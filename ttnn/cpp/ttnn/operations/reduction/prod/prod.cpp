@@ -90,12 +90,16 @@ Tensor ProdOperation::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const size_t size = input_a.get_legacy_shape().size();
+    const size_t size = input_a.get_shape().size();
     TT_FATAL(
         size && dim >= -static_cast<int>(size) && dim <= size - 1,
         "Dimension out of range (expected to be in range of [-{}, {}]",
         size,
         size - 1);
+
+    if (all_dimensions) {
+        return prod_all(input_a, output_mem_config);
+    }
 
     // FIXME: all the prod code is based on 4D tensors, so we need to convert the input tensor to 4D.
     // TODO: We need to handle the case where the input tensor is not 4D.
@@ -103,15 +107,11 @@ Tensor ProdOperation::invoke(
     auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
     // update the dim because we unsqueezed input to 4d
+    const int64_t old_dim = dim;
     if (dim >= 0) {
         dim = (4 - old_rank + dim);
     }
 
-    TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
-
-    if (all_dimensions) {
-        return prod_all(input_tensor_4d, output_mem_config);
-    }
     Tensor temp = input_tensor_4d;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {
@@ -148,7 +148,7 @@ Tensor ProdOperation::invoke(
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
         result = ttnn::squeeze_from_4D(res_host, old_rank);
     }
-    return keepdim ? result : ttnn::squeeze(result, dim);
+    return keepdim ? result : ttnn::squeeze(result, old_dim);
 }
 
 Tensor ProdOperation::invoke(

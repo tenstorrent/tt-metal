@@ -109,26 +109,26 @@ def run(
     )
 
 
-
 import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
+    "input_shape, dim, keepdim",
     [
-        ([7, 32], 3, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([7, 32], 1, False, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([7, 32], 0, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([7], 1, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([7], 2, False, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([5, 7, 32], 1, False, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([5, 7, 32], 0, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
-        ([5, 7, 32], 3, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        # 0-D/1-D support is not available yet
+        # ([7, 32], 1, False),
+        # ([7], 0, False),
+        # ([7], 1, True),
+        ([7, 32], 0, True),
+        ([7, 32], 3, True),
+        ([5, 7, 32], 1, False),
+        ([5, 7, 32], 0, True),
+        ([5, 7, 32], 3, True),
+        ([5, 7, 32, 66], 1, True),
+        ([5, 7, 32, 66], 2, False),
     ],
 )
-def test_reduction_prod_localrun_fail_only(
-    device, input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config
-):
+def test_reduction_prod_localrun_fail_only(device, input_shape, dim, keepdim):
     run_prod(
-        input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device
+        input_shape, dim, keepdim, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, device
     )
