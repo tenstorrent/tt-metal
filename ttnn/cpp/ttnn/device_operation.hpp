@@ -208,25 +208,15 @@ inline void log_operation(
     tt::stl::hash::hash_t program_hash,
     bool program_cache_hit) {
     tt::log_debug(
-        tt::LogOp, "Launching Operation: \"{}\" ({})", tt::stl::get_type_name<device_operation_t>(), OPERATION_TYPE);
+        tt::LogOp, "Launching Device Operation: \"{}\"",
+        get_operation_name<device_operation_t>(operation_attributes));
 
-    if (reflect::size(operation_attributes) > 0) {
-        tt::log_debug(tt::LogOp, "Attributes:");
-        reflect::for_each(
-            [&operation_attributes](auto I) {
-                // this didnt resolve all issues
-                using MemberType = std::decay_t<decltype(reflect::get<I>(operation_attributes))>;
-                if constexpr (std::is_same_v<MemberType, CoreRangeSet>) {
-                    tt::log_debug(tt::LogOp, "\t{} [excluded]", reflect::member_name<I>(operation_attributes));
-                } else {
-                    tt::log_debug(
-                        tt::LogOp,
-                        "\t{} = {}",
-                        reflect::member_name<I>(operation_attributes),
-                        reflect::get<I>(operation_attributes));
-                }
-            },
-            operation_attributes);
+    tt::log_debug(tt::LogOp, "Program Hash: {}", program_hash);
+    tt::log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
+
+    tt::log_debug(tt::LogOp, "Attributes:");
+    for (const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+        tt::log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
     tt::log_debug(tt::LogOp, "Tensors Args:");
@@ -275,10 +265,14 @@ void launch_on_worker_thread(
 
     auto& program_cache = device->get_program_cache();
 
-    tt::stl::reflection::visit_object_of_type<Tensor>(check_tensor_types, tensor_args);
+    auto program_hash = 0;
+    bool program_cache_hit = false;
 
-    using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-    static_assert(not std::same_as<tensor_return_value_t, void>, "Operation return type cannot be \"void\"");
+    auto is_program_cache_enabled = program_cache.is_enabled();
+    if (is_program_cache_enabled) {
+        program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+        program_cache_hit = program_cache.contains(program_hash);
+    }
 
     log_operation<device_operation_t>(
             device->id(),
@@ -289,6 +283,7 @@ void launch_on_worker_thread(
         );
 
     tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+
     if (program_cache_hit) {
         ZoneScopedN("Validate on Program Cache Hit");
         device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
