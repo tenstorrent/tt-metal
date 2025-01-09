@@ -158,6 +158,7 @@ def ttnn_vgg16(
             [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
+                bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
                 conv_op_cache=conv_op_cache,

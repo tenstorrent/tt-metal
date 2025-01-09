@@ -768,7 +768,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
     }
-
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
 }
 
@@ -829,7 +828,6 @@ ttnn::Tensor prepare_conv_weights(
 
     ParallelConfig parallel_config;
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        // std::cout << "should not come here " << std::endl;
         parallel_config = {
             .grid = input_memory_config.shard_spec.value().grid,
             .shard_scheme = input_memory_config.memory_layout,
@@ -846,7 +844,8 @@ ttnn::Tensor prepare_conv_weights(
             shard_orientation,
             !mm_conv,
             !use_non_tile_height,
-            is_non_tile_mul_width);
+            is_non_tile_mul_width,
+            conv_config.act_block_h_override);
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
@@ -950,7 +949,8 @@ ttnn::Tensor prepare_conv_bias(
             shard_orientation,
             !mm_conv,
             !use_non_tile_height,
-            is_non_tile_mul_width);
+            is_non_tile_mul_width,
+            conv_config.act_block_h_override);
     }
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
