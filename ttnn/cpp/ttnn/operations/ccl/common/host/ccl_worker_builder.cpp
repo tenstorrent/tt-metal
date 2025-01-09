@@ -806,7 +806,6 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
     DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams,
     std::optional<chip_id_t> my_chip_id) {
-    TT_FATAL(cb_indices.size() == tensors.size(), "Number of CB indices must match number of tensors");
     TT_FATAL(
         num_command_streams > 0 && num_command_streams <= 2,
         "Invalid number of command streams: {}. Must be 1 or 2",
@@ -841,12 +840,6 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         }
     }
 
-    for (auto i : cb_indices) {
-        TT_FATAL(
-            i != tt::CB::c_in7 && i != tt::CB::c_in6,
-            "Command processor kernel reserves cb in7 for use but user specified CBs included it. Please choose "
-            "another CB besides c_in6 and c_in7.");
-    }
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index =
@@ -878,7 +871,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
                         tensors[i]->buffer()->buffer_layout()),  // TODO: refactor out to generate_tensor_ct_args
                     static_cast<uint32_t>(tensors[i]->buffer()->buffer_type()),
                     static_cast<uint32_t>(tensors[i]->layout()),
-                    static_cast<uint32_t>(cb_indices[i])},
+                    static_cast<uint32_t>(0)},
                 std::back_inserter(ct_args));
         }
         for (size_t i = 0; i < tensors.size(); i++) {
@@ -1133,6 +1126,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     for (Tensor const* t : tensors) {
         if (t) {
+            bool rt_args_enabled = true;
+            rt_args.push_back(rt_args_enabled);
             if (tensor_device_override.has_value() and
                 tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
                 std::ranges::copy(
@@ -1143,6 +1138,9 @@ void generate_multi_input_command_stream_kernel_rt_args(
                     ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
                     std::back_inserter(rt_args));
             }
+        } else {
+            bool rt_args_enabled = false;
+            rt_args.push_back(rt_args_enabled);
         }
         // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
@@ -1645,19 +1643,18 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
     return args;
 }
 
-bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor) {
+bool can_command_stream_be_lowered_to_noc_commands(const Tensor& tensor) {
     static constexpr size_t baseline_arg_count = 12;
     // approximately... this is only very rough estimate until unlimited command stream length is enabled
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
-    size_t num_tensor_pages = input_tensor.shape().logical_shape().volume() / input_tensor.buffer()->page_size();
+    size_t page_num_elements =
+        tensor.layout() == Layout::TILE ? tensor.get_tensor_spec().tile().get_tile_hw(): tensor.padded_shape()[-1];
+    size_t num_tensor_pages = tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
-    bool can_be_lowered = input_tensor.is_sharded() &&
+    return tensor.is_sharded() &&
            (num_tensor_pages * args_per_noc_command + baseline_arg_count < max_noc_commands);
-
-    log_debug(tt::LogOp, "command stream can{} be lowered to noc commands", (can_be_lowered ? "" : "not"));
-    return can_be_lowered;
 }
 
 
