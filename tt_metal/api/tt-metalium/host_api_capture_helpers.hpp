@@ -14,17 +14,49 @@
 // FIXME (kmabee) - Temp hack, remove before merge and integrate as cmake define.
 #define TT_ENABLE_LIGHT_METAL_TRACE 1
 
+//////////////////////////////////////////////////////////////
+// TRACE GUARD & TRACE MACRO                                //
+//////////////////////////////////////////////////////////////
+
+namespace tt::tt_metal {
+
+// This struct will disable further tracing in current scope, and re-enable
+// when scope ends. Prevents recursive tracing of host APIs.
+struct TraceScope {
+    // Provide an inline definition in the header
+    static inline thread_local int depth = 0;
+    // Increment depth on entering scope, decrement on exiting
+    TraceScope() { ++depth; }
+    ~TraceScope() { --depth; }
+};
+
+}  // namespace tt::tt_metal
+
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-#define TRACE_FUNCTION_CALL(capture_func, ...)             \
-    do {                                                   \
-        if (LightMetalCaptureContext::Get().IsTracing()) { \
-            capture_func(__VA_ARGS__);                     \
-        }                                                  \
+
+// What should we name this? Another idea is TRACE_FUNCTION_THIS_SCOPE
+#define TRACE_FUNCTION_ENTRY() tt::tt_metal::TraceScope __traceScopeGuard
+
+#define TRACE_FUNCTION_CALL(capture_func, ...)                                                     \
+    do {                                                                                           \
+        log_trace(                                                                                 \
+            tt::LogMetalTrace,                                                                     \
+            "TRACE_FUNCTION_CALL: {} via {} istracing: {} depth: {}",                              \
+            #capture_func,                                                                         \
+            __FUNCTION__,                                                                          \
+            LightMetalCaptureContext::Get().IsTracing(),                                           \
+            tt::tt_metal::TraceScope::depth);                                                      \
+        if (LightMetalCaptureContext::Get().IsTracing() && tt::tt_metal::TraceScope::depth == 1) { \
+            capture_func(__VA_ARGS__);                                                             \
+        }                                                                                          \
     } while (0)
 #else
+
+#define TRACE_FUNCTION_ENTRY()
 #define TRACE_FUNCTION_CALL(capture_func, ...) \
     do {                                       \
     } while (0)
+
 #endif
 
 namespace tt::tt_metal {
