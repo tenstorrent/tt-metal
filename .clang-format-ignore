@@ -2,7 +2,6 @@ tt_metal/distributed/mesh_device.cpp
 tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h
 tt_metal/impl/buffers/buffer.cpp
 tt_metal/impl/buffers/buffer.hpp
-tt_metal/impl/device/device.cpp
 tt_metal/impl/device/device.hpp
 tt_metal/impl/dispatch/arch.cpp
 tt_metal/impl/dispatch/arch.hpp
