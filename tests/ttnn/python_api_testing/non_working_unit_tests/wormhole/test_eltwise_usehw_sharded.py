@@ -279,6 +279,63 @@ def test_eltwise_abs(input_shape, dtype, dlayout, sharding_strategy, shard_orien
     "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
+def test_eltwise_neg(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.neg,
+        ttnn.neg,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_selu(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.selu,
+        ttnn.selu,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
+def test_eltwise_identity(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
+    run_tests(
+        input_shape,
+        dtype,
+        dlayout,
+        sharding_strategy,
+        shard_orientation,
+        hw_as_shard_shape,
+        torch.identity,
+        ttnn.identity,
+        False,
+        device,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape",
+    (test_sweep_args),
+)
 def test_eltwise_exp(input_shape, dtype, dlayout, sharding_strategy, shard_orientation, hw_as_shard_shape, device):
     run_tests(
         input_shape,
