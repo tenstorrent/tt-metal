@@ -240,7 +240,7 @@ convolution with filters of size $[3,3]$ (see
 Figure [\[fig:filters\]](#fig:filters){reference-type="ref"
 reference="fig:filters"}), using a stride of $2$ in both $H$ and $W$
 dimensions, indicating downsample, and with padding enabled. The output
-of this convolution would be a tensor of dimensions $[2,8,8,64]$.
+of this convolution would be a tensor of dimensions $[2,8,8,32]$.
 
 The key variables as input to the convolution operation are:
 
@@ -251,7 +251,7 @@ The key variables as input to the convolution operation are:
 
            **Stride**:  $S_h = 2$   $S_w = 2$
 
-           **Output**:   $N = 2$    $H_o = 8$    $W_o = 8$    $C_o = 64$
+           **Output**:   $N = 2$    $H_o = 8$    $W_o = 8$    $C_o = 32$
   -------------------- ----------- ------------ ------------ ------------
 
 The input tensor to the convolution must first be transformed into a
