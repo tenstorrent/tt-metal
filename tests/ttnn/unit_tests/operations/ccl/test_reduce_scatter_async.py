@@ -520,7 +520,6 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     )
 
 
-@pytest.mark.skip(reason="Sharded reduce scatter sometimes hangs")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
@@ -552,26 +551,46 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
     ],
 )
 @pytest.mark.parametrize(
-    "per_chip_output_shape,input_shard_shape,shard_grid",
+    "per_chip_input_shape,input_shard_shape,shard_grid",
     (
-        # LLama
+        (
+            (1, 1, 32, 256),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+        ),
+        (
+            (1, 1, 32, 128),
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ),
+        (
+            (1, 1, 32, 256),
+            (32, 256),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ),
         (
             (1, 1, 32, 1024),
+            (32, 1024),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        ),
+        # LLama
+        (
+            (1, 1, 32, 4096),
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 4096),
+            (1, 1, 32, 16384),
             (32, 512),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 2048),
+            (1, 1, 32, 8192),
             (32, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
         (  # https://github.com/tenstorrent/tt-metal/issues/9686
-            (1, 1, 32, 1792),
+            (1, 1, 32, 7168),
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         ),
@@ -579,11 +598,11 @@ def test_line_reduce_scatter_async_on_T3K_rows_post_commit(
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("enable_async", [False])
-@pytest.mark.parametrize("replication_factor", [2])
+@pytest.mark.parametrize("replication_factor", [1])
 def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_post_commit(
     t3k_mesh_device,
     num_devices,
-    per_chip_output_shape,
+    per_chip_input_shape,
     input_shard_shape,
     dim,
     num_links,
@@ -604,9 +623,9 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
     if len(t3k_mesh_device.get_devices()) < 8:
         pytest.skip("Not T3K!")
 
-    per_chip_input_shape = list(per_chip_output_shape)
-    per_chip_input_shape[dim] *= num_devices
-    per_chip_input_shape = tuple(per_chip_input_shape)
+    # per_chip_input_shape = list(per_chip_output_shape)
+    # per_chip_input_shape[dim] *= num_devices
+    # per_chip_input_shape = tuple(per_chip_input_shape)
 
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
