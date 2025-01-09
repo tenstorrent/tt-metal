@@ -1648,14 +1648,13 @@ bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor) {
     // approximately... this is only very rough estimate until unlimited command stream length is enabled
     static constexpr size_t args_per_noc_command = 4;
     static constexpr size_t max_noc_commands = 256;
-    size_t num_tensor_pages = input_tensor.shape().logical_shape().volume() / input_tensor.buffer()->page_size();
+    size_t page_num_elements =
+        input_tensor.layout() == Layout::TILE ? tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH : input_tensor.padded_shape()[-1];
+    size_t num_tensor_pages = input_tensor.padded_shape().volume() / page_num_elements;
 
     // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
-    bool can_be_lowered = input_tensor.is_sharded() &&
+    return input_tensor.is_sharded() &&
            (num_tensor_pages * args_per_noc_command + baseline_arg_count < max_noc_commands);
-
-    log_debug(tt::LogOp, "command stream can{} be lowered to noc commands", (can_be_lowered ? "" : "not"));
-    return can_be_lowered;
 }
 
 
