@@ -157,8 +157,8 @@ void kernel_main() {
     uint8_t sub_tile_lines_real = (remainder == 0) ? FACE_HEIGHT : static_cast<uint8_t>(remainder);
 
     // Precompute constants used in inner loops
-    const uint32_t face_height_width = FACE_HEIGHT * FACE_WIDTH;
-    const uint32_t num_faces_wh = NUM_FACES_W * FACE_WIDTH;
+    constexpr uint32_t face_height_width = FACE_HEIGHT * FACE_WIDTH;
+    constexpr uint32_t face_h_stride = NUM_FACES_W * face_height_width;
 
     // Main single loop over all tiles
     uint32_t src_multi_idx[N];
@@ -254,8 +254,24 @@ void kernel_main() {
                 base_output_row_offset += dest_multi_idx[i] * dest_padded_strides[i];
             }
 
+            // This kernel doesn't run when N-2 is not moved, as a result, h_in_dest != N-2, so we can use N-2 directly
+            // without knowing the full index Position of this output_row within the tile:
+            uint32_t output_row_in_tile = dest_multi_idx[N - 2] % TILE_HEIGHT;
+
+            // Face index along the tile's height dimension:
+            uint32_t output_face_h = output_row_in_tile / FACE_HEIGHT;  // in [0..NUM_FACES_H-1]
+
+            // Row within that face:
+            uint32_t output_sub_tile_line = output_row_in_tile % FACE_HEIGHT;  // in [0..FACE_HEIGHT-1]
+
+            // Precompute offset for the current face_h
+            uint32_t face_h_offset = output_face_h * face_h_stride;
+
             // Iterate over faces in the width dimension
             for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                // Combine face_w for the overall tile column
+                uint32_t face_w_offset = face_w * face_height_width;
+
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
                     uint32_t row = base_row + sub_tile_line;
@@ -265,29 +281,11 @@ void kernel_main() {
                     // Adjust destination multi-dimensional index based on sub_tile_line
                     dest_multi_idx[h_in_dest] = src_multi_idx[N - 2];
 
-                    // Calculate the output row offset
+                    // Calculate the offset to the beginning of the row in the output tensor
                     uint32_t output_row_offset =
                         base_output_row_offset + dest_multi_idx[h_in_dest] * dest_padded_strides[h_in_dest];
 
                     uint32_t output_tile_idx = (output_row_offset / TILE_HEIGHT) * W_t + w_t;
-
-                    // 1) The row coordinate in the X dimension:
-                    uint32_t output_row = dest_multi_idx[N - 2];
-
-                    // 2) Position of this output_row within the tile:
-                    uint32_t output_row_in_tile = output_row % TILE_HEIGHT;
-
-                    // 3) Face index along the tile's height dimension:
-                    uint32_t output_face_h = output_row_in_tile / FACE_HEIGHT;  // in [0..NUM_FACES_H-1]
-
-                    // 4) Row within that face:
-                    uint32_t output_sub_tile_line = output_row_in_tile % FACE_HEIGHT;  // in [0..FACE_HEIGHT-1]
-
-                    // Precompute offset for the current face_h
-                    uint32_t face_h_offset = output_face_h * NUM_FACES_W * face_height_width;
-
-                    // Combine face_w for the overall tile column
-                    uint32_t face_w_offset = face_w * face_height_width;
 
                     // Since we are writing in SUBTILE_LINE_BYTES chunks, we don't need an offset within the sub-tile
                     // line
@@ -320,7 +318,6 @@ void kernel_main() {
     if constexpr (needs_padding) {
         cb_wait_front(tt::CBIndex::c_1, 1);
         uint32_t l1_read_addr = get_read_ptr(tt::CBIndex::c_1);
-        tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(l1_read_addr);
 
         uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_1);
 
@@ -329,12 +326,8 @@ void kernel_main() {
         constexpr uint8_t face_c_start = X_in_tile / FACE_HEIGHT;
 
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
-            // Map tile_idx to (n, h, w_t)
-
-            // input tiled shape is [...., X_t, W_t],
-            // we want to iterate across:
-            // [0, ...., X_t-1, 0] to [N-1, ...., Xt-1, W_t-1]
-            // tile_idx is between [0, prod(N, ..., Xt, W_t)/Xt)
+            // Map tile_idx to it's multi dimensional tiled index in the output
+            // reuse dest_multi_idx for this purpose
 
             // calculate dest_multi_idx
             size_t remaining = tile_idx;
