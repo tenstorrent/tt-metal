@@ -38,6 +38,7 @@ struct BinaryNgDeviceOperation {
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
+        const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
 
@@ -56,7 +57,6 @@ struct BinaryNgDeviceOperation {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
             tt::tt_metal::KernelHandle compute_kernel_id;
-            CoreCoord compute_with_storage_grid_size;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
