@@ -332,6 +332,14 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         }
     }
 
+    uint32_t h_in_dest = 0;
+    for (uint32_t i = 0; i < N; i++) {
+        if (dims[i] == N - 2) {
+            h_in_dest = i;
+            break;
+        }
+    }
+
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t)needs_padding};
 
@@ -354,7 +362,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         face_shape[0],
         face_shape[1],
         (uint32_t)needs_padding,
-        N};
+        N,
+        h_in_dest};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
