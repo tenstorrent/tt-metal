@@ -226,7 +226,6 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
 // TODO: Change dprint_tensix functions to use struct readers and then print struct fields (where this is possible) 
 
 // GRAYSKULL
-
 #ifdef ARCH_GRAYSKULL
 inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     
