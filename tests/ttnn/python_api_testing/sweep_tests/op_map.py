@@ -387,7 +387,7 @@ op_map = {
     },
     "ttnn-transpose_13": {
         "tt_op": ttnn_ops.transpose_13,
-        "pytorch_op": partial(pytorch_ops.transpose, dim0=0, dim1=3),
+        "pytorch_op": partial(pytorch_ops.transpose, dim0=1, dim1=3),
     },
     "ttnn-transpose_23": {
         "tt_op": ttnn_ops.transpose_23,

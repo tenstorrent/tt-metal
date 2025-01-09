@@ -19,7 +19,7 @@ def run_min_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
 
     try:
         # get ref result
-        ref_value = torch.min(x, dim)
+        ref_value = torch.min(x, dim).values
 
         tt_result = ttnn_ops.min(
             x,
@@ -35,6 +35,9 @@ def run_min_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
         logger.warning(f"Operation execution crashed")
         raise e
 
+    ref_value = torch.squeeze(ref_value[0])
+    tt_result = torch.squeeze(tt_result[0])
+
     assert len(tt_result.shape) == len(ref_value.shape)
     assert_with_pcc(ref_value, tt_result, 0.99)
 
@@ -46,7 +49,7 @@ def run_max_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
 
     try:
         # get ref result
-        ref_value = torch.max(x, dim)
+        ref_value = torch.max(x, dim).values
 
         tt_result = ttnn_ops.max(
             x,
@@ -61,6 +64,9 @@ def run_max_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
     except Exception as e:
         logger.warning(f"Operation execution crashed")
         raise e
+
+    ref_value = torch.squeeze(ref_value[0])
+    tt_result = torch.squeeze(tt_result[0])
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert_with_pcc(ref_value, tt_result, 0.99)
