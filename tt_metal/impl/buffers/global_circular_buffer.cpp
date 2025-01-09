@@ -14,7 +14,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -24,7 +24,7 @@ namespace v1 {
 namespace experimental {
 
 GlobalCircularBuffer::GlobalCircularBuffer(
-    Device* device,
+    IDevice* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type,

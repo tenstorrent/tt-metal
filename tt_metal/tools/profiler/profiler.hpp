@@ -108,7 +108,7 @@ public:
     void setOutputDir(const std::string& new_output_dir);
 
     // Traverse all cores on the device and dump the device profile results
-    void dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump);
+    void dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, bool lastDump);
 };
 
 }  // namespace tt_metal

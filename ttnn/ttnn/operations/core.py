@@ -159,7 +159,7 @@ def from_torch(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
-    sub_device_ids: List[ttnn.SubDeviceId] = [],
+    sub_device_ids: List[ttnn.SubDeviceId] = [],  # TODO #16492: Remove argument
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
@@ -179,7 +179,7 @@ def from_torch(
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
-        sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to wait on. Defaults to all sub-devices.
+        sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to wait on. Defaults to sub-devices set by set_sub_device_stall_group.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -273,7 +273,7 @@ def to_torch(
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
     device: Optional[ttnn.Device] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
-    sub_device_ids: List[ttnn.SubDeviceId] = [],
+    sub_device_ids: List[ttnn.SubDeviceId] = [],  # TODO #16492: Remove argument
 ) -> "torch.Tensor":
     """
     Converts the `ttnn.Tensor` tensor into a `torch.Tensor`. It does not call to_layout for bfloat8_b or bfloat4_b as we now convert
@@ -289,7 +289,7 @@ def to_torch(
         mesh_composer (ttnn.MeshToTensor, optional): The desired `ttnn` mesh composer. Defaults to `None`.
         device (ttnn.Device, optional): The `ttnn` device of the input tensor. Defaults to `None`.
         cq_id (int, optional): The command queue ID to use. Defaults to `0`.
-        sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to wait on. Defaults to all sub-devices.
+        sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to wait on. Defaults to sub-devices set by set_sub_device_stall_group.
 
     Returns:
         torch.Tensor: The converted `torch` tensor.

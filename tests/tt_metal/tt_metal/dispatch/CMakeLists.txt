@@ -2,7 +2,6 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_buffer)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_event)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_program)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_trace)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_util)
 
 add_executable(
     unit_tests_dispatch
@@ -10,7 +9,6 @@ add_executable(
     $<TARGET_OBJECTS:unit_tests_dispatch_event_o>
     $<TARGET_OBJECTS:unit_tests_dispatch_program_o>
     $<TARGET_OBJECTS:unit_tests_dispatch_trace_o>
-    $<TARGET_OBJECTS:unit_tests_dispatch_util_o>
 )
 TT_ENABLE_UNITY_BUILD(unit_tests_dispatch)
 
@@ -19,9 +17,7 @@ target_include_directories(
     unit_tests_dispatch
     PRIVATE
         ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/common
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}

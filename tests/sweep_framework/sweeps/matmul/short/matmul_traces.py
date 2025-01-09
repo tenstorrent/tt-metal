@@ -115,8 +115,9 @@ parameters = {
             (9, 768, 768, 640),
             (920, 256, 256, 256),
         ],
-        "core_grid": [False],
-        "dtype": [ttnn.float32],
+        "core_grid": [True, False],
+        "dtype": [ttnn.float32, ttnn.bfloat16],
+        "test_bias": [True, False],
     },
     "gpt": {
         "params": [
@@ -352,7 +353,8 @@ parameters = {
             (64, 12, 64, 1024, 64, 12, 1024, 64),
         ],
         "core_grid": [True, False],
-        "dtype": [ttnn.float32],
+        "dtype": [ttnn.float32, ttnn.bfloat16],
+        "test_bias": [True, False],
     },
     "forge": {
         "params": [
@@ -2607,30 +2609,70 @@ parameters = {
                 256,
             ),
         ],
-        "core_grid": [False],
+        "core_grid": [True, False],
         "dtype": [ttnn.float32, ttnn.bfloat16],
+        "test_bias": [True, False],
     },
 }
 
 
-def run_matmul(device, params, core_grid, dtype):
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    # Cannot have bias and batch. If only four params, two input tensors have a dimension of 2 and cannot be batched.
+    if test_vector["test_bias"] and len(test_vector["params"]) > 4 and test_vector["params"][0] > 1:
+        return True, "Batched input not supported when bias exists"
+    return False, None
+
+
+def run_matmul(device, params, core_grid, dtype, test_bias):
+    # Cannot have bias and batch. If only four params, two input tensors have a dimension of 2 and cannot be batched.
+    if test_bias and len(params) > 4 and params[0] > 1:
+        pytest.skip("Batched input not supported when bias exists")
     if core_grid == False:
         grid = None
     else:
         grid = device.core_grid
+    if dtype == ttnn.bfloat16:
+        compute_kernel_config = None
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     count = len(params)
     half = int(count / 2)
     shape0 = params[0:half]
     shape1 = params[half:count]
+    shape2 = [shape1[-1]]
     torch_input_tensor0 = torch.rand(shape0, dtype=torch.float32)
     torch_input_tensor1 = torch.rand(shape1, dtype=torch.float32)
+    torch_input_tensor2 = torch.rand(shape2, dtype=torch.float32)
     torch_output_tensor = torch.matmul(torch_input_tensor0, torch_input_tensor1)
+    if test_bias:
+        torch_output_tensor += torch_input_tensor2
 
     input_tensor0 = ttnn.from_torch(torch_input_tensor0, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor2 = ttnn.from_torch(torch_input_tensor2, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.matmul(input_tensor0, input_tensor1, core_grid=grid)
+    if test_bias:
+        output_tensor = ttnn.linear(
+            input_tensor0,
+            input_tensor1,
+            core_grid=grid,
+            compute_kernel_config=compute_kernel_config,
+            bias=input_tensor2,
+        )
+    else:
+        output_tensor = ttnn.matmul(
+            input_tensor0, input_tensor1, core_grid=grid, compute_kernel_config=compute_kernel_config
+        )
     output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.99
@@ -2640,29 +2682,33 @@ def run_matmul(device, params, core_grid, dtype):
 @pytest.mark.parametrize("params", parameters["pytorch"]["params"])
 @pytest.mark.parametrize("core_grid", parameters["pytorch"]["core_grid"])
 @pytest.mark.parametrize("dtype", parameters["pytorch"]["dtype"])
-def test_pytorch(device, params, core_grid, dtype):
-    run_matmul(device, params, core_grid, dtype)
+@pytest.mark.parametrize("test_bias", parameters["pytorch"]["test_bias"])
+def test_pytorch(device, params, core_grid, dtype, test_bias):
+    run_matmul(device, params, core_grid, dtype, test_bias)
 
 
 @pytest.mark.parametrize("params", parameters["gpt"]["params"])
 @pytest.mark.parametrize("core_grid", parameters["gpt"]["core_grid"])
 @pytest.mark.parametrize("dtype", parameters["gpt"]["dtype"])
-def test_gpt(device, params, core_grid, dtype):
-    run_matmul(device, params, core_grid, dtype)
+@pytest.mark.parametrize("test_bias", parameters["gpt"]["test_bias"])
+def test_gpt(device, params, core_grid, dtype, test_bias):
+    run_matmul(device, params, core_grid, dtype, test_bias)
 
 
 @pytest.mark.parametrize("params", parameters["forge"]["params"])
 @pytest.mark.parametrize("core_grid", parameters["forge"]["core_grid"])
 @pytest.mark.parametrize("dtype", parameters["forge"]["dtype"])
-def test_forge(device, params, core_grid, dtype):
-    run_matmul(device, params, core_grid, dtype)
+@pytest.mark.parametrize("test_bias", parameters["forge"]["test_bias"])
+def test_forge(device, params, core_grid, dtype, test_bias):
+    run_matmul(device, params, core_grid, dtype, test_bias)
 
 
 def run(
     params,
     core_grid,
     dtype,
+    test_bias,
     *,
     device,
 ) -> list:
-    return run_matmul(device, params, core_grid, dtype)
+    return run_matmul(device, params, core_grid, dtype, test_bias)

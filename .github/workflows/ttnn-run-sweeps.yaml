@@ -29,6 +29,7 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
+          - eltwise.unary.abs.abs_sharded
           - eltwise.unary.abs.abs_forge
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
@@ -61,11 +62,15 @@ on:
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.erfc.erfc
+          - eltwise.unary.erfc.erfc_sharded
           - eltwise.unary.exp.exp
+          - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
           - eltwise.unary.exp.exp_pytorch2
           - eltwise.unary.exp2.exp2
+          - eltwise.unary.exp2.exp2_sharded
           - eltwise.unary.expm1.expm1
+          - eltwise.unary.expm1.expm1_sharded
           - eltwise.unary.tanh.tanh
           - eltwise.unary.tanh.tanh_pytorch2
           - eltwise.unary.tanh.tanh_forge
@@ -76,6 +81,7 @@ on:
           - eltwise.unary.deg2rad.deg2rad
           - eltwise.unary.relu6.relu6
           - eltwise.unary.log.log
+          - eltwise.unary.log.log_sharded
           - eltwise.unary.log.log_pytorch2
           - eltwise.unary.log.log_forge
           - eltwise.unary.log1p.log1p
@@ -99,6 +105,7 @@ on:
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.erf.erf
           - eltwise.unary.erfinv.erfinv
+          - eltwise.unary.erfinv.erfinv_sharded
           - eltwise.unary.i0.i0
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
@@ -124,21 +131,30 @@ on:
           - eltwise.unary.hardsigmoid.hardsigmoid_sharded
           - eltwise.unary.hardshrink.hardshrink
           - eltwise.unary.hardshrink.hardshrink_sharded
-          - eltwise.unary.softmax.softmax
+          - normalization.softmax.softmax
+          - normalization.softmax.softmax_sharded
           - eltwise.unary.identity.identity
+          - eltwise.unary.identity.identity_sharded
           - eltwise.unary.neg.neg
+          - eltwise.unary.neg.neg_sharded
           - eltwise.unary.sinh.sinh
+          - eltwise.unary.sinh.sinh_sharded
           - eltwise.unary.asinh.asinh
           - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
+          - eltwise.unary.relu_min.relu_min_sharded
           - eltwise.unary.relu_max.relu_max
+          - eltwise.unary.relu_max.relu_max_sharded
           - eltwise.unary.softplus.softplus
+          - eltwise.unary.softplus.softplus_sharded
           - eltwise.unary.selu.selu
+          - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
           - eltwise.unary_backward.logit_bw
-          - eltwise.unary_backward.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw
+          - eltwise.unary_backward.neg_bw.neg_bw_sharded
           - eltwise.unary_backward.hardshrink_bw
           - eltwise.unary_backward.softshrink_bw
           - eltwise.unary_backward.acos_bw.acos_bw
@@ -149,7 +165,9 @@ on:
           - eltwise.unary_backward.i0_bw.i0_bw
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
           - eltwise.unary_backward.relu_bw.relu_bw
+          - eltwise.unary_backward.relu_bw.relu_bw_sharded
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
+          - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
           - eltwise.unary_backward.tan_bw.tan_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw
@@ -160,7 +178,9 @@ on:
           - eltwise.unary_backward.threshold_bw.threshold_bw
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
+          - eltwise.unary_backward.log_bw.log_bw_sharded
           - eltwise.unary_backward.relu6_bw.relu6_bw
+          - eltwise.unary_backward.relu6_bw.relu6_bw_sharded
           - eltwise.unary_backward.log10_bw.log10_bw
           - eltwise.unary_backward.abs_bw.abs_bw
           - eltwise.unary_backward.sinh_bw.sinh_bw
@@ -179,6 +199,7 @@ on:
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
+          - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
           - eltwise.unary_backward.elu_bw.elu_bw
           - eltwise.unary_backward.celu_bw.celu_bw
           - eltwise.unary_backward.selu_bw.selu_bw
@@ -226,10 +247,12 @@ on:
           - eltwise.unary.lez.lez
           - eltwise.unary.nez.nez
           - eltwise.unary.prelu.prelu
+          - eltwise.unary.prelu.prelu_sharded
           - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
           - eltwise.unary.reglu.reglu
+          - eltwise.unary.round.round_sharded
           - eltwise.unary_complex.polar.polar
           - eltwise.unary_complex.angle.angle
           - eltwise.unary_complex.polar_bw.polar_bw

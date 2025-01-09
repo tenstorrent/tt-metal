@@ -16,7 +16,7 @@
 namespace ttnn {
 namespace types {
 
-using Device = tt::tt_metal::Device;
+using IDevice = tt::tt_metal::IDevice;
 
 constexpr auto TILE_SIZE = 32;
 

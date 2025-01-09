@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     Program program = CreateProgram();
 
-    Device* device = input_tensor_q.device();
+    IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -598,6 +598,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        Sk_chunk_t,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,

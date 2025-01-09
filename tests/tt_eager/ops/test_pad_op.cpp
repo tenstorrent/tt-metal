@@ -13,7 +13,7 @@
 #include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
