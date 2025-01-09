@@ -298,6 +298,8 @@ class Cluster {
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
+
+    uint32_t routing_info_addr_ = 0;
 };
 
 }  // namespace tt
