@@ -96,7 +96,7 @@ def run_reduce_scatter_test(
     math_op,
     input_dtype,
     layout,
-    _mem_config,
+    mem_config,
     use_program_cache,
     function_level_defaults,
     num_iters,
@@ -141,9 +141,9 @@ def run_reduce_scatter_test(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
         )
     else:
-        assert _mem_config is not None
-        input_mem_config = _mem_config
-        output_mem_config = _mem_config
+        assert mem_config is not None
+        input_mem_config = mem_config
+        output_mem_config = mem_config
 
     (is_known_failure, message) = is_unsupported_case(
         per_chip_output_shape, dim, math_op, input_mem_config, num_devices, num_links, input_dtype, layout

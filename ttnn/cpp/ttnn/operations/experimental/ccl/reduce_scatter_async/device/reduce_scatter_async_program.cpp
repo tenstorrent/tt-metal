@@ -812,7 +812,7 @@ static void generate_partial_reducer_reader_worker_command_streams(
                 //... There is a low-probability race here. To close it we need to have the original writer of
                 //    the global semaphore wait for an ack from this consumer that the reading is complete (else the producer
                 //    of a future iteration could write an increment from that next invocation before this consumer clears the
-                //    value for the current iteration.
+                //    value for the current iteration. ###
                 worker_command_stream0.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(in0_tensor_sync.value().get_tensor_sync_semaphore(w), 0));
             }
         }
@@ -831,11 +831,7 @@ static void generate_partial_reducer_reader_worker_command_streams(
                 }
             }
 
-            // Reader must clear the global semaphore so that it can be reused by any future iterations
-            //... There is a low-probability race here. To close it we need to have the original writer of
-            //    the global semaphore wait for an ack from this consumer that the reading is complete (else the producer
-            //    of a future iteration could write an increment from that next invocation before this consumer clears the
-            //    value for the current iteration.
+            // Reader must clear the global semaphore for future program launches. See comment above ###
             worker_command_stream1.push_back(ttnn::ccl::cmd::uops::local_core_semaphore_set(from_remote_input_tensor_sync.value().get_tensor_sync_semaphore(w), 0));
         }
     }
@@ -1149,7 +1145,6 @@ static void create_final_reducer_worker_rt_args_not_end_of_line(
             builder_config.kernel_ids.get().math,
             w_logical,
             math_page_counts_out.at(w_logical));
-        // log_info(tt::LogOp, "Writer kernel on core x={}, y={} has tensor addresses: {} and {}", w_logical.x, w_logical.y, (void*)all_program_tensors.local_final_output_tensor->buffer()->address(), (void*)nullptr);
         generate_multi_input_command_stream_kernel_rt_args(
             builder_config.program,
             builder_config.kernel_ids.get().writer,
