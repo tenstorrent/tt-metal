@@ -143,7 +143,9 @@ Tensor to_layout_impl(
                 throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
             }
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
+            TT_FATAL(
+                !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
+                "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
 
             if (tensor.is_sharded()) {
                 const auto memory_config = tensor.memory_config();
