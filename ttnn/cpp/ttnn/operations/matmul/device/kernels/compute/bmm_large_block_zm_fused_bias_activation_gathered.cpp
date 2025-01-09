@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-// #include "remote_circular_buffer_api.h"
 
 namespace NAMESPACE {
 

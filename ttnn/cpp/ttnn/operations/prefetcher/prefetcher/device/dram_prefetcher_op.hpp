@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb);
 
 struct DramPrefetcher {
     const Tensor tensor_addrs = Tensor();

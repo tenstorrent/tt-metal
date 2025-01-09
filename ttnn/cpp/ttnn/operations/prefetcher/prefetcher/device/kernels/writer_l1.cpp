@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,9 +21,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t num_receivers = get_compile_time_arg_val(3);
     constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
-
-    constexpr uint32_t local_cb_id = tt::CBIndex::c_0;
-    constexpr uint32_t remote_cb_id = tt::CBIndex::c_31;
+    constexpr uint32_t local_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t remote_cb_id = get_compile_time_arg_val(6);
 
     // Runtime args
     // Note: Coalesced sizes -> wrt to receiver cores, sizes -> wrt to dram reader cores

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,37 +36,39 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& tensors,
     const Tensor& tensor_addrs,
     const uint32_t num_layers,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb) {
+    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb) {
     /* Buffers */
-    const Buffer& global_cb_buffer = global_cb->cb_buffer();
+    const Buffer& global_cb_buffer = global_cb.cb_buffer();
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
-    std::vector<Buffer*> tensor_buffers(tensors.size());
-    for (size_t t = 0; t < tensors.size(); ++t) {
-        tensor_buffers[t] = tensors[t].buffer();
-    }
+    std::vector<Buffer*> tensor_buffers;
+    tensor_buffers.reserve(tensors.size());
+    std::transform(
+        tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
 
     /* Tiles */
     tt::tt_metal::Tile tensor_addrs_tile = tensor_addrs.get_tensor_spec().tile();
-    std::vector<tt::tt_metal::Tile> tensor_tiles(tensors.size());
-    for (size_t t = 0; t < tensors.size(); ++t) {
-        tensor_tiles[t] = tensors[t].get_tensor_spec().tile();
-    }
+    std::vector<tt::tt_metal::Tile> tensor_tiles;
+    tensor_tiles.reserve(tensors.size());
+    std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_tiles), [](const auto& t) {
+        return t.get_tensor_spec().tile();
+    });
 
     /* Dataformats */
     tt::DataFormat tensor_addrs_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_addrs.get_dtype());
-    std::vector<tt::DataFormat> tensor_data_formats(tensors.size());
-    for (size_t t = 0; t < tensors.size(); ++t) {
-        tensor_data_formats[t] = tt::tt_metal::datatype_to_dataformat_converter(tensors[t].get_dtype());
-    }
+    std::vector<tt::DataFormat> tensor_data_formats;
+    tensor_data_formats.reserve(tensors.size());
+    std::transform(tensors.begin(), tensors.end(), std::back_inserter(tensor_data_formats), [](const auto& t) {
+        return tt::tt_metal::datatype_to_dataformat_converter(t.get_dtype());
+    });
 
     Program program{};
 
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::IDevice* device = tensors[0].device();
     uint32_t num_tensors = tensors.size();
-    uint32_t num_receivers_per_reader = global_cb->receiver_cores().num_cores() / global_cb->sender_cores().num_cores();
+    uint32_t num_receivers_per_reader = global_cb.receiver_cores().num_cores() / global_cb.sender_cores().num_cores();
 
-    uint32_t num_blocks = global_cb->receiver_cores().num_cores();
+    uint32_t num_blocks = global_cb.receiver_cores().num_cores();
     std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
     std::vector<uint32_t> tensor_tile_sizes(num_tensors);
@@ -92,21 +94,21 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t max_block_size_per_reader_core = *std::max_element(block_sizes.begin(), block_sizes.end());
     uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
     TT_FATAL(
-        max_tensor_size <= global_cb->size(),
+        max_tensor_size <= global_cb.size(),
         "largest tensor {} must fit in global cb {}",
         max_tensor_size,
-        global_cb->size());
+        global_cb.size());
 
     /* Cores setup */
-    auto reader_core_range = global_cb->sender_cores();
-    auto receiver_core_range = global_cb->receiver_cores();
+    auto reader_core_range = global_cb.sender_cores();
+    auto receiver_core_range = global_cb.receiver_cores();
 
     /* read cb setup */
     uint32_t reader_cb_single_tile_size = max_tile_size;
     const uint32_t total_num_blocks_in_buffer = 3;        // reader cb is triple buffered
     uint32_t reader_cb_size = max_block_size_per_reader_core * total_num_blocks_in_buffer;
 
-    TT_FATAL(reader_cb_size <= global_cb->size(), "reader_cb_size must not be larger than global cb");
+    TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
     uint32_t reader_cb_index = tt::CBIndex::c_0;
     CircularBufferConfig reader_cb_config = CircularBufferConfig(reader_cb_size, {{reader_cb_index, max_tile_size_df}})
@@ -128,7 +130,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     auto tensor_addrs_cb = CreateCircularBuffer(program, reader_core_range, tensor_addrs_cb_config);
 
     /* remote cb setup */
-    uint32_t remote_cb_size = global_cb->size();
+    uint32_t remote_cb_size = global_cb.size();
     uint32_t remote_cb_single_tile_size = max_tile_size;
 
     uint32_t remote_cb_index = tt::CBIndex::c_31;
@@ -137,13 +139,21 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         .set_page_size(remote_cb_single_tile_size)
         .set_data_format(max_tile_size_df);
     auto remote_cb =
-        tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, *global_cb);
+        tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
 
     /* Compile time args */
 
     // Reader kernel
     std::vector<uint32_t> reader_ct_args = {
-        num_layers, num_tensors, num_blocks, reader_cb_size, max_block_tiles, max_block_size_per_reader_core};
+        num_layers,
+        num_tensors,
+        num_blocks,
+        reader_cb_size,
+        max_block_tiles,
+        max_block_size_per_reader_core,
+        reader_cb_index,
+        tensor_addrs_cb_index,
+    };
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -157,7 +167,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
     // Writer kernel
     std::vector<uint32_t> writer_ct_args = {
-        num_layers, num_tensors, num_blocks, num_receivers_per_reader, max_block_tiles};
+        num_layers,
+        num_tensors,
+        num_blocks,
+        num_receivers_per_reader,
+        max_block_tiles,
+        reader_cb_index,
+        remote_cb_index,
+    };
 
     auto writer_kernel_id = CreateKernel(
         program,

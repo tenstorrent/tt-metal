@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,9 +17,8 @@ void kernel_main() {
     constexpr uint32_t read_cb_size = get_compile_time_arg_val(3);
     constexpr uint32_t max_block_num_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t max_block_size = get_compile_time_arg_val(5);
-
-    constexpr uint32_t cb_id = tt::CBIndex::c_0;        // Reader cb
-    constexpr uint32_t addrs_cb_id = tt::CBIndex::c_1;  // Tensor addrs cb
+    constexpr uint32_t cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t addrs_cb_id = get_compile_time_arg_val(7);
 
     // Runtime args
     uint32_t rt_args_idx = 0;
