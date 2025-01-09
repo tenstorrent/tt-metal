@@ -21,7 +21,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     CoreCoord compute_with_storage_grid_size) {
     const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();

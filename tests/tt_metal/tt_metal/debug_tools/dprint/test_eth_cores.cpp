@@ -32,7 +32,7 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
+static void RunTest(DPrintFixture* fixture, IDevice* device, bool active) {
     // Try printing on all ethernet cores on this device
     int count = 0;
     std::unordered_set<CoreCoord> test_cores;
@@ -82,14 +82,14 @@ static void RunTest(DPrintFixture* fixture, Device* device, bool active) {
 }
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_active_ethernet_cores(true).size() == 0) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
+            [](DPrintFixture *fixture, IDevice* device){
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
             },
             device
@@ -101,14 +101,14 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         // Skip if no ethernet cores on this device
         if (device->get_inactive_ethernet_cores().size() == 0) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, Device *device){
+            [](DPrintFixture *fixture, IDevice* device){
                 CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false);
             },
             device

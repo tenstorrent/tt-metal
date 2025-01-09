@@ -60,7 +60,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -71,8 +71,8 @@ private:
 bool RunWriteBWTest(
     std::string const& sender_kernel_path,
     std::string const& receiver_kernel_path,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     bool source_is_dram,
     bool dest_is_dram,

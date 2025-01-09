@@ -15,7 +15,7 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
 }
 
 TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
@@ -26,7 +26,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Just try forcing an eth retrain on Device 0
-    Device *device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     vector<uint32_t> reset_val = {0x1};
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
         // Only force a retrain on odd-numbered eth cores
@@ -46,7 +46,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices to trigger watcher check on teardown.
-    for (Device *device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         tt::tt_metal::CloseDevice(device);
     }
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));

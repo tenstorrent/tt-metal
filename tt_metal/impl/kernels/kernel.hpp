@@ -22,7 +22,7 @@ namespace tt {
 namespace tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -96,18 +96,18 @@ class Kernel : public JitBuildSettings {
     virtual RISCV processor() const = 0;
     uint32_t dispatch_class() { return this->dispatch_class_; }
 
-    virtual bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
+    virtual bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
 
     virtual Config config() const = 0;
 
     std::string compute_hash() const;
     virtual void set_build_options(JitBuildOptions &build_options) const {}
-    virtual void generate_binaries(Device *device, JitBuildOptions &build_options) const = 0;
-    uint32_t get_binary_packed_size(Device *device, int index) const;
-    uint32_t get_binary_text_size(Device *device, int index) const;
+    virtual void generate_binaries(IDevice* device, JitBuildOptions &build_options) const = 0;
+    uint32_t get_binary_packed_size(IDevice* device, int index) const;
+    uint32_t get_binary_text_size(IDevice* device, int index) const;
     void set_binary_path(const std::string &binary_path) { binary_path_ = binary_path; }
     void set_binaries(uint32_t build_key, std::vector<ll_api::memory const*>&& binaries);
-    virtual void read_binaries(Device *device) = 0;
+    virtual void read_binaries(IDevice* device) = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
@@ -167,10 +167,10 @@ class DataMovementKernel : public Kernel {
 
     RISCV processor() const override;
 
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
-    void read_binaries(Device *device) override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
@@ -195,10 +195,10 @@ class EthernetKernel : public Kernel {
 
     RISCV processor() const override;
 
-    void generate_binaries(Device *device, JitBuildOptions &build_options) const override;
-    void read_binaries(Device *device) override;
+    void generate_binaries(IDevice* device, JitBuildOptions &build_options) const override;
+    void read_binaries(IDevice* device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 
@@ -224,10 +224,10 @@ class ComputeKernel : public Kernel {
     RISCV processor() const override;
 
     void set_build_options(JitBuildOptions& build_options) const override;
-    void generate_binaries(Device *device, JitBuildOptions& build_options) const override;
-    void read_binaries(Device *device) override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device) override;
 
-    bool configure(Device *device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+    bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
 
     Config config() const override { return this->config_; }
 

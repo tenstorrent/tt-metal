@@ -15,14 +15,14 @@
 #include "tt_metal/detail/tt_metal.hpp"
 
 #include "tracy/TracyTTDevice.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 namespace tt {
 
 namespace tt_metal {
 inline namespace v0 {
 
-void DumpDeviceProfileResults(Device* device, const Program& program) {
+void DumpDeviceProfileResults(IDevice* device, const Program& program) {
 #if defined(TRACY_ENABLE)
     std::vector<CoreCoord> worker_cores_in_program;
     std::vector<CoreCoord> eth_cores_in_program;
@@ -84,7 +84,7 @@ void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer)
 }
 
 void syncDeviceHost(
-    Device* device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program>& sync_program, bool doHeader) {
+    IDevice* device, CoreCoord logical_core, std::shared_ptr<tt_metal::Program>& sync_program, bool doHeader) {
     if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
         return;
     }
@@ -259,13 +259,13 @@ void syncDeviceHost(
         std::make_tuple(smallestHostime[device_id], delay, frequencyFit);
 }
 
-void ClearProfilerControlBuffer(Device* device) {
+void ClearProfilerControlBuffer(IDevice* device) {
     auto device_id = device->id();
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
     setControlBuffer(device_id, control_buffer);
 }
 
-void InitDeviceProfiler(Device* device) {
+void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -319,7 +319,7 @@ void InitDeviceProfiler(Device* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, bool lastDump) {
+void DumpDeviceProfileResults(IDevice* device, bool lastDump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
@@ -340,7 +340,7 @@ void DumpDeviceProfileResults(Device* device, bool lastDump) {
 #endif
 }
 
-void DumpDeviceProfileResults(Device* device, std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, bool lastDump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 

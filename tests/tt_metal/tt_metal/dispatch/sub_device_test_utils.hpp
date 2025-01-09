@@ -10,7 +10,7 @@
 #include "eth_l1_address_map.h"
 
 inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_program(
-    Device* device, SubDevice sub_device) {
+    IDevice* device, SubDevice sub_device) {
     auto syncer_coord = sub_device.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
     auto global_sem = CreateGlobalSemaphore(device, sub_device.cores(HalProgrammableCoreType::TENSIX), INVALID);
@@ -27,7 +27,7 @@ inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_progra
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_program(
-    Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
+    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
     auto waiter_core_physical = device->worker_core_from_logical_core(waiter_coord);
@@ -71,7 +71,7 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
 }
 
 inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_sync_program(
-    Device* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
+    IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
     auto waiter_core_physical = device->ethernet_core_from_logical_core(waiter_coord);

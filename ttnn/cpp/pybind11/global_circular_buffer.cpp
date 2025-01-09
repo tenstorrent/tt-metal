@@ -19,7 +19,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_circular_buffer",
-        [](Device* device,
+        [](IDevice* device,
            const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
            uint32_t size,
            BufferType buffer_type,
@@ -31,7 +31,7 @@ void py_module(py::module& module) {
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
@@ -59,7 +59,7 @@ void py_module(py::module& module) {
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalCircularBuffer Object on a single device.
 
