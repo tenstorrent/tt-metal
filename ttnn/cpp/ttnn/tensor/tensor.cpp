@@ -926,61 +926,46 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
     }
 }
 
-void memcpy(CommandQueue& queue, void* dst, const Tensor& src, bool blocking) {
+void memcpy(
+    CommandQueue& queue, void* dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region, bool blocking) {
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
-    EnqueueReadBuffer(queue, src.device_buffer(), dst, blocking);
-}
 
-void memcpy(CommandQueue& queue, void* dst, const Tensor& src, size_t offset, size_t size, bool blocking) {
-    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    if (!region.has_value()) {
+        EnqueueReadBuffer(queue, src.device_buffer(), dst, blocking);
+    } else {
+        EnqueueReadSubBuffer(queue, src.device_buffer(), dst, region.value(), blocking);
     }
-    const BufferRegion region(offset, size);
-    EnqueueReadSubBuffer(queue, src.device_buffer(), dst, region, blocking);
 }
 
-void memcpy(void* dst, const Tensor& src, bool blocking) { memcpy(src.device()->command_queue(), dst, src, blocking); }
-
-void memcpy(void* dst, const Tensor& src, size_t offset, size_t size, bool blocking) {
-    memcpy(src.device()->command_queue(), dst, src, offset, size, blocking);
+void memcpy(void* dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region, bool blocking) {
+    memcpy(src.device()->command_queue(), dst, src, region, blocking);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src) {
+void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region) {
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
     }
-    EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
-}
 
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src, size_t offset, size_t size) {
-    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
+    if (!region.has_value()) {
+        EnqueueWriteBuffer(queue, dst.device_buffer(), src, false);
+    } else {
+        EnqueueWriteSubBuffer(queue, dst.device_buffer(), src, region.value(), false);
     }
-    const BufferRegion region(offset, size);
-    EnqueueWriteSubBuffer(queue, dst.device_buffer(), src, region, false);
 }
 
-void memcpy(Tensor& dst, const void* src) { memcpy(dst.device()->command_queue(), dst, src); }
-
-void memcpy(Tensor& dst, const void* src, size_t offset, size_t size) {
-    memcpy(dst.device()->command_queue(), dst, src, offset, size);
+void memcpy(Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region) {
+    memcpy(dst.device()->command_queue(), dst, src, region);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src) {
+void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region) {
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -990,47 +975,19 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src) {
     TT_ASSERT(dst.get_layout() == src.get_layout());
 
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(queue, get_raw_host_data_ptr(dst), src);
+        memcpy(queue, get_raw_host_data_ptr(dst), src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(queue, dst, get_raw_host_data_ptr(src));
+        memcpy(queue, dst, get_raw_host_data_ptr(src), region);
     } else {
         TT_THROW("Unsupported memcpy");
     }
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, size_t offset, size_t size) {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    TT_ASSERT(dst.get_dtype() == src.get_dtype());
-    TT_ASSERT(dst.get_layout() == src.get_layout());
-
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region) {
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(queue, get_raw_host_data_ptr(dst), src, offset, size);
+        memcpy(src.device()->command_queue(), dst, src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(queue, dst, get_raw_host_data_ptr(src), offset, size);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
-void memcpy(Tensor& dst, const Tensor& src) {
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(src.device()->command_queue(), dst, src);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(dst.device()->command_queue(), dst, src);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
-}
-
-void memcpy(Tensor& dst, const Tensor& src, size_t offset, size_t size) {
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        memcpy(src.device()->command_queue(), dst, src, offset, size);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        memcpy(dst.device()->command_queue(), dst, src, offset, size);
+        memcpy(dst.device()->command_queue(), dst, src, region);
     } else {
         TT_THROW("Unsupported memcpy");
     }
