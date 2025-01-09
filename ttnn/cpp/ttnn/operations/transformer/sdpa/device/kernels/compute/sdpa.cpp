@@ -58,7 +58,7 @@ void reduce_c() {
 
     reduce_init_delta<false, pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
-    const uint32_t num_tiles = rows * cols;
+    constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
@@ -105,7 +105,6 @@ void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-
     sub_bcast_cols_init_short(in0_cb, in1_cb);
     exp_tile_init<true>();
     cb_wait_front(in0_cb, rows * cols);
@@ -290,7 +289,6 @@ void matmul_blocks(
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-
     mm_block_init_short(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 

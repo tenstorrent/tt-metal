@@ -417,10 +417,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                            .set_page_size(tt::CBIndex::c_3, mask_tile_size);
-    auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
+    // Only create mask buffer if it's going to be used
+    if (use_provided_mask or is_causal) {
+        // attn_mask input
+        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                                .set_page_size(tt::CB::c_in3, mask_tile_size);
+        auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
+    }
 
     // scale input
     auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
