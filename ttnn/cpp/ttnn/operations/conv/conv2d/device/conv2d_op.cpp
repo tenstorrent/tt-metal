@@ -140,7 +140,7 @@ Tensor optimized_conv_new(
                 enable_split_reader,
                 enable_subblock_padding,
                 use_non_tile_height);
-            tt::tt_metal::Device* device = a.device();
+            IDevice* device = a.device();
 
             optimized_conv_op.pre_op_l1_allocation_size_bytes =
                 device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -283,7 +283,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    tt::tt_metal::Device* device = input_tensor_a.device();
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
 
     const auto arch = device->arch();
     const auto has_bias = input_tensor_bias.has_value();
