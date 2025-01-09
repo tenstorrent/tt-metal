@@ -18,20 +18,14 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-inline uint32_t get_estimated_size_of_cbs(const Tensor& input_tensor_a, const Tensor& output) {
-    // Circular Buffer sizes:
-    uint32_t element_size = input_tensor_a.element_size();
-    uint32_t Wt = output.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t Ht = output.get_legacy_shape()[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t HtWt = Ht * Wt;
-    auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    uint32_t tile_size = tt::tt_metal::detail::TileSize(data_format);
-
-    uint32_t cb_src0_size = 2 * Wt * tile_size;
-    uint32_t cb_output_size = 2 * Ht * tile_size;
-    uint32_t cb_im_size = Ht * Wt * tile_size;
-    uint32_t cb_im2_size = Ht * tile_size;
-    return cb_src0_size + cb_output_size + cb_im_size + cb_im2_size;
+inline uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
+    uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
+    return cb_src0_size + cb_output_size;
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -42,9 +36,14 @@ inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     return max_l1_space;
 }
 
-inline bool rm_enough_available_space(const Tensor& input_tensor_a, const Tensor& output) {
+inline bool enough_available_space(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    uint32_t estimated_size_of_cbs = get_estimated_size_of_cbs(input_tensor_a, output);
+    uint32_t estimated_size_of_cbs =
+        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     return max_l1_space > estimated_size_of_cbs;
 }
 
@@ -272,13 +271,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    bool enough_space = rm_enough_available_space(a, output);
+    uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
+
+    bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     if (enough_space == 0) {
         return tilize_with_val_padding_single_core(a, output, pad_value);
     }
-
-    uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
@@ -379,9 +378,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
-            if (reader_rt_args.size() == 10) {
-                reader_rt_args.resize(reader_rt_args.size() - 4);
-            }
             reader_rt_args.push_back(el.n_data);
             reader_rt_args.push_back(el.n_mixed);
             reader_rt_args.push_back(el.n_pads);

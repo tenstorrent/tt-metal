@@ -59,8 +59,7 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
             const auto tile = output.get_tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
             uint32_t tile_width = tile.get_width();
-            auto unsqueezed_tensor =
-                ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});

@@ -15,7 +15,7 @@ from models.utility_functions import is_grayskull, is_blackhole, torch_random, s
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("use_multicore", [False, True])
-@pytest.mark.parametrize("shape", [[1, 1, 1, 50304], [1, 3, 5, 25152], [7, 32, 19200]])
+@pytest.mark.parametrize("shape", [[1, 1, 1, 50304], [1, 3, 5, 25152], [17, 32, 10944]])
 def test_tilize_with_zero_padding(device, in_dtype, use_multicore, shape):
     torch_input = torch.randn(shape, dtype=torch.bfloat16).bfloat16()
 
