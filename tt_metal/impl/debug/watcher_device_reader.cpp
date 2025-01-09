@@ -12,11 +12,10 @@
 #include "tt_metal/common/assert.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/metal_soc_descriptor.h"
+#include "hw/inc/dev_msgs.h"
 
 // FIXME: Avoid dependence on ARCH_NAME specific includes
-#include "dev_mem_map.h"         // for MEM_BRISC_STAC...
-#include "eth_l1_address_map.h"  // for address_map
-#include "hw/inc/dev_msgs.h"
+#include "dev_mem_map.h"  // for MEM_BRISC_STAC...
 
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
@@ -144,7 +143,10 @@ WatcherDeviceReader::WatcherDeviceReader(
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
@@ -157,7 +159,10 @@ WatcherDeviceReader::~WatcherDeviceReader() {
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(

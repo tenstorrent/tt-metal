@@ -50,6 +50,10 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
         eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
+        eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -73,6 +77,9 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
