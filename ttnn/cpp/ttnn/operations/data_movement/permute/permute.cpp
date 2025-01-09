@@ -96,7 +96,7 @@ ttnn::Tensor permute_impl(
     } else if (N == 1 && C == 0 && H == 3 && W == 2) {
         output = prim_permute(formatted_input_tensor);
     } else if (N == 1 && C == 2 && H == 0 && W == 3) {
-        output = transpose_hc(transpose_cn(formatted_input_tensor));
+        output = prim_permute(formatted_input_tensor);
     } else if (N == 1 && C == 2 && H == 3 && W == 0) {
         output = transpose_wh(transpose_hc(transpose_cn(formatted_input_tensor)));
     } else if (N == 1 && C == 3 && H == 0 && W == 2) {
@@ -104,11 +104,11 @@ ttnn::Tensor permute_impl(
     } else if (N == 1 && C == 3 && H == 2 && W == 0) {
         output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor))));
     } else if (N == 2 && C == 0 && H == 1 && W == 3) {
-        output = transpose_cn(transpose_hc(formatted_input_tensor));
+        output = prim_permute(formatted_input_tensor);
     } else if (N == 2 && C == 0 && H == 3 && W == 1) {
         output = transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)));
     } else if (N == 2 && C == 1 && H == 0 && W == 3) {
-        output = transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor)));
+        output = prim_permute(formatted_input_tensor);
     } else if (N == 2 && C == 1 && H == 3 && W == 0) {
         output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor))));
     } else if (N == 2 && C == 3 && H == 0 && W == 1) {
