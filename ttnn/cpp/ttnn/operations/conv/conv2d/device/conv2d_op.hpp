@@ -14,7 +14,7 @@ namespace ttnn {
 namespace operations::conv {
 namespace conv2d {
 
-const uint32_t l1_scratchpad_CB_size = 64;
+constexpr uint32_t l1_scratchpad_CB_size = 64;
 struct Conv2dConfig {
     DataType dtype = DataType::BFLOAT16;
     DataType weights_dtype = DataType::BFLOAT16;
