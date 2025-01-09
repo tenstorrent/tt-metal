@@ -171,6 +171,7 @@ docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razo
 # misc
 tests/**/dtx/ @mywoodstock @sankarmanoj-tt
 tests/**/*test*conv*.py @mywoodstock @sankarmanoj-tt
+tests/ttnn/unit_tests/operations/convolution @mywoodstock @sankarmanoj-tt
 tests/python_api_testing/conv/ @mywoodstock @sankarmanoj-tt
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
