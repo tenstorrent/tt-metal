@@ -216,6 +216,31 @@ void kernel_main() {
 
         // Determine the number of real faces with data in the height dimension
         uint8_t num_faces_h = (h_t == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
+
+        uint32_t remainder = tile_start;
+
+        // Compute multi-dimensional index for the starting row of the face
+        for (uint32_t i = 0; i < N - 1; ++i) {
+            size_t dim = N - 2 - i;  // Start from the second last dimension
+            src_multi_idx[dim] = remainder % input_shape[dim];
+            remainder /= input_shape[dim];
+        }
+        src_multi_idx[N - 1] = 0;
+
+        // Apply permutation to get destination multi-dimensional index of where the data will begin
+        for (uint32_t i = 0; i < N; ++i) {
+            dest_multi_idx[i] = src_multi_idx[perm[i]];  // Logical row dimension index for output tensor
+        }
+
+        // Calculate the base output row offset to the start of the data in the output
+        uint32_t base_output_row_offset = 0;
+        for (uint32_t i = 0; i < N - 1; i++) {
+            if (i == h_in_dest) {
+                continue;
+            }
+            base_output_row_offset += dest_multi_idx[i] * dest_padded_strides[i];
+        }
+
         cb_wait_front(cb_id_out0, 1);
 
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
@@ -230,29 +255,6 @@ void kernel_main() {
 
             // Compute the row that the start of the face belongs to
             uint32_t base_row = tile_start + face_h * FACE_HEIGHT;
-            uint32_t remainder = base_row;
-
-            // Compute multi-dimensional index for the starting row of the face
-            for (uint32_t i = 0; i < N - 1; ++i) {
-                size_t dim = N - 2 - i;  // Start from the second last dimension
-                src_multi_idx[dim] = remainder % input_shape[dim];
-                remainder /= input_shape[dim];
-            }
-            src_multi_idx[N - 1] = 0;
-
-            // Apply permutation to get destination multi-dimensional index of where the data will begin
-            for (uint32_t i = 0; i < N; ++i) {
-                dest_multi_idx[i] = src_multi_idx[perm[i]];  // Logical row dimension index for output tensor
-            }
-
-            // Calculate the base output row offset to the start of the data in the output
-            uint32_t base_output_row_offset = 0;
-            for (uint32_t i = 0; i < N - 1; i++) {
-                if (i == h_in_dest) {
-                    continue;
-                }
-                base_output_row_offset += dest_multi_idx[i] * dest_padded_strides[i];
-            }
 
             // This kernel doesn't run when N-2 is not moved, as a result, h_in_dest != N-2, so we can use N-2 directly
             // without knowing the full index Position of this output_row within the tile:
@@ -324,7 +326,7 @@ void kernel_main() {
         constexpr uint32_t x_t = X_t - 1;
         constexpr uint8_t X_in_tile = X % TILE_HEIGHT;
         constexpr uint8_t face_c_start = X_in_tile / FACE_HEIGHT;
-
+        dest_multi_idx[N - 2] = x_t;
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Map tile_idx to it's multi dimensional tiled index in the output
             // reuse dest_multi_idx for this purpose
@@ -334,7 +336,6 @@ void kernel_main() {
             for (uint32_t i = 0; i < N; ++i) {
                 size_t dim = N - 1 - i;
                 if (dim == N - 2) {
-                    dest_multi_idx[dim] = x_t;
                     continue;
                 }
                 dest_multi_idx[dim] = remaining % output_tiled_shape[dim];
