@@ -371,7 +371,26 @@ def test_permute_5d_tiled_row_invariant(shape, perm, device):
 
 @pytest.mark.parametrize("shape", [[2, 2, 36, 33, 35]])
 @pytest.mark.parametrize("perm", [(0, 1, 3, 2, 4)])
-def test_permute_5d_xc_pad(shape, perm, device):
+def test_permute_5d_xh_pad(shape, perm, device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+def generate_fixed_w_permutations(N):
+    perms_Nd = generate_permutations(N - 1)
+    for perm in perms_Nd:
+        yield perm + (N - 1,)
+
+
+@pytest.mark.parametrize("shape", [[7, 7, 7, 7, 7]])
+@pytest.mark.parametrize("perm", generate_fixed_w_permutations(5))
+def test_permutations_5d_fixed_w(shape, perm, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)

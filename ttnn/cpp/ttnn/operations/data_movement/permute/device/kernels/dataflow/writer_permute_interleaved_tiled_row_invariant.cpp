@@ -116,6 +116,7 @@ void kernel_main() {
     // Input shape, permutation, and destination strides
     uint32_t array_start_offset = 5;  // input shape starts at arg 5
     uint32_t input_shape[N], perm[N], output_shape[N];
+
     for (uint32_t i = 0; i < N; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + array_start_offset);
         perm[i] = get_arg_val<uint32_t>(i + array_start_offset + N);
@@ -191,6 +192,20 @@ void kernel_main() {
     output_tiled_shape[N - 2] = X_t;
     output_tiled_shape[N - 1] = W_t;
 
+    uint32_t h_in_dest = 0;
+    for (uint32_t i = 0; i < N; i++) {
+        if (perm[i] == N - 2) {
+            h_in_dest = i;
+            break;
+        }
+    }
+
+    uint32_t dest_padded_strides[N];
+    dest_padded_strides[N - 1] = 1;
+    for (uint32_t i = N - 2; i > 0; i--) {
+        dest_padded_strides[i] = dest_padded_strides[i + 1] * output_padded_shape[i];
+    }
+
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
         uint32_t tile_start =
             get_unpadded_linear_row_index_for_tile<N, TILE_HEIGHT, TILE_WIDTH>(tile, input_tiled_shape, input_shape);
@@ -210,24 +225,29 @@ void kernel_main() {
             bool is_last_sub_tile_line = (h_t == H_t - 1) && (face_h == num_faces_h - 1);
             uint8_t sub_tile_lines = is_last_sub_tile_line ? sub_tile_lines_real : FACE_HEIGHT;
 
+            uint32_t base_row = tile_start + face_h * FACE_HEIGHT;
+            uint32_t remainder = base_row;
+            // Compute multi-dimensional index for the starting row of the tile
+            for (uint32_t i = 0; i < N - 1; ++i) {
+                size_t dim = N - 2 - i;  // Start from the second last dimension
+                src_multi_idx[dim] = remainder % input_shape[dim];
+                remainder /= input_shape[dim];
+            }
+            src_multi_idx[N - 1] = 0;  // Logical row dimension index for output tensor
+
+            // Apply permutation to get destination multi-dimensional index
+            for (uint32_t i = 0; i < N; ++i) {
+                dest_multi_idx[i] = src_multi_idx[perm[i]];  // Logical row dimension index for output tensor
+            }
+
             // Iterate over faces in the width dimension
             for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
-                    // Compute multi-dimensional index for the row that we're on
-                    uint32_t row = tile_start + (uint32_t)(face_h * FACE_HEIGHT + sub_tile_line);
-
-                    for (uint32_t i = 0; i < N - 1; ++i) {
-                        size_t dim = N - 2 - i;  // Start from the second last dimension
-                        src_multi_idx[dim] = row % input_shape[dim];
-                        row /= input_shape[dim];
-                    }
-                    src_multi_idx[N - 1] = 0;  // Logical row dimension index for output tensor
-
-                    // Apply permutation to get destination multi-dimensional index
-                    for (uint32_t i = 0; i < N; ++i) {
-                        dest_multi_idx[i] = src_multi_idx[perm[i]];  // Logical row dimension index for output tensor
-                    }
+                    uint32_t row = base_row + sub_tile_line;
+                    // Adjust multi-dimensional index for sub_tile_line
+                    src_multi_idx[N - 2] = row % input_shape[N - 2];
+                    dest_multi_idx[h_in_dest] = src_multi_idx[N - 2];
 
                     // First find the tile that this belongs to
                     // logical output shape: [..., X, W]
