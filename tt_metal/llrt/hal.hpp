@@ -53,6 +53,8 @@ enum class HalL1MemAddrType : uint8_t {
     BANK_TO_NOC_SCRATCH,
     APP_SYNC_INFO,
     TILE_HEADER_BUFFER,
+    APP_ROUTING_INFO,
+    RETRAIN_COUNT,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
