@@ -111,7 +111,7 @@ Result conv2d(
         parallel_config,
         output_parallel_config,
         in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment,
+        out_channels,
         batch_size,
         output_height,
         output_width,
