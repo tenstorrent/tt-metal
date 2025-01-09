@@ -44,6 +44,6 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
     }
 }
 
-#endif
-
 }  // namespace tt::data_movement::common
+
+#endif
