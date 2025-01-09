@@ -2304,7 +2304,6 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
             // partial reducer writer0 (end of line - start): output_tensor_pt
             // partial reducer writer1 (end of line - end): local_final_output_tensor
 
-            log_info(tt::LogOp, "Overriding runtime args for device {}", topology_config.line_index());
             std::array<size_t, 2> input_tensor_from_remote_idx = {input_tensor_from_remote_forward_direction_idx, input_tensor_from_remote_backward_direction_idx};
             std::array<size_t, 2> partial_output_tensor_idx = {partial_output_tensor_forward_direction_idx, partial_output_tensor_backward_direction_idx};
 
