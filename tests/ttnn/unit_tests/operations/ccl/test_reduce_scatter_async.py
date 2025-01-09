@@ -354,19 +354,6 @@ def test_line_reduce_scatter_async_post_commit(
     trace_mode,
     num_iters=16,
 ):
-    # known_l1_failure_shapes = (
-    #     (1, 1, 128, 4096),
-    #     (1, 4, 32, 2304),
-    #     (1, 8, 1024, 1024),
-    #     (1, 4, 2048, 1024),
-    #     (1, 1, 128, 8192),
-    # )
-
-    # if mem_config.buffer_type == ttnn.BufferType.L1 and any(
-    #     tuple(per_chip_output_shape) == s for s in known_l1_failure_shapes
-    # ):
-    #     pytest.skip("Skipping known failure")
-
     run_reduce_scatter_test(
         t3k_mesh_device,
         num_devices,
@@ -624,10 +611,6 @@ def test_line_reduce_scatter_cluster_axis_on_T3K_width_sharded_reduce_scatter_po
 ):
     if len(t3k_mesh_device.get_devices()) < 8:
         pytest.skip("Not T3K!")
-
-    # per_chip_input_shape = list(per_chip_output_shape)
-    # per_chip_input_shape[dim] *= num_devices
-    # per_chip_input_shape = tuple(per_chip_input_shape)
 
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
