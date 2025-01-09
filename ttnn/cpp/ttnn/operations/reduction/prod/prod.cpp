@@ -90,9 +90,9 @@ Tensor ProdOperation::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const size_t size = input_a.get_shape().size();
+    const int size = static_cast<int>(input_a.get_shape().size());
     TT_FATAL(
-        size && dim >= -static_cast<int>(size) && dim <= size - 1,
+        size && dim >= -size && dim <= size - 1,
         "Dimension out of range (expected to be in range of [-{}, {}]",
         size,
         size - 1);
