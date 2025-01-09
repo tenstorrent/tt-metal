@@ -55,7 +55,7 @@ def test_var(device, batch_size, h, w, dim):
 @pytest.mark.parametrize("h", [67])
 @pytest.mark.parametrize("w", [77])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
-@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("keepdim", [True, False])
 def test_prod(device, batch_size, c, h, w, dim, keepdim):
     torch.manual_seed(0)
 
@@ -66,7 +66,7 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn.prod(input_tensor, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output_tensor = ttnn.prod(input_tensor, dim=dim, keepdim=keepdim, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -75,8 +75,8 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [3])
-@pytest.mark.parametrize("c", [5])
+@pytest.mark.parametrize("batch_size", [32])
+@pytest.mark.parametrize("c", [32])
 @pytest.mark.parametrize("h", [37])
 @pytest.mark.parametrize("w", [63])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
