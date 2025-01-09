@@ -388,7 +388,7 @@ def generate_fixed_w_permutations(N):
         yield perm + (N - 1,)
 
 
-@pytest.mark.parametrize("shape", [[7, 7, 7, 7, 7]])
+@pytest.mark.parametrize("shape", [[7, 7, 7, 33, 33]])
 @pytest.mark.parametrize("perm", generate_fixed_w_permutations(5))
 def test_permutations_5d_fixed_w(shape, perm, device):
     torch.manual_seed(2005)
