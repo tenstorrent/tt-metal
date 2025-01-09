@@ -528,10 +528,7 @@ void MAIN {
                     cb_pop_front(cb_qk_im, qk_chunk_tiles);
 
                     /* OUT_ACC += OUT_IM */
-                    if (k_chunk == 0) {
-                        // Instead of copy, swap.
-                        std::swap(alias_cur_sum, alias_prev_sum);
-                    } else {
+                    if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                         sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                         cb_pop_front(cb_prev_max, Sq_chunk_t);
@@ -541,15 +538,14 @@ void MAIN {
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 
-                        // Swap alias_prev_sum and alias_cur_sum
-                        std::swap(alias_prev_sum, alias_cur_sum);
-
                         /* cb_out_accumulate_im *= cb_exp_max_diff */
                         mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(cb_out_accumulate_im, cb_exp_max_diff);
 
                         add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                     }
 
+                    // Swap alias_prev_sum and alias_cur_sum
+                    std::swap(alias_prev_sum, alias_cur_sum);
                     // Set cb_prev_sum and cb_prev_max
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
                 }
