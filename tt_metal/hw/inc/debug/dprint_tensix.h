@@ -223,146 +223,100 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
 
 // UNPACKER CONFIG REGISTERS
 
+// TODO: Change dprint_tensix functions to use struct readers and then print struct fields (where this is possible) 
+
 // GRAYSKULL
+
+#ifdef ARCH_GRAYSKULL
 inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    
+    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
 
-    //word 0
-    uint32_t word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xf, 0, "in_data_format"); // cast to DataType
-    dprint_tensix_struct_field(word, 0x10, 4, "uncompressed");
-    dprint_tensix_struct_field(word, 0xe0, 5, "reserved_0");
-    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane", true); // decimal
-    dprint_tensix_struct_field(word, 0xf000, 12, "reserved_1");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim", true); // decimal
-
-    //word 1
-    word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim", true); // decimal
-
-    //word 2
-    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim", true); // decimal
-
-    // blobs_y_start is in 2 words (word2 and word3)
-    uint32_t tmp_word = word;
-
-    // word3
-    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
-    DPRINT << "blobs_y_start: " << DEC() << (((word & 0xffff) << 16) | ((tmp_word & 0xffff0000) >> 16)) << "; "; //blobs_y_start -> decimal
-
-    dprint_tensix_struct_field(word, 0xff0000, 16, "digest_type");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size", true); // decimal
-
+    DPRINT << "in_data_format: " << HEX() << tile_descriptor.in_data_format << "; ";
+    DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << "; ";
+    DPRINT << "reserved_0: " << HEX() << tile_descriptor.reserved_0 << "; ";
+    DPRINT << "blobs_per_xy_plane: " << tile_descriptor.blobs_per_xy_plane << "; ";
+    DPRINT << "reserved_1: " << HEX() << tile_descriptor.reserved_1 << "; ";
+    DPRINT << "x_dim: " << tile_descriptor.x_dim << "; ";
+    DPRINT << "y_dim: " << tile_descriptor.y_dim << "; ";
+    DPRINT << "z_dim: " << tile_descriptor.z_dim << "; ";
+    DPRINT << "w_dim: " << tile_descriptor.w_dim << "; ";
+    DPRINT << "blobs_y_start: " << tile_descriptor.blobs_y_start << "; ";
+    DPRINT << "digest_type: " << HEX() << tile_descriptor.digest_type << "; ";
+    DPRINT << "digest_size: " << tile_descriptor.digest_size << "; ";
     DPRINT << ENDL();
 }
 
 inline void dprint_tensix_unpack_config_grayskull() {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    
+    ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
 
-    //word 0
-    uint32_t word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0xf, 0, "out_format"); // cast to DataType
-    dprint_tensix_struct_field(word, 0x30, 4, "throttle_mode");
-    dprint_tensix_struct_field(word, 0xc0, 6, "cntx_cnt");
-    dprint_tensix_struct_field(word, 0x100, 8, "halo_mode");
-    dprint_tensix_struct_field(word, 0x200, 9, "tile_mode");
-    dprint_tensix_struct_field(word, 0x400, 10, "force_shrd_exp");
-    dprint_tensix_struct_field(word, 0x800, 11, "res_0");
-    dprint_tensix_struct_field(word, 0x7000, 12, "upsmpl_rate", true); // decimal
-    dprint_tensix_struct_field(word, 0x8000, 15, "upsmpl_and_intrlv");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt", true); // decimal
-
-    //word 2
-    word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xf, 0, "uncmpr_cntx0_3");
-    dprint_tensix_struct_field(word, 0xfff0, 4, "res_1");
-    dprint_tensix_struct_field(word, 0xf0000, 16, "uncmpr_cntx4_7");
-    dprint_tensix_struct_field(word, 0xfff00000, 20, "res_2");
-
-    //word 2
-    word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0xffff, 0, "limit_addr");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "fifo_sz", true); // decimal
-
-    DPRINT << ENDL();
+    DPRINT << "out_format: " << HEX() << config.out_data_format << "; ";
+    DPRINT << "throttle_mode: " << HEX() << config.throttle_mode << "; ";
+    DPRINT << "cntx_cnt: " << HEX() << config.context_count << "; ";
+    DPRINT << "halo_mode: " << HEX() << config.haloize_mode << "; ";
+    DPRINT << "tile_mode: " << HEX() << config.tileize_mode << "; ";
+    DPRINT << "force_shrd_exp: " << HEX() << config.force_shared_exp << "; ";
+    DPRINT << "res_0: " << HEX() << config.reserved_0 << "; ";
+    DPRINT << "upsmpl_rate: " << config.upsample_rate << "; ";
+    DPRINT << "upsmpl_and_intrlv: " << HEX() << config.upsamle_and_interlave << "; ";
+    DPRINT << "shamt: " << config.shift_amount << "; ";
+    DPRINT << "uncmpr_cntx0_3: " << HEX() << config.uncompress_cntx0_3 << "; ";
+    DPRINT << "res_1: " << HEX() << config.reserved_1 << "; ";
+    DPRINT << "uncmpr_cntx4_7: " << HEX() << config.uncompress_cntx4_7 << "; ";
+    DPRINT << "res_2: " << HEX() << config.reserved_2 << "; ";
+    DPRINT << "limit_addr: " << HEX() << config.limit_addr << "; "; 
+    DPRINT << "fifo_sz: " << config.fifo_size << "; ";
+    DPRINT << ENDL();  
 }
+#endif // ARCH_GRAYSKULL
 
 // WORMHOLE/BLACKHOLE
 inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    
+    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor(); 
 
-    //word 0
-    uint32_t word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xf, 0, "in_data_format"); // cast to DataType
-    dprint_tensix_struct_field(word, 0x10, 4, "uncompressed");
-    dprint_tensix_struct_field(word, 0xe0, 5, "reserved_0");
-    dprint_tensix_struct_field(word, 0xf00, 8, "blobs_per_xy_plane", true); // decimal
-    dprint_tensix_struct_field(word, 0xf000, 12, "reserved_1");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "x_dim", true); // decimal
-
-    //word 1
-    word = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xffff, 0, "y_dim", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "z_dim", true); // decimal
-
-    //word 2
-    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32];
-    dprint_tensix_struct_field(word, 0xffff, 0, "w_dim", true); // decimal
-
-    uint32_t prev_word = word;
-
-    // word3
-    word = cfg[THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1];
-    DPRINT << "blobs_y_start: " << DEC() << (((word & 0xffff) << 16) | ((prev_word & 0xffff0000) >> 16)) << "; "; // decimal
-    dprint_tensix_struct_field(word, 0xff0000, 16, "digest_type");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "digest_size", true); // decimal
-
+    DPRINT << "in_data_format: " << HEX() << tile_descriptor.in_data_format << "; ";
+    DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << "; ";
+    DPRINT << "reserved_0: " << HEX() << tile_descriptor.reserved_0 << "; ";
+    DPRINT << "blobs_per_xy_plane: " << tile_descriptor.blobs_per_xy_plane << "; ";
+    DPRINT << "reserved_1: " << HEX() << tile_descriptor.reserved_1 << "; ";
+    DPRINT << "x_dim: " << tile_descriptor.x_dim << "; ";
+    DPRINT << "y_dim: " << tile_descriptor.y_dim << "; ";
+    DPRINT << "z_dim: " << tile_descriptor.z_dim << "; ";
+    DPRINT << "w_dim: " << tile_descriptor.w_dim << "; ";
+    DPRINT << "blobs_y_start: " << ((tile_descriptor.blobs_y_start_hi << 16) | tile_descriptor.blobs_y_start_lo) << "; ";
+    DPRINT << "digest_type: " << HEX() << tile_descriptor.digest_type << "; ";
+    DPRINT << "digest_size: " << tile_descriptor.digest_size << "; ";
     DPRINT << ENDL();
 }
 
 inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+    
+    ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
 
-    //word 0
-    uint32_t word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0xf, 0, "out_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0x30, 4, "throt_md");
-    dprint_tensix_struct_field(word, 0xc0, 6, "cx_cnt");
-    dprint_tensix_struct_field(word, 0x100, 8, "halo_md");
-    dprint_tensix_struct_field(word, 0x200, 9, "tile_md");
-    dprint_tensix_struct_field(word, 0x400, 10, "unp_srreg_stupd");
-    dprint_tensix_struct_field(word, 0x800, 11, "unpis");
-    dprint_tensix_struct_field(word, 0x3000, 12, "ups_rate");
-    dprint_tensix_struct_field(word, 0x4000, 14, "r1");
-    dprint_tensix_struct_field(word, 0x8000, 15, "ups_and_int");
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "shamt", true); // decimal
-
-    //word 2
-    word = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32 + 1];
-    dprint_tensix_struct_field(word, 0xf, 0, "uncmpr_cx0_3");
-    dprint_tensix_struct_field(word, 0xf0, 4, "unpis_cx0_3");
-    dprint_tensix_struct_field(word, 0x100, 8, "force_shrd_exp");
-    dprint_tensix_struct_field(word, 0xfe00, 9, "r2");
-    dprint_tensix_struct_field(word, 0xf0000, 16, "uncmpr_cx4_7");
-    dprint_tensix_struct_field(word, 0xf00000, 20, "unpis_cx4_7");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "r3");
-
-    //word 2
-    word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0x1ffff, 0, "lmt_addr");
-    dprint_tensix_struct_field(word, 0xfffe0000, 17, "r4");
-
-    //word 3
-    word = cfg[THCON_SEC1_REG2_Out_data_format_ADDR32];
-    dprint_tensix_struct_field(word, 0x1ffff, 0, "fifo_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0xfffe0000, 17, "r5");
-
+    DPRINT << "out_frmt: " << HEX() << config.out_data_format << "; ";
+    DPRINT << "throt_md: " << HEX() << config.throttle_mode << "; ";
+    DPRINT << "cx_cnt: " << HEX() << config.context_count << "; ";
+    DPRINT << "halo_md: " << HEX() << config.haloize_mode << "; ";
+    DPRINT << "tile_md: " << HEX() << config.tileize_mode << "; ";
+    DPRINT << "u_s_s: " << HEX() << config.unpack_src_reg_set_update << "; ";
+    DPRINT << "unpis: " << HEX() << config.unpack_if_sel << "; ";
+    DPRINT << "ups_rate: " << HEX() << config.upsample_rate << "; ";
+    DPRINT << "r1: " << HEX() << config.reserved_1 << "; ";
+    DPRINT << "ups_and_int: " << config.upsamle_and_interlave << "; ";
+    DPRINT << "shamt: " << config.shift_amount << " ;";
+    DPRINT << "u_cx0_3: " << HEX() << config.uncompress_cntx0_3 << "; ";
+    DPRINT << "u_cx4_7: " << HEX() << config.unpack_if_sel_cntx0_3 << "; ";
+    DPRINT << "frc_shrd_exp: " << HEX() << config.force_shared_exp << "; ";
+    DPRINT << "r2: " << HEX() << config.reserved_2 << "; ";
+    DPRINT << "u_cx4_7: " << HEX() << config.uncompress_cntx4_7 << "; ";
+    DPRINT << "u_cx4_7: " << HEX() << config.unpack_if_sel_cntx4_7 << "; ";
+    DPRINT << "r3: " << HEX() << config.reserved_3 << "; ";
+    DPRINT << "l_ad: " << HEX() << config.limit_addr << "; ";
+    DPRINT << "r4: " << HEX() << config.reserved_4 << "; ";
+    DPRINT << "f_sz: " << config.fifo_size << "; ";
+    DPRINT << "r5: " << HEX() << config.reserved_5 << "; ";
     DPRINT << ENDL();
 }
 
@@ -479,27 +433,22 @@ inline void dprint_tensix_alu_config() {
     return;
 #endif
 
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr * cfg = get_cfg_pointer();
-    uint32_t reg_val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
+    ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
-    DPRINT << "RND_MODE: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Fpu_srnd_en, "Fpu_srnd_en", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Gasket_srnd_en, "Gasket_srnd_en", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Packer_srnd_en, "Packer_srnd_en", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Padding, "Padding", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_GS_LF, "GS_LF", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ROUNDING_MODE_Bfp8_HF, "Bfp8_HF", false);
-    DPRINT << "FORMAT: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcAUnsigned, "SrcAUnsigned", false); // cast to DataFormat
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcBUnsigned, "SrcBUnsigned", false); // cast to DataFormat
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG0_SrcA, "SrcA", false); // cast to DataFormat
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG1_SrcB, "SrcB", false); // cast to DataFormat
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_FORMAT_SPEC_REG2_Dstacc, "Dstacc", false); // cast to DataFormat
-    DPRINT << "ACC_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Fp32_enabled, "Fp32_enabled", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_SFPU_Fp32_enabled, "SFPU_Fp32_enabled", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_INT8_math_enabled, "INT8_math_enabled", false);
+    DPRINT << "Fpu_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << "; ";
+    DPRINT << "Gasket_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Gasket_srnd_en << "; ";
+    DPRINT << "Packer_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Packer_srnd_en << "; ";
+    DPRINT << "Padding: " << HEX() << config.ALU_ROUNDING_MODE_Padding << "; ";
+    DPRINT << "GS_LF: " << HEX() << config.ALU_ROUNDING_MODE_GS_LF << "; ";
+    DPRINT << "Bfp8_HF: " << HEX() << config.ALU_ROUNDING_MODE_Bfp8_HF << "; ";
+    DPRINT << "SrcAUnsigned: " << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << "; ";
+    DPRINT << "SrcBUnsigned: " << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << "; ";
+    DPRINT << "SrcA: " << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcA << "; ";
+    DPRINT << "SrcB: " << HEX() << config.ALU_FORMAT_SPEC_REG1_SrcB << "; ";
+    DPRINT << "Dstacc: " << HEX() << config.ALU_FORMAT_SPEC_REG2_Dstacc << "; ";
+    DPRINT << "Fp32_enabled: " << HEX() << config.ALU_ACC_CTRL_Fp32_enabled << "; ";
+    DPRINT << "SFPU_Fp32_enabled: " << HEX() << config.ALU_ACC_CTRL_SFPU_Fp32_enabled << "; ";
+    DPRINT << "INT8_math_enabled: " << HEX() << config.ALU_ACC_CTRL_INT8_math_enabled << "; ";
     DPRINT << ENDL();
 }
 
