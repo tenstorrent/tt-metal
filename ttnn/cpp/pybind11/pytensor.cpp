@@ -1038,6 +1038,12 @@ void pytensor_module(py::module& m_tensor) {
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
         .def_property_readonly("shape", [](const Tensor& self) { return self.get_shape(); })
+        .def_property_readonly(
+            "logical_shape",
+            [](const Tensor& self) {
+                auto logical_shape = self.get_logical_shape();
+                return std::vector<uint32_t>(logical_shape.cbegin(), logical_shape.cend());
+            })
         .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
         .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
         .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })

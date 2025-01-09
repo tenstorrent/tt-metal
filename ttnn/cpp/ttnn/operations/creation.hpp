@@ -121,7 +121,8 @@ static Tensor full_impl(
     TensorSpec tensor_spec(
         shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout), MemoryConfig{}, shape));
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tensor_spec.padded_shape().volume());
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(
+        tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width());
     // TODO: 15061 - Generalize the header to support generic vector / view types.
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
