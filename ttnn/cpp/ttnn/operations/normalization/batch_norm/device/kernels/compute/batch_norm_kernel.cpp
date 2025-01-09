@@ -40,6 +40,8 @@ void MAIN {
     constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t is_training_mode = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(4) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -56,6 +58,11 @@ void MAIN {
     constexpr auto cb_weight = tt::CBIndex::c_16;    // weight tensor
     constexpr auto cb_tmp_1 = tt::CBIndex::c_17;     // (input - batch_mean)/(sqrt(batch_var + eps))
     constexpr auto cb_bias = tt::CBIndex::c_18;      // bias tensor
+    constexpr auto cb_old_running_mean = tt::CBIndex::c_25;  // old running mean tensor
+    constexpr auto cb_old_running_var = tt::CBIndex::c_26;   // old running var tensor
+    constexpr auto cb_updated_running_mean = tt::CBIndex::c_27;  // updated running mean tensor
+    constexpr auto cb_updated_running_var = tt::CBIndex::c_28;   // updated running var tensor
+    constexpr auto cb_momentum = tt::CBIndex::c_24;              // momentum
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
@@ -118,7 +125,12 @@ void MAIN {
         cb_push_back(cb_affine_or_out, onetile);
 
         if constexpr (is_training_mode) {
-            // update running stats here
+            // updated running stats
+            if constexpr (old_running_mean_has_value) {
+            }
+
+            if constexpr (old_running_var_has_value) {
+            }
         }
 
         if constexpr (weight_has_value) {  // result = result * weight

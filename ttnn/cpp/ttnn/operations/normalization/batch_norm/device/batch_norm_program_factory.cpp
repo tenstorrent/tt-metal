@@ -29,12 +29,15 @@ void set_or_update_runtime_arguments(
     const BatchNormOperation::tensor_args_t& tensor_args,
     BatchNormOperation::tensor_return_value_t& c,
     F handle_args) {
-    const auto& [a, b, d, e, f, _] = tensor_args;
+    const auto& [a, b, d, e, f, g, h, _] = tensor_args;
     const auto eps = operation_attributes.eps;
     const auto momentum = operation_attributes.momentum;
 
     const bool weight_has_value = e.has_value();
     const bool bias_has_value = f.has_value();
+    const bool running_mean_has_value = g.has_value();
+    const bool running_var_has_value = h.has_value();
+    const bool is_training_mode = operation_attributes.training;
 
     const auto ashape = a.padded_shape();
     const auto bshape = b.padded_shape();
@@ -65,7 +68,7 @@ void set_or_update_runtime_arguments(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 12>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -93,11 +96,15 @@ void set_or_update_runtime_arguments(
 
         const auto weight_addr = weight_has_value ? e->buffer()->address() : 0;
         const auto bias_addr = bias_has_value ? f->buffer()->address() : 0;
+        const auto running_mean_addr = is_training_mode and running_mean_has_value ? g->buffer()->address() : 0;
+        const auto running_var_addr = is_training_mode and running_var_has_value ? h->buffer()->address() : 0;
         std::array writer_runtime_args = {
             b.buffer()->address(),  //  batch mean
             d.buffer()->address(),  //  batch var
             weight_addr,            // weight
             bias_addr,              // bias
+            running_mean_addr,      // old running mean
+            running_var_addr,       // old running var
             c.buffer()->address(),  // output
             start_tile_id,
             num_tiles_per_core,
@@ -131,7 +138,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& [a, b, d, e, f, _] = tensor_args;
+    const auto& [a, b, d, e, f, g, h, _] = tensor_args;
 
     auto program = CreateProgram();
 
@@ -139,6 +146,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     const bool weight_has_value = e.has_value();
     const bool bias_has_value = f.has_value();
+    const bool running_mean_has_value = g.has_value();
+    const bool running_var_has_value = h.has_value();
+    const bool is_training_mode = operation_attributes.training;
 
     auto a_data_format = datatype_to_dataformat_converter(a.get_dtype());
     auto b_data_format = datatype_to_dataformat_converter(b.get_dtype());
@@ -146,6 +156,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto d_data_format = datatype_to_dataformat_converter(d.get_dtype());
     auto e_data_format = weight_has_value ? datatype_to_dataformat_converter(e->get_dtype()) : DataFormat::Float16_b;
     auto f_data_format = bias_has_value ? datatype_to_dataformat_converter(f->get_dtype()) : DataFormat::Float16_b;
+    auto g_data_format = is_training_mode and running_mean_has_value ? datatype_to_dataformat_converter(g->get_dtype())
+                                                                     : DataFormat::Float16_b;
+    auto h_data_format = is_training_mode and running_var_has_value ? datatype_to_dataformat_converter(h->get_dtype())
+                                                                    : DataFormat::Float16_b;
 
     uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
@@ -153,6 +167,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t d_single_tile_size = tt_metal::detail::TileSize(d_data_format);
     uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
     uint32_t f_single_tile_size = tt_metal::detail::TileSize(f_data_format);
+    uint32_t g_single_tile_size = tt_metal::detail::TileSize(g_data_format);
+    uint32_t h_single_tile_size = tt_metal::detail::TileSize(h_data_format);
 
     uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
 
@@ -199,6 +215,20 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         d_single_tile_size,
         b_num_tiles_per_cb,
         d_data_format);  // momentum
+    auto [g_cb, g_cb_handle] = create_cb(
+        tt::CBIndex::c_25,
+        program,
+        all_device_cores,
+        g_single_tile_size,
+        b_num_tiles_per_cb,
+        g_data_format);  // old running mean
+    auto [h_cb, h_cb_handle] = create_cb(
+        tt::CBIndex::c_26,
+        program,
+        all_device_cores,
+        h_single_tile_size,
+        b_num_tiles_per_cb,
+        h_data_format);  // old running var
 
     // Temporary buffers to store intermediate results
     auto [den_cb, den_cb_handle] = create_cb(
@@ -217,6 +247,20 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         a_data_format);  // to store input - batch_mean
     auto [temp_1_cb, temp_1_cb_handle] =
         create_cb(tt::CBIndex::c_17, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
+    auto [updated_m_cb, updated_m_cb_handle] = create_cb(
+        tt::CBIndex::c_27,
+        program,
+        all_device_cores,
+        g_single_tile_size,
+        b_num_tiles_per_cb,
+        g_data_format);  // updated running mean
+    auto [updated_v_cb, updated_v_cb_handle] = create_cb(
+        tt::CBIndex::c_28,
+        program,
+        all_device_cores,
+        h_single_tile_size,
+        b_num_tiles_per_cb,
+        h_data_format);  // updated running var
 
     auto a_is_dram = static_cast<uint32_t>(a.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(b.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
@@ -224,6 +268,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto d_is_dram = static_cast<uint32_t>(d.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     const auto e_is_dram = weight_has_value and e->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     const auto f_is_dram = bias_has_value and f->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    const auto g_is_dram =
+        is_training_mode and running_mean_has_value and g->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    const auto h_is_dram =
+        is_training_mode and running_var_has_value and h->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
     // READER KERNEL
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -237,15 +285,20 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_batch_norm.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(
-            {b_is_dram,
-             c_is_dram,
-             d_is_dram,
-             e_is_dram,
-             f_is_dram,
-             static_cast<uint32_t>(weight_has_value),
-             static_cast<uint32_t>(bias_has_value),
-             static_cast<uint32_t>(operation_attributes.training)}));
+        tt_metal::WriterDataMovementConfig({
+            b_is_dram,
+            c_is_dram,
+            d_is_dram,
+            e_is_dram,
+            f_is_dram,
+            static_cast<uint32_t>(weight_has_value),
+            static_cast<uint32_t>(bias_has_value),
+            static_cast<uint32_t>(operation_attributes.training),
+            g_is_dram,
+            h_is_dram,
+            static_cast<uint32_t>(running_mean_has_value),
+            static_cast<uint32_t>(running_var_has_value),
+        }));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
@@ -253,7 +306,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     std::vector<uint32_t> compute_kernel_args = {
         static_cast<uint32_t>(weight_has_value),
         static_cast<uint32_t>(bias_has_value),
-        static_cast<uint32_t>(operation_attributes.training)};
+        static_cast<uint32_t>(operation_attributes.training),
+        static_cast<uint32_t>(running_mean_has_value),
+        static_cast<uint32_t>(running_var_has_value)};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
