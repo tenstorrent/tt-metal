@@ -185,28 +185,6 @@ static Tensor reduce_impl(
                 memory_config,
                 std::nullopt,
                 compute_kernel_config);
-        } else if constexpr (reduce_type == ReduceType::Var or reduce_type == ReduceType::Std) {
-            auto mean_tensor = tt::tt_metal::reduce(
-                input_tensor,
-                tt::tt_metal::ReduceOpMath::SUM,
-                reduce_op_dim,
-                1.0 / reduced_volume,
-                memory_config,
-                std::nullopt,
-                compute_kernel_config);
-            auto mean_square_tensor = tt::tt_metal::reduce(
-                ttnn::pow(input_tensor, 2.0f, memory_config),
-                tt::tt_metal::ReduceOpMath::SUM,
-                reduce_op_dim,
-                1.0 / reduced_volume,
-                memory_config,
-                std::nullopt,
-                compute_kernel_config);
-            output_tensor = ttnn::subtract(
-                mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
-            if constexpr (reduce_type == ReduceType::Std) {
-                output_tensor = ttnn::sqrt(output_tensor, memory_config);
-            }
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -220,6 +198,41 @@ static Tensor reduce_impl(
 }
 
 template <ReduceType reduce_type>
+static Tensor std_var_impl(
+    const Tensor& input_tensor_arg,
+    const ttnn::SmallVector<int>& dim,
+    const bool keepdim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using ttnn::operations::experimental::auto_format::AutoFormat;
+    auto input_shape = input_tensor_arg.get_shape();
+    auto rank = input_shape.size();
+    auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+
+    int reduced_volume = 1;
+    for (int axis : dim) {
+        reduced_volume *= input_shape[axis];
+    }
+
+    auto mean_tensor = reduce_impl<ReduceType::Sum>(
+        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, 1.0 / reduced_volume, true);
+    auto mean_square_tensor = reduce_impl<ReduceType::Sum>(
+        ttnn::pow(input_tensor_arg, 2.0f, memory_config),
+        dim,
+        keepdim,
+        memory_config_arg,
+        compute_kernel_config,
+        1.0 / reduced_volume,
+        true);
+    Tensor output_tensor =
+        ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
+    if constexpr (reduce_type == ReduceType::Std) {
+        output_tensor = ttnn::sqrt(output_tensor, memory_config);
+    }
+    return output_tensor;
+}
+
+template <ReduceType reduce_type>
 Tensor Reduce<reduce_type>::invoke(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg,
@@ -228,6 +241,9 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
+    if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
+        return std_var_impl<reduce_type>(input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config);
+    }
     return reduce_impl<reduce_type>(
         input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
 }
