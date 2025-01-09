@@ -10,7 +10,7 @@
 namespace ttnn::operations::normalization {
 void BatchNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
+    const auto& [input, batch_mean, batch_var, weight, bias, running_mean, running_var, output] = tensor_args;
 
     check_tensor(input, "batch_norm", "input");
     check_tensor(batch_mean, "batch_norm", "batch_mean");
@@ -18,6 +18,8 @@ void BatchNormOperation::validate_tensors(
     check_tensor(weight, "batch_norm", "weight");
     check_tensor(bias, "batch_norm", "bias");
     check_tensor(output, "batch_norm", "output");
+    check_tensor(running_mean, "batch_norm", "running_mean");
+    check_tensor(running_var, "batch_norm", "running_var");
 
     // input (N, C, H, W)
     auto C = input.get_logical_shape()[1];
@@ -45,6 +47,26 @@ void BatchNormOperation::validate_tensors(
         TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
         TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
     }
+
+    // running_mean (1, C, 1, 1)
+    if (running_mean.has_value()) {
+        TT_FATAL(
+            running_mean.value().get_logical_shape()[1] == C,
+            "running_mean_shape[1] must be the same as input's channel size.");
+        TT_FATAL(
+            running_mean.value().get_logical_shape()[1] == C,
+            "running_mean_shape[1] must be the same as input's channel size.");
+    }
+
+    // running_var (1, C, 1, 1)
+    if (running_var.has_value()) {
+        TT_FATAL(
+            running_var.value().get_logical_shape()[1] == C,
+            "running_var_shape[1] must be the same as input's channel size.");
+        TT_FATAL(
+            running_var.value().get_logical_shape()[1] == C,
+            "running_var_shape[1] must be the same as input's channel size.");
+    }
 }
 
 BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory(
@@ -54,7 +76,8 @@ BatchNormOperation::program_factory_t BatchNormOperation::select_program_factory
 
 void BatchNormOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
+
+    const auto& [input, batch_mean, batch_var, weight, bias, running_mean, running_var, output] = tensor_args;
 
     TT_FATAL(input.get_layout() == Layout::TILE, "Input tensor must be must be tilized");
     TT_FATAL(
@@ -85,6 +108,20 @@ void BatchNormOperation::validate_on_program_cache_miss(
         TT_FATAL(
             bias.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
             "bias tensor must be interleaved");
+    }
+
+    if (running_mean.has_value()) {
+        TT_FATAL(running_mean.value().get_layout() == Layout::TILE, "running_mean tensor must be tilized");
+        TT_FATAL(
+            running_mean.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "running_mean tensor must be interleaved");
+    }
+
+    if (running_var.has_value()) {
+        TT_FATAL(running_var.value().get_layout() == Layout::TILE, "running_var tensor must be tilized");
+        TT_FATAL(
+            running_var.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
+            "running_var tensor must be interleaved");
     }
 
     validate_tensors(operation_attributes, tensor_args);
@@ -127,10 +164,20 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
     const bool training,
     std::optional<Tensor> weight,
     std::optional<Tensor> bias,
+    std::optional<Tensor> running_mean,
+    std::optional<Tensor> running_var,
     std::optional<Tensor> output,
     const std::optional<MemoryConfig>& memory_config) {
     operation_attributes_t operation_attributes{eps, momentum, training, memory_config.value_or(input.memory_config())};
-    tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
+    tensor_args_t tensor_args{
+        input,
+        batch_mean,
+        batch_var,
+        std::move(weight),
+        std::move(bias),
+        std::move(running_mean),
+        std::move(running_var),
+        std::move(output)};
     return {operation_attributes, tensor_args};
 }
 }  // namespace ttnn::operations::normalization

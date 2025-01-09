@@ -24,20 +24,34 @@ from itertools import product
         torch.Size([3, 2, 64, 120]),
     ],
 )
-@pytest.mark.parametrize("training", [False])
+@pytest.mark.parametrize(
+    "training, check_mean, check_var",
+    [
+        # (True, True, True),
+        # (True, True, False),
+        # (True, False, True),
+        (True, False, False),
+        (False, False, False),  # xfail case
+        (False, True, False),  # xfail case
+        (False, False, True),  # xfail case
+        (False, True, True),
+    ],
+)
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
-def test_batch_norm(input_shapes, training, weight, bias, eps, device):
+@pytest.mark.parametrize("momentum", [0.1, 0.0, 2.3])
+def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if (not training) else (None, None)
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if (check_mean) else (None, None)
     )
-    var_data, var_tensor = (
-        data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if (not training) else (None, None)
-    )
+    var_data, var_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 20, device) if (check_var) else (None, None)
     weight_data, weight_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if weight else (None, None)
     bias_data, bias_tensor = data_gen_with_range_batch_norm(input_shapes, 4, 10, device) if bias else (None, None)
+
+    if (not check_mean) or (not check_var):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
 
     tt_output_tensor_on_device = ttnn.batch_norm(
         input_tensor,
@@ -45,10 +59,15 @@ def test_batch_norm(input_shapes, training, weight, bias, eps, device):
         running_var=var_tensor,
         training=training,
         eps=eps,
+        momentum=momentum,
         weight=weight_tensor,
         bias=bias_tensor,
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+
+    # tt_updated_mean = ttnn.to_torch(mean_tensor)
+    # tt_updated_var = ttnn.to_torch(var_tensor)
+
     # ttnn.set_printoptions(profile="full")
     # print("TT result : ", tt_output, tt_output.shape)
     # torch.set_printoptions(precision=5, sci_mode=False)
@@ -60,9 +79,15 @@ def test_batch_norm(input_shapes, training, weight, bias, eps, device):
         bias=bias_data,
         training=training,
         eps=eps,
+        momentum=momentum,
     )
     # print("Torch result : ",torch_result)
-    comp_pass = compare_results_batch_norm([tt_output], [torch_result])
+    comp_pass = compare_results_batch_norm([tt_output], [torch_result])  # Check BN Result
+    # if training :
+    #     channels = input_shapes[1]
+    #     comp_pass_1 = compare_results_batch_norm([tt_updated_mean], [mean_data.view(1, channels, 1, 1)]) # Check Updated running mean
+    #     comp_pass_2 = compare_results_batch_norm([tt_updated_var], [var_data.view(1, channels, 1, 1)])  # Check Updated running var
+    #     comp_pass = comp_pass and comp_pass_1 and comp_pass_2
     assert comp_pass
 
 
