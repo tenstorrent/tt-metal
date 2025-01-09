@@ -70,8 +70,8 @@ run_additional_T3000_test(){
     else
         echo "Verifying test results"
         runDate=$(ls $PROFILER_OUTPUT_DIR/)
-        LINE_COUNT=9 #1 header + 8 devices
-        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
+        LINE_COUNT=8 #8 devices
+        res=$(verify_perf_line_count "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT" "AllGather")
         echo $res
 
         run_tracing_async_mode_T3000_test
