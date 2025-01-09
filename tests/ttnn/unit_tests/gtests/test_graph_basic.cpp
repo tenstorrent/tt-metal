@@ -126,7 +126,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
-    tt::tt_metal::Device* device = &(this->getDevice());
+    tt::tt_metal::IDevice* device = &(this->getDevice());
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
         const auto input_a = ttnn::TensorSpec(
