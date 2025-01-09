@@ -514,6 +514,7 @@ void EnqueueReadBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
+    TRACE_FUNCTION_ENTRY();
     TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     BufferRegion region(0, buffer_obj.size());
@@ -545,6 +546,7 @@ void EnqueueWriteBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
+    TRACE_FUNCTION_ENTRY();
     TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     BufferRegion region(0, buffer_obj.size());
@@ -565,6 +567,7 @@ void EnqueueWriteSubBuffer(
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
+    TRACE_FUNCTION_ENTRY();
     TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
     detail::DispatchStateCheck(true);
 
@@ -636,6 +639,7 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 }
 
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TRACE_FUNCTION_ENTRY();
     TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
@@ -648,6 +652,7 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+    TRACE_FUNCTION_ENTRY();
     TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
