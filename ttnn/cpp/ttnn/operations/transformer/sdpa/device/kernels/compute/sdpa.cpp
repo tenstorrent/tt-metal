@@ -520,6 +520,8 @@ void MAIN {
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk == 0) {
                         copy_block(cb_out_im, cb_out_accumulate_im, out_chunk_tiles);
+
+                        copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                     } else {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                         sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
@@ -532,7 +534,7 @@ void MAIN {
                         mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, DHt);
 
                         /* cb_cur_sum += cb_prev_sum */
-                        add_block_inplace(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                        add_block_inplace(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
                         /* cb_out_accumulate_im += cb_out_im */
                         add_block_inplace(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
@@ -540,22 +542,19 @@ void MAIN {
 
                     // Set cb_prev_sum and cb_prev_max
                     copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                    copy_block(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
 
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
-                cb_push_back(cb_cur_sum, Sq_chunk_t);
-                recip_block_inplace(cb_cur_sum, Sq_chunk_t);
+                recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
-                mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, DHt);
+                mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, DHt);
                 pack_reconfig_data_format(cb_out);
                 copy_block(cb_out_accumulate_im, cb_out, out_chunk_tiles);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
                 cb_pop_front(cb_prev_max, Sq_chunk_t);
-                cb_pop_front(cb_prev_sum, Sq_chunk_t);
             }
         }
     }
