@@ -16,7 +16,7 @@ torch.manual_seed(0)
 
 
 def torch_functional_falcon_linear(hidden_states, parameters):
-    hidden_states = ttnn.matmul(hidden_states, parameters.weight, core_grid=ttnn.CoreGrid(y=4,x=4))
+    hidden_states = hidden_states @ parameters.weight
     if parameters.get("bias", None):
         hidden_states = hidden_states + parameters.bias
     return hidden_states
@@ -31,7 +31,7 @@ def torch_functional_falcon_mlp(hidden_states, *, parameters):
 
 
 def ttnn_functional_falcon_linear(hidden_states, parameters):
-    hidden_states = hidden_states @ parameters.weight
+    hidden_states = ttnn.matmul(hidden_states, parameters.weight, core_grid=ttnn.CoreGrid(y=4,x=4))
     if parameters.get("bias", None):
         hidden_states = hidden_states + parameters.bias
     return hidden_states
