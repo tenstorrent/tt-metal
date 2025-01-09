@@ -202,8 +202,9 @@ void kernel_main() {
 
     uint32_t dest_padded_strides[N];
     dest_padded_strides[N - 1] = 1;
-    for (uint32_t i = N - 2; i > 0; i--) {
-        dest_padded_strides[i] = dest_padded_strides[i + 1] * output_padded_shape[i];
+    dest_padded_strides[N - 2] = 1;
+    for (int i = N - 3; i >= 0; i--) {
+        dest_padded_strides[i] = dest_padded_strides[i + 1] * output_padded_shape[i + 1];
     }
 
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
@@ -213,7 +214,7 @@ void kernel_main() {
         uint32_t temp = tile / W_t;
         uint32_t h_t = temp % H_t;
 
-        // Determine the number of faces in the height dimension
+        // Determine the number of real faces with data in the height dimension
         uint8_t num_faces_h = (h_t == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
         cb_wait_front(cb_id_out0, 1);
 
@@ -221,23 +222,36 @@ void kernel_main() {
 
         // Iterate over faces in the height dimension
         for (uint8_t face_h = 0; face_h < num_faces_h; ++face_h) {
-            // Determine the number of sub-tile lines to process
+            // Determine the number of sub-tile lines to process, ignoring padding
             bool is_last_sub_tile_line = (h_t == H_t - 1) && (face_h == num_faces_h - 1);
+
+            // If the last face_h, use the real number of lines, which excludes padding, otherwise use FACE_HEIGHT
             uint8_t sub_tile_lines = is_last_sub_tile_line ? sub_tile_lines_real : FACE_HEIGHT;
 
+            // Compute the row that the start of the face belongs to
             uint32_t base_row = tile_start + face_h * FACE_HEIGHT;
             uint32_t remainder = base_row;
-            // Compute multi-dimensional index for the starting row of the tile
+
+            // Compute multi-dimensional index for the starting row of the face
             for (uint32_t i = 0; i < N - 1; ++i) {
                 size_t dim = N - 2 - i;  // Start from the second last dimension
                 src_multi_idx[dim] = remainder % input_shape[dim];
                 remainder /= input_shape[dim];
             }
-            src_multi_idx[N - 1] = 0;  // Logical row dimension index for output tensor
+            src_multi_idx[N - 1] = 0;
 
-            // Apply permutation to get destination multi-dimensional index
+            // Apply permutation to get destination multi-dimensional index of where the data will begin
             for (uint32_t i = 0; i < N; ++i) {
                 dest_multi_idx[i] = src_multi_idx[perm[i]];  // Logical row dimension index for output tensor
+            }
+
+            // Calculate the base output row offset to the start of the data in the output
+            uint32_t base_output_row_offset = 0;
+            for (uint32_t i = 0; i < N - 1; i++) {
+                if (i == h_in_dest) {
+                    continue;
+                }
+                base_output_row_offset += dest_multi_idx[i] * dest_padded_strides[i];
             }
 
             // Iterate over faces in the width dimension
@@ -245,18 +259,15 @@ void kernel_main() {
                 // Iterate over sub-tile lines
                 for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
                     uint32_t row = base_row + sub_tile_line;
-                    // Adjust multi-dimensional index for sub_tile_line
+                    // Adjust source multi-dimensional index based on sub_tile_line
                     src_multi_idx[N - 2] = row % input_shape[N - 2];
+
+                    // Adjust destination multi-dimensional index based on sub_tile_line
                     dest_multi_idx[h_in_dest] = src_multi_idx[N - 2];
 
-                    // First find the tile that this belongs to
-                    // logical output shape: [..., X, W]
-                    // padded output shape: [..., X_p, W_p]
-                    // tiled output shape: [..., X_t, W_t] = [..., X_p/TILE_HEIGHT, W_p/TILE_WIDTH]
-                    uint32_t output_row_offset = 0;
-                    for (uint32_t i = 0; i < N - 1; i++) {
-                        output_row_offset = output_row_offset * output_padded_shape[i] + dest_multi_idx[i];
-                    }
+                    // Calculate the output row offset
+                    uint32_t output_row_offset =
+                        base_output_row_offset + dest_multi_idx[h_in_dest] * dest_padded_strides[h_in_dest];
 
                     uint32_t output_tile_idx = (output_row_offset / TILE_HEIGHT) * W_t + w_t;
 
