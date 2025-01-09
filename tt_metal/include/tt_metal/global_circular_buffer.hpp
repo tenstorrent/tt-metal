@@ -24,11 +24,11 @@ namespace experimental {
  * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
  * @param sub_device_ids Sub-device IDs to wait on before writing the global circular buffer config to device. Defaults
  * to waiting on all sub-devices.
- * @return Handle to the allocated global circular buffer.
+ * @return The allocated global circular buffer.
  */
-std::shared_ptr<GlobalCircularBuffer> CreateGlobalCircularBuffer(
-    Device* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+GlobalCircularBuffer CreateGlobalCircularBuffer(
+    IDevice* device,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {});

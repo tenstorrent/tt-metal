@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
+LegacyShape squeeze_vector_shape(tt::tt_metal::LegacyShape output_shape) {
     if (output_shape.rank() > 4) {
         std::vector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
@@ -45,7 +45,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) 
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
             *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
@@ -71,7 +71,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
         for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
             output_end_vector.push_back(input_tensor.get_shape()[index] - 1);
         }
-        output_end = squeeze_output_shape(LegacyShape(output_end_vector));
+        output_end = squeeze_vector_shape(LegacyShape(output_end_vector));
     } else {
         output_end = output_tensor_end;
     }

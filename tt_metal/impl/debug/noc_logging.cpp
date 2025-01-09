@@ -12,7 +12,7 @@
 
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt::tt_metal;
 
@@ -38,7 +38,7 @@ void PrintNocData(noc_data_t noc_data, const string& file_name) {
     outfile.close();
 }
 
-void DumpCoreNocData(Device* device, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
+void DumpCoreNocData(IDevice* device, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
     CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
     for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
@@ -54,7 +54,7 @@ void DumpCoreNocData(Device* device, const CoreDescriptor& logical_core, noc_dat
     }
 }
 
-void DumpDeviceNocData(Device* device, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
+void DumpDeviceNocData(IDevice* device, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
     // Need to treat dispatch cores and normal cores separately, so keep track of which cores are dispatch.
     CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
 
@@ -69,14 +69,14 @@ void DumpDeviceNocData(Device* device, noc_data_t& noc_data, noc_data_t& dispatc
     }
 }
 
-void DumpNocData(const std::vector<Device*>& devices) {
+void DumpNocData(const std::vector<IDevice*>& devices) {
     // Skip if feature is not enabled
     if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
         return;
     }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
-    for (Device* device : devices) {
+    for (IDevice* device : devices) {
         log_info("Dumping noc data for Device {}...", device->id());
         DumpDeviceNocData(device, noc_data, dispatch_noc_data);
     }
@@ -85,7 +85,7 @@ void DumpNocData(const std::vector<Device*>& devices) {
     PrintNocData(dispatch_noc_data, "dispatch_noc_data.txt");
 }
 
-void ClearNocData(Device* device) {
+void ClearNocData(IDevice* device) {
     // Skip if feature is not enabled
     if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
         return;

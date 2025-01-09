@@ -124,6 +124,8 @@ message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
+message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
@@ -205,8 +207,6 @@ target_link_libraries(
 if(NOT DEFINED ENV{ARCH_NAME})
     message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
 endif(NOT DEFINED ENV{ARCH_NAME})
-string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
-add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
     -Wno-deprecated-declarations

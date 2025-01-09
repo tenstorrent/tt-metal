@@ -69,12 +69,6 @@ Tensor ExecuteUnary<unary_op_types...>::invoke(
 }
 
 template <>
-Tensor ExecuteUnary<UnaryOpType::ABS>::invoke(
-    const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
-}
-
-template <>
 ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::invoke(
     const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     Tensor a_plus_b = ttnn::add(input[0], input[1], std::nullopt, output_mem_config);
@@ -89,8 +83,6 @@ ComplexTensor ExecuteUnary<UnaryOpType::RECIP>::invoke(
     Tensor conj_re = ttnn::multiply(input[0], inv_dr, std::nullopt, output_mem_config);
     return ComplexTensor({conj_re, conj_im});
 }
-
-template struct ExecuteUnary<UnaryOpType::ABS>;
 template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
@@ -335,6 +327,34 @@ Tensor Identity::invoke(
         DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
+Tensor Abs::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::ABS;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        op_type = UnaryOpType::ABS_INT32;
+    }
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Abs::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::ABS;
+    if (input_tensor.get_dtype() == DataType::INT32) {
+        op_type = UnaryOpType::ABS_INT32;
+    }
+    return detail::unary_impl(
+        DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
+    return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
+}
+
 Tensor Floor::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
@@ -385,39 +405,6 @@ Tensor Ceil::invoke(
 
     return detail::unary_impl(
         DefaultQueueId, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-}
-
-Tensor Dropout::invoke(
-    const Tensor& input,
-    const uint32_t seed,
-    const float probability,
-    const float scale,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
-    return detail::unary_impl(
-        DefaultQueueId,
-        input,
-        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
-        memory_config,
-        optional_output_tensor);
-}
-
-Tensor Dropout::invoke(
-    uint8_t queue_id,
-    const Tensor& input,
-    const uint32_t seed,
-    const float probability,
-    const float scale,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    TT_ASSERT(input.device()->arch() != tt::ARCH::GRAYSKULL, "Dropout is not currently supported on Grayskull");
-    return detail::unary_impl(
-        queue_id,
-        input,
-        {UnaryWithParam{UnaryOpType::DROPOUT, {static_cast<float>(seed), probability, scale}}},
-        memory_config,
-        optional_output_tensor);
 }
 
 template <UnaryOpType unary_op_type, typename T>

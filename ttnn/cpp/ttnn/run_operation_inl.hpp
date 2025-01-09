@@ -40,7 +40,7 @@ Tensor* get_tensor(T& maybe_tensor) {
     return output_tensor;
 }
 
-void check_output(auto& output_tensors, const std::vector<Device*>& workers) {
+void check_output(auto& output_tensors, const std::vector<IDevice*>& workers) {
     for (auto& output_tensor_like : output_tensors) {
         auto output_tensor = get_tensor(output_tensor_like);
         if (!output_tensor) {
@@ -155,7 +155,7 @@ void launch_op(
 
     {
         ZoneScopedN("PushOpToWorkers");
-        auto work_lambda = std::make_shared<std::function<void(Device*)>>(
+        auto work_lambda = std::make_shared<std::function<void(IDevice*)>>(
             [workers_size,
              op_func,
              optional_output_tensors,
@@ -163,7 +163,7 @@ void launch_op(
              inputs = async_safe_input_tensors,
              outputs = output_tensors,
              shared_input_idx = cross_worker_input_tensor_idx,
-             shared_optional_input_idx = cross_worker_optional_input_tensor_idx](Device* target_device) mutable {
+             shared_optional_input_idx = cross_worker_optional_input_tensor_idx](IDevice* target_device) mutable {
                 std::vector<Tensor> input_shards = std::vector<Tensor>(inputs.size(), Tensor());
                 std::vector<std::optional<const Tensor>> optional_input_shards = {};
                 std::vector<std::optional<Tensor>> optional_output_shards(optional_output_tensors.size());

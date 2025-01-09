@@ -20,7 +20,7 @@
 #include "hal_asserts.hpp"
 
 // FIXME: Eventually this file will be gone
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
+#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
 
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
@@ -159,6 +159,20 @@ void Hal::initialize_gs() {
     this->noc_xy_encoding_func_ = [](uint32_t x, uint32_t y) { return NOC_XY_ENCODING(x, y); };
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
+    };
+
+    this->stack_size_func_ = [](uint32_t type) -> uint32_t {
+        switch (type) {
+            case DebugBrisc: return MEM_BRISC_STACK_SIZE;
+            case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
+            case DebugErisc: return 0;  // Not managed/checked by us.
+            case DebugIErisc: return MEM_IERISC_STACK_SIZE;
+            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
+            case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
+            case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
+        }
+        return 0xdeadbeef;
     };
 
     this->num_nocs_ = NUM_NOCS;

@@ -95,12 +95,12 @@ std::tuple<uint32_t, uint32_t> get_out_subblock_params(
     return {1, 1};
 }
 
-std::tuple<std::vector<tt_metal::Program>, std::shared_ptr<tt::tt_metal::v1::experimental::GlobalCircularBuffer>>
+std::tuple<std::vector<tt_metal::Program>, ::tt_metal::v1::experimental::GlobalCircularBuffer>
 create_programs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t m,
@@ -169,7 +169,7 @@ create_programs(
     tt_metal::CircularBufferConfig in1_writer_cb_config = tt_metal::CircularBufferConfig(in1_receiver_cb_size);
     in1_writer_cb_config.remote_index(in1_writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     auto writer_cb = tt_metal::v1::experimental::CreateCircularBuffer(
-        sender_program, dram_reader_core, in1_writer_cb_config, *global_cb);
+        sender_program, dram_reader_core, in1_writer_cb_config, global_cb);
 
     // in0 reader CB
     uint32_t in0_reader_cb_index = 0;
@@ -190,7 +190,7 @@ create_programs(
         .set_data_format(tile_format);
     in1_receiver_cb_config.index(in1_pusher_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
     auto in1_receiver_cb = tt_metal::v1::experimental::CreateCircularBuffer(
-        receiver_program, l1_receiver_cores, in1_receiver_cb_config, *global_cb);
+        receiver_program, l1_receiver_cores, in1_receiver_cb_config, global_cb);
 
     // output CB
     uint32_t output_cb_index = 16;
@@ -529,7 +529,7 @@ bool validation_fp16(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
@@ -687,7 +687,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -700,8 +700,7 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = { { dram_reader_core_coord, l1_receiver_core } };
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});

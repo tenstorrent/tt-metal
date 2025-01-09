@@ -23,13 +23,13 @@ struct FormatParams {
 
 class AutoFormat {
 private:
-    inline static tt::tt_metal::Device* device = nullptr;
+    inline static tt::tt_metal::IDevice* device = nullptr;
 
     AutoFormat() {}
 
 public:
-    static void SetDefaultDevice(tt::tt_metal::Device* dev) { device = dev; }
-    static tt::tt_metal::Device* GetDefaultDevice() { return device; }
+    static void SetDefaultDevice(tt::tt_metal::IDevice* dev) { device = dev; }
+    static tt::tt_metal::IDevice* GetDefaultDevice() { return device; }
 
     static tt::tt_metal::LegacyShape pad_to_tile_shape(
         const tt::tt_metal::LegacyShape& unpadded_shape,
@@ -113,20 +113,20 @@ public:
     // See: Remove auto format within permute_op.cpp #9404
     static Tensor move_tensor_to_device_and_pad(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config);
 
     static Tensor move_tensor_to_device(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         const tt::tt_metal::MemoryConfig& mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
 
     static Tensor move_tensor_to_mem_config(const Tensor& input, const tt::tt_metal::MemoryConfig& mem_config);
 
     static Tensor format_input_tensor(
         const Tensor& input,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         const tt::tt_metal::LegacyShape& padded_shape,
         float pad_value,
         tt::tt_metal::Layout target_layout,
@@ -135,7 +135,7 @@ public:
     static Tensor format_output_tensor(
         const Tensor& output,
         const tt::tt_metal::LegacyShape& shape,
-        tt::tt_metal::Device* device,
+        tt::tt_metal::IDevice* device,
         tt::tt_metal::Layout target_layout,
         std::optional<tt::tt_metal::MemoryConfig> target_mem_config = std::nullopt);
 };

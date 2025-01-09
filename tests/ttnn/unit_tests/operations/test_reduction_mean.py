@@ -43,7 +43,8 @@ def test_mean_without_dim(device, batch_size, h, w):
     output_tensor = ttnn.mean(input_tensor, keepdim=True)
     output_tensor = ttnn.to_torch(output_tensor)
     # PCC does not work for a single value. Assert on allclose.
-    close_passed, close_message = comp_allclose(torch_output_tensor, output_tensor, rtol=0.001, atol=0.001)
+    # visit issue: https://github.com/tenstorrent/tt-metal/issues/16454 for why tolerance values are changed
+    close_passed, close_message = comp_allclose(torch_output_tensor, output_tensor, rtol=0.001, atol=0.00139)
     if not close_passed:
         print(f"Found mismatch: torch_output_tensor {torch_output_tensor}\n output_tensor {output_tensor}")
     assert close_passed, construct_pcc_assert_message(close_message, torch_output_tensor, output_tensor)

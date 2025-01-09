@@ -53,4 +53,6 @@ void kernel_main() {
     }
 
     reader.close();
+
+    noc_async_full_barrier();
 }

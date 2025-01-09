@@ -17,7 +17,7 @@
 #include "blackhole/bh_hal.hpp"
 
 // FIXME: Eventually this file will be gone
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
+#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_BASE
 
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
