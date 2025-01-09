@@ -1065,7 +1065,8 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     if (fill_args_overrider) {
         TT_FATAL(tensor_indices.has_value(), "Internal Error. Tensor indices must be provided when using rt_args_overrider");
-        TT_FATAL(tensor_indices.value().size() == tensors.size(), "Internal Error. Tensor indices must match the number of tensors");
+        const size_t tensor_count = std::count_if(tensors.begin(), tensors.end(), [](Tensor const* t) { return t != nullptr; });
+        TT_FATAL(tensor_indices.value().size() == tensor_count, "Internal Error. Tensor indices must match the number of tensors");
         for (auto tensor_index : tensor_indices.value()) {
             while (rt_args_overrider->size() <= tensor_index) {
                 rt_args_overrider->add_tensor();
@@ -1643,5 +1644,21 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_ct_args
 
     return args;
 }
+
+bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor) {
+    static constexpr size_t baseline_arg_count = 12;
+    // approximately... this is only very rough estimate until unlimited command stream length is enabled
+    static constexpr size_t args_per_noc_command = 4;
+    static constexpr size_t max_noc_commands = 256;
+    size_t num_tensor_pages = input_tensor.shape().logical_shape().volume() / input_tensor.buffer()->page_size();
+
+    // Interleaved tensors are currently not iterable on host so we can't resolve the page locations
+    bool can_be_lowered = input_tensor.is_sharded() &&
+           (num_tensor_pages * args_per_noc_command + baseline_arg_count < max_noc_commands);
+
+    log_debug(tt::LogOp, "command stream can{} be lowered to noc commands", (can_be_lowered ? "" : "not"));
+    return can_be_lowered;
+}
+
 
 }  // namespace ttnn::ccl::worker_detail
