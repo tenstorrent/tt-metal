@@ -791,12 +791,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t weights_width,
-    uint32_t input_height,
     uint32_t input_width,
-    uint32_t groups,
-    std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid_size,
-    const DeviceComputeKernelConfig& compute_config,
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config) {
     Conv2dConfig conv_config = conv_config_;
