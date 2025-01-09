@@ -71,6 +71,13 @@ void validate_supported_arch_dtype(
                 static_cast<int>(output_datatype),
                 static_cast<int>(op_type));
             break;
+        case UnaryOpType::ABS:
+        case UnaryOpType::ABS_INT32:
+            TT_FATAL(
+                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
+                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
+                static_cast<int>(op_type));
+            break;
         default: return;
     }
 }
