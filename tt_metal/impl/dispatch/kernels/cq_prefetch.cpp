@@ -330,6 +330,10 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             while ((fetch_size = *prefetch_q_rd_ptr) == 0) {
                 invalidate_l1_cache();
                 IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+                asm("nop");
+                asm("nop");
+                asm("nop");
+                asm("nop");
             }
             fetch_q_get_cmds<preamble_size>(fence, cmd_ptr, pcie_read_ptr);
             WAYPOINT("HQD");
@@ -903,10 +907,16 @@ uint32_t process_stall(uint32_t cmd_ptr) {
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(downstream_sync_sem_id));
     uint32_t heartbeat = 0;
-    do {
+    invalidate_l1_cache();
+    IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+    while (*sem_addr != count) {
         invalidate_l1_cache();
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, CQ_PREFETCH_CMD_BARE_MIN_SIZE);
-    } while (*sem_addr != count);
+        asm("nop");
+        asm("nop");
+        asm("nop");
+        asm("nop");
+    }
     WAYPOINT("PSD");
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;

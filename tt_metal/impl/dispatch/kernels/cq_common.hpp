@@ -278,9 +278,14 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     n &= 0x7fffffff;
 
     WAYPOINT("TAPW");
-    do {
+    invalidate_l1_cache();
+    while ((*sem_addr & 0x7fffffff) != n) {
+        asm("nop");
+        asm("nop");
+        asm("nop");
+        asm("nop");
         invalidate_l1_cache();
-    } while ((*sem_addr & 0x7fffffff) != n);  // mask off terminate bit
+    }
     WAYPOINT("TAPD");
 }
 
@@ -296,10 +301,16 @@ void cb_acquire_pages(uint32_t n) {
     // Use a wrapping compare here to compare distance
     // Required for trace which steals downstream credits and may make the value negative
     uint32_t heartbeat = 0;
-    do {
+    invalidate_l1_cache();
+    IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+    while (wrap_gt(n, *sem_addr)) {
+        asm("nop");
+        asm("nop");
+        asm("nop");
+        asm("nop");
         invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    } while (wrap_gt(n, *sem_addr));
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+    }
     WAYPOINT("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
 }
@@ -320,10 +331,16 @@ cb_acquire_pages(uint32_t cb_fence, uint32_t block_next_start_addr[], uint32_t r
     if (local_count == upstream_count) {
         WAYPOINT("UAPW");
         uint32_t heartbeat = 0;
-        do {
+        invalidate_l1_cache();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+        while ((upstream_count = *sem_addr) == local_count) {
+            asm("nop");
+            asm("nop");
+            asm("nop");
+            asm("nop");
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
-        } while ((upstream_count = *sem_addr) == local_count);
+        }
         WAYPOINT("UAPD");
     }
 
