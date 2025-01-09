@@ -77,7 +77,6 @@ Result conv2d(
             weight_tensor.get_shape()[3],
             input_width,
             compute_grid_size,
-            compute_config,
             input_tensor.layout(),
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt);

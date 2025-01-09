@@ -569,7 +569,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[1],
         input_width,
         device->compute_with_storage_grid_size(),
-        compute_config,
         input_tensor_layout,
         input_memory_config);
 

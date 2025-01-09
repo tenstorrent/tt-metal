@@ -89,9 +89,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled);
 
-OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
-
 template <typename T>
 std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
@@ -133,7 +130,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t weights_width,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
-    const DeviceComputeKernelConfig& compute_config,
     Layout input_tensor_layout,
     std::optional<const MemoryConfig> input_memory_config);
 
