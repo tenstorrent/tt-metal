@@ -159,9 +159,9 @@ private:
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
 
-    float eps_;
-    float nan_;
-    float inf_;
+    float eps_ = 0.0f;
+    float nan_ = 0.0f;
+    float inf_ = 0.0f;
 
     void initialize_gs();
     void initialize_wh();

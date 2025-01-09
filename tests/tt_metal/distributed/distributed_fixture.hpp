@@ -24,7 +24,9 @@ class MeshDevice_T3000 : public ::testing::Test {
 protected:
     void SetUp() override {
         skip_test_if_not_t3000();
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{
+            .mesh_shape = MeshShape(2, 4),
+        });
     }
 
     void TearDown() override {
