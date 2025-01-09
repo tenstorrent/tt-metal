@@ -39,6 +39,7 @@ void bind_uniform_operation(py::module& module) {
             py::arg("input"),
             py::arg("from") = 0,
             py::arg("to") = 1,
+            py::arg("seed") = 0,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});

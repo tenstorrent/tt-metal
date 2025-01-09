@@ -12,12 +12,15 @@ namespace ttnn::global_circular_buffer {
 
 struct MultiDeviceGlobalCircularBuffer {
     MultiDeviceGlobalCircularBuffer(MeshDevice* mesh_device);
-    std::vector<std::shared_ptr<GlobalCircularBuffer>> global_circular_buffers;
+    std::vector<GlobalCircularBuffer> global_circular_buffers;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("global_circular_buffers");
+    const auto attribute_values() const { return std::forward_as_tuple(this->global_circular_buffers); }
 };
 
 // Single Device APIs
-std::shared_ptr<GlobalCircularBuffer> create_global_circular_buffer(
-    Device* device,
+GlobalCircularBuffer create_global_circular_buffer(
+    IDevice* device,
     const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,

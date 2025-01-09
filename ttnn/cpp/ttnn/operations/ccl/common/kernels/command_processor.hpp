@@ -14,6 +14,7 @@
 
 #include "dataflow_api.h"  // for interleaved addrgen
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using ttnn::ccl::coord_t;
@@ -66,16 +67,7 @@ FORCE_INLINE shape_t worker_wrapped_offset_to_coord(shape_t const& slice_shape, 
     return shape_t(0, 0, y, worker_slice_offset.x - (y * slice_shape.x));
 }
 
-FORCE_INLINE std::size_t get_flat_index_from_shape(const Shape4D<uint32_t>& shape, const Shape4D<uint32_t>& index) {
-    std::size_t offset = index.x;
-    std::size_t inner_volume = shape.x;
-    offset += index.y * inner_volume;
-    inner_volume *= shape.y;
-    offset += index.z * inner_volume;
-    inner_volume *= shape.z;
-    offset += index.w * inner_volume;
-    return offset;
-}
+
 
 namespace v2 {
 /*

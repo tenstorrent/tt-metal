@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
         }
         int device_id = test_device_id;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() < 2) {

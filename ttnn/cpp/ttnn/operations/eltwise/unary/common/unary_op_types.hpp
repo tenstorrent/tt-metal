@@ -24,6 +24,7 @@ enum class UnaryOpType {
     SIN,
     COS,
     ABS,
+    ABS_INT32,
     SIGN,
     SQUARE,
     EQZ,

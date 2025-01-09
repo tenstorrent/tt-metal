@@ -8,7 +8,7 @@
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt;
@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
         }
         int device_id_l = test_device_id;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id_l);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id_l);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
         auto eth_core_iter = device_active_eth_cores.begin();
         auto [device_id_r, eth_receiver_core] = device->get_connected_ethernet_core(*eth_core_iter);
 
-        tt_metal::Device* device_r = tt_metal::CreateDevice(device_id_r);
+        tt_metal::IDevice* device_r = tt_metal::CreateDevice(device_id_r);
 
         CoreCoord tunneler_logical_core = device->get_ethernet_sockets(device_id_r)[0];
         CoreCoord tunneler_phys_core = device->ethernet_core_from_logical_core(tunneler_logical_core);

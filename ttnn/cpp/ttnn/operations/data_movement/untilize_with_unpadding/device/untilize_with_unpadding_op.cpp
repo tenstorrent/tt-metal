@@ -8,6 +8,8 @@
 #include "ttnn/run_operation.hpp"
 #include "untilize_with_unpadding_program_factory.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) const {

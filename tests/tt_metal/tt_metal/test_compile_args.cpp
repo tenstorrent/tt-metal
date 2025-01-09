@@ -19,7 +19,7 @@
 using std::vector;
 using namespace tt;
 
-bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::Device* device) {
+bool test_compile_args(std::vector<uint32_t> compile_args_vec, tt_metal::IDevice* device) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
     try {
         int device_id = 0;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         // Remove old compiled kernels
         static const std::string kernel_name = "test_compile_args";
         auto binary_path_str = device->build_env().get_out_kernel_root_path() + kernel_name;

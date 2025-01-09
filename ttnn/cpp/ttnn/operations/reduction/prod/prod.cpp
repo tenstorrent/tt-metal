@@ -12,6 +12,7 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -59,7 +60,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     }
     // Apply prod
     ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    tt::tt_metal::LegacyShape input_shape = formatted_input_tensor.get_legacy_shape();
+    const auto input_shape = formatted_input_tensor.get_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
@@ -75,19 +76,24 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
             ttnn_shape,
             formatted_input_tensor.get_dtype(),
             formatted_input_tensor.get_layout(),
-            std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+            std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
             output_mem_config),
         dimension,
         output_mem_config);
 }
 
 Tensor ProdOperation::invoke(
-    const Tensor& input_a, bool all_dimensions, int64_t dim, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_a,
+    bool all_dimensions,
+    int64_t dim,
+    const bool keepdim,
+    const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     if (all_dimensions) {
         return prod_all(input_a, output_mem_config);
     }
     TT_FATAL(dim >= -4 && dim <= 3, "Dimension out of range (expected to be in range of [-4, 3]");
+    TT_FATAL(input_a.get_shape().rank() == 4, "As of now, Prod op only supports 4D tensors");
     Tensor temp = input_a;
     // Permute for dim 2,3
     if (dim == 2 || dim == -2) {
@@ -98,31 +104,30 @@ Tensor ProdOperation::invoke(
         temp = ttnn::permute(input_a, permute_dims, output_mem_config);
     }
     Tensor result = prod_nc(temp, dim, output_mem_config);
-    // Permute and unpad result for dim 2,3
+    // Permute and unpad result for dim 2,3. Don't need to process dim 0,1.
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    if (dim == 0 || dim == 1 || dim == -4 || dim == -3) {
-        return result;
-    } else if (dim == 2 || dim == -2) {
+    if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        const auto input_shape = input_a.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
-        return ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
-    } else {  // dim 3
+        result = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
+    } else if (dim == 3 || dim == -1) {  // dim 3
         // permute
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        tt::tt_metal::LegacyShape input_shape = input_a.get_legacy_shape();
+        const auto input_shape = input_a.get_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);
-        return res_host;
+        result = res_host;
     }
+    return keepdim ? result : ttnn::squeeze(result, dim);
 }
 
 Tensor ProdOperation::invoke(
