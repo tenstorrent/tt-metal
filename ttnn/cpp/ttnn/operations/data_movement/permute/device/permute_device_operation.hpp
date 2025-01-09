@@ -20,7 +20,7 @@ struct PermuteDeviceOperation {
     struct operation_attributes_t {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
-        const std::optional<float>& pad_value;
+        const std::optional<float> pad_value;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
