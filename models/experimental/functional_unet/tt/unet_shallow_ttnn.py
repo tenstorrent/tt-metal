@@ -73,8 +73,33 @@ def concatenate(inputs: List, dim=-1, groups=2):
             memory_config.shard_spec.shape = reshard_shape
             memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
             memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
+            from tests.ttnn.utils_for_testing import assert_with_pcc
+
+            before = ttnn.to_torch(tensor)
             inputs[i] = ttnn.reshard(tensor, memory_config)
-    return ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=groups)
+            after = ttnn.to_torch(inputs[i])
+            assert_with_pcc(before, after, 0.999)
+
+    from models.experimental.functional_unet.tt import unet_shallow_torch
+    from tests.ttnn.utils_for_testing import assert_with_pcc
+
+    torch_inputs = [ttnn.to_torch(x) for x in inputs]
+
+    expected = torch.concat(torch_inputs, dim=-1)
+    expected2 = unet_shallow_torch.concatenate(
+        torch_inputs[0].permute(0, 3, 1, 2), torch_inputs[1].permute(0, 3, 1, 2), groups=1
+    ).permute(0, 2, 3, 1)
+    output = ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=1)
+    assert_with_pcc(expected, expected2, 0.999)
+    assert_with_pcc(expected, ttnn.to_torch(output), 0.999)
+
+    expected = unet_shallow_torch.concatenate(
+        torch_inputs[0].permute(0, 3, 1, 2), torch_inputs[1].permute(0, 3, 1, 2)
+    ).permute(0, 2, 3, 1)
+    output = ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=groups)
+    assert_with_pcc(expected, ttnn.to_torch(output), 0.999)
+
+    return output
 
 
 class UNetConv2D:
@@ -280,7 +305,7 @@ class UNetUpblock:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         x = self.upsample(x)
-        ttnn.reallocate(residual)
+        # ttnn.reallocate(residual)
 
         if not residual.is_sharded():
             core_grid = get_core_grid_from_num_cores(x.memory_config().shard_spec.num_cores())
@@ -494,7 +519,6 @@ class UNet:
         ttnn.deallocate(c4_residual)
         x = self.upblock2(x, c3_residual)
         ttnn.deallocate(c3_residual)
-        c2_residual = ttnn.to_memory_config(c2_residual, ttnn.L1_MEMORY_CONFIG)
         x = self.upblock3(x, c2_residual)
         ttnn.deallocate(c2_residual)
         x = self.upblock4(x, c1_residual)
