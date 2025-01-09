@@ -41,7 +41,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 
         // Check that all tensors' k is divisible by number of cores in global CB receiver
         TT_FATAL(
-            tensor.get_legacy_shape()[1] % num_receiver_cores == 0,
+            tensor.get_legacy_shape()[3] % num_receiver_cores == 0,
             "All tensors' k must be divisible by the number of receiver cores = {}.",
             num_receiver_cores);
 
