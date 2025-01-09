@@ -14,9 +14,6 @@
 #include "tt_metal/common/metal_soc_descriptor.h"
 #include "hw/inc/dev_msgs.h"
 
-// FIXME: Avoid dependence on ARCH_NAME specific includes
-#include "dev_mem_map.h"  // for MEM_BRISC_STAC...
-
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
@@ -57,18 +54,11 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 
 // Helper function to get stack size by riscv core type
 static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    switch (type) {
-        case DebugBrisc: return MEM_BRISC_STACK_SIZE;
-        case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-        case DebugErisc: return 0;  // Not managed/checked by us.
-        case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-        case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
-        case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
-        case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
-        case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
+    auto stack_size = hal.get_stack_size(type);
+    if (stack_size == 0xdeadbeef) {
+        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
-    return 0;
+    return stack_size;
 }
 
 // Helper function to get string rep of noc target.
@@ -418,7 +408,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t* launch_msg) {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
     if (data[0] != llrt::generate_risc_startup_addr(false)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);
