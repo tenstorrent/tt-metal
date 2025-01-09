@@ -46,6 +46,10 @@ HalCoreInfoType create_active_eth_mem_map() {
         GET_ETH_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
+        eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -66,6 +70,9 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
