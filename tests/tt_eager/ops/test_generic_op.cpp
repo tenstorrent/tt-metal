@@ -6,7 +6,7 @@
 
 #include "base_types.hpp"
 #include "common/constants.hpp"
-#include "core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "logger.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
