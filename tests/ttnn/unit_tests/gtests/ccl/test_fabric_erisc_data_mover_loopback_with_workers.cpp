@@ -166,6 +166,7 @@ static SubdeviceInfo create_subdevices(std::vector<IDevice*> const& devices) {
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
         subdevice_info.fabric_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
+        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
     }
 
     return subdevice_info;
@@ -182,10 +183,7 @@ Correctness run_output_check(
     return run_output_check(inputs, readback_data_vec);
 };
 
-void run_programs(
-    std::vector<Program>& programs,
-    std::vector<IDevice*> const& devices,
-    std::optional<std::unordered_map<chip_id_t, SubDeviceId>> const& sub_device_ids = std::nullopt) {
+void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& devices) {
     EXPECT_EQ(programs.size(), devices.size());
     const size_t num_programs = programs.size();
     try {
@@ -214,11 +212,7 @@ void run_programs(
 
         log_debug(tt::LogTest, "Calling Finish");
         for (size_t i = 0; i < num_programs; i++) {
-            if (sub_device_ids.has_value()) {
-                tt_metal::Finish(devices.at(i)->command_queue(), {sub_device_ids.value().at(devices.at(i)->id())});
-            } else {
-                tt_metal::Finish(devices.at(i)->command_queue());
-            }
+            tt_metal::Finish(devices.at(i)->command_queue());
         }
     }
 }
@@ -475,11 +469,7 @@ bool RunLoopbackTest(
         devices.push_back(receiver_device);
     }
     log_trace(tt::LogTest, "{} programs, {} devices", programs.size(), devices.size());
-    run_programs(
-        programs,
-        devices,
-        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
-                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt});
+    run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
@@ -842,34 +832,18 @@ bool RunLocalTestWithMultiInputReaders(
     ////////////////////////////////////////////////////////////////////////////
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    run_programs(
-        programs,
-        enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices,
-        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
-                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt}
-
-    );
+    run_programs(programs, enable_persistent_fabric ? std::vector<IDevice*>{devices[0]} : devices);
     log_info(tt::LogTest, "Finished");
 
     bool pass = true;
     constexpr bool enable_check = true;
     if constexpr (enable_check) {
         log_info(tt::LogTest, "Reading back outputs");
-        std::vector<SubDeviceId> out_tensor_worker_subdevice_id =
-            subdevice_managers.has_value() ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(
-                                                 devices.at(output_tensor_dest_device_index)->id())}
-                                           : std::vector<SubDeviceId>{};
-        auto output0_cpu = output_tensor0_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
-        auto output1_cpu = output_tensor1_device.cpu(true, ttnn::DefaultQueueId, out_tensor_worker_subdevice_id);
+        auto output0_cpu = output_tensor0_device.cpu(true, ttnn::DefaultQueueId);
+        auto output1_cpu = output_tensor1_device.cpu(true, ttnn::DefaultQueueId);
 
-        auto in_tensor_worker_subdevice_id =
-            subdevice_managers.has_value()
-                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices.at(0)->id())}
-                : std::vector<SubDeviceId>{};
-        auto in0_tensor_copyback_cpu =
-            input_tensor0_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
-        auto in1_tensor_copyback_cpu =
-            input_tensor1_device.cpu(true, ttnn::DefaultQueueId, in_tensor_worker_subdevice_id);
+        auto in0_tensor_copyback_cpu = input_tensor0_device.cpu(true, ttnn::DefaultQueueId);
+        auto in1_tensor_copyback_cpu = input_tensor1_device.cpu(true, ttnn::DefaultQueueId);
 
         auto in0_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in0_tensor_copyback_cpu);
         auto in1_tensor_copyback = tt::tt_metal::owned_buffer::get_as<uint32_t>(in1_tensor_copyback_cpu);
@@ -1027,11 +1001,7 @@ bool RunLineFabricTest(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    run_programs(
-        programs,
-        devices,
-        subdevice_managers.has_value() ? subdevice_managers.value().worker_subdevice_id
-                                       : std::optional<std::unordered_map<chip_id_t, SubDeviceId>>{std::nullopt});
+    run_programs(programs, devices);
     log_info(tt::LogTest, "Reading back outputs");
 
     bool pass = true;
@@ -1428,18 +1398,14 @@ bool TestMultiInputReaderKernel(
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
-        std::vector<SubDeviceId> subdevice_target =
-            subdevice_managers.has_value()
-                ? std::vector<SubDeviceId>{subdevice_managers->worker_subdevice_id.at(devices[i]->id())}
-                : std::vector<SubDeviceId>{};
         input0_tensors_device.push_back(
-            input_tensor0.to(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+            input_tensor0.to(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+            input_tensor1.to(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId, subdevice_target));
+            output_tensor0.to(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId, subdevice_target));
+            output_tensor1.to(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     TT_FATAL(
         !enable_persistent_fabric || subdevice_managers.has_value(),
@@ -2924,7 +2890,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
             devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
             0,                             // initial value
             tt::tt_metal::BufferType::L1,  // buffer type
-            {SubDeviceId(0)},              // sub_device_ids
             10                             // attempts
         );
 
@@ -2934,7 +2899,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
             devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
             0,                             // initial value
             tt::tt_metal::BufferType::L1,  // buffer type
-            {SubDeviceId(0)},              // sub_device_ids
             10                             // attempts
         );
 
@@ -3038,7 +3002,6 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
             devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
             0,                             // initial value
             tt::tt_metal::BufferType::L1,  // buffer type
-            {SubDeviceId(0)},              // sub_device_ids
             10                             // attempts
         );
 

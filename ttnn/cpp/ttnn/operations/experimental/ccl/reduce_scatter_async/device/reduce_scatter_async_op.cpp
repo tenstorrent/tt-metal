@@ -185,6 +185,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
         this->num_links_preferred,
         this->from_remote_sem,
         this->to_remote_sem,
+        this->sub_device_id,
         this->fabric_handle);
 }
 
