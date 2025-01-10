@@ -12,18 +12,21 @@ void kernel_main() {
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
     constexpr uint32_t Sqt = get_compile_time_arg_val(3);
     constexpr uint32_t Skt = get_compile_time_arg_val(4);
-    constexpr uint32_t DHt = get_compile_time_arg_val(5);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(10);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(13) == 1;
-    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(15);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(16);
+    constexpr uint32_t valid_Sqt = get_compile_time_arg_val(5);
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(6);
+    constexpr uint32_t DHt = get_compile_time_arg_val(7);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(8);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(10);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(15) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(18);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -80,10 +83,10 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
 
-    const auto q_tile_shape = TensorTileShape(B, NQH, Sqt, DHt);
-    const auto k_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
-    const auto v_tile_shape = TensorTileShape(B, NKH, Skt, DHt);
-    const auto mask_tile_shape = TensorTileShape(B, 1, Sqt, Skt);
+    const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
+    const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
+    const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
+    const auto mask_tile_shape = TensorTileShape(B, 1, valid_Sqt, valid_Skt);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
@@ -92,6 +95,7 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+        DPRINT << "b " << nb << ENDL();
         if constexpr (is_chunked) {
             // Chunked means that we have paged attention
             const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
@@ -104,11 +108,18 @@ void kernel_main() {
             cb_push_back(cb_id_page_table, 1);
             page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
         }
-        // const uint32_t q_batch_offset = nb * NQH * Sqt * DHt;
-        // const uint32_t kv_batch_offset = nb * NKH * Skt * DHt;
+
         const uint32_t mask_batch_offset = nb * Sqt * Skt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+            DPRINT << "\tnq " << nq << ENDL();
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                /*
+                Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks
+                across cores when causal and other conditions are met.
+                When chunked, we must treat Q as offset by some factor.
+                When causal, we set up the bounds such that we only read the lower triangle of K and V.
+                When non-causal, read all of K and V.
+                */
                 uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
@@ -121,13 +132,30 @@ void kernel_main() {
 #else
                 q_chunk = local_q_start + q_iter;
 #endif
+                /*
+                Determine how many rows of Q will be read. Both start and end rows are
+                capped by valid_Sqt, since Sq padding is independent of Sk padding.
+                */
+                const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
+                const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
+                const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
+                const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_row_start_tile, 0);
+                DPRINT << "\t\tread q chunk " << q_chunk << ENDL();
+                DPRINT << "\t\tq_row_start_tile " << q_row_start_tile << ENDL();
+                DPRINT << "\t\tq_row_end_tile " << q_row_end_tile << ENDL();
+                DPRINT << "\t\tq_row_tile_count " << q_row_tile_count << ENDL();
+                DPRINT << "\t\tq_tile_id " << q_tile_id << ENDL();
 
-                // uint32_t q_head_offset = nq * Sqt * DHt;
-                // uint32_t q_chunk_offset = q_chunk * Sq_chunk_t * DHt;
-                // q_tile_id = q_batch_offset + q_head_offset + q_chunk_offset;
-
-                const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_chunk * Sq_chunk_t, 0);
-                read_chunk(q_reader, cb_q_in, q_tile_id, Sq_chunk_t, DHt, q_tile_bytes, barrier_threshold);
+                read_chunk_with_padding(
+                    q_reader,
+                    cb_q_in,
+                    q_tile_id,
+                    q_row_tile_count,
+                    DHt,
+                    Sq_chunk_t,
+                    DHt,
+                    q_tile_bytes,
+                    barrier_threshold);
 
                 if constexpr (is_chunked) {
                     q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -142,23 +170,27 @@ void kernel_main() {
                 }
 
                 const uint32_t kv_head = nq / q_heads_per_kv;
-                // const uint32_t kv_head_offset = kv_head * Skt * DHt;
 
                 // loop while k_low < q_high
                 for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
-                    // const uint32_t k_start_tile_id = kv_batch_offset + kv_head_offset + k_chunk * Sk_chunk_t * DHt;
-                    const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_chunk * Sk_chunk_t, 0);
+
+                    const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
+                    const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt);
+                    const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
+                    const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
                     if constexpr (is_chunked) {
                         // Use page table to read K chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        read_paged_chunk<NKH, block_size_t, DHt>(
+                        read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                             k_reader,
                             cb_k_in,
                             kv_head,
                             k_chunk_start_row_num,
+                            k_row_tile_count,
+                            DHt,
                             Sk_chunk_t,
                             DHt,
                             k_tile_bytes,
@@ -167,10 +199,17 @@ void kernel_main() {
                             true  // transpose=true for K reads
                         );
                     } else {
-                        read_chunk(
+                        DPRINT << "\t\t\tread k chunk " << k_chunk << ENDL();
+                        DPRINT << "\t\t\tk_row_start_tile " << k_row_start_tile << ENDL();
+                        DPRINT << "\t\t\tk_row_end_tile " << k_row_end_tile << ENDL();
+                        DPRINT << "\t\t\tk_row_tile_count " << k_row_tile_count << ENDL();
+                        DPRINT << "\t\t\tk_start_tile_id " << k_start_tile_id << ENDL();
+                        read_chunk_with_padding(
                             k_reader,
                             cb_k_in,
                             k_start_tile_id,
+                            k_row_tile_count,
+                            DHt,
                             Sk_chunk_t,
                             DHt,
                             k_tile_bytes,
@@ -186,6 +225,7 @@ void kernel_main() {
                         // does_overlap = not (q_low >= k_high or k_low >= q_high)
                         // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
                         // Read mask chunk
+                        // When a mask is provided, there will be no padding on q or kv.
                         cb_reserve_back(cb_mask_in, mask_chunk_tiles);
                         uint32_t mask_write_ptr = get_write_ptr(cb_mask_in);
                         barrier_count = 0;
@@ -211,11 +251,13 @@ void kernel_main() {
                     if constexpr (is_chunked) {
                         // Use page table to read V chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        read_paged_chunk<NKH, block_size_t, DHt>(
+                        read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                             v_reader,
                             cb_v_in,
                             kv_head,
                             k_chunk_start_row_num,
+                            k_row_tile_count,
+                            DHt,
                             Sk_chunk_t,
                             DHt,
                             v_tile_bytes,
@@ -224,10 +266,12 @@ void kernel_main() {
                             false  // transpose=false for V reads
                         );
                     } else {
-                        read_chunk(
+                        read_chunk_with_padding(
                             v_reader,
                             cb_v_in,
                             k_start_tile_id,
+                            k_row_tile_count,
+                            DHt,
                             Sk_chunk_t,
                             DHt,
                             v_tile_bytes,

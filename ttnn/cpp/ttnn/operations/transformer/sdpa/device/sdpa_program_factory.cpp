@@ -6,6 +6,7 @@
 #include "sdpa_op.hpp"
 
 #include <optional>
+#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -42,8 +43,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     attn_mask: B x NQH x S x S
     */
 
-    const auto q_shape = input_tensor_q.get_legacy_shape();
-    const auto k_shape = input_tensor_k.get_legacy_shape();
+    const auto q_shape = input_tensor_q.get_logical_shape();
+    const auto k_shape = input_tensor_k.get_logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
 
@@ -52,33 +53,59 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // In chunked mode, we only need to process K/V up to chunk_start_idx + Sq
     const uint32_t Sk = is_chunked ? (chunk_start_idx.value() + Sq) : k_shape[2];
 
-    const uint32_t Sqt = Sq / TILE_HEIGHT;
-    const uint32_t Skt = Sk / TILE_HEIGHT;
+    /*
+    Note about tensor shapes:
+    SDPA inputs may be padded on the sequence length dimension. In addition,
+    q_chunk_size and k_chunk_size don't have to divide the valid sequence length.
+    Internally, the kernels pad tensors up to nearest multiple of the larger chunk size
+    and handle masking pad tokens when appropriate.
+    */
+
+    // Calculate padded sequence length
+    const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
+    const uint32_t padded_Sk = std::ceil((float)Sk / k_chunk_size) * k_chunk_size;
+
+    const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
+    const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
+
+    const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
+    const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
+    /*
+    For non-causal case we must provide a padded mask if the K sequence length has been padded
+    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
+    don't affect attention of unpadded tokens.
+    In causal case, the causal mask takes care of masking K pad tokens.
+    */
+    const bool use_padded_mask = (!is_causal) && (padded_Sk != Sk);
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    const uint32_t q_num_chunks = Sq / q_chunk_size;
-    const uint32_t k_num_chunks = Sk / k_chunk_size;
+    const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
+    const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
 
     // log_debug all of the above
-    tt::log_debug("B: {}", B);
-    tt::log_debug("NQH: {}", NQH);
+    tt::log_info("B: {}", B);
+    tt::log_info("NQH: {}", NQH);
 
-    tt::log_debug("Sq: {}", Sq);
-    tt::log_debug("Sk: {}", Sk);
-    tt::log_debug("DH: {}", DH);
-    tt::log_debug("Sqt: {}", Sqt);
-    tt::log_debug("Skt: {}", Skt);
-    tt::log_debug("DHt: {}", DHt);
-    tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
-    tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
-    tt::log_debug("q_chunk_size: {}", q_chunk_size);
-    tt::log_debug("k_chunk_size: {}", k_chunk_size);
-    tt::log_debug("q_num_chunks: {}", q_num_chunks);
-    tt::log_debug("k_num_chunks: {}", k_num_chunks);
-    tt::log_debug("NKH: {}", NKH);
+    tt::log_info("Sq: {}", Sq);
+    tt::log_info("Sk: {}", Sk);
+    tt::log_info("padded_Sq: {}", padded_Sq);
+    tt::log_info("padded_Sk: {}", padded_Sk);
+    tt::log_info("valid_Sqt: {}", valid_Sqt);
+    tt::log_info("valid_Skt: {}", valid_Skt);
+    tt::log_info("DH: {}", DH);
+    tt::log_info("Sqt: {}", Sqt);
+    tt::log_info("Skt: {}", Skt);
+    tt::log_info("DHt: {}", DHt);
+    tt::log_info("Sq_chunk_t: {}", Sq_chunk_t);
+    tt::log_info("Sk_chunk_t: {}", Sk_chunk_t);
+    tt::log_info("q_chunk_size: {}", q_chunk_size);
+    tt::log_info("k_chunk_size: {}", k_chunk_size);
+    tt::log_info("q_num_chunks: {}", q_num_chunks);
+    tt::log_info("k_num_chunks: {}", k_num_chunks);
+    tt::log_info("NKH: {}", NKH);
 
     // In chunked prefill mode, the offset of Q in terms of Q chunks
     uint32_t chunked_q_chunk_offset = 0;
@@ -294,6 +321,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       NKH,
                                                       Sqt,
                                                       Skt,
+                                                      valid_Sqt,
+                                                      valid_Skt,
                                                       DHt,
                                                       Sq_chunk_t,
                                                       q_num_chunks,
@@ -302,6 +331,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
                                                       (uint32_t)page_table_is_dram,
                                                       block_size_t,
@@ -313,6 +343,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         NQH,
         NKH,
         Sqt,
+        valid_Sqt,
+        Sk,
         DHt,
         Sq_chunk_t,
         q_num_chunks,
@@ -323,6 +355,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         num_cores,
         (std::uint32_t)is_causal,
         (std::uint32_t)use_provided_mask,
+        (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
     };
 
@@ -352,6 +385,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         num_cores,
         (std::uint32_t)is_causal,
         (std::uint32_t)use_provided_mask,
+        (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
     };
 
@@ -443,7 +477,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // Only create mask buffer if it's going to be used
-    if (use_provided_mask or is_causal) {
+    if (use_provided_mask or is_causal or use_padded_mask) {
         // attn_mask input
         auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
                                 .set_page_size(tt::CB::c_in3, mask_tile_size);
