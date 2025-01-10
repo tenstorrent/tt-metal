@@ -7,7 +7,6 @@ string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
 
 include_directories(
     ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${currentArch}
-    $<$<STREQUAL:${currentArch},wormhole>:${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines>/inc/wormhole/wormhole_b0_defines>
 )
 
 enable_testing()
