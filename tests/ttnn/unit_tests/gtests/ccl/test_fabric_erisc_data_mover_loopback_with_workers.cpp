@@ -116,13 +116,6 @@ struct KernelXY {
 
 enum Correctness { Correct, Incorrect };
 
-struct EthLinkBuilder {
-    ttnn::ccl::FabricEriscDatamoverBuilder sender_edm_builder;
-    ttnn::ccl::FabricEriscDatamoverBuilder receiver_edm_builder;
-    tt_xy_pair sender_core;
-    tt_xy_pair receiver_core;
-};
-
 template <typename CONTAINER_T>
 Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffer) {
     constexpr bool debug_mode = true;
@@ -1066,6 +1059,7 @@ void setup_test_with_persistent_fabric(
 
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, enable_persistent_fabric, num_links.value_or(1));
+    line_fabric->set_firmware_context_switch_interval(0);
 
     if (enable_persistent_fabric) {
         TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -1237,6 +1231,7 @@ int TestLoopbackEntrypoint(
         remote_chip_id,
         edm_config,
         enable_persistent_fabric);
+    chip_0_edm_builder.set_firmware_context_switch_interval(0);
     auto chip_1_edm_builder = ttnn::ccl::FabricEriscDatamoverBuilder::build(
         receiver_device,
         fabric_receiver_program,
@@ -1245,6 +1240,7 @@ int TestLoopbackEntrypoint(
         local_chip_id,
         edm_config,
         enable_persistent_fabric);
+    chip_1_edm_builder.set_firmware_context_switch_interval(0);
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
