@@ -158,7 +158,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
-    tt_metal::Device* device = input_tensor.device();
+    tt_metal::IDevice* device = input_tensor.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -171,6 +171,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     auto face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
+    auto face_hw = face_h * face_w;
 
     const uint32_t head_tiles = head_dim / tile_w;
     const uint32_t head_size = head_tiles * single_tile_size;
@@ -220,7 +221,9 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
         batch,
         head_tiles,
         1,  // read the first phase
-        in_num_cores};
+        in_num_cores,
+        face_h,
+        face_hw};
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/kernels/dataflow/"
@@ -238,8 +241,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     for (uint32_t i = 0; i < num_cores; ++i) {
         // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
         // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch =
-            i < face_h ? i * sub_tile_line_bytes : (i - face_h) * sub_tile_line_bytes + face_h * tile_w * element_size;
+        uint32_t in_tile_offset_by_batch = i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -283,8 +285,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
-                    i < face_h ? i * sub_tile_line_bytes
-                               : (i - face_h) * sub_tile_line_bytes + face_h * tile_w * element_size;
+                    i < face_h ? i * sub_tile_line_bytes : (i + face_h) * sub_tile_line_bytes;
                 const auto& core = cores[i];
                 auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
                 runtime_args_reader[0] = in_tile_offset_by_batch;

@@ -19,6 +19,8 @@ void kernel_main() {
         get_compile_time_arg_val(6);  // 0 to read all phases, 1 to read only first phase, 2 to read only second phase
 
     constexpr uint32_t in_num_cores = get_compile_time_arg_val(7);
+    constexpr uint32_t face_h = get_compile_time_arg_val(8);
+    constexpr uint32_t face_hw = get_compile_time_arg_val(9);
 
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores));
@@ -36,7 +38,7 @@ void kernel_main() {
     const uint32_t cb_write_ptr_base = get_write_ptr(cb_id_q_out);
 
     for (uint32_t q = 0; q < batch; ++q) {
-        uint32_t wptr_offset = q < 16 ? q * SUBTILE_LINE_BYTES : (q - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
+        uint32_t wptr_offset = q < face_h ? q * SUBTILE_LINE_BYTES : (q + face_h) * SUBTILE_LINE_BYTES;
         uint32_t q_write_addr = cb_write_ptr_base + wptr_offset;
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
             // Read first phase
@@ -46,7 +48,7 @@ void kernel_main() {
             // Read second phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 2) {
                 noc_async_read(
-                    qkv_read_addr + 256 * ELEMENT_SIZE, q_write_addr + 256 * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
+                    qkv_read_addr + face_hw * ELEMENT_SIZE, q_write_addr + face_hw * ELEMENT_SIZE, SUBTILE_LINE_BYTES);
             }
 
             qkv_read_addr += tile_size;
