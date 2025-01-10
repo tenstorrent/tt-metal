@@ -136,28 +136,46 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 /models/*/**
 models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
 functional_*/ @uaydonat @esmalTT
+
 models/demos @uaydonat
-models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-models/demos/wormhole @uaydonat
-models/demos/t3000 @uaydonat
-models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
-models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
+
+models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
+
+models/demos/bert @TT-BrianLiu
+models/demos/bert_tiny @TT-BrianLiu
+models/demos/convnet_mnist @mywoodstock @shwetankTT @tt-aho
+models/demos/distilbert @tt-aho
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
-models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
+models/demos/grayskull @uaydonat
+models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
+models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
+models/demos/mnist @mywoodstock @shwetankTT @tt-aho
+models/demos/qwen @sraizada-tt @mtairum @yieldthought @uaydonat
+models/demos/segformer @esmalTT
+models/demos/squeezebert @cfjchu
+models/demos/ttnn_falcon7b @cfjchu
+models/demos/utils @uaydonat
+models/demos/vgg @mywoodstock @shwetankTT @tt-aho
+models/demos/yolov4 @dvartaniansTT @shwetankTT
+
+models/demos/wormhole @uaydonat
+models/demos/wormhole/mamba @esmalTT @kpaigwar @uaydonat
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
-models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @mywoodstock
+models/demos/wormhole/mistral7b @yieldthought @mtairum @uaydonat
+models/demos/wormhole/stable_diffusion @esmalTT @mywoodstock @uaydonat
+models/demos/wormhole/yolov4 @dvartaniansTT @shwetankTT
+
+models/demos/t3000 @uaydonat
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
-models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
+
+models/demos/tg/llama3_70b @johanna-rock-tt @djordje-tt @kpaigwar @sraizada-tt
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/grayskull @uaydonat
-models/demos/yolov4 @dvartaniansTT @shwetankTT
-models/demos/wormhole/yolov4 @dvartaniansTT @shwetankTT
-models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
+
+models/experimental @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
 models/perf/ @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
