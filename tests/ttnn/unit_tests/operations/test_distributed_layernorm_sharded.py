@@ -226,7 +226,7 @@ def test_pre_allgather_layernorm(
 @skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
-@pytest.mark.parametrize("input_width", [256])
+@pytest.mark.parametrize("input_width", [1024])
 @pytest.mark.parametrize("num_devices", [4, 8])
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))

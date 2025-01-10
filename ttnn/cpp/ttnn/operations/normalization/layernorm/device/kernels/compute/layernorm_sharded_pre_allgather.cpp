@@ -166,7 +166,6 @@ void MAIN {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 cb_wait_front(cb_ex_external2, 1);
-                // DPRINT_UNPACK({ DPRINT  << TSLICE(cb_ex_external2, 0, SliceRange::h0_32_w0()) << ENDL(); });
                 reduce_tile(
                     cb_ex_external2,
                     cb_scaler_global,
@@ -186,8 +185,6 @@ void MAIN {
         }
         reduce_revert_delta();
         cb_push_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
-        cb_wait_front(cb_reduction_out, 1);
-        // DPRINT_UNPACK({ DPRINT  << TSLICE(cb_reduction_out, 0, SliceRange::h0_32_w0()) << ENDL(); });
     }
 }
 
