@@ -8,6 +8,7 @@
 #include <optional>
 #include <unordered_map>
 #include <variant>
+#include "ttnn/decorators.hpp"
 
 #include "tt_metal/common/core_coord.hpp"
 #include "impl/kernels/kernel_types.hpp"
@@ -66,12 +67,13 @@ struct GenericOpDeviceOperation {
 
 
     // Define the return types for the shape(s) of the operation
-    using shape_return_value_t = ttnn::Shape;
+    using shape_return_value_t = std::vector<SimpleShape>;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
+    using spec_return_value_t = TensorSpec;
     struct tensor_args_t {
         // std::vector<std::reference_wrapper<Tensor>> io_tensors;
         std::vector<Tensor> io_tensors;
@@ -112,6 +114,8 @@ struct GenericOpDeviceOperation {
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
+    static void validate_inputs(const operation_attributes_t& attributes, const tensor_args_t& tensor_args);
+
     // Validate the operation when it creates a program. Usually will have more checks
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -124,6 +128,21 @@ struct GenericOpDeviceOperation {
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input,
+        const std::unordered_map<uint8_t, circular_buffer_attributes_t>& circular_buffer_attributes,
+        const std::vector<data_movement_attributes_t>& data_movement_attributes,
+        const std::vector<compute_attributes_t>& compute_attributes,
+        const std::vector<Tensor>& io_tensors);
+
+    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
 
 }   // namespace ttnn::operations::generic
+
+namespace ttnn::prim {
+constexpr auto generic =
+    ttnn::register_operation<"ttnn::prim::generic", ttnn::operations::generic::GenericOpDeviceOperation>();
+}  // namespace ttnn::prim
