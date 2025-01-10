@@ -210,6 +210,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     log_trace(tt::LogTest, "Receiver num buffers: {}", this->receiver_num_buffers);
     log_trace(tt::LogTest, "Receiver channel address: {}", this->local_receiver_channel_buffer_address);
     return std::vector<uint32_t>{
+        this->firmware_context_switch_interval,
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -711,6 +712,10 @@ void FabricEriscDatamoverBuilder::teardown_from_host(IDevice*d, tt::fabric::Term
         CoreType::ETH);}, true);
 }
 
+void FabricEriscDatamoverBuilder::set_firmware_context_switch_interval(size_t interval) {
+    this->firmware_context_switch_interval = interval;
+}
+
 void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal termination_signal) const {
     for (IDevice*d : this->device_sequence) {
         if (edm_builders_forward_direction.find(d->id()) != edm_builders_forward_direction.end()) {
@@ -722,6 +727,19 @@ void EdmLineFabricOpInterface::teardown_from_host(tt::fabric::TerminationSignal 
             for (auto& edm_builder : edm_builders_backward_direction.at(d->id())) {
                 edm_builder.teardown_from_host(d, termination_signal);
             }
+        }
+    }
+}
+
+void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t interval) {
+    for (auto& edm_builder : edm_builders_forward_direction) {
+        for (auto& builder : edm_builder.second) {
+            builder.set_firmware_context_switch_interval(interval);
+        }
+    }
+    for (auto& edm_builder : edm_builders_backward_direction) {
+        for (auto& builder : edm_builder.second) {
+            builder.set_firmware_context_switch_interval(interval);
         }
     }
 }
