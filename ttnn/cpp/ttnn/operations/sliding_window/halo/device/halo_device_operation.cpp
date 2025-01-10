@@ -71,7 +71,6 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     auto out_mem_config = output_memory_config_;
     out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
-    out_mem_config.shard_spec->halo = true;
     return {TensorSpec(
         output_shape,
         TensorLayout::fromLegacyPaddedShape(

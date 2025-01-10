@@ -92,7 +92,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
         }
     )
     n_cores = 8
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJORs)
 
     pixel_values = torch2tt_tensor(
         torch_pixel_values,
@@ -284,7 +284,7 @@ def test_performance_vit_e2e(
             }
         )
         n_cores = 8
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         pixel_values = torch2tt_tensor(
             torch_pixel_values,

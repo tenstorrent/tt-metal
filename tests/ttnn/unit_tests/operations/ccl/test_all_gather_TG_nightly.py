@@ -78,7 +78,6 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
         shard_grid,
         input_shard_shape,
         shard_grid_orientation,
-        False,
     )
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -210,7 +209,6 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         shard_grid,
         input_shard_shape,
         shard_grid_orientation,
-        False,
     )
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(

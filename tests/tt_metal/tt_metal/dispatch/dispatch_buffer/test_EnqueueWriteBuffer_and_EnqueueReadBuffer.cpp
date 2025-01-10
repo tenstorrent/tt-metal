@@ -42,7 +42,6 @@ public:
     uint32_t element_size = 1;
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
-    bool halo = false;
 
     BufferStressTestConfigSharded(std::array<uint32_t, 2> pages_per_core, std::array<uint32_t, 2> cores) :
         max_num_pages_per_core(pages_per_core), max_num_cores(cores) {
@@ -67,12 +66,7 @@ public:
 
     ShardSpecBuffer shard_parameters() {
         return ShardSpecBuffer(
-            this->shard_grid(),
-            this->shard_shape(),
-            this->shard_orientation,
-            this->halo,
-            this->page_shape,
-            this->tensor2d_shape());
+            this->shard_grid(), this->shard_shape(), this->shard_orientation, this->page_shape, this->tensor2d_shape());
     }
 
     uint32_t page_size() { return page_shape[0] * page_shape[1] * element_size; }

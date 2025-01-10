@@ -206,7 +206,7 @@ def run_test_sdpa_decode_multi_pos(
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -364,7 +364,7 @@ def run_test_sdpa_decode_single_iter(
         compute_sub_core_grids = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             start_core, grid_size[0] * grid_size[1], sub_core_grids, row_wise=True
         )
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -695,7 +695,7 @@ def run_test_sdpa_decode_paged_attention(
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -1089,7 +1089,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
                         ttnn.CoreRangeSet({num_to_corerange(32)}),
                         (32, 32),
                         ttnn.ShardOrientation.ROW_MAJOR,
-                        False,
                     ),
                 ),
             )

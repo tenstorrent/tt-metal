@@ -153,7 +153,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
                     llama_attention_model.head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         rot_mats = ttnn.as_tensor(

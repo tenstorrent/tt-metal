@@ -68,7 +68,6 @@ def test_serialize_memory_config_with_shard_spec_over_core_range_set(tmp_path):
                 sequence_lengtb,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     ttnn.dump_memory_config(memory_config_path, memory_config)

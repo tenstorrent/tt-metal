@@ -63,7 +63,7 @@ def test_softmax_causal_mask(device, in_dtype, in0_mem_config):
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 768]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
 
@@ -154,7 +154,7 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 384]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
 
@@ -251,7 +251,7 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [fuse_head * 384, 384]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     in1_t_shard = ttnn.to_memory_config(in1_t, sharded_mem_config)
 
@@ -325,7 +325,7 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
     grid_coord = ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = [M, K]
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orient, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orient)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     attention_mask_t_shard = ttnn.to_memory_config(attention_mask_t, sharded_mem_config)
 
