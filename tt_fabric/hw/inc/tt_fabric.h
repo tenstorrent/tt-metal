@@ -9,6 +9,7 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
+#include "tt_fabric/hw/inc/routing_table.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_fabric/hw/inc/eth_chan_noc_mapping.h"
 
