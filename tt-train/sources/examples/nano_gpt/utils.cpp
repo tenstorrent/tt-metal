@@ -4,6 +4,7 @@
 
 #include "utils.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "ops/binary_ops.hpp"
 
@@ -91,4 +92,11 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
         std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 1.0F, 0.01F, linear_decay_steps));
     std::vector<size_t> steps = {warmup_steps, linear_decay_steps};
     return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
+}
+
+void initialize_device(bool ddp) {
+    if (ddp) {
+        // currently supports only N300 device
+        ttml::autograd::ctx().set_mesh_shape({1, 2});
+    }
 }
