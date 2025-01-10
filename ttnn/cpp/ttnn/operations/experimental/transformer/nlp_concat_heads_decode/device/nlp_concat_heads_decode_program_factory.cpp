@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_shape().with_tile_padding();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
@@ -163,18 +163,26 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    auto tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
+    auto tile_h = tile_shape[0];
+    auto tile_w = tile_shape[1];
+    auto tile_hw = tile_h * tile_w;
 
-    const uint32_t head_tiles = head_dim / TILE_WIDTH;
+    auto face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
+    auto face_h = face_shape[0];
+    auto face_w = face_shape[1];
+
+    const uint32_t head_tiles = head_dim / tile_w;
     const uint32_t head_size = head_tiles * single_tile_size;
 
     const uint32_t element_size = input_tensor.element_size();
-    const uint32_t sub_tile_line_bytes = 16 * element_size;
+    const uint32_t sub_tile_line_bytes = face_w * element_size;
     const auto q_shard_spec = output.shard_spec().value();
     const auto q_cores = q_shard_spec.grid;
-    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    const auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / tile_hw;
     const auto in_shard_spec = input_tensor.shard_spec().value();
     const auto in_cores = in_shard_spec.grid;
-    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
+    const auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / tile_hw;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
     tt_metal::CircularBufferConfig cb_q_output_config =
@@ -183,7 +191,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
             .set_globally_allocated_address(*output.buffer());
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
+    uint32_t q_start_addr = input_tensor.buffer()->address();
 
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
@@ -202,8 +210,8 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
         noc_y_coords.push_back(device->worker_core_from_logical_core(in_cores_vec[i]).y);
     }
 
-    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a
-    // tile respectively)
+    // We parallize the reader on risc0 and risc1 as two phases, where each risc reads half-tile of the input (Phase 1
+    // reads left half-tile and Phase 2 reads right half-tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
@@ -227,15 +235,15 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
         q_cores,
         tt_metal::WriterDataMovementConfig(reader_compile_time_args));
 
-    uint32_t q_start_addr = q_base_addr;
-
     for (uint32_t i = 0; i < num_cores; ++i) {
+        // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
+        // the upper half of the tile and rest are in the lower half of tile.
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+            i < face_h ? i * sub_tile_line_bytes : (i - face_h) * sub_tile_line_bytes + face_h * tile_w * element_size;
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2 + in_num_cores);
+        reader_runtime_args.reserve(2 + 2 * in_num_cores);
         reader_runtime_args = {
             in_tile_offset_by_batch,
             q_start_addr,
@@ -248,7 +256,15 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     }
 
     auto override_runtime_arguments_callback =
-        [reader_kernel_id, writer_kernel_id, num_cores, cb_q_output, cores, element_size, sub_tile_line_bytes](
+        [reader_kernel_id,
+         writer_kernel_id,
+         num_cores,
+         cb_q_output,
+         cores,
+         element_size,
+         sub_tile_line_bytes,
+         face_h,
+         tile_w](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -260,16 +276,15 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
 
             UpdateDynamicCircularBufferAddress(program, cb_q_output, *dst_buffer_query);
 
-            uint32_t q_base_addr = input_tensors[0].buffer()->address();
-
-            uint32_t q_start_addr = q_base_addr;
+            uint32_t q_start_addr = input_tensors[0].buffer()->address();
 
             auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
-                    i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+                    i < face_h ? i * sub_tile_line_bytes
+                               : (i - face_h) * sub_tile_line_bytes + face_h * tile_w * element_size;
                 const auto& core = cores[i];
                 auto& runtime_args_reader = reader_args_by_core[core.x][core.y];
                 runtime_args_reader[0] = in_tile_offset_by_batch;
