@@ -268,7 +268,8 @@ void kernel_main() {
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
 
-    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    uint64_t router_config_addr =
+        NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
     noc_async_read_one_packet(
         router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
     noc_async_read_barrier();

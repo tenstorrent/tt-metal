@@ -43,37 +43,36 @@ inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint3
 }
 
 typedef struct test_board {
+    std::vector<chip_id_t> available_chip_ids;
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, chip_id_t>> unicast_map;
     std::map<chip_id_t, IDevice*> device_handle_map;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+    uint32_t num_chips_to_use;
+    std::string mesh_graph_descriptor;
 
     test_board(std::string& board_type_) {
         if ("n300" == board_type_) {
-            const std::string mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
-            uint32_t num_chips = 2;
+            mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
+            num_chips_to_use = 2;
 
-            if (num_chips != tt_metal::GetNumAvailableDevices()) {
+            if (num_chips_to_use != tt_metal::GetNumAvailableDevices()) {
                 throw std::runtime_error("Not found the expected 2 chips for n300");
             }
 
-            _init_control_plane(mesh_graph_descriptor);
-
-            for (auto i = 0; i < num_chips; i++) {
-                physical_chip_ids.push_back(i);
+            for (auto i = 0; i < num_chips_to_use; i++) {
+                available_chip_ids.push_back(i);
             }
         } else if ("t3k" == board_type_) {
-            const std::string mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
-            uint32_t num_chips = 8;
+            mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
+            num_chips_to_use = 8;
 
-            if (num_chips != tt_metal::GetNumAvailableDevices()) {
+            if (num_chips_to_use != tt_metal::GetNumAvailableDevices()) {
                 throw std::runtime_error("Not found the expected 8 chips for t3k");
             }
 
-            _init_control_plane(mesh_graph_descriptor);
-
-            for (auto i = 0; i < num_chips; i++) {
-                physical_chip_ids.push_back(i);
+            for (auto i = 0; i < num_chips_to_use; i++) {
+                available_chip_ids.push_back(i);
             }
         } else if ("glx8" == board_type_) {
             _init_galaxy_board(8);
@@ -86,11 +85,36 @@ typedef struct test_board {
         }
 
         // TODO: should we support odd number of chips (for unicast)?
-        if ((physical_chip_ids.size() % 2) != 0) {
+        if ((available_chip_ids.size() % 2) != 0) {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        device_handle_map = tt::tt_metal::detail::CreateDevices(physical_chip_ids);
+        _init_control_plane(mesh_graph_descriptor);
+        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
+
+        if (num_chips_to_use != available_chip_ids.size()) {
+            // initialize partial board to get the set of physical chip IDs for fabric kernels
+            if ("tg_mesh_graph_descriptor.yaml" == mesh_graph_descriptor) {
+                _init_partial_galaxy_board(num_chips_to_use);
+            }
+        } else {
+            physical_chip_ids = available_chip_ids;
+        }
+    }
+
+    void _init_galaxy_board(uint32_t num_chips) {
+        // TODO: add support for quanta galaxy variant
+        mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+        num_chips_to_use = num_chips;
+
+        // do run time check for number of available chips
+        if (tt_metal::GetNumAvailableDevices() < 32) {
+            throw std::runtime_error("Not a valid galaxy board since it has less than 32 chips");
+        }
+
+        for (auto i = 4; i < tt_metal::GetNumAvailableDevices() + 4; i++) {
+            available_chip_ids.push_back(i);
+        }
     }
 
     void _init_control_plane(const std::string& mesh_graph_descriptor) {
@@ -104,19 +128,10 @@ typedef struct test_board {
         }
     }
 
-    void _init_galaxy_board(uint32_t num_chips) {
-        // TODO: add support for quanta galaxy variant
-        const std::string mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+    void _init_partial_galaxy_board(uint32_t num_chips) {
         uint32_t mesh_id = 4;
         uint32_t start_row_idx, start_row_max_idx, num_rows;
         chip_id_t physical_chip_id;
-
-        // do run time check for number of available chips
-        if (tt_metal::GetNumAvailableDevices() < 32) {
-            throw std::runtime_error("Not a valid galaxy board since it has less than 32 chips");
-        }
-
-        _init_control_plane(mesh_graph_descriptor);
 
         // Init valid and available chip ids
         // consecutive rows of galaxy chips are chosen at random
@@ -303,6 +318,8 @@ typedef struct test_board {
         return control_plane->get_fabric_route(src_mesh_id, src_chip_id, dst_mesh_id, dst_chip_id, src_chan_id);
     }
 
+    inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
+
 } test_board_t;
 
 typedef struct test_device {
@@ -351,7 +368,7 @@ typedef struct test_device {
         }
     }
 
-    void launch_router_kernels(std::vector<uint32_t>& compile_args, std::map<string, string>& defines) {
+    void create_router_kernels(std::vector<uint32_t>& compile_args, std::map<string, string>& defines) {
         uint32_t num_routers = router_logical_cores.size();
         std::vector<uint32_t> zero_buf(1, 0);
 
@@ -405,7 +422,7 @@ typedef struct test_device {
 
     inline uint32_t get_noc_offset(CoreCoord& logical_core) {
         CoreCoord phys_core = device_handle->worker_core_from_logical_core(logical_core);
-        return (phys_core.y << 10) | (phys_core.x << 4);
+        return tt_metal::hal.noc_xy_encoding(phys_core.x, phys_core.y);
     }
 
     inline CoreCoord get_router_core() {
@@ -484,7 +501,7 @@ typedef struct test_traffic {
         }
     }
 
-    void launch_kernels(
+    void create_kernels(
         std::vector<uint32_t>& tx_compile_args,
         std::vector<uint32_t>& rx_compile_args,
         std::map<string, string>& defines,
@@ -1097,7 +1114,7 @@ int main(int argc, char **argv) {
             0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
         };
         for (auto& [chip_id, test_device] : test_devices) {
-            test_device->launch_router_kernels(router_compile_args, defines);
+            test_device->create_router_kernels(router_compile_args, defines);
         }
 
         if (check_txrx_timeout) {
@@ -1144,7 +1161,7 @@ int main(int argc, char **argv) {
 
         // TODO: launch traffic kernels
         for (auto& traffic : fabric_traffic) {
-            traffic.launch_kernels(
+            traffic.create_kernels(
                 tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address, test_results_addr);
         }
 
@@ -1207,9 +1224,7 @@ int main(int argc, char **argv) {
         */
 
         // close devices
-        for (auto& [chip_id, test_device] : test_devices) {
-            tt_metal::CloseDevice(test_device->device_handle);
-        }
+        test_board.close_devices();
 
         // tally-up the packets and words from tx/rx kernels
         for (auto& traffic : fabric_traffic) {
