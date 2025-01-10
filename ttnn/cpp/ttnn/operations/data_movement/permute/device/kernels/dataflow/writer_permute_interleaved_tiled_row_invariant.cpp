@@ -4,10 +4,9 @@
 
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "debug/dprint.h"
 
 template <size_t N, typename T>
-void dprint_array(T arr[N], const char* name) {
+void dprint_array(const T arr[N], const char* name) {
     DPRINT << name << ": ";
     for (size_t i = 0; i < N; i++) {
         DPRINT << arr[i] << " ";
@@ -34,7 +33,7 @@ inline void unflatten_index(uint32_t flat_idx, const uint32_t (&shape)[N], uint3
 //    Flatten the first (N-1) coords in row-major order, ignoring dimension N-1.
 //    shape[] has length (N-1). The result is a uint32_t "row" offset.
 template <uint32_t N>
-inline uint32_t flatten_index_ignore_last_dim(const uint32_t (&multi_idx)[N - 1], const uint32_t (&shape)[N - 1]) {
+inline uint32_t flatten_index_ignore_last_dim(const uint32_t (&multi_idx)[N], const uint32_t (&shape)[N]) {
     uint32_t offset = 0;
     for (uint32_t d = 0; d < N - 1; d++) {
         offset = offset * shape[d] + multi_idx[d];
@@ -42,53 +41,18 @@ inline uint32_t flatten_index_ignore_last_dim(const uint32_t (&multi_idx)[N - 1]
     return offset;
 }
 
-// ------------------------------------------------------------------
-// 3) get_unpadded_linear_row_index_for_tile<N, TILE_HEIGHT, TILE_WIDTH>:
-//    - 'tile' is a 0-based tile index in the "tiled_shape" (flattened row-major).
-//    - 'input_tiled_shape':  length N, [ ..., X_t, W_t ]
-//    - 'input_shape':        length N, [ ..., X,   W   ] (the unpadded shape).
-//    - TILE_HEIGHT, TILE_WIDTH are compile-time constants.
-//
-//  Returns the linear row index (flattened in row-major ignoring the last dim)
-//  in the UNPADDED shape where that tile starts.
-//
-//  Steps, conceptually:
-//    a) unflatten 'tile' -> tile_multi_idx[N] in input_tiled_shape
-//    b) x_t = tile_multi_idx[N-2]
-//    c) x = x_t * TILE_HEIGHT
-//    d) row_multi_idx[d < N-2] = tile_multi_idx[d], row_multi_idx[N-2] = x
-//    e) flatten row_multi_idx[] vs input_shape[0..N-2]
-//
 template <uint32_t N, uint32_t TILE_HEIGHT, uint32_t TILE_WIDTH>
 inline uint32_t get_unpadded_linear_row_index_for_tile(
     uint32_t tile,
     const uint32_t (&input_tiled_shape)[N],  // [ ..., X_t, W_t ]
-    const uint32_t (&input_shape)[N]         // [ ..., X,   W   ]
-) {
-    // a) unflatten tile into tile_multi_idx
-    uint32_t tile_multi_idx[N];
-    unflatten_index<N>(tile, input_tiled_shape, tile_multi_idx);
+    const uint32_t (&input_shape)[N],        // [ ..., X,   W   ]
+    uint32_t (&src_multi_idx)[N]) {
+    // unflatten tile into src_multi_idx
+    unflatten_index<N>(tile, input_tiled_shape, src_multi_idx);
 
-    // b) x_t = tile_multi_idx[N-2]
-    uint32_t x_t = tile_multi_idx[N - 2];
-
-    // c) x = x_t * TILE_HEIGHT
-    uint32_t x = x_t * TILE_HEIGHT;
-
-    // d) Build row_multi_idx of length N-1, ignoring last dimension
-    //    row_multi_idx[d] = tile_multi_idx[d] for d < N-2
-    //    row_multi_idx[N-2] = x
-    uint32_t row_multi_idx[N - 1];
-    uint32_t row_shape[N - 1];
-    for (uint32_t d = 0; d < N - 2; d++) {
-        row_multi_idx[d] = tile_multi_idx[d];
-        row_shape[d] = input_shape[d];
-    }
-    row_multi_idx[N - 2] = x;               // the actual row
-    row_shape[N - 2] = input_shape[N - 2];  // dimension X
-
-    // e) Flatten row_multi_idx in row_shape => linear row index
-    return flatten_index_ignore_last_dim<N>(row_multi_idx, row_shape);
+    src_multi_idx[N - 2] *= TILE_HEIGHT;
+    // Flatten row_multi_idx in row_shape => linear row index
+    return flatten_index_ignore_last_dim<N>(src_multi_idx, input_shape);
 }
 
 void kernel_main() {
@@ -201,24 +165,17 @@ void kernel_main() {
     }
 
     for (uint32_t tile = start_tile; tile < end_tile; ++tile) {
-        uint32_t tile_start =
-            get_unpadded_linear_row_index_for_tile<N, TILE_HEIGHT, TILE_WIDTH>(tile, input_tiled_shape, input_shape);
-        uint32_t w_t = tile % W_t;
-        uint32_t temp = tile / W_t;
-        uint32_t h_t = temp % H_t;
+        // unflatten tile into src_multi_idx
+        unflatten_index<N>(tile, input_tiled_shape, src_multi_idx);
 
+        uint32_t w_t = src_multi_idx[N - 1];
+        uint32_t h_t = src_multi_idx[N - 2];
         // Determine the number of real faces with data in the height dimension
         uint8_t num_faces_h = (h_t == H_t - 1) ? remainder_faces_h : NUM_FACES_H;
 
-        uint32_t remainder = tile_start;
-
-        // Compute multi-dimensional index for the starting row of the face
-        for (uint32_t i = 0; i < N - 1; ++i) {
-            size_t dim = N - 2 - i;  // Start from the second last dimension
-            src_multi_idx[dim] = remainder % input_shape[dim];
-            remainder /= input_shape[dim];
-        }
-        src_multi_idx[N - 1] = 0;
+        src_multi_idx[N - 2] *= TILE_HEIGHT;
+        // Flatten row_multi_idx in row_shape => linear row index
+        uint32_t tile_start = flatten_index_ignore_last_dim<N>(src_multi_idx, input_shape);
 
         // Apply permutation to get destination multi-dimensional index of where the data will begin
         for (uint32_t i = 0; i < N; ++i) {
