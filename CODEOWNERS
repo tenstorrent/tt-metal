@@ -97,7 +97,7 @@ ttnn/cpp/ttnn/deprecated/tt_dnn/op_library/moreh*/ @razorback3 @dongjin-na @cfjc
 ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
-ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT
+ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
 ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
@@ -114,7 +114,7 @@ ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sj
 ttnn/cpp/ttnn/operations/embedding_backward/ @TT-BrianLiu @yan-zaretskiy
 ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT
-tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu
+tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
