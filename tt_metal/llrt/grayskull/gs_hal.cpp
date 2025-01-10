@@ -176,6 +176,8 @@ void Hal::initialize_gs() {
     };
 
     this->num_nocs_ = NUM_NOCS;
+    this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
