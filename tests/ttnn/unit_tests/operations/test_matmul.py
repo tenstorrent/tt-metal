@@ -1230,14 +1230,14 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand((k_size), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand((1, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = input_tensor_a @ input_tensor_b
-    output = ttnn.to_torch(output, torch_rank=1)
+    output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape

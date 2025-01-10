@@ -200,14 +200,13 @@ class LegacyShape {
         }
     }
     explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
-        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(
-            shape.size() == shape_with_tile_padding.size(),
-            "Shape and shape_with_tile_padding must have the same size");
-        for (auto index = 0; index < shape.size(); index++) {
-            auto padded_dimension = shape_with_tile_padding[index];
+    rank_(shape_with_tile_padding.size()), dimensions_{}, padding_{shape_with_tile_padding.size()} {
+        for (int index = 0; index < shape_with_tile_padding.size(); index++) {
+            int shape_index = index + static_cast<int>(shape.size()) - static_cast<int>(shape_with_tile_padding.size());
+            int dimension = shape_index >= 0 ? shape[shape_index] : 1;
+            int padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
-            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
         }
     }
     explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)
@@ -228,6 +227,7 @@ class LegacyShape {
     const LegacyShape without_padding() const;
 
     ttnn::SimpleShape logical_shape() const;
+    ttnn::SimpleShape padded_shape() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
