@@ -10,8 +10,7 @@ target_link_libraries(unit_tests_dispatch_trace_o PRIVATE test_metal_common_libs
 target_include_directories(
     unit_tests_dispatch_trace_o
     PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/dispatch

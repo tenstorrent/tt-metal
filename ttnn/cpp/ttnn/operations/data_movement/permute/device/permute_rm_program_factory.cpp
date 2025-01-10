@@ -15,7 +15,8 @@ uint32_t num_pages(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t page_size(const ttnn::Tensor& input_tensor) {
-    auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    auto BUFFER_ALIGNMENT =
+        input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
     const auto& shape = input_tensor.get_logical_shape();  // in anticipation of RM padding
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
@@ -55,7 +56,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     uint32_t num_input_pages = detail::num_pages(input_tensor);
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
@@ -180,7 +181,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t x_block_size = constants::TILE_HEIGHT;
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_2;

@@ -7,6 +7,7 @@
 
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
+#include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"
@@ -77,7 +78,23 @@ void Hal::initialize_bh() {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
 
+    this->stack_size_func_ = [](uint32_t type) -> uint32_t {
+        switch (type) {
+            case DebugBrisc: return MEM_BRISC_STACK_SIZE;
+            case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
+            case DebugErisc: return 0;  // Not managed/checked by us.
+            case DebugIErisc: return MEM_IERISC_STACK_SIZE;
+            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
+            case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
+            case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
+        }
+        return 0xdeadbeef;
+    };
+
     this->num_nocs_ = NUM_NOCS;
+    this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;

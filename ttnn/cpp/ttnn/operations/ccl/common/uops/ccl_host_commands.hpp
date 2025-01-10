@@ -84,5 +84,38 @@ using semaphore_id_t = std::variant<uint32_t, tt::tt_metal::GlobalSemaphore cons
     size_t dest_noc0_y,
     UnicastCommandDestArgs const& unicast_args);
 
+// Noc Read/Write commands
+// Densely packs as many transfers as possible into a single packet
+[[nodiscard]] CclHostLowLevelWorkerCommand local_noc_read_burst_to_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id
+);
+
+[[nodiscard]] CclHostLowLevelWorkerCommand local_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id
+);
+
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id,
+    UnicastCommandDestArgs const& unicast_args
+);
+
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_multicast_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id,
+    MulticastCommandDestArgs const& multicast_args
+);
+
+
 };  // namespace uops
 };  // namespace ttnn::ccl::cmd

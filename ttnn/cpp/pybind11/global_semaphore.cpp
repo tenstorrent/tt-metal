@@ -19,7 +19,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_semaphore",
-        [](Device* device,
+        [](IDevice* device,
            const CoreRangeSet& cores,
            uint32_t initial_value,
            BufferType buffer_type,
@@ -31,7 +31,7 @@ void py_module(py::module& module) {
         py::arg("cores"),
         py::arg("initial_value"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 
@@ -64,7 +64,7 @@ void py_module(py::module& module) {
         },
         py::arg("global_semaphore"),
         py::arg("reset_value"),
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Reset the value of the global semaphore.
 
@@ -90,7 +90,7 @@ void py_module(py::module& module) {
         py::arg("cores"),
         py::arg("initial_value"),
         py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Create a GlobalSemaphore Object on a single device.
 
@@ -101,6 +101,41 @@ void py_module(py::module& module) {
                 buffer_type (BufferType): The type of buffer to use for the global semaphore.
                 sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global semaphore value to device.
                 Defaults to waiting on all sub-devices.
+            )doc");
+
+    module.def(
+        "create_global_semaphore_with_same_address",
+        [](MeshDevice* mesh_device,
+           const CoreRangeSet& cores,
+           uint32_t initial_value,
+           BufferType buffer_type,
+           const std::vector<SubDeviceId>& sub_device_ids,
+           uint32_t attempts,
+           bool search_max) {
+            return ttnn::global_semaphore::create_global_semaphore_with_same_address(
+                mesh_device, cores, initial_value, buffer_type, sub_device_ids, attempts, search_max);
+        },
+        py::arg("mesh_device"),
+        py::arg("cores"),
+        py::arg("initial_value"),
+        py::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("attempts") = 1000,
+        py::arg("search_max") = false,
+        R"doc(
+            Create a GlobalSemaphore Object on multiple devices with the same address by iteratively creating global semaphore until alignment is found.
+            Fails if the address is not the same on all devices after the specified number of attempts.
+            Note: Temperary API until mesh allocator is implemented.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device on which to create the global semaphore.
+                cores (CoreRangeSet): The cores on which the global semaphore will be used for synchronization.
+                initial_value (int): The initial value of the global semaphore.
+                buffer_type (BufferType): The type of buffer to use for the global semaphore.
+                sub_device_ids (List[ttnn.SubDeviceIds]): Sub-device IDs to wait on before writing the global semaphore value to device.
+                attempts (int): The number of attempts to create the global semaphore with the same address.
+                Defaults to waiting on all sub-devices.
+                search_max (bool): Whether to search for the maximum address. (default: False, which searches for the minimum address)
             )doc");
 
     module.def(
@@ -123,7 +158,7 @@ void py_module(py::module& module) {
         },
         py::arg("global_semaphore"),
         py::arg("reset_value"),
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Reset the value of the global semaphore.
 

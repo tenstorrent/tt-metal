@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
     //get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const uint32_t data_size = input.element_size();
-    tt::tt_metal::Device *device = input.device();
+    tt::tt_metal::IDevice*device = input.device();
     //Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

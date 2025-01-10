@@ -21,6 +21,7 @@ target_link_libraries(
         span
         Tracy::TracyClient
     PRIVATE
+        TT::Metalium::HostDevCommon
         profiler
         common
         jit_build
@@ -47,6 +48,8 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}
         include
+    PRIVATE
+        common # FIXME: Clean up the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
@@ -61,6 +64,7 @@ set_target_properties(
 )
 
 add_subdirectory(hw)
+add_subdirectory(hostdevcommon)
 add_subdirectory(common)
 add_subdirectory(jit_build)
 add_subdirectory(llrt)

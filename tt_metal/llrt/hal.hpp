@@ -51,6 +51,10 @@ enum class HalL1MemAddrType : uint8_t {
     LAUNCH_MSG_BUFFER_RD_PTR,
     LOCAL,
     BANK_TO_NOC_SCRATCH,
+    APP_SYNC_INFO,
+    TILE_HEADER_BUFFER,
+    APP_ROUTING_INFO,
+    RETRAIN_COUNT,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
@@ -140,6 +144,7 @@ public:
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
+    using StackSizeFunc = std::function<uint32_t(uint32_t)>;
 
 private:
     tt::ARCH arch_;
@@ -148,6 +153,8 @@ private:
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
     uint32_t num_nocs_;
+    uint32_t noc_addr_node_id_bits_;
+    uint32_t noc_coord_reg_offset_;
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
@@ -161,6 +168,7 @@ private:
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
+    StackSizeFunc stack_size_func_;
 
 public:
     Hal();
@@ -168,6 +176,8 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
+    uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
+    uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
@@ -221,6 +231,8 @@ public:
     }
 
     uint32_t valid_reg_addr(uint32_t addr) { return valid_reg_addr_func_(addr); }
+
+    uint32_t get_stack_size(uint32_t type) { return stack_size_func_(type); }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
