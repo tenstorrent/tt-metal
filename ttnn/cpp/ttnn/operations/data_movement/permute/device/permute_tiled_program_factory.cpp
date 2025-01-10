@@ -264,7 +264,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
