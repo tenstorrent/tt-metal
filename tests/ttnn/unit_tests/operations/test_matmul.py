@@ -2111,3 +2111,18 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert_with_pcc(torch_output_tensor, output, 0.999)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
     assert_with_pcc(output, optional_output_tensor, 0.999)
+
+
+def test_small_matmul_pcc(device):
+    torch.manual_seed(0)
+    pcc = 0.99
+    torch_input_tensor_a = torch.rand([1, 2048])
+    torch_input_tensor_b = torch.rand([2048, 1000])
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output1)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
