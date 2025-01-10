@@ -78,6 +78,24 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@pytest.mark.parametrize("width", [54])
+def test_prod_bf8(device, width):
+    torch.manual_seed(0)
+
+    input_shape = (1, 12, 16, width)
+    reduce_dim = -1
+
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.prod(torch_input_tensor, dim=reduce_dim, keepdim=True, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.prod(input_tensor, dim=reduce_dim)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("batch_size", [32])
 @pytest.mark.parametrize("c", [32])
 @pytest.mark.parametrize("h", [37])
