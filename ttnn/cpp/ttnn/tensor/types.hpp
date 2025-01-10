@@ -304,7 +304,6 @@ struct OwnedStorage {
 };
 
 using DeviceBuffer = std::shared_ptr<Buffer>;
-using DeviceBufferRegion = tt::tt_metal::BufferRegion;
 struct DeviceStorage {
     DeviceBuffer buffer;
     DeviceStorage() = default;

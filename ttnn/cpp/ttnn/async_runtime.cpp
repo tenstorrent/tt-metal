@@ -12,10 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn {
 
 void write_buffer(
-    queue_id cq_id,
-    Tensor& dst,
-    std::vector<std::shared_ptr<void>> src,
-    const std::optional<DeviceBufferRegion>& region) {
+    queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
     uint32_t dst_ref_count = dst.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : dst.get_workers()) {
         auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(worker->id());
@@ -31,7 +28,7 @@ void read_buffer(
     queue_id cq_id,
     Tensor& src,
     std::vector<std::shared_ptr<void>> dst,
-    const std::optional<DeviceBufferRegion>& region,
+    const std::optional<BufferRegion>& region,
     size_t src_offset,
     bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");

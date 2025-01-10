@@ -927,7 +927,7 @@ void* get_raw_host_data_ptr(const Tensor& tensor) {
 }
 
 void memcpy(
-    CommandQueue& queue, void* dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region, bool blocking) {
+    CommandQueue& queue, void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -942,11 +942,11 @@ void memcpy(
     }
 }
 
-void memcpy(void* dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region, bool blocking) {
+void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     memcpy(src.device()->command_queue(), dst, src, region, blocking);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region) {
+void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -961,11 +961,11 @@ void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::option
     }
 }
 
-void memcpy(Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region) {
+void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     memcpy(dst.device()->command_queue(), dst, src, region);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region) {
+void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
         TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
@@ -983,7 +983,7 @@ void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::opti
     }
 }
 
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region) {
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
         memcpy(src.device()->command_queue(), dst, src, region);
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {

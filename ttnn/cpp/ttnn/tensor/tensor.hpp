@@ -388,24 +388,21 @@ void memcpy(
     CommandQueue& queue,
     void* dst,
     const Tensor& src,
-    const std::optional<DeviceBufferRegion>& region = std::nullopt,
+    const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
 void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region = std::nullopt);
+    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
-    CommandQueue& queue,
-    Tensor& dst,
-    const Tensor& src,
-    const std::optional<DeviceBufferRegion>& region = std::nullopt);
+    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 void memcpy(
-    void* dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region = std::nullopt, bool blocking = true);
+    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
 
-void memcpy(Tensor& dst, const void* src, const std::optional<DeviceBufferRegion>& region = std::nullopt);
+void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<DeviceBufferRegion>& region = std::nullopt);
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
