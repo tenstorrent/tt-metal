@@ -124,6 +124,8 @@ void kernel_main() {
     // Precompute constants used in inner loops
     constexpr uint32_t face_height_width = FACE_HEIGHT * FACE_WIDTH;
     constexpr uint32_t face_h_stride = NUM_FACES_W * face_height_width;
+    constexpr uint32_t face_height_width_bytes = face_height_width * element_size;
+    constexpr uint32_t face_h_stride_bytes = face_h_stride * element_size;
 
     // Main single loop over all tiles
     uint32_t src_multi_idx[N];
@@ -207,7 +209,7 @@ void kernel_main() {
 
         cb_wait_front(cb_id_out0, 1);
 
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        uint32_t base_l1_read_addr = get_read_ptr(cb_id_out0);
 
         // Iterate over faces in the height dimension
         for (uint8_t face_h = 0; face_h < num_faces_h; ++face_h) {
@@ -220,47 +222,43 @@ void kernel_main() {
             // Compute the row that the start of the face belongs to
             uint32_t base_row = tile_start + face_h * FACE_HEIGHT;
 
-            // Iterate over faces in the width dimension
-            for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-                // Combine face_w for the overall tile column
-                uint32_t face_w_offset = face_w * face_height_width;
+            uint32_t face_h_offset_bytes = face_h * face_h_stride_bytes;
 
-                // Offset in bytes to where our data starts in the output tile
-                uint32_t output_tile_offset_bytes = (output_face_line_offset + face_w_offset) * element_size;
+            // Iterate over sub-tile lines
+            for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
+                // Calculate the input row based on sub_tile_line, face_h, and tile_start
+                uint32_t row = base_row + sub_tile_line;
 
-                // Iterate over sub-tile lines
-                for (uint8_t sub_tile_line = 0; sub_tile_line < sub_tile_lines; ++sub_tile_line) {
-                    // Calculate the input row based on sub_tile_line, face_h, and tile_start
-                    uint32_t row = base_row + sub_tile_line;
+                // Adjust source multi-dimensional index based on sub_tile_line
+                src_multi_idx[N - 2] = row % input_shape[N - 2];
 
-                    // Adjust source multi-dimensional index based on sub_tile_line
-                    src_multi_idx[N - 2] = row % input_shape[N - 2];
+                // Adjust destination multi-dimensional index based on sub_tile_line
+                dest_multi_idx[h_in_dest] = src_multi_idx[N - 2];
 
-                    // Adjust destination multi-dimensional index based on sub_tile_line
-                    dest_multi_idx[h_in_dest] = src_multi_idx[N - 2];
+                // Calculate the offset to the beginning of the row in the output tensor
+                uint32_t output_row_offset =
+                    base_output_row_offset + dest_multi_idx[h_in_dest] * dest_padded_strides[h_in_dest];
 
-                    // Calculate the offset to the beginning of the row in the output tensor
-                    uint32_t output_row_offset =
-                        base_output_row_offset + dest_multi_idx[h_in_dest] * dest_padded_strides[h_in_dest];
+                uint32_t output_tile_idx = (output_row_offset / TILE_HEIGHT) * W_t + w_t;
 
-                    uint32_t output_tile_idx = (output_row_offset / TILE_HEIGHT) * W_t + w_t;
+                // Since we are writing in SUBTILE_LINE_BYTES chunks, we don't need an offset within the sub-tile
+                // line
 
-                    // Since we are writing in SUBTILE_LINE_BYTES chunks, we don't need an offset within the sub-tile
-                    // line
+                // Iterate over faces in the width dimension
+                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                    // Combine face_w for the overall tile column
+                    uint32_t face_w_offset_bytes = face_w * face_height_width_bytes;
 
+                    // Offset in bytes to where our data starts in the output tile
+                    uint32_t output_tile_offset_bytes = (output_face_line_offset)*element_size + face_w_offset_bytes;
                     // Compute the write address using the output tile index and the offset into the face line
                     uint64_t write_noc_base_addr = get_noc_addr(output_tile_idx, s, output_tile_offset_bytes);
 
                     // Perform asynchronous write
-                    noc_async_write(l1_read_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
-
-                    // Increment the read address
-                    l1_read_addr += SUBTILE_LINE_BYTES;
-                }
-
-                // Skip padding if not all lines are real
-                if (is_last_sub_tile_line) {
-                    l1_read_addr += (FACE_HEIGHT - sub_tile_lines) * SUBTILE_LINE_BYTES;
+                    uint32_t final_addr = base_l1_read_addr + (face_h_offset_bytes + face_w_offset_bytes +
+                                                               sub_tile_line * SUBTILE_LINE_BYTES);
+                    // DPRINT << "Final addr equal to l1_read_read_addr: " << final_addr - l1_read_addr << ENDL();
+                    noc_async_write(final_addr, write_noc_base_addr, SUBTILE_LINE_BYTES);
                 }
             }
         }
