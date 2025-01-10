@@ -880,6 +880,8 @@ void bind_binary_bw_div(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
+            Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
+
         Example:
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
@@ -1193,7 +1195,7 @@ void py_module(py::module& module) {
         module,
         ttnn::div_bw,
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`round_mode`,  with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_backward_overload(
         module,
@@ -1242,13 +1244,14 @@ void py_module(py::module& module) {
         module,
         ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_binary_backward_ops(
         module,
         ttnn::hypot_bw,
         R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16)doc",
+        R"doc(Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_ops(
         module,

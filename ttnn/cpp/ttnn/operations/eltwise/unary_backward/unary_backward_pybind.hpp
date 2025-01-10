@@ -758,6 +758,7 @@ void bind_unary_backward_rdiv(
                  - TILE
                  - 2, 3, 4
 
+            Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
             {9}
 
         Example:
@@ -1377,7 +1378,7 @@ void py_module(py::module& module) {
         "exponent",
         "Exponent value [must be non-negative]",
         R"doc(Performs backward operations for power on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_optional(
         module,
@@ -1470,7 +1471,7 @@ void py_module(py::module& module) {
         module,
         ttnn::log_sigmoid_bw,
         R"doc(Performs backward operations for log sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1501,7 +1502,7 @@ void py_module(py::module& module) {
         module,
         ttnn::rsqrt_bw,
         R"doc(Performs backward operations for reciprocal of square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_neg(
         module,
@@ -1556,7 +1557,7 @@ void py_module(py::module& module) {
         module,
         ttnn::abs_bw,
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     detail::bind_unary_backward_neg(
         module,
