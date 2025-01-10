@@ -24,16 +24,26 @@
 #include "hw/inc/debug/ring_buffer.h"
 #include "impl/device/device.hpp"
 #include "llrt/rtoptions.hpp"
-#include "noc/noc_overlay_parameters.h"
-#include "noc/noc_parameters.h"
 
 #include "watcher_device_reader.hpp"
 
 #include "llrt/hal.hpp"
 
 using namespace tt::tt_metal;
-
 using std::string;
+
+#define NOC_MCAST_ADDR_START_X(addr) (hal.get_noc_mcast_addr_start_x(addr))
+#define NOC_MCAST_ADDR_START_Y(addr) (hal.get_noc_mcast_addr_start_y(addr))
+#define NOC_MCAST_ADDR_END_X(addr) (hal.get_noc_mcast_addr_end_x(addr))
+#define NOC_MCAST_ADDR_END_Y(addr) (hal.get_noc_mcast_addr_end_y(addr))
+#define NOC_UNICAST_ADDR_X(addr) (hal.get_noc_ucast_addr_x(addr))
+#define NOC_UNICAST_ADDR_Y(addr) (hal.get_noc_ucast_addr_y(addr))
+#define NOC_LOCAL_ADDR(addr) (hal.get_noc_local_addr(addr))
+#define NOC_OVERLAY_START_ADDR (hal.get_noc_overlay_start_addr())
+#define NOC_STREAM_REG_SPACE_SIZE (hal.get_noc_stream_reg_space_size())
+#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (hal.get_noc_stream_remote_dest_buf_size_reg_index())
+#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX (hal.get_noc_stream_remote_dest_buf_start_reg_index())
+
 namespace {  // Helper functions
 
 // Helper function to get string rep of riscv type

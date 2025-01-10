@@ -160,6 +160,13 @@ void Hal::initialize_gs() {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
+    this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
+    this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
+    this->noc_mcast_addr_end_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_Y(addr); };
+    this->noc_ucast_addr_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_X(addr); };
+    this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
+    this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
 
     this->stack_size_func_ = [](uint32_t type) -> uint32_t {
         switch (type) {
@@ -178,6 +185,10 @@ void Hal::initialize_gs() {
     this->num_nocs_ = NUM_NOCS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
+    this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
+    this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
+    this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;
+    this->noc_stream_remote_dest_buf_start_reg_index_ = STREAM_REMOTE_DEST_BUF_START_REG_INDEX;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
