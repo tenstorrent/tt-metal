@@ -98,12 +98,12 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
-ttnn/cpp/ttnn/operations/pool/ @@tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/conv/ @@tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT @nardoTT
-ttnn/cpp/ttnn/operations/data_movement/fold/ @@tenstorrent/metalium-developers-convolutions
-ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @@tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
@@ -155,8 +155,8 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat
-models/demos/yolov4 @dvartaniansTT @shwetankTT
-models/demos/wormhole/yolov4 @dvartaniansTT @shwetankTT
+models/demos/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
+models/demos/wormhole/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @uaydonat
