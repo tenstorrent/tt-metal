@@ -159,16 +159,22 @@ def run_reduce_scatter_test(
     )
     worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
     worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
     mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
         mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
     )
+    mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
     from_remote_semaphore_handles = create_global_semaphore_with_same_address(
-        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]  # , search_max=True
+        mesh_device,
+        ccl_sub_device_crs,
+        0,  # , search_max=True
     )
     to_remote_semaphore_handles = create_global_semaphore_with_same_address(
-        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]  # , search_max=True
+        mesh_device,
+        ccl_sub_device_crs,
+        0,  # , search_max=True
     )
     mesh_device.set_sub_device_stall_group([worker_sub_device_id])
     debug = False
@@ -219,7 +225,7 @@ def run_reduce_scatter_test(
             output_mem_config,
             num_iters=num_iters,
             topology=topology,
-            subdevice_id=ttnn.SubDeviceId(0),
+            subdevice_id=worker_sub_device_id,
         )
     else:
         logger.info(f"Running {num_iters} iterations of reduce scatter")
@@ -237,8 +243,7 @@ def run_reduce_scatter_test(
             )
 
         logger.info(f"Waiting for op to finish all iterations")
-        for device_id in mesh_device.get_device_ids():
-            ttnn.synchronize_device(mesh_device.get_device(device_id), sub_device_ids=[worker_sub_device_id])
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done iterations")
 
     # Compute golden
@@ -284,6 +289,7 @@ def run_reduce_scatter_test(
 
         else:
             logger.info(f"output match for tensor {i}")
+    mesh_device.reset_sub_device_stall_group()
     teardown_fabric_interface(mesh_device)
 
     assert not mismatch, f"{i} FAILED: {output}"
