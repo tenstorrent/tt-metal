@@ -116,6 +116,7 @@ parameters = {
                     ),
                     [64, 64],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],

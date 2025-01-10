@@ -126,6 +126,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
                 head_dim * total_heads,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
@@ -243,6 +244,7 @@ def run_test_create_min_width_shard(
             32,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
+        False,
     )
     CREATE_HEAD_INPUT_MEMCFG = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, CREATE_HEAD_SHARD_SPEC
@@ -414,6 +416,7 @@ def run_test_create_width_shard_by_head(
                 head_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)

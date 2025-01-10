@@ -499,6 +499,7 @@ class cross_attention:
             output_shard_grid,
             [height_per_core, key_len],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -736,6 +737,7 @@ class cross_attention:
                 output_shard_grid,
                 [self.seq_len, self.q_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -752,6 +754,7 @@ class cross_attention:
                 output_shard_grid,
                 [96, self.kv_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,

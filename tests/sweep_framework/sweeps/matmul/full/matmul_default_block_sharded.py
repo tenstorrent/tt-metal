@@ -103,6 +103,7 @@ def run(
             ),
             (per_core_height, per_core_width),
             ttnn.ShardOrientation.COL_MAJOR,
+            False,
         )
     else:
         input_a_shard_spec = ttnn.ShardSpec(
@@ -111,6 +112,7 @@ def run(
             ),
             (per_core_height, per_core_width),
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
     input_a_memory_config.shard_spec = input_a_shard_spec
 

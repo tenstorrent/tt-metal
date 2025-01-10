@@ -484,6 +484,7 @@ class TtModelArgs:
                         128,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
 
@@ -595,6 +596,7 @@ class TtModelArgs:
                         nearest_32(56),
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
 
@@ -832,6 +834,7 @@ class TtModelArgs:
                         self.dim // self.num_devices,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
 
@@ -1055,7 +1058,7 @@ class TtModelArgs:
         dram_cores = 12
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
+            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
@@ -1406,6 +1409,7 @@ def set_tg_attention_config(model_config, dim):
                     32,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             ),
         )
     )

@@ -181,6 +181,7 @@ def run_all_gather_impl(
             shard_grid,
             input_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
         input_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
@@ -194,6 +195,7 @@ def run_all_gather_impl(
             shard_grid,
             output_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec

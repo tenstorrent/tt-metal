@@ -1691,6 +1691,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0))})),
         {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
         ShardOrientation::ROW_MAJOR,
+        false,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 
@@ -1717,6 +1718,7 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb_fp8(
         CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0))})),
         {Mt * tt::constants::TILE_HEIGHT, Nt * tt::constants::TILE_WIDTH},
         ShardOrientation::ROW_MAJOR,
+        false,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {Mt, Nt});
 

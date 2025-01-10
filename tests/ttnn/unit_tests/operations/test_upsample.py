@@ -204,13 +204,13 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
         shard_height = math.ceil(batch_size * height * width / ncores)
         shard_width = num_channels
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     ## output shard
     shard_height = shard_height * scale_h * scale_w
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     print(f"in_shard_mem_config: {in_sharded_mem_config}")
@@ -329,13 +329,13 @@ def test_bilinear_multi_core(
         shard_width = num_channels
     # breakpoint()
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
     ## output shard
     shard_height = shard_height * scale_h * scale_w
     shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, False)
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=math_fidelity,

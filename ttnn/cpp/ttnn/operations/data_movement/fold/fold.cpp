@@ -136,7 +136,8 @@ ttnn::MemoryConfig create_sharded_memory_config(
         .shard_spec = ShardSpec{
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}}}},
             {shard_height, shard_width},
-            orientation}};
+            orientation,
+            false}};
 
     return sharded_memory_config;
 }

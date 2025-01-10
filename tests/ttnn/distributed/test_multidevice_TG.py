@@ -229,7 +229,7 @@ def test_galaxy_matmul_2d_fracture_dram_sharded(M, K, N, weights_dtype, mesh_sha
         }
     )
     shard_shape = (K, nearest_32(N // 12))  # padded cols to divide by 12
-    shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(weight_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
     weight_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
     weights = ttnn.from_torch(
@@ -354,6 +354,7 @@ def test_galaxy_eltwise_add(M, N, mesh_device):
                 N // 32,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -528,6 +529,7 @@ def test_galaxy_nlp_create_heads_decode(
                 32 if is_multicore else total_heads * head_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -613,6 +615,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
                 head_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -626,6 +629,7 @@ def test_galaxy_rotary_matmul(batch, seq_len, head_dim, n_local_heads, n_local_k
                 head_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -741,6 +745,7 @@ class TestUpdateCache:
                     xt.shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -814,6 +819,7 @@ class TestUpdateCache:
                 xt.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -910,7 +916,7 @@ def run_test_sdpa_decode_single_iter(
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     mesh_shape = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(mesh_shape, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(mesh_shape, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -1054,6 +1060,7 @@ def test_galaxy_nlp_concat_heads_decode(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -1126,6 +1133,7 @@ def test_galaxy_layernorm(M, N, mesh_device):
                 N // 32,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 

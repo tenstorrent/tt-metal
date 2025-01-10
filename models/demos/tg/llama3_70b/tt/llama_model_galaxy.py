@@ -216,6 +216,7 @@ class TtLlamaModel_galaxy:
                         self.head_dim,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
 

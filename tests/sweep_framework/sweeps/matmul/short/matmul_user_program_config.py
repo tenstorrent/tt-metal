@@ -85,6 +85,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (384, 64),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -96,6 +97,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (64, 128),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -141,6 +143,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (128, 64),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -190,6 +193,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (2 * 32, 32),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -247,6 +251,7 @@ parameters = {
                     ),
                     (256, 64),  # M // num_cores(34), K
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -299,6 +304,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (64, 64),  # M, K // num_cores(32)
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -350,6 +356,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
                     (320, 64),  # M // grid_size[1], K // grid_size[0]
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -400,6 +407,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
                     (320, 64),  # M // grid_size[0], K // grid_size[1]
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -450,6 +458,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 5))}),
                     (32, 64),  # M // grid_size[1], K
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -461,6 +470,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
                     (64, 64),  # K, N // grid_size[0]
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
