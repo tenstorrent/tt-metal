@@ -66,6 +66,9 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_sync_
     std::array<uint32_t, 3> incrementer_rt_args = {
         global_sem.address(), waiter_core_physical.x, waiter_core_physical.y};
     SetRuntimeArgs(incrementer_program, incrementer_kernel, incrementer_cores, incrementer_rt_args);
+    waiter_program.set_runtime_id(1);
+    syncer_program.set_runtime_id(2);
+    incrementer_program.set_runtime_id(3);
     return {
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};
 }
@@ -119,6 +122,9 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     std::array<uint32_t, 3> incrementer_rt_args = {
         global_sem.address(), tensix_waiter_core_physical.x, tensix_waiter_core_physical.y};
     SetRuntimeArgs(incrementer_program, incrementer_kernel, incrementer_cores, incrementer_rt_args);
+    waiter_program.set_runtime_id(1);
+    syncer_program.set_runtime_id(2);
+    incrementer_program.set_runtime_id(3);
     return {
         std::move(waiter_program), std::move(syncer_program), std::move(incrementer_program), std::move(global_sem)};
 }
