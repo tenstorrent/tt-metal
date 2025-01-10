@@ -188,12 +188,16 @@ int main(int argc, char **argv) {
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = true;
+    bool ddp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
-
+    app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     CLI11_PARSE(app, argc, argv);
+
+    initialize_device(ddp);
+
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);
         if (result == SIG_ERR) {
@@ -290,11 +294,21 @@ int main(int argc, char **argv) {
             }
         }
     }
-    cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
+
+    if (ddp) {
+        ttml::core::XTensorToMeshVariant<float> float_composer =
+            ttml::core::ShardXTensorToMesh<float>(device->shape(), 0);
+        xt::xarray<float> mask_xtensor =
+            xt::adapt(mask, {config.batch_size, num_heads, sequence_length, sequence_length});
+        cached_data.masks_tensor =
+            ttml::autograd::create_tensor(ttml::core::from_xtensor(mask_xtensor, device, float_composer));
+    } else {
+        cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
+            mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
+    }
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, num_heads, device, &cached_data, ddp](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -312,10 +326,31 @@ int main(int argc, char **argv) {
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
-                data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-            auto targets_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector<int32_t, DataType::INT32>(targets, {batch_size * sequence_length}, device));
+
+            auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
+                if (ddp) {
+                    auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
+                    auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
+                    auto data_tensor =
+                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, DataType::UINT32>(
+                            data_xtensor, device, data_composer, Layout::ROW_MAJOR));
+
+                    auto targets_xtensor = xt::adapt(targets, {batch_size * sequence_length});
+                    auto targets_composer = ttml::core::ShardXTensorToMesh<int32_t>(device->shape(), 0);
+                    auto targets_tt_tensor =
+                        ttml::core::from_xtensor<int32_t, DataType::INT32>(targets_xtensor, device, targets_composer);
+                    auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
+                    return {data_tensor, targets_tensor};
+                }
+
+                auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
+                    data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
+                auto targets_tensor = ttml::autograd::create_tensor(
+                    ttml::core::from_vector<int32_t, DataType::INT32>(targets, {batch_size * sequence_length}, device));
+                return {data_tensor, targets_tensor};
+            };
+
+            auto [data_tensor, targets_tensor] = create_data_and_targets();
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
@@ -367,6 +402,18 @@ int main(int argc, char **argv) {
         return global_step * config.batch_size * config.gradient_accumulation_steps;
     };
 
+    auto get_loss_value = [device](const TensorPtr &loss) {
+        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        // sum of loss xtensors
+        float loss_float =
+            std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
+                return acc + xtensor(0);
+            });
+
+        return loss_float / static_cast<float>(loss_xtensors.size());
+    };
+
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
@@ -378,7 +425,7 @@ int main(int argc, char **argv) {
             auto output = (*model)(features, masks);
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
-            auto loss_float = ttml::core::to_vector(loss->get_value())[0];
+            float loss_float = get_loss_value(loss);
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();
