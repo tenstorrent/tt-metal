@@ -179,15 +179,13 @@ class UNetConv2D:
             self.weight = ttnn.to_device(self.weight, self.device)
             self.bias = ttnn.to_device(self.bias, self.device) if self.bias else None
 
-        x, [self.weight, self.bias] = ttnn.conv2d(
+        x = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             **conv_kwargs,
             compute_config=self.compute_config,
             conv_op_cache=self.cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
         return x
 

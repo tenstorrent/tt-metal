@@ -291,7 +291,7 @@ class transformer_2d_model:
                 ttnn.to_device(self.proj_in_conv_bias, self.device) if self.proj_in_conv_bias is not None else None
             )
 
-        [hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias]] = ttnn.conv2d(
+        hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.proj_in_conv_weights,
             bias_tensor=self.proj_in_conv_bias,
@@ -299,7 +299,7 @@ class transformer_2d_model:
             compute_config=compute_config,
             conv_op_cache=conv_cache,
             return_output_dim=False,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
         )
 
         inner_dim = hidden_states.shape[-1]

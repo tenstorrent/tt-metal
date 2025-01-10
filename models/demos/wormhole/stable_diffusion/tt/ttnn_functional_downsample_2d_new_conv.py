@@ -182,15 +182,13 @@ class downsample_2d:
             self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
             self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
 
-        [hidden_states, [self.conv_weights, self.conv_bias]] = ttnn.conv2d(
+        hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
             **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
         # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
         #     self.device,

@@ -139,14 +139,12 @@ class upsample2d:
             self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
             self.conv_bias_tensor = ttnn.to_device(self.conv_bias_tensor, self.device)
 
-        [tt_out, [self.conv_weight_tensor, self.conv_bias_tensor]] = ttnn.conv2d(
+        tt_out = ttnn.conv2d(
             input_tensor=tt_out,
             weight_tensor=self.conv_weight_tensor,
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
         return tt_out

@@ -155,15 +155,13 @@ def ttnn_vgg16(
                 tt_bias = ttnn.to_device(tt_bias, device) if tt_bias else None
             # Call ttnn.conv
             conv_op_cache = {}
-            [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+            tt_output_tensor_on_device = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
                 **conv_kwargs,
                 compute_config=compute_config,
                 conv_op_cache=conv_op_cache,
-                return_output_dim=True,
-                return_weights_and_bias=True,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)
@@ -275,7 +273,6 @@ def ttnn_vgg11(
             tt_bias = ttnn.to_layout(ttnn.from_device(tt_bias), layout=ttnn.ROW_MAJOR_LAYOUT)
 
             conv_kwargs = {
-                "input_layout": tt_x.get_layout(),
                 "in_channels": conv_ttnn_params_2[iter_conv_id][0],
                 "out_channels": conv_ttnn_params_2[iter_conv_id][1],
                 "batch_size": batch_size,
@@ -295,6 +292,7 @@ def ttnn_vgg11(
                     weight_tensor=tt_weight,
                     weights_format="OIHW",
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    input_layout=tt_x.get_layout(),
                     **conv_kwargs,
                 )
 
@@ -302,6 +300,7 @@ def ttnn_vgg11(
                     ttnn.prepare_conv_bias(
                         bias_tensor=tt_bias,
                         input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                        input_layout=tt_x.get_layout(),
                         **conv_kwargs,
                     )
                     if tt_bias is not None
@@ -313,24 +312,13 @@ def ttnn_vgg11(
 
             # Call ttnn.conv
             conv_op_cache = {}
-            [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
+            tt_output_tensor_on_device = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
-                in_channels=conv_ttnn_params_2[iter_conv_id][0],
-                out_channels=conv_ttnn_params_2[iter_conv_id][1],
-                device=device,
                 bias_tensor=tt_bias,
-                kernel_size=(3, 3),
-                stride=(1, 1),
-                padding=(1, 1),
-                batch_size=batch_size,
-                input_height=conv_ttnn_params_2[iter_conv_id][2],
-                input_width=conv_ttnn_params_2[iter_conv_id][3],
-                conv_config=conv_config,
+                **conv_kwargs,
                 compute_config=compute_config,
                 conv_op_cache=conv_op_cache,
-                return_output_dim=True,
-                return_weights_and_bias=True,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)

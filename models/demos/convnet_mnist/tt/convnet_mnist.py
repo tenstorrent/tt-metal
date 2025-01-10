@@ -70,8 +70,6 @@ def convnet_mnist(
         compute_config=compute_config,
         conv_op_cache={},
         debug=True,
-        return_output_dim=False,
-        return_weights_and_bias=False,
     )
     x = ttnn.relu(x)
 
@@ -101,7 +99,6 @@ def convnet_mnist(
     tt_weight = parameters.conv2.weight
     tt_bias = parameters.conv2.bias
     conv_kwargs = {
-        "input_layout": x.get_layout(),
         "in_channels": 32,
         "out_channels": 64,
         "batch_size": batch_size,
@@ -121,6 +118,7 @@ def convnet_mnist(
             weight_tensor=tt_weight,
             weights_format="OIHW",
             input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_layout=x.get_layout(),
             **conv_kwargs,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
@@ -128,20 +126,9 @@ def convnet_mnist(
     x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=tt_weight,
-        in_channels=32,
-        out_channels=64,
-        device=device,
-        bias_tensor=tt_bias,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(0, 0),
-        batch_size=batch_size,
-        input_height=15,
-        input_width=15,
-        conv_config=conv_config,
+        **conv_kwargs,
         conv_op_cache={},
         debug=False,
-        groups=1,
         return_output_dim=True,
         return_weights_and_bias=False,
     )

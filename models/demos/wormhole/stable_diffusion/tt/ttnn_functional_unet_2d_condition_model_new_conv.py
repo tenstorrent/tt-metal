@@ -429,15 +429,13 @@ class UNet2DConditionModel:
             self.conv_in_weights = ttnn.to_device(self.conv_in_weights, self.device)
             self.conv_in_bias = ttnn.to_device(self.conv_in_bias, self.device)
 
-        [sample, [self.conv_in_weights, self.conv_in_bias]] = ttnn.conv2d(
+        sample = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.conv_in_weights,
             bias_tensor=self.conv_in_bias,
             **conv_kwargs,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
         sample = ttnn.reallocate(sample)  # TODO: Test remove
 
@@ -722,15 +720,13 @@ class UNet2DConditionModel:
             self.conv_out_weights = ttnn.to_device(self.conv_out_weights, self.device)
             self.conv_out_bias = ttnn.to_device(self.conv_out_bias, self.device)
 
-        [sample, [self.conv_out_weights, self.conv_out_bias]] = ttnn.conv2d(
+        sample = ttnn.conv2d(
             input_tensor=sample,
             **conv_kwargs_1,
             weight_tensor=self.conv_out_weights,
             bias_tensor=self.conv_out_bias,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
         sample = ttnn.to_memory_config(sample, ttnn.L1_MEMORY_CONFIG)
         sample = ttnn.clone(sample, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
