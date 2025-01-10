@@ -56,7 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     bool pass = true;
     enable_split_reader = false;
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -368,7 +368,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, input_num_cores * TILE_WIDTH);
+    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, output_num_cores * TILE_WIDTH);
     TT_FATAL(
         output_channels_padded_to_tile_width <= weight_matrix_width,
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",

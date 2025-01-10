@@ -52,6 +52,7 @@ def get_physical_to_logical_core_mapping(device):
     return mapping
 
 
+# physical coords
 PREFETCHER_GRID = [
     (8, 11),
     (8, 9),
@@ -79,6 +80,34 @@ PREFETCHER_GRID = [
     (2, 11),
 ]
 
+# logical coords
+PREFETCHER_NOC1_GRID = [
+    (6, 6),
+    (6, 7),
+    (6, 9),
+    (6, 0),
+    (6, 1),
+    (6, 2),
+    (6, 4),
+    (6, 5),
+    (5, 5),
+    (5, 6),
+    (5, 7),
+    (5, 9),
+    (5, 0),
+    (5, 1),
+    (5, 2),
+    (5, 4),
+    (1, 4),
+    (1, 5),
+    (1, 9),
+    (1, 0),
+    (2, 0),
+    (2, 4),
+    (2, 5),
+    (2, 9),
+]
+
 
 def run_multi_core_matmul_1d(
     device,
@@ -98,7 +127,8 @@ def run_multi_core_matmul_1d(
     num_iters,
     max_dst_tiles=8,
     pcc_threshold=0.98,
-    mm_chain=False,
+    use_physical_to_logical_mapping=True,
+    hop_grid=None,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -127,7 +157,7 @@ def run_multi_core_matmul_1d(
         pytest.skip(f"num_blocks_total {num_blocks_total} != num_cores {num_cores}")
 
     out_subblock_h = 1
-    out_subblock_w = max_dst_tiles if (out_block_h == 1 and out_block_w <= max_dst_tiles) else 4
+    out_subblock_w = max_dst_tiles
     while out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
 
@@ -142,8 +172,11 @@ def run_multi_core_matmul_1d(
             CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
             random.shuffle(CORE_RANGE)
         else:  # Use custom grid
-            mapping = get_physical_to_logical_core_mapping(device)
-            CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            if use_physical_to_logical_mapping:
+                mapping = get_physical_to_logical_core_mapping(device)
+                CORE_RANGE = [mapping[physical_coord] for physical_coord in grid]
+            else:
+                CORE_RANGE = grid
 
         core_range_set = ttnn.CoreRangeSet(
             [
@@ -161,6 +194,18 @@ def run_multi_core_matmul_1d(
                     ttnn.CoreCoord(0, 0),
                     ttnn.CoreCoord(storage_grid[0] - 1, storage_grid[1] - 1),
                 ),
+            }
+        )
+
+    hop_core_range_set = ttnn.CoreRangeSet([])
+    if hop_grid is not None:
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
             }
         )
 
@@ -226,6 +271,7 @@ def run_multi_core_matmul_1d(
         fused_activation=activation,
         mcast_in0=False,
         gather_in0=True,
+        hop_cores=hop_core_range_set,
     )
 
     if is_grayskull():
@@ -250,38 +296,10 @@ def run_multi_core_matmul_1d(
             memory_config=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
-        if mm_chain:
-            a_t = ttnn.from_torch(
-                in0,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in0_dtype,
-            )
-            b_t = ttnn.from_torch(
-                in1,
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=in1_dtype,
-            )
-            c_t = ttnn.matmul(a_t, b_t)
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out)
-            assert passing
-
-            c_t = ttnn.matmul(
-                in0_t,
-                in1_t,
-                program_config=program_config,
-                memory_config=output_sharded_mem_config,
-                compute_kernel_config=compute_kernel_config,
-            )
-            c_out = ttnn.to_torch(c_t)
-            passing, output = comp_pcc(in0 * in1, c_out, pcc_threshold)
-            assert passing
 
     tt_out = ttnn.to_torch(output_t)
-
     pt_out = in0 @ in1
+
     if activation:
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)
@@ -333,6 +351,8 @@ def run_multi_core_matmul_1d(
         (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
         # 32, 64, 64
         (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (2, 1)),
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, True, (1, 1)),
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (1, 1)),
     ],
 )
 @pytest.mark.parametrize(
@@ -395,13 +415,28 @@ def test_multi_core_matmul_1d_wh(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
+        # Disabled for post-commit
+        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
         (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+    ],
+)
+@pytest.mark.parametrize(
+    "hop_grid",
+    [
+        # [
+        #     (3, 6),
+        # ],
+        [
+            (6, 3),
+        ],
     ],
 )
 @pytest.mark.parametrize(
     "activation",
     [
         None,
+        ttnn.UnaryOpType.SILU,
+        ttnn.UnaryOpType.RELU,
     ],
 )
 @pytest.mark.parametrize(
@@ -410,9 +445,10 @@ def test_multi_core_matmul_1d_wh(
 )
 @pytest.mark.parametrize(
     "num_iters",
-    [3],
+    [1, 3],
 )
-def test_multi_core_matmul_1d_mm_chain_wh(
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,
     in1_dtype,
@@ -426,6 +462,7 @@ def test_multi_core_matmul_1d_mm_chain_wh(
     N,
     activation,
     grid,
+    hop_grid,
     use_arbitrary_cores,
     num_iters,
     use_program_cache,
@@ -447,7 +484,8 @@ def test_multi_core_matmul_1d_mm_chain_wh(
         grid,
         use_arbitrary_cores,
         num_iters,
-        True,
+        use_physical_to_logical_mapping=False,
+        hop_grid=hop_grid,
     )
 
 
@@ -473,6 +511,7 @@ def test_multi_core_matmul_1d_mm_chain_wh(
         (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
         # 32, 64, 64
         (11, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (2, 1)),
+        (1, 32, 64, 64, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (1, 1)),
     ],
 )
 @pytest.mark.parametrize(

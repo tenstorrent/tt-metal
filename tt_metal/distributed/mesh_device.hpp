@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "tt_metal/distributed/mesh_device_view.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 
@@ -22,6 +22,9 @@ struct MeshOffset {
     size_t row = 0;
     size_t col = 0;
 };
+
+class MeshCommandQueue;
+
 class MeshDeviceView;
 
 struct MeshSubDeviceManagerId;
@@ -58,7 +61,7 @@ class SystemMesh {
     ~SystemMesh();
 
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<Device*>& devices);
+    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 
 public:
     static SystemMesh& instance();
@@ -84,10 +87,12 @@ private:
     MeshShape mesh_device_shape;
     MeshType type;
     std::unique_ptr<MeshDeviceView> view;
-    std::map<chip_id_t, Device*> opened_devices;
-    std::vector<Device*> devices;
-    std::vector<std::shared_ptr<MeshDevice>> submeshes;  // Parent owns submeshes and responsible fortheir destruction
+    std::map<chip_id_t, IDevice*> opened_devices;
+    std::vector<IDevice*> devices;
+    std::vector<std::shared_ptr<MeshDevice>>
+        submeshes;  // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh;               // Submesh created with reference to parent mesh
+    std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
 
     void initialize(
         size_t l1_small_size,
@@ -97,7 +102,7 @@ private:
         const MeshDeviceConfig& config);
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
-    Device* reference_device() const;
+    IDevice* reference_device() const;
 
 public:
     MeshDevice(const MeshShape& mesh_device_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh = {});
@@ -112,11 +117,12 @@ public:
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
     // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
-    std::vector<Device*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
-    Device* get_device_index(size_t logical_device_id) const;
-    Device* get_device(chip_id_t physical_device_id) const;
-    Device* get_device(size_t row_idx, size_t col_idx) const;
+    std::vector<IDevice*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
+    IDevice* get_device_index(size_t logical_device_id) const;
+    IDevice* get_device(chip_id_t physical_device_id) const;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
+    MeshCommandQueue& command_queue();
     const DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
@@ -140,7 +146,6 @@ public:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
     void reshape(const MeshShape& new_shape);
-
     void close_devices();
     const MeshDeviceView& get_view() const;
 
@@ -160,12 +165,16 @@ public:
 
     MeshSubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
-    // TODO #15944: Temporary api until migration to actual fabric is complete
+    // TODO #16526: Temporary api until migration to actual fabric is complete
     std::tuple<MeshSubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     void load_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
     void clear_loaded_sub_device_manager();
     void remove_sub_device_manager(MeshSubDeviceManagerId mesh_sub_device_manager_id);
+    // TODO #16492: Add get_sub_device_stall_group once MeshDevice is no longer just a collection of single Devices
+    // and the MeshDevice has a single SubDeviceManager responsible for all Devices.
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void reset_sub_device_stall_group();
 
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
@@ -186,7 +195,10 @@ public:
     size_t num_program_cache_entries() const;
 
     int num_dram_channels() const;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id = SubDeviceId{0}) const;
+    allocator::Statistics get_memory_allocation_statistics(
+        const BufferType& buffer_type, SubDeviceId sub_device_id = SubDeviceId{0}) const;
+
+    bool using_fast_dispatch();
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
@@ -236,7 +248,7 @@ concept DeviceInterfaceContract =
 
 // For now static_asserts are used to ensure that the concepts are satisfied.
 // This is a temporary compile-time check to make sure that Device/MeshDevice don't deviate from the expected interface.
-static_assert(detail::DeviceInterfaceContract<Device>, "Device must satisfy the DeviceInterfaceContract concept.");
+static_assert(detail::DeviceInterfaceContract<IDevice>, "Device must satisfy the DeviceInterfaceContract concept.");
 static_assert(detail::DeviceInterfaceContract<MeshDevice>, "MeshDevice must satisfy the DeviceInterfaceContract concept.");
 
 }  // namespace tt::tt_metal::distributed

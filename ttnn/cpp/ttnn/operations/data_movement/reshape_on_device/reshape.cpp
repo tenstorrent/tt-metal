@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 static Tensor manual_insertion(
-    const Tensor& input_tensor, const ttnn::Shape& shape, Device* device, const MemoryConfig& output_mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& shape, IDevice* device, const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         shape.logical_shape().volume() == input_tensor.get_logical_volume(),

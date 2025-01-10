@@ -47,7 +47,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto num_rows = input.volume() / input.get_logical_shape()[-1];
     Program program{};
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

@@ -53,9 +53,11 @@ struct TrainingConfig {
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
-void train_test(bool use_moreh_adamw = false) {
+void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     auto config = TrainingConfig();
     config.transformer_config.dropout_prob = 0.0F;
+    config.transformer_config.runner_type =
+        memory_efficient ? ttml::models::gpt2::RunnerType::MemoryEfficient : ttml::models::gpt2::RunnerType::Default;
     config.data_path = "/shakespeare.txt";
 
     // set seed
@@ -185,7 +187,10 @@ void train_test(bool use_moreh_adamw = false) {
 
     // verify time per step
     size_t num_steps_below = 0;
-    double expected_time_ms = 330.0;
+    const double expected_default_runner_time_ms = 330.0;
+    const double expected_memory_efficient_runner_time_ms = 450.0;
+    double expected_time_ms =
+        memory_efficient ? expected_memory_efficient_runner_time_ms : expected_default_runner_time_ms;
     for (auto &time : steps_time) {
         num_steps_below += (time < expected_time_ms);
     }
@@ -241,7 +246,7 @@ TEST_F(NanoGPTTest, AdamW) {
     GTEST_SKIP() << "Skipping AdamW";
     return;
     if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ false);
+        train_test(/* use_moreh_adamw */ false, /* memory_efficient */ false);
     }
 }
 
@@ -250,6 +255,24 @@ TEST_F(NanoGPTTest, MorehAdamW) {
     return;
 
     if (should_run_tests()) {
-        train_test(/* use_moreh_adamw */ true);
+        train_test(/* use_moreh_adamw */ true, /* memory_efficient */ false);
+    }
+}
+
+TEST_F(NanoGPTTest, AdamW_MemoryEfficient) {
+    GTEST_SKIP() << "Skipping AdamW + MemoryEfficient";
+    return;
+
+    if (should_run_tests()) {
+        train_test(/* use_moreh_adamw */ false, /* memory_efficient */ true);
+    }
+}
+
+TEST_F(NanoGPTTest, MorehAdamW_MemoryEfficient) {
+    GTEST_SKIP() << "Skipping MorehAdamW + MemoryEfficient";
+    return;
+
+    if (should_run_tests()) {
+        train_test(/* use_moreh_adamw */ true, /* memory_efficient */ true);
     }
 }

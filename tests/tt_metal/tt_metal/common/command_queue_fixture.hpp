@@ -15,10 +15,11 @@
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 class CommandQueueFixture : public DispatchFixture {
 protected:
-    tt::tt_metal::Device* device_;
+    tt::tt_metal::IDevice* device_;
     void SetUp() override {
         this->validate_dispatch_mode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -102,8 +103,8 @@ protected:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
@@ -153,8 +154,8 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(reserved_devices_); }
 
-    std::vector<tt::tt_metal::Device*> devices_;
-    std::map<chip_id_t, tt::tt_metal::Device*> reserved_devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
     size_t num_devices_;
 };
 

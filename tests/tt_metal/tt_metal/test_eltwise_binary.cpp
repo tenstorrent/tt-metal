@@ -10,7 +10,7 @@
 #include "test_gold_impls.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using std::vector;
 using namespace tt;
@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     CommandQueue& cq = device->command_queue();
 

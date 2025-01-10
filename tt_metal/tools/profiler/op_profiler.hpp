@@ -149,7 +149,7 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
-    Device* device = nullptr;
+    IDevice* device = nullptr;
     if (tt::DevicePool::instance().is_device_active(device_id)) {
         device = tt::DevicePool::instance().get_active_device(device_id);
     }

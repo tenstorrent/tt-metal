@@ -32,7 +32,7 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -123,7 +123,7 @@ struct ShardSpecBuffer {
 inline namespace v0 {
 
 struct BufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
@@ -135,7 +135,7 @@ typedef BufferConfig InterleavedBufferConfig;
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct ShardedBufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
@@ -168,7 +168,7 @@ class Buffer final {
 
    public:
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -177,7 +177,7 @@ class Buffer final {
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
@@ -192,7 +192,7 @@ class Buffer final {
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
 
-    Device *device() const { return device_; }
+    IDevice* device() const { return device_; }
     Allocator *allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
@@ -247,7 +247,7 @@ class Buffer final {
     size_t unique_id() const { return unique_id_; }
 
     Buffer(
-        Device *device,
+        IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -274,7 +274,7 @@ class Buffer final {
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
-    Device * const device_;
+    IDevice* const device_;
     const DeviceAddr size_; // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;

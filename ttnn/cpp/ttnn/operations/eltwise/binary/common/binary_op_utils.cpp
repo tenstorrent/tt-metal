@@ -151,11 +151,11 @@ std::map<std::string, std::string> get_defines(
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     if (fused_activations.has_value()) {
-        if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and
-            fused_activations.value().at(0).op_type == UnaryOpType::RELU) {
+        if (op_type == BinaryOpType::ADD and fused_activations->size() == 1 and
+            fused_activations->at(0).op_type == UnaryOpType::RELU and not input_tensor_a_activation.has_value()) {
             defines["PACK_RELU"] = "1";
         } else {
-            defines.merge(ttnn::operations::unary::utils::get_block_defines(fused_activations.value(), "0", idst));
+            defines.merge(ttnn::operations::unary::utils::get_block_defines(*fused_activations, "0", idst));
         }
     }
 
