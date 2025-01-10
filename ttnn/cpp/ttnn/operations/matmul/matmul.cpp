@@ -52,22 +52,6 @@ ttnn::Tensor bound_matmul(
                                               ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
                                               : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_logical_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_logical_shape();
-
-    const auto width_a = input_tensor_a_shape[-1];
-    const auto height_b = input_tensor_b_shape[-2];
-
-    if (width_a != height_b) {
-        TT_THROW(
-            "ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor ({} != {}). "
-            "The shape of first tensor was {} and the shape of second tensor was {})",
-            width_a,
-            height_b,
-            input_tensor_a_shape,
-            input_tensor_b_shape);
-    }
-
     const bool has_program_config = parameters.program_config.has_value();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     bool post_process_bias = false;

@@ -2155,9 +2155,6 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
     TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
 
-    TT_FATAL(
-        ashape[-1] == bshape[-2],
-        "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
     TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
     TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
     TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
@@ -2180,11 +2177,20 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         Mt = B * Mt;
         B = 1;
     }
-    TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
+
+    // Pad K, N
+    if (gather_in0) {
+        Kt = (Kt + num_cores - 1) / num_cores;  // ceil division
+        Kt *= num_cores;
+
+        Nt = (Nt + num_cores - 1) / num_cores;  // ceil division
+        Nt *= num_cores;
+    }
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;

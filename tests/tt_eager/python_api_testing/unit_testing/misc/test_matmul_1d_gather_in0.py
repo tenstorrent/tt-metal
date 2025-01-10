@@ -142,6 +142,12 @@ def run_multi_core_matmul_1d(
     if storage_grid is None:
         pytest.skip(f"Could not find a rectangle grid for num_cores: {num_cores}")
 
+    # Pad K, N to be divsible by the number of cores
+    factor = ttnn.TILE_SIZE * num_cores
+    K = int(math.ceil(K / factor) * factor)
+    N = int(math.ceil(N / factor) * factor)
+    logger.info(f"Padded K, N: {K}, {N}")
+
     M *= B  # Fuse batch always enabled
 
     in0_block_h = M // ttnn.TILE_SIZE
@@ -249,8 +255,9 @@ def run_multi_core_matmul_1d(
         dtype=in0_dtype,
         memory_config=in0_sharded_mem_config,
     )
+    in1_padded = torch.nn.functional.pad(in1, (0, 0, 0, K - in1_shape[2]), "constant", 0)
     in1_t = ttnn.from_torch(
-        in1,
+        in1_padded,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         dtype=in1_dtype,
@@ -316,24 +323,26 @@ def run_multi_core_matmul_1d(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        # # 32, 2304, 3840 (PREFETCHER), only works on TG
-        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
-        # 32, 2304, 3840
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
+        # # 32, 2048, 3584 (PREFETCHER), only works on TG
+        # (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_GRID),
+        # 32, 2048, 3584
+        (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # 32, 2048, 3584 * 2
+        (1, 32, 2048, 3584 * 2, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, True, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, True, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, True, (8, 3)),
         # 256, 1024, 8192
         (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, True, True, (8, 4)),
         # 256, 1024, 8192
@@ -413,8 +422,8 @@ def test_multi_core_matmul_1d_wh(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
         # Disabled for post-commit
-        # (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        # (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, PREFETCHER_NOC1_GRID),
+        (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
     ],
 )
 @pytest.mark.parametrize(
@@ -444,7 +453,7 @@ def test_multi_core_matmul_1d_wh(
     "num_iters",
     [1, 3],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,
@@ -492,14 +501,14 @@ def test_multi_core_matmul_1d_ring_hop_wh(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        # 32, 2304, 3840
-        (1, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 3)),
-        # 32, 2304, 3840
-        (3, 32, 2304, 3840, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 3)),
+        # 32, 2048, 3584
+        (3, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi4, False, False, (8, 3)),
         # 256, 1024, 8192
         (1, 256, 1024, 8192, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.HiFi4, False, False, (8, 4)),
         # 128, 8192, 2048
