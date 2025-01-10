@@ -5,7 +5,7 @@ endif(NOT DEFINED ENV{ARCH_NAME})
 set(currentArch "$ENV{ARCH_NAME}")
 string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
 
-include_directories(${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${currentArch})
+#include_directories(${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${currentArch})
 
 enable_testing()
 include(GoogleTest)
