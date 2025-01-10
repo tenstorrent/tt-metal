@@ -56,6 +56,11 @@ void read_chunk(
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
     const bool transpose = false) {
+    /*
+    Method always reads tiles from memory in row-major order.
+    It assumes that the block of rows x cols in stored in contiguous tile order.
+    That means, it won't work if the chunk to read is a slice of the last dimension.
+    */
     // Read Q chunk
     const uint32_t num_tiles = rows * cols;
     cb_reserve_back(cb_id, num_tiles);
@@ -79,5 +84,47 @@ void read_chunk(
     }
     noc_async_read_barrier();
 
+    cb_push_back(cb_id, num_tiles);
+}
+
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, bool is_dram = true>
+void read_paged_chunk(
+    const InterleavedAddrGenFast<is_dram>& reader,
+    const uint32_t cb_id,
+    const uint32_t cur_head,
+    const uint32_t chunk_start_row,
+    const uint32_t rows,
+    const uint32_t cols,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const volatile tt_l1_ptr uint32_t* const page_table_ptr,
+    const bool transpose = false) {
+    const uint32_t num_tiles = rows * cols;
+    cb_reserve_back(cb_id, num_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+
+    // Stride calculation based on transpose flag
+    uint32_t outer_ptr_stride = transpose ? tile_bytes : cols * tile_bytes;
+    uint32_t inner_ptr_stride = transpose ? tile_bytes * rows : tile_bytes;
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = 0; row < rows; ++row) {
+        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        uint32_t virtual_row_num = chunk_start_row + row;
+        uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(
+            virtual_row_num, cur_head, page_table_ptr);
+
+        for (uint32_t col = 0; col < cols; ++col) {
+            noc_async_read_tile(physical_tile_id, reader, write_ptr);
+            physical_tile_id += 1;
+            write_ptr += inner_ptr_stride;
+
+            if (++barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
 }

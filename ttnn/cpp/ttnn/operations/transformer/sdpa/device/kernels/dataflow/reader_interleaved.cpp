@@ -154,32 +154,29 @@ void kernel_main() {
                     if constexpr (is_chunked) {
                         // Use page table to read K chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        cb_reserve_back(cb_k_in, k_chunk_tiles);
-                        uint32_t k_write_ptr = get_write_ptr(cb_k_in);
-                        barrier_count = 0;
-                        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                            uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
-                            uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
-                            uint32_t physical_k_tile_id =
-                                virtual_seq_tile_id_to_physical_tile_id<NKH, block_size_t, DHt>(
-                                    virtual_k_tile_row_num, kv_head, page_table_ptr);
-                            for (uint32_t col = 0; col < DHt; ++col) {
-                                noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
-                                physical_k_tile_id += 1;                       // Go to next tile in row
-                                k_write_ptr_col += Sk_chunk_t * k_tile_bytes;  // Go to next column in CB
-
-                                if (++barrier_count == barrier_threshold) {
-                                    noc_async_read_barrier();
-                                    barrier_count = 0;
-                                }
-                            }
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_k_in, k_chunk_tiles);
-
+                        read_paged_chunk<NKH, block_size_t, DHt>(
+                            k_reader,
+                            cb_k_in,
+                            kv_head,
+                            k_chunk_start_row_num,
+                            Sk_chunk_t,
+                            DHt,
+                            k_tile_bytes,
+                            barrier_threshold,
+                            page_table_ptr,
+                            true  // transpose=true for K reads
+                        );
                     } else {
                         read_chunk(
-                            k_reader, cb_k_in, k_start_tile_id, Sk_chunk_t, DHt, k_tile_bytes, barrier_threshold, true);
+                            k_reader,
+                            cb_k_in,
+                            k_start_tile_id,
+                            Sk_chunk_t,
+                            DHt,
+                            k_tile_bytes,
+                            barrier_threshold,
+                            true  // transpose=true for K reads
+                        );
                     }
 
                     if constexpr (use_provided_mask) {
@@ -214,46 +211,28 @@ void kernel_main() {
                     if constexpr (is_chunked) {
                         // Use page table to read V chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        cb_reserve_back(cb_v_in, k_chunk_tiles);
-                        uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        barrier_count = 0;
-
-                        for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                            uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
-                            uint32_t physical_v_tile_id =
-                                virtual_seq_tile_id_to_physical_tile_id<NKH, block_size_t, DHt>(
-                                    virtual_v_tile_row_num, kv_head, page_table_ptr);
-                            for (uint32_t col = 0; col < DHt; ++col) {
-                                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
-                                physical_v_tile_id += 1;
-                                v_write_ptr += v_tile_bytes;
-
-                                if (++barrier_count == barrier_threshold) {
-                                    noc_async_read_barrier();
-                                    barrier_count = 0;
-                                }
-                            }
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_v_in, k_chunk_tiles);
+                        read_paged_chunk<NKH, block_size_t, DHt>(
+                            v_reader,
+                            cb_v_in,
+                            kv_head,
+                            k_chunk_start_row_num,
+                            Sk_chunk_t,
+                            DHt,
+                            v_tile_bytes,
+                            barrier_threshold,
+                            page_table_ptr,
+                            false  // transpose=false for V reads
+                        );
                     } else {
-                        v_tile_id = k_start_tile_id;
-                        // Read V chunk
-                        cb_reserve_back(cb_v_in, k_chunk_tiles);
-                        uint32_t v_write_ptr = get_write_ptr(cb_v_in);
-                        barrier_count = 0;
-                        for (uint32_t tile = 0; tile < k_chunk_tiles; ++tile) {
-                            noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
-                            v_tile_id += 1;
-                            v_write_ptr += v_tile_bytes;
-
-                            if (++barrier_count == barrier_threshold) {
-                                noc_async_read_barrier();
-                                barrier_count = 0;
-                            }
-                        }
-                        noc_async_read_barrier();
-                        cb_push_back(cb_v_in, k_chunk_tiles);
+                        read_chunk(
+                            v_reader,
+                            cb_v_in,
+                            k_start_tile_id,
+                            Sk_chunk_t,
+                            DHt,
+                            v_tile_bytes,
+                            barrier_threshold,
+                            false);
                     }
                 }
             }
