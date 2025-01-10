@@ -155,9 +155,9 @@ on:
           - eltwise.unary_backward.logit_bw
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
-          - eltwise.unary_backward.hardshrink_bw
+          - eltwise.unary_backward.hardshrink_bw.hardshrink_bw
           - eltwise.unary_backward.hardshrink_bw.hardshrink_bw_sharded
-          - eltwise.unary_backward.softshrink_bw
+          - eltwise.unary_backward.softshrink_bw.softshrink_bw
           - eltwise.unary_backward.softshrink_bw.softshrink_bw_sharded
           - eltwise.unary_backward.acos_bw.acos_bw
           - eltwise.unary_backward.acosh_bw.acosh_bw
