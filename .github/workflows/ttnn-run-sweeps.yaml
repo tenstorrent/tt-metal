@@ -152,7 +152,8 @@ on:
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
-          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.logit_bw.logit_bw
+          - eltwise.unary_backward.logit_bw.logit_bw_sharded
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
           - eltwise.unary_backward.hardshrink_bw.hardshrink_bw
