@@ -46,12 +46,12 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
     auto tile = tensor.get_tensor_spec().tile();
     if (layout == Layout::ROW_MAJOR) {
         // There shouldn't be extra paddings for Row Major layout
-        return tensor.logical_shape() != tensor.padded_shape();
+        return tensor.get_logical_shape() != tensor.get_padded_shape();
     }
     // It's okay for conversion to tile layout to preserve arbitrary padding as long as it satisfies the alignment
     TensorSpec padded_spec(
-        tensor.padded_shape(),
-        TensorLayout(tensor.dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
+        tensor.get_padded_shape(),
+        TensorLayout(tensor.get_dtype(), PageConfig(layout, std::move(tile)), tensor.memory_config()));
     return tensor.get_padded_shape() != padded_spec.padded_shape();
 }
 
@@ -105,7 +105,7 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> new_padded_shape(2, 1);
             new_padded_shape[1] = tensor.get_padded_shape()[-1];
             new_padded_shape[0] = tensor.get_padded_shape()[-2];
-            tensor = tensor.reshape(tensor.logical_shape(), SimpleShape(new_padded_shape));
+            tensor = tensor.reshape(tensor.get_logical_shape(), SimpleShape(new_padded_shape));
         }
     }
 

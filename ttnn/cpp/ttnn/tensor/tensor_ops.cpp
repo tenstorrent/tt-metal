@@ -325,24 +325,24 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank() - 2; index++) {
+    for (auto index = -3; index >= -static_cast<int>(input_tensor.get_padded_shape().rank()); index--) {
         TT_ASSERT(
             input_tensor.get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            input_tensor.get_legacy_shape()[-1] % constants::TILE_WIDTH == 0,
+        input_tensor.get_padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
+            input_tensor.get_padded_shape()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
-            input_tensor.get_legacy_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
+        input_tensor.get_padded_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
+            input_tensor.get_padded_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
     ttnn::SmallVector<uint32_t> output_tensor_start{};
     ttnn::SmallVector<uint32_t> output_tensor_end{};
-    for (auto index = 0; index < input_tensor.get_legacy_shape().rank(); index++) {
+    for (auto index = 0; index < input_tensor.get_padded_shape().rank(); index++) {
         output_tensor_start.push_back(0);
-        output_tensor_end.push_back(output_tensor_shape[index]);
+        output_tensor_end.push_back(index < output_tensor_shape.rank() ? output_tensor_shape[index] : 1);
     }
     auto output = input_tensor.unpad(
         ttnn::SimpleShape(std::move(output_tensor_start)), ttnn::SimpleShape(std::move(output_tensor_end)));
