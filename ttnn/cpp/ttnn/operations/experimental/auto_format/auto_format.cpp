@@ -113,7 +113,8 @@ Tensor AutoFormat::format_input_tensor(
                 } else {
                     pad_value_variant = (uint32_t)pad_value;
                 }
-                return ttnn::tilize_with_val_padding(formatted_input, padded_shape, pad_value_variant, mem_config);
+                return ttnn::tilize_with_val_padding(
+                    formatted_input, padded_shape.padded_shape(), pad_value_variant, mem_config);
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
