@@ -88,13 +88,29 @@ on:
           - eltwise.unary.log2.log2
           - eltwise.unary.log10.log10
           - eltwise.unary.sqrt.sqrt_forge
-          - eltwise.unary.bitwise.bitwise_and
-          - eltwise.unary.bitwise.bitwise_left_shift
-          - eltwise.unary.bitwise.bitwise_not
-          - eltwise.unary.bitwise.bitwise_not_pytorch2
-          - eltwise.unary.bitwise.bitwise_or
-          - eltwise.unary.bitwise.bitwise_right_shift
-          - eltwise.unary.bitwise.bitwise_xor
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary_sharded
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_sharded
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary
+          - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary_sharded
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
+          - eltwise.unary.bitwise.bitwise_not.bitwise_not_pytorch2
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_sharded
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary_sharded
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_sharded
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary
+          - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary_sharded
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
