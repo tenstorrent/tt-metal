@@ -16,7 +16,8 @@
 #include "llrt/rtoptions.hpp"
 #include "dev_msgs.h"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/device.hpp"
+#include "tt_metal/impl/device/device.hpp"
+#include "tools/profiler/event_metadata.hpp"
 
 namespace tt {
 
@@ -384,6 +385,230 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
+void DeviceProfiler::dumpJsonReport(
+    IDevice* device, const std::vector<std::uint32_t>& profile_buffer, const std::vector<CoreCoord>& worker_cores) {
+    auto device_id = device->id();
+
+    // determine rpt filepath
+    std::string requested_rpt_path = tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_report_path();
+    std::filesystem::path rpt_filepath;
+    if (requested_rpt_path.empty()){
+        std::string prefix = "noc_trace";
+        std::string basename = prefix + "_dev" + std::to_string(device_id) + ".json";
+        rpt_filepath = output_dir / basename;
+    } else {
+        rpt_filepath = requested_rpt_path;
+    }
+
+    // check that filepath can be created/already exists
+    auto rpt_dir = rpt_filepath.parent_path();
+    std::filesystem::create_directories(rpt_dir);
+    if (not std::filesystem::is_directory(rpt_dir)){
+        log_error("Could not write noc event json trace to '{}' because the directory path could not be created!",rpt_filepath);
+        return;
+    }
+
+    std::ofstream json_rpt_os(rpt_filepath);
+    if (!json_rpt_os){
+        log_error("Could not open noc event json trace file at '{}'!",rpt_filepath);
+        return;
+    }
+    log_info("Dumping noc event trace to '{}'", rpt_filepath);
+
+    // helper function for quoting strings
+    auto dquote = [](std::string_view str) { return fmt::format(R"("{}")", str); };
+
+    bool first_record = true;
+    json_rpt_os << "[" << std::endl;
+
+    for (const auto& worker_core : worker_cores) {
+        HalProgrammableCoreType CoreType;
+        int riscCount;
+        profiler_msg_t* profiler_msg;
+
+        uint64_t kernel_start_timestamp = 0;
+
+        if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
+            profiler_msg =
+                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+            CoreType = HalProgrammableCoreType::TENSIX;
+            riscCount = 5;
+        } else {
+            profiler_msg =
+                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+            CoreType = HalProgrammableCoreType::ACTIVE_ETH;
+            riscCount = 1;
+        }
+
+        uint32_t coreFlatID =
+            tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
+        uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
+
+        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+            device_id,
+            worker_core,
+            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+
+        if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
+            (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
+            continue;
+        }
+
+        int riscNum = 0;
+        for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+            uint32_t bufferEndIndex = control_buffer[riscEndIndex];
+            uint32_t riscType;
+            if (CoreType == HalProgrammableCoreType::TENSIX) {
+                riscType = riscEndIndex;
+            } else {
+                riscType = 5;
+            }
+            if (bufferEndIndex > 0) {
+                uint32_t bufferRiscShift = riscNum * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
+                if ((control_buffer[kernel_profiler::DROPPED_ZONES] >> riscEndIndex) & 1) {
+                    std::string warningMsg = fmt::format(
+                        "Profiler DRAM buffers were full, markers were dropped! device {}, worker core {}, {}, Risc "
+                        "{},  "
+                        "bufferEndIndex = {}",
+                        device_id,
+                        worker_core.x,
+                        worker_core.y,
+                        tracy::riscName[riscEndIndex],
+                        bufferEndIndex);
+                    TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
+                    log_warning(warningMsg.c_str());
+                }
+
+                uint32_t riscNumRead = 0;
+                uint32_t coreFlatIDRead = 0;
+                uint32_t runCounterRead = 0;
+                uint32_t runHostCounterRead = 0;
+
+                bool newRunStart = false;
+
+                uint32_t opTime_H = 0;
+                uint32_t opTime_L = 0;
+                for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
+                     index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                    if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
+                        newRunStart = true;
+                        opTime_H = 0;
+                        opTime_L = 0;
+                    } else if (newRunStart) {
+                        newRunStart = false;
+
+                        // TODO(MO): Cleanup magic numbers
+                        riscNumRead = profile_buffer[index] & 0x7;
+                        coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
+                        runCounterRead = profile_buffer[index + 1] & 0xFFFF;
+                        runHostCounterRead = (profile_buffer[index + 1] >> 16) & 0xFFFF;
+
+                    } else {
+                        uint32_t timer_id = (profile_buffer[index] >> 12) & 0x7FFFF;
+                        kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+
+                        uint32_t time_H = profile_buffer[index] & 0xFFF;
+                        uint32_t time_L = profile_buffer[index + 1];
+                        uint64_t timestamp = (uint64_t(time_H) << 32) | time_L;
+
+                        int64_t kernel_start_delta = int64_t(timestamp) - int64_t(kernel_start_timestamp);
+
+                        switch (packet_type) {
+                            case kernel_profiler::ZONE_START:
+                            case kernel_profiler::ZONE_END: {
+                                if (timer_id || time_H) {
+                                    tracy::TTDeviceEventPhase zone_phase = (packet_type == kernel_profiler::ZONE_END)
+                                                                               ? tracy::TTDeviceEventPhase::end
+                                                                               : tracy::TTDeviceEventPhase::begin;
+                                    std::string proc;
+                                    std::string zone_name;
+                                    std::string source_file;
+                                    std::string source_line;
+                                    if (hash_to_zone_src_locations.find((uint16_t)timer_id) !=
+                                        hash_to_zone_src_locations.end()) {
+                                        std::stringstream source_info(hash_to_zone_src_locations[timer_id]);
+                                        getline(source_info, zone_name, ',');
+                                        getline(source_info, source_file, ',');
+
+                                        std::string source_line_str;
+                                        getline(source_info, source_line_str, ',');
+                                        source_line = stoi(source_line_str);
+                                    }
+                                    if (zone_name.ends_with("-FW") ||
+                                        zone_name.starts_with("PROFILER-NOC-QUICK-SEND")) {
+                                        break;
+                                    } else if (zone_name.ends_with("-KERNEL")) {
+                                        kernel_start_timestamp = timestamp;
+                                        // derive proc from zone_name
+                                        proc = zone_name;
+                                        const std::string erase_str = "-KERNEL";
+                                        proc.erase(proc.find(erase_str), erase_str.size());
+                                    }
+
+                                    std::string prefix(first_record ? " " : ",");
+                                    first_record = false;
+                                    json_rpt_os
+                                        << std::endl
+                                        << fmt::format(
+                                               R"({}{{ "proc":{:<8s}, "zone":{:<14}, "zone_phase":{:<7}, "sx":{:<2}, "sy":{:<2}, "timestamp" : {} }})",
+                                               prefix,
+                                               dquote(proc),
+                                               dquote(zone_name),
+                                               dquote(magic_enum::enum_name(zone_phase)),
+                                               worker_core.x,
+                                               worker_core.y,
+                                               timestamp,
+                                               source_file)
+                                        << std::endl;
+                                }
+                                break;
+                            }
+                            case kernel_profiler::TS_DATA: {
+                                index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+                                uint32_t data_H = profile_buffer[index];
+                                uint32_t data_L = profile_buffer[index + 1];
+                                uint64_t event_metadata = (uint64_t(data_H) << 32) | data_L;
+
+                                KernelProfilerNocEventMetadata ev_md(event_metadata);
+
+                                std::string prefix(first_record ? " " : ",");
+                                first_record = false;
+                                json_rpt_os
+                                    << fmt::format(
+                                           R"({}{{ "proc":{:<6}, "noc":{:<6}, "vc":{:<2}, "sx":{:<2},  "sy":{:<2},  "dx":{:<2},  "dy":{:<2},  "num_bytes":{:<6},  "type":{:<22}, "timestamp":{:<16}, "kernel_start_delta":{:<6} }})",
+                                           prefix,
+                                           dquote(tracy::riscName[riscType]),
+                                           dquote(magic_enum::enum_name(ev_md.noc_type)),
+                                           ev_md.noc_vc,
+                                           worker_core.x,
+                                           worker_core.y,
+                                           ev_md.dst_x,
+                                           ev_md.dst_y,
+                                           uint32_t(ev_md.num_bytes),
+                                           dquote(magic_enum::enum_name(ev_md.noc_xfer_type)),
+                                           timestamp,
+                                           kernel_start_delta) +
+                                           "\n";
+
+                                break;
+                            }
+                            default: {
+                                //log_info("Unsupported packet format {}", magic_enum::enum_name(packet_type));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            riscNum++;
+        }
+    }
+
+    json_rpt_os << "]" << std::endl;
+    json_rpt_os.close();
+}
+
 void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
@@ -409,6 +634,10 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
             if (!lastDump) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
+        }
+
+        if (not lastDump) {
+            dumpJsonReport(device, profile_buffer, worker_cores);
         }
 
         for (const auto& worker_core : worker_cores) {

@@ -389,6 +389,7 @@ def get_device_data_generate_report(
         deviceData = import_log_run_stats(setup)
         logger.info(f"Generating device op report ...")
         freq = deviceData["deviceInfo"]["freq"]
+        allHeaders = set()
         for device in deviceData["devices"]:
             deviceOps[device] = []
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
@@ -430,6 +431,8 @@ def get_device_data_generate_report(
                             rowDict["OP TO OP LATENCY [ns]"] = 0
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
+                for header in rowDict.keys():
+                    allHeaders.add(header)
 
         rowDictHeaders = set()
         for row in rowDicts:
