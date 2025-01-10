@@ -294,6 +294,5 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
-    noc_async_full_barrier();
     DPRINT << "dispatch_s : done" << ENDL();
 }
