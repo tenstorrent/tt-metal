@@ -188,15 +188,15 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * eltwise_binary_op_type: the binary operation type
  */
 template <bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
-ALWI void binary_op_specific_init()  // TODO(AP): better naming
+ALWI void binary_op_specific_init(uint32_t icb0, uint32_t icb1)  // TODO(AP): better naming
 {
     if constexpr (full_init) {
         if constexpr (eltwise_binary_op_type == ELWADD) {
-            add_tiles_init(0, 1);
+            add_tiles_init(icb0, icb1);
         } else if constexpr (eltwise_binary_op_type == ELWSUB) {
-            sub_tiles_init(0, 1);
+            sub_tiles_init(icb0, icb1);
         } else if constexpr (eltwise_binary_op_type == ELWMUL) {
-            mul_tiles_init(0, 1);
+            mul_tiles_init(icb0, icb1);
         }
     } else {
         if constexpr (eltwise_binary_op_type == ELWADD) {
