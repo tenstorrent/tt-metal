@@ -342,12 +342,13 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
 #ifdef NCRISC_HAS_IRAM
     // stall on trisc first to reduce L1 hits
-    while (get_stream_register_value(STREAM_CHANNEL) & RUN_ALL_TRISCS != 0);  // stall on trisc first to reduce L1 hits
+    while ((get_stream_register_value(STREAM_CHANNEL) & RUN_ALL_TRISCS) !=
+           0);  // stall on trisc first to reduce L1 hits
     while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
         invalidate_l1_cache();
     }
 #else
-    while (get_stream_register_value(STREAM_CHANNEL) & RUN_ALL != 0);
+    while ((get_stream_register_value(STREAM_CHANNEL) & RUN_ALL) != 0);
 #endif
     WAYPOINT("NTD");
 }
