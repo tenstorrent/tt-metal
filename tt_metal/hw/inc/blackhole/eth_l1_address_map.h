@@ -74,8 +74,7 @@ struct address_map {
 
     // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
     // runtime build, and is unused once FW copies the data to local memory during FW initialization.
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH =
-        (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
