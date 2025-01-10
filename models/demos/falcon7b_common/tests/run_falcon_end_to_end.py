@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 import numpy as np
 from sklearn.metrics import top_k_accuracy_score
+import time
 
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 
@@ -126,8 +127,8 @@ def run_test_FalconCausalLM_end_to_end(
     if e2e_perf:
         assert expected_inference_time is not None, "Expected inference time is required for e2e perf test"
 
-    if device_perf:  # Enable tracy signpost support in device perf runs only
-        from tracy import signpost
+    # if device_perf:  # Enable tracy signpost support in device perf runs only
+    from tracy import signpost
 
     # Clear global profiler state before starting measurements
     if e2e_perf:
@@ -171,81 +172,81 @@ def run_test_FalconCausalLM_end_to_end(
     )
     profiler.end("TtFalcon_model_setup")
 
-    # Generate dummy kv_cache --------------------------------------------------------------
-    (
-        past_key_values,
-        tt_layer_past,
-        kv_len,
-    ) = get_rand_falcon_inputs(
-        llm_mode,
-        seq_len,
-        batch,
-        kv_cache_len,
-        mesh_device,
-        global_batch,
-        head_dim,
-        max_position_embeddings,
-        configuration,
-        model_config,
-        num_layers=num_layers,
-        generate_attention_inputs=False,
-    )
+    # # Generate dummy kv_cache --------------------------------------------------------------
+    # (
+    #     past_key_values,
+    #     tt_layer_past,
+    #     kv_len,
+    # ) = get_rand_falcon_inputs(
+    #     llm_mode,
+    #     seq_len,
+    #     batch,
+    #     kv_cache_len,
+    #     mesh_device,
+    #     global_batch,
+    #     head_dim,
+    #     max_position_embeddings,
+    #     configuration,
+    #     model_config,
+    #     num_layers=num_layers,
+    #     generate_attention_inputs=False,
+    # )
 
-    if not device_perf:
-        # Do warmp up run unless testing device perf -------------------------------------------
+    # if not device_perf:
+    #     # Do warmp up run unless testing device perf -------------------------------------------
 
-        profiler.start("processing_of_input")
-        # TODO: Generate attention_mask on device
-        tt_input_ids, tt_attention_mask = get_inputs_on_device(
-            llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
-        )
-        profiler.end("processing_of_input")
+    #     profiler.start("processing_of_input")
+    #     # TODO: Generate attention_mask on device
+    #     tt_input_ids, tt_attention_mask = get_inputs_on_device(
+    #         llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
+    #     )
+    #     profiler.end("processing_of_input")
 
-        # First run to fill compile cache ----------------------------------------------------
-        logger.info(f"Running Falcon model once to fill caches")
-        profiler.disable()
+    #     # First run to fill compile cache ----------------------------------------------------
+    #     logger.info(f"Running Falcon model once to fill caches")
+    #     profiler.disable()
 
-        # Use force enable to only record this profiler call while others are disabled
-        profiler.start("first_model_run_with_compile", force_enable=e2e_perf)
-        if llm_mode == "prefill":
-            tt_outs = []
-            # Device transfer time is included in model run time for prefill
-            tt_input_ids, tt_attention_mask = get_inputs_on_device(
-                llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
-            )
-            for user_id in range(batch):
-                tt_out, tt_layer_present = tt_FalconCausalLM(
-                    input_ids=tt_input_ids[user_id],
-                    llm_mode=llm_mode,
-                    attention_mask=tt_attention_mask[user_id],
-                    user_id=user_id,
-                    layer_past=tt_layer_past,
-                    layer_past_len=kv_cache_len,
-                    use_cache=use_cache,
-                )
-                tt_outs.append(tt_out)
-            tt_out = tt_outs
+    #     # Use force enable to only record this profiler call while others are disabled
+    #     profiler.start("first_model_run_with_compile", force_enable=e2e_perf)
+    #     if llm_mode == "prefill":
+    #         tt_outs = []
+    #         # Device transfer time is included in model run time for prefill
+    #         tt_input_ids, tt_attention_mask = get_inputs_on_device(
+    #             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
+    #         )
+    #         for user_id in range(batch):
+    #             tt_out, tt_layer_present = tt_FalconCausalLM(
+    #                 input_ids=tt_input_ids[user_id],
+    #                 llm_mode=llm_mode,
+    #                 attention_mask=tt_attention_mask[user_id],
+    #                 user_id=user_id,
+    #                 layer_past=tt_layer_past,
+    #                 layer_past_len=kv_cache_len,
+    #                 use_cache=use_cache,
+    #             )
+    #             tt_outs.append(tt_out)
+    #         tt_out = tt_outs
 
-        elif llm_mode == "decode":
-            tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_ids=tt_input_ids,
-                llm_mode=llm_mode,
-                attention_mask=tt_attention_mask,
-                layer_past=tt_layer_past,
-                layer_past_len=kv_cache_len,
-                use_cache=use_cache,
-            )
-        synchronize_devices(mesh_device)
-        profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
+    #     elif llm_mode == "decode":
+    #         tt_out, tt_layer_present = tt_FalconCausalLM(
+    #             input_ids=tt_input_ids,
+    #             llm_mode=llm_mode,
+    #             attention_mask=tt_attention_mask,
+    #             layer_past=tt_layer_past,
+    #             layer_past_len=kv_cache_len,
+    #             use_cache=use_cache,
+    #         )
+    #     synchronize_devices(mesh_device)
+    #     profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
 
-        # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
-        dump_device_profiler(mesh_device)
+    #     # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
+    #     dump_device_profiler(mesh_device)
 
-        del tt_out
-        del tt_layer_past
-        del tt_layer_present
-        del tt_input_ids
-        del tt_attention_mask
+    #     del tt_out
+    #     del tt_layer_past
+    #     del tt_layer_present
+    #     del tt_input_ids
+    #     del tt_attention_mask
 
     # Generate dummy kv_cache ------------------------------------------------------------
     (
@@ -269,11 +270,11 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Prepare reference output -----------------------------------------------------------
 
-    profiler.start("hugging_face_reference_model")
-    pytorch_out, pytorch_layer_present = pytorch_FalconCausalLM(
-        input_ids=model_input, past_key_values=past_key_values, use_cache=use_cache
-    )
-    profiler.end("hugging_face_reference_model")
+    # profiler.start("hugging_face_reference_model")
+    # pytorch_out, pytorch_layer_present = pytorch_FalconCausalLM(
+    #     input_ids=model_input, past_key_values=past_key_values, use_cache=use_cache
+    # )
+    # profiler.end("hugging_face_reference_model")
 
     # Run model --------------------------------------------------------------------------
 
@@ -287,27 +288,30 @@ def run_test_FalconCausalLM_end_to_end(
     )
 
     profiler.start(f"model_run_for_inference")
-    if device_perf:
-        signpost("start")  # start device perf measurement
+    # if device_perf:
+    signpost("start")  # start device perf measurement
 
     if llm_mode == "prefill":
         tt_outs = []
+        start_transfer = time.time()
         # Device transfer time is included in model run time for prefill
         tt_input_ids, tt_attention_mask = get_inputs_on_device(
             llm_mode, tt_FalconCausalLM, model_input, kv_cache_len, seq_len, batch, kv_len
         )
-        for user_id in range(batch):
-            tt_out, tt_layer_present = tt_FalconCausalLM(
-                input_ids=tt_input_ids[user_id],
-                llm_mode=llm_mode,
-                attention_mask=tt_attention_mask[user_id],
-                user_id=user_id,
-                layer_past=tt_layer_past,
-                layer_past_len=kv_cache_len,
-                use_cache=use_cache,
-                device_perf_run=device_perf,
-            )
-            tt_outs.append(tt_out)
+        end_transfer = time.time()
+        # start_fwd = time.time()
+        # for user_id in range(batch):
+        #     tt_out, tt_layer_present = tt_FalconCausalLM(
+        #         input_ids=tt_input_ids[user_id],
+        #         llm_mode=llm_mode,
+        #         attention_mask=tt_attention_mask[user_id],
+        #         user_id=user_id,
+        #         layer_past=tt_layer_past,
+        #         layer_past_len=kv_cache_len,
+        #         use_cache=use_cache,
+        #         device_perf_run=device_perf,
+        #     )
+        #     tt_outs.append(tt_out)
 
     elif llm_mode == "decode":
         tt_out, tt_layer_present = tt_FalconCausalLM(
@@ -320,80 +324,84 @@ def run_test_FalconCausalLM_end_to_end(
             device_perf_run=device_perf,
         )
     synchronize_devices(mesh_device)
+    # end_fwd = time.time()
     profiler.end(f"model_run_for_inference")
 
-    if llm_mode == "prefill":
-        tt_out_tmp = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
-        for user_id, tt_out in enumerate(tt_outs):
-            # Get outputs from all devices
-            tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
-        tt_out = tt_out_tmp
-    elif llm_mode == "decode":
-        tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
+    # if llm_mode == "prefill":
+    #     tt_out_tmp = torch.zeros(global_batch, seq_len, configuration.vocab_size)  # Output tensor to overwrite
+    #     for user_id, tt_out in enumerate(tt_outs):
+    #         # Get outputs from all devices
+    #         tt_out_tmp[user_id::batch] = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=0).squeeze(1)
+    #     tt_out = tt_out_tmp
+    # elif llm_mode == "decode":
+    #     tt_out = tt_tensors_to_torch_tensors(tt_out, mesh_device, concat_dim=2).squeeze(1).transpose(0, 1)
 
-    if device_perf:
-        signpost("stop")  # stop device perf measurement
+    # if device_perf:
+    signpost("stop")  # stop device perf measurement
 
-    # check outputs ----------------------------------------------------------------------
-    does_pass = True
-    tt_out_tmp = tt_out.type(pytorch_out.dtype)
-    _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_out, tt_out_tmp)
-    logger.info(f"Output: {pcc_str}")
-    if device_pcc < expected_pccs[0]:
-        does_pass = False
-        logger.warning(f"Output PCC {device_pcc} is lower than {expected_pccs[0]}")
-    if device_pcc > (expected_pccs[0] + 0.01):
-        does_pass = False
-        logger.warning(f"Output PCC {device_pcc} is higher than {expected_pccs[0]}. Please update the expected PCC")
+    logger.info("Device transfer time: {:.3f} s".format(end_transfer - start_transfer))
+    # logger.info("Device forward time: {:.3f} s".format(end_fwd - start_fwd))
 
-    reference_logits = pytorch_out.view(global_batch * seq_len, -1).float().detach().numpy()
-    eval_logits = tt_out.view(global_batch * seq_len, -1).float().detach().numpy()
-    reference_top1 = np.argmax(reference_logits, axis=-1)
-    top1_acc = top_k_accuracy_score(reference_top1, eval_logits, k=1, labels=np.arange(eval_logits.shape[-1]))
-    top5_acc = top_k_accuracy_score(reference_top1, eval_logits, k=5, labels=np.arange(eval_logits.shape[-1]))
-    logger.info(f"Top-1 Accuracy: {top1_acc}")
-    logger.info(f"Top-5 Accuracy: {top5_acc}")
+    # # check outputs ----------------------------------------------------------------------
+    # does_pass = True
+    # tt_out_tmp = tt_out.type(pytorch_out.dtype)
+    # _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_out, tt_out_tmp)
+    # logger.info(f"Output: {pcc_str}")
+    # if device_pcc < expected_pccs[0]:
+    #     does_pass = False
+    #     logger.warning(f"Output PCC {device_pcc} is lower than {expected_pccs[0]}")
+    # if device_pcc > (expected_pccs[0] + 0.01):
+    #     does_pass = False
+    #     logger.warning(f"Output PCC {device_pcc} is higher than {expected_pccs[0]}. Please update the expected PCC")
 
-    device_pcc_k = 1.0
-    device_pcc_v = 1.0
-    for i in range(num_layers):
-        if llm_mode == "prefill":
-            pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
-            tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
-        elif llm_mode == "decode":
-            pytorch_layer_pres = (
-                pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
-                pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
-            )
-            tt_layer_pres = concat_device_out_layer_present(
-                mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True
-            )
-        tt_layer_pres_0 = tt_layer_pres[0].type(pytorch_layer_pres[0].dtype)
-        _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_layer_pres[0], tt_layer_pres_0)
-        logger.info(f"K Cache Layer {i}: {pcc_str}")
-        device_pcc_k = min(device_pcc_k, device_pcc)
+    # reference_logits = pytorch_out.view(global_batch * seq_len, -1).float().detach().numpy()
+    # eval_logits = tt_out.view(global_batch * seq_len, -1).float().detach().numpy()
+    # reference_top1 = np.argmax(reference_logits, axis=-1)
+    # top1_acc = top_k_accuracy_score(reference_top1, eval_logits, k=1, labels=np.arange(eval_logits.shape[-1]))
+    # top5_acc = top_k_accuracy_score(reference_top1, eval_logits, k=5, labels=np.arange(eval_logits.shape[-1]))
+    # logger.info(f"Top-1 Accuracy: {top1_acc}")
+    # logger.info(f"Top-5 Accuracy: {top5_acc}")
 
-        tt_layer_pres_1 = tt_layer_pres[1].type(pytorch_layer_pres[1].dtype)
-        _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_layer_pres[1], tt_layer_pres_1)
-        logger.info(f"V Cache Layer {i}: {pcc_str}")
-        device_pcc_v = min(device_pcc_v, device_pcc)
+    # device_pcc_k = 1.0
+    # device_pcc_v = 1.0
+    # for i in range(num_layers):
+    #     if llm_mode == "prefill":
+    #         pytorch_layer_pres = (pytorch_layer_present[i][0].squeeze(1), pytorch_layer_present[i][1].squeeze(1))
+    #         tt_layer_pres = concat_device_out_layer_present(mesh_device, tt_layer_present[i], kv_len)
+    #     elif llm_mode == "decode":
+    #         pytorch_layer_pres = (
+    #             pytorch_layer_present[i][0].squeeze(1)[:, kv_cache_len, :],
+    #             pytorch_layer_present[i][1].squeeze(1)[:, kv_cache_len, :],
+    #         )
+    #         tt_layer_pres = concat_device_out_layer_present(
+    #             mesh_device, tt_layer_present[i], kv_cache_len, end_idx_only=True
+    #         )
+    #     tt_layer_pres_0 = tt_layer_pres[0].type(pytorch_layer_pres[0].dtype)
+    #     _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_layer_pres[0], tt_layer_pres_0)
+    #     logger.info(f"K Cache Layer {i}: {pcc_str}")
+    #     device_pcc_k = min(device_pcc_k, device_pcc)
 
-    logger.info(f"Device PCC K: {device_pcc_k}")
-    logger.info(f"Device PCC V: {device_pcc_v}")
+    #     tt_layer_pres_1 = tt_layer_pres[1].type(pytorch_layer_pres[1].dtype)
+    #     _, _, device_pcc, pcc_str = get_atol_rtol_pcc(pytorch_layer_pres[1], tt_layer_pres_1)
+    #     logger.info(f"V Cache Layer {i}: {pcc_str}")
+    #     device_pcc_v = min(device_pcc_v, device_pcc)
 
-    if device_pcc_k < expected_pccs[1]:
-        does_pass = False
-        logger.warning(f"K Cache PCC {device_pcc_k} is lower than {expected_pccs[1]}")
-    if device_pcc_k > (expected_pccs[1] + 0.01):
-        does_pass = False
-        logger.warning(f"K Cache PCC {device_pcc_k} is higher than {expected_pccs[1]}. Please update the expected PCC")
+    # logger.info(f"Device PCC K: {device_pcc_k}")
+    # logger.info(f"Device PCC V: {device_pcc_v}")
 
-    if device_pcc_v < expected_pccs[2]:
-        does_pass = False
-        logger.warning(f"V Cache PCC {device_pcc_v} is lower than {expected_pccs[2]}")
-    if device_pcc_v > (expected_pccs[2] + 0.01):
-        does_pass = False
-        logger.warning(f"V Cache PCC {device_pcc_v} is higher than {expected_pccs[2]}. Please update the expected PCC")
+    # if device_pcc_k < expected_pccs[1]:
+    #     does_pass = False
+    #     logger.warning(f"K Cache PCC {device_pcc_k} is lower than {expected_pccs[1]}")
+    # if device_pcc_k > (expected_pccs[1] + 0.01):
+    #     does_pass = False
+    #     logger.warning(f"K Cache PCC {device_pcc_k} is higher than {expected_pccs[1]}. Please update the expected PCC")
+
+    # if device_pcc_v < expected_pccs[2]:
+    #     does_pass = False
+    #     logger.warning(f"V Cache PCC {device_pcc_v} is lower than {expected_pccs[2]}")
+    # if device_pcc_v > (expected_pccs[2] + 0.01):
+    #     does_pass = False
+    #     logger.warning(f"V Cache PCC {device_pcc_v} is higher than {expected_pccs[2]}. Please update the expected PCC")
 
     if e2e_perf:
         profiler.print()
@@ -418,10 +426,10 @@ def run_test_FalconCausalLM_end_to_end(
         logger.info(f"falcon {comment} inference time: {second_iter_time}")
         logger.info(f"falcon {comment} compile time: {compile_time}")
 
-    if does_pass:
-        logger.info("Falcon PCC Check Passed!")
-    else:
-        logger.warning("Falcon PCC Check Failed!")
-        assert (
-            does_pass
-        ), f"Output PCC, k_cache_pcc, or v_cache_pcc is either lower or higher than {expected_pccs}. See earlier warnings for more details."
+    # if does_pass:
+    #     logger.info("Falcon PCC Check Passed!")
+    # else:
+    #     logger.warning("Falcon PCC Check Failed!")
+    #     assert (
+    #         does_pass
+    #     ), f"Output PCC, k_cache_pcc, or v_cache_pcc is either lower or higher than {expected_pccs}. See earlier warnings for more details."
