@@ -30,10 +30,7 @@
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 
-// FIXME: ARCH_NAME specific
-#include "dev_msgs.h" // RUN_MSG_DONE
-#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
-
+#include "dev_msgs.h"
 
 namespace tt {
 
