@@ -35,28 +35,34 @@ def create_tile_tensor(height, width, tile_size):
     return tile_tensor
 
 
-@pytest.mark.parametrize("shape", (32, 32))
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+import pytest
+import torch
+import ttnn
+
+
+@pytest.mark.parametrize("height", [30])
+@pytest.mark.parametrize("width", [30])
+@pytest.mark.parametrize("fill_value", [0, 1, 3])
+@pytest.mark.parametrize("dtype", [ttnn.uint32])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_embedding(
+def test_fill_pad(
     device,
-    shape,
+    height,
+    width,
+    fill_value,
     dtype,
     input_mem_config,
     output_mem_config,
-    layout,
 ):
     torch.manual_seed(1234)
 
-    torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
-    torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
+    torch_input_tensor = torch.randn((batch_size, height, width), dtype=torch.float32)
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=dtype), device, memory_config=input_mem_config
+    )
 
-    input_tensor = ttnn.to_device(ttnn.from_torch(torch_input_tensor), device, memory_config=input_mem_config)
-    weights = ttnn.to_device(ttnn.from_torch(torch_weights, dtype=dtype), device, memory_config=input_mem_config)
-
-    output_tensor = ttnn.embedding(input_tensor, weights, memory_config=output_mem_config, layout=layout)
+    output_tensor = ttnn.fill_pad(input_tensor, fill_value, memory_config=output_mem_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_with_pcc(torch_input_tensor, output_tensor)

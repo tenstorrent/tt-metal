@@ -5,13 +5,16 @@
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "tt_metal/common/test_tiles.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
+#include "tt_log.h"
 
-using namespace tt::tt_metal;
+using namespace tt;
 
 using uint32_t = uint32_t;
+
+bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
 namespace ttnn::operations::data_movement {
 
@@ -21,68 +24,71 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t page_size = single_tile_size;
-    std::cout << "single_tile_size: " << single_tile_size << std::endl;
+    // uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
     uint32_t input_element_size_bytes = input_tensor.element_size();
+    uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
     uint32_t height = input_tensor.get_logical_shape()[-2];
     uint32_t width = input_tensor.get_logical_shape()[-1];
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(input_element_size_bytes * page_size * 2, {{src0_cb_index, cb_data_format}})
-            .set_page_size(0, input_element_size_bytes * page_size);
+        tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
+            .set_page_size(0, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-    uint32_t output_log2_stick_size = output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(page_size) : 0;
+    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(tt::constants::TILE_HW);
+    uint32_t tile_size_bytes_log_2 = output_stick_size_is_power_of_two
+                                         ? (std::uint32_t)std::log2(tt::constants::TILE_HW * input_element_size_bytes)
+                                         : 0;
     // create kernel
     // reader compile time args
-    std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
         (std::uint32_t)output_stick_size_is_power_of_two,
-        (std::uint32_t)output_log2_stick_size};
-    (std::uint32_t)fill_value
-};
+        (std::uint32_t)tile_size_bytes_log_2,
+        (std::uint32_t)fill_value};
 
-tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
-    program,
-    "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
-    core,
-    // tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-    tt_metal::WriterDataMovementConfig(writer_compile_time_args));  // gonna be writer only
+    tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
+        core,
+        // tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));  // gonna be writer only
 
-std::vector<uint32_t> writer_runtime_args = {
-    (std::uint32_t)tens_buffer()->address(),
-    (std::uint32_t)page_size,
-    (std::uint32_t)height,
-    (std::uint32_t)width,
-    (std::uint32_t)(((height + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT),
-    (std::uint32_t)(((width + TILE_HEIGHT - 1) / TILE_HEIGHT) * TILE_HEIGHT),
-};
-tt::tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, {tens_buffer->address(), height, width});
+    std::vector<uint32_t> writer_runtime_args = {
+        (std::uint32_t)tens_buffer->address(),
+        (std::uint32_t)cb_page_size,
+        (std::uint32_t)height,
+        (std::uint32_t)width,
+        (std::uint32_t)(((height + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
+                        tt::constants::TILE_HEIGHT),
+        (std::uint32_t)(((width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
+                        tt::constants::TILE_HEIGHT),
+    };
+    tt::tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, {tens_buffer->address(), height, width});
 
-auto override_runtime_args_callback =
-    [kernel_id = binary_reader_kernel_id](
-        const Program& program, const std::vector<Buffer*>& input_buffers, const std::vector<Buffer*>& output_buffers) {
+    auto override_runtime_args_callback = [binary_reader_kernel_id](
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto tens_buffer = input_buffers.at(0);
 
         CoreCoord core = {0, 0};
 
         {
-            auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, binary_reader_kernel_id, core);
             runtime_args[0] = tens_buffer->address();
         }
     };
 
-return {std::move(program), override_runtime_args_callback};
+    return {std::move(program), override_runtime_args_callback};
 }
 
 void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
