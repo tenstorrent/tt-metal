@@ -158,6 +158,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         f"full_mesh_input_shape: {full_mesh_input_shape}, dim: {dim}, reduce_scatter_instances_concat_dim: {reduce_scatter_instances_concat_dim}, num_devices_per_line: {num_devices_per_line}"
     )
 
+    sub_device_stall_group = []
     if use_reduce_scatter_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -171,16 +172,11 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                 mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
             )
             logger.info("Done Create persistent fabric interface")
-
+            sub_device_stall_group = [worker_sub_device_id]
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
         # create global semaphore handles
-        from_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
-        )
-        to_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
-        )
-        mesh_device.set_sub_device_stall_group([worker_sub_device_id])
-
+        from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+        to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
     else:
         worker_sub_device_id = None
     ##
@@ -284,14 +280,11 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                 )
-        for d in mesh_device.get_devices():
-            if use_reduce_scatter_async and enable_persistent_fabric:
-                ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
-            else:
-                ttnn.synchronize_device(d)
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")
+        mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
         logger.info("Done tearing down persistent fabric interface")
 

@@ -247,7 +247,7 @@ def run_prefetcher_mm(
     worker_sub_device = ttnn.SubDevice([worker_cores_range_set])
     sub_device_manager = device.create_sub_device_manager([prefetcher_sub_device, worker_sub_device], 0)
     device.load_sub_device_manager(sub_device_manager)
-    worker_sub_device_id = 1  # Can we parameterize this?
+    worker_sub_device_id = ttnn.SubDeviceId(1)  # Can we parameterize this?
 
     max_dst_tiles = 8
     grid = receiver_cores_list
@@ -360,7 +360,6 @@ def run_prefetcher_mm(
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=in0_sharded_mem_config,
-            sub_device_ids=[ttnn.SubDeviceId(worker_sub_device_id)],
         )
         in0_t_tensors.append(in0_t)
 
@@ -398,6 +397,7 @@ def run_prefetcher_mm(
             num_layers,
             global_circular_buffer,
         )
+        device.set_sub_device_stall_group([worker_sub_device_id])
 
         outputs_dram = []
         for l in range(num_layers):
@@ -418,7 +418,7 @@ def run_prefetcher_mm(
             # Send outputs to DRAM to so that we don't run out of L1 memory when testing for large number of layers
             for t in range(num_tensors):
                 outputs_dram.append(ttnn.to_memory_config(outputs_l1[t], ttnn.DRAM_MEMORY_CONFIG))
-
+        device.reset_sub_device_stall_group()
         return outputs_dram
 
     ##### Compile Model #####
@@ -442,7 +442,7 @@ def run_prefetcher_mm(
         for t in range(num_tensors):
             idx = l * num_tensors + t
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
-            tt_out = ttnn.to_torch(outputs_t[idx], sub_device_ids=[ttnn.SubDeviceId(worker_sub_device_id)])
+            tt_out = ttnn.to_torch(outputs_t[idx])
             pt_out = in0_tensors[t] @ pt_tensors[idx]
 
             dtype = dtypes[t]

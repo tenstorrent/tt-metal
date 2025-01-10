@@ -1265,7 +1265,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         program.allocate_kernel_bin_buf_on_device(device);
         if (program.get_program_transfer_info().binary_data.size()) {
             this->enqueue_write_buffer(
-                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false, sub_device_ids);
+                *program.get_kernels_buffer(device), program.get_program_transfer_info().binary_data.data(), false);
         }
         program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
     }
@@ -1280,7 +1280,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
+            this->enqueue_read_buffer(*buffer, read_data.data(), true);
             TT_FATAL(
                 program.get_program_transfer_info().binary_data == read_data,
                 "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
@@ -1339,7 +1339,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         TT_FATAL(!this->manager.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
         if (const auto buffer = program.get_kernels_buffer(device)) {
             std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            this->enqueue_read_buffer(*buffer, read_data.data(), true, sub_device_ids);
+            this->enqueue_read_buffer(*buffer, read_data.data(), true);
             TT_FATAL(
                 program.get_program_transfer_info().binary_data == read_data,
                 "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
@@ -1898,32 +1898,29 @@ void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<uint32_t>& src,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     // TODO(agrebenisan): Move to deprecated
-    EnqueueWriteBuffer(cq, std::move(buffer), src.data(), blocking, sub_device_ids);
+    EnqueueWriteBuffer(cq, std::move(buffer), src.data(), blocking);
 }
 
 void EnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER, .blocking = blocking, .buffer = buffer, .dst = dst, .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER, .blocking = blocking, .buffer = buffer, .dst = dst});
 }
 
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = std::move(src), .sub_device_ids = sub_device_ids});
+        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER, .blocking = blocking, .buffer = buffer, .src = std::move(src)});
 }
 
 void EnqueueProgram(
@@ -2013,14 +2010,13 @@ void EnqueueReadBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     std::visit(
         [&](auto&& b) {
             using T = std::decay_t<decltype(b)>;
             if constexpr (
                 std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking, sub_device_ids);
+                cq.hw_command_queue().enqueue_read_buffer(b, dst, blocking);
             }
         },
         buffer);
@@ -2030,9 +2026,8 @@ void EnqueueWriteBufferImpl(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), blocking, sub_device_ids);
+    bool blocking) {
+    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), blocking);
 }
 
 void EnqueueProgramImpl(
@@ -2231,13 +2226,13 @@ void CommandQueue::run_command_impl(const CommandInterface& command) {
             TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueReadBufferImpl(*this, command.buffer.value(), command.dst.value(), command.blocking.value(), command.sub_device_ids);
+            EnqueueReadBufferImpl(*this, command.buffer.value(), command.dst.value(), command.blocking.value());
             break;
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER:
             TT_ASSERT(command.src.has_value(), "Must provide a src!");
             TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
             TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueWriteBufferImpl(*this, command.buffer.value(), command.src.value(), command.blocking.value(), command.sub_device_ids);
+            EnqueueWriteBufferImpl(*this, command.buffer.value(), command.src.value(), command.blocking.value());
             break;
         case EnqueueCommandType::GET_BUF_ADDR:
             TT_ASSERT(command.dst.has_value(), "Must provide a dst address!");

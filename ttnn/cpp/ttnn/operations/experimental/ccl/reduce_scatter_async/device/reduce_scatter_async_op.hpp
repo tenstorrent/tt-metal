@@ -107,6 +107,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     std::optional<size_t> num_links_preferred,
     const std::shared_ptr<const GlobalSemaphore>& from_remote_sem,
     const std::shared_ptr<const GlobalSemaphore>& to_remote_sem,
+    const std::optional<SubDeviceId>& sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }
 };  // namespace ccl
@@ -125,7 +126,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<size_t> num_links_preferred,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }  // namespace reduce_scatter_detail
 }  // namespace ccl

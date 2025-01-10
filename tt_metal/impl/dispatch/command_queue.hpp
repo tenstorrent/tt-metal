@@ -572,11 +572,11 @@ private:
     template <typename T>
     void enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
-    void enqueue_read_buffer(std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
-    void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void enqueue_read_buffer(std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
+    void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_write_buffer(
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
-    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
+        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
+    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_program(Program& program, bool blocking);
     void enqueue_record_event(const std::shared_ptr<Event>& event, bool clear_count = false, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false);
@@ -594,14 +594,12 @@ private:
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         void* dst,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids);
+        bool blocking);
     friend void EnqueueWriteBufferImpl(
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         HostDataType src,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids);
+        bool blocking);
     friend void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer);
     friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event);

@@ -9,7 +9,6 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -31,8 +30,7 @@ public:
         IDevice* device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        BufferType buffer_type = BufferType::L1);
 
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
@@ -54,8 +52,7 @@ public:
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
 
 private:
-    void setup_cb_buffers(
-        BufferType buffer_type, uint32_t max_num_receivers_per_sender, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
