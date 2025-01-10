@@ -145,6 +145,7 @@ on:
           - eltwise.unary.reciprocal.reciprocal_sharded
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
+          - eltwise.unary.silu.silu_llama
           - eltwise.unary.glu.glu
           - eltwise.unary.geglu.geglu
           - eltwise.unary.swiglu.swiglu
@@ -316,6 +317,7 @@ on:
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.multiply.multiply_llama
+          - eltwise.binary.multiply.mul_no_act_llama
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
