@@ -106,19 +106,27 @@ const core_descriptor_t& get_core_descriptor_config(
     if (tt::Cluster::instance().is_galaxy_cluster() and product_name == "nebula_x1") {
         dispatch_cores_string = "tg_dispatch_cores";
     }
+
+    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
+    auto logical_active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+
     for (const auto& core_node : desc_yaml[dispatch_cores_string]) {
         RelativeCoreCoord coord = {};
         if (core_node.IsSequence()) {
             // Logical coord
             coord = RelativeCoreCoord({.x = core_node[0].as<int>(), .y = core_node[1].as<int>()});
+            if (dispatch_core_config.get_core_type() == CoreType::ETH) {
+                auto logical_coord = get_core_coord_from_relative(coord, grid_size);
+                if (logical_active_eth_cores.find(logical_coord) != logical_active_eth_cores.end()) {
+                    continue;
+                }
+            }
         } else {
             TT_THROW("Only logical relative coords supported for dispatch_cores cores");
         }
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(dispatch_cores.size() || std::getenv("TT_METAL_SIMULATOR_EN"), "Dispatch cores size must be positive");
-
-    CoreCoord grid_size = tt::Cluster::instance().get_soc_desc(device_id).worker_grid_size;
 
     std::vector<CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());
