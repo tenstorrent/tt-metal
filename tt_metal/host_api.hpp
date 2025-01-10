@@ -305,15 +305,10 @@ uint32_t CreateSemaphore(
  * | cores          | Range of the Tensix co-ordinates using the semaphore   | const CoreRangeSet &                                      |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
- * | sub_device_ids | Sub-device ids to wait on before writing the semaphore | tt::stl::Span<const SubDeviceId>                          |              | No       |
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    uint32_t initial_value,
-    BufferType buffer_type = BufferType::L1,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**
@@ -328,15 +323,10 @@ GlobalSemaphore CreateGlobalSemaphore(
  * | cores          | Range of the Tensix co-ordinates using the semaphore   | CoreRangeSet &&                                           |              | Yes      |
  * | initial_value  | Initial value of the semaphore                         | uint32_t                                                  |              | Yes      |
  * | buffer_type    | Buffer type to store the semaphore                     | BufferType                                                | L1 types     | No       |
- * | sub_device_ids | Sub-device ids to wait on before writing the semaphore | tt::stl::Span<const SubDeviceId>                          |              | No       |
  */
 // clang-format on
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    CoreRangeSet&& cores,
-    uint32_t initial_value,
-    BufferType buffer_type = BufferType::L1,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type = BufferType::L1);
 
 // clang-format off
 /**
@@ -607,15 +597,13 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
  */
 // clang-format on
 void EnqueueReadBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool blocking);
 
 // clang-format off
 /**
@@ -629,27 +617,16 @@ void EnqueueReadBuffer(
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                        | No       |
  */
 // clang-format on
 template <typename DType>
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    Buffer& buffer,
-    std::vector<DType>& dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
     dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
-    EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking, sub_device_ids);
+    EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
 }
 template <typename DType>
-void EnqueueReadBuffer(
-    CommandQueue& cq,
-    std::shared_ptr<Buffer> buffer,
-    std::vector<DType>& dst,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    EnqueueReadBuffer(cq, *buffer, dst, blocking, sub_device_ids);
+void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::vector<DType>& dst, bool blocking) {
+    EnqueueReadBuffer(cq, *buffer, dst, blocking);
 }
 
 // clang-format off
@@ -664,8 +641,6 @@ void EnqueueReadBuffer(
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The vector we are writing to the device                                           | vector<DType> &                     |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
-
  */
 // clang-format on
 template <typename DType>
@@ -673,9 +648,8 @@ void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<DType>& src,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    EnqueueWriteBuffer(cq, buffer, src.data(), blocking, sub_device_ids);
+    bool blocking) {
+    EnqueueWriteBuffer(cq, buffer, src.data(), blocking);
 }
 
 // clang-format off
@@ -690,15 +664,13 @@ void EnqueueWriteBuffer(
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 // clang-format on
 void EnqueueWriteBuffer(
     CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool blocking);
 
 // clang-format off
 /**

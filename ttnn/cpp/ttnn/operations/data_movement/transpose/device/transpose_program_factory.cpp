@@ -5,16 +5,15 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_log.h"
 #include "ttnn/operation.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
-
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -676,7 +675,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
     // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
     // tiles
-    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                     : hal::get_l1_alignment();
     bool misaligned = alignment > sub_tile_line_bytes;
     if (row_major) {
         auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1

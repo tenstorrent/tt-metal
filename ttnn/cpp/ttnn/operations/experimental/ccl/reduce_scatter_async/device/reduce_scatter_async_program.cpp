@@ -413,7 +413,7 @@ struct ReduceScatterBuilderConfig {
 };
 
 
-static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, IDevice*device) {
+static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, IDevice*device, const std::optional<SubDeviceId>& sub_device_id) {
 
     auto build_all_workers_list = [](CoreRangeSet const& available_cores, size_t total_cores_needed, std::vector<CoreCoord> &all_cores_out) {
 
@@ -439,7 +439,7 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, 
     constexpr size_t per_link_num_workers_needed = num_directions_per_line + num_final_reducers_per_link;
     const size_t total_cores_needed = per_link_num_workers_needed * num_links;
     const auto available_cores =
-        device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
     if (available_cores.num_cores() < total_cores_needed) {
         log_warning(
             tt::LogOp,
@@ -493,9 +493,9 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, 
  * reduce scatter worker kernels. BORROWED FROM REDUCE SCATTER
  * TODO: COMMONIZE
  */
-static WorkerCoreBundle select_worker_cores(ttnn::ccl::Topology const topology, size_t num_links, IDevice*device) {
+static WorkerCoreBundle select_worker_cores(ttnn::ccl::Topology const topology, size_t num_links, IDevice*device, const std::optional<SubDeviceId>& sub_device_id) {
     switch (topology) {
-        case ttnn::ccl::Topology::Linear: return select_worker_cores_for_line_topology(num_links, device);
+        case ttnn::ccl::Topology::Linear: return select_worker_cores_for_line_topology(num_links, device, sub_device_id);
 
         case ttnn::ccl::Topology::Ring:
             TT_THROW("Ring topology support not yet added to async reduce scatter");
@@ -2136,7 +2136,8 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
 
     fabric_lifetime_mode fabric_mode,
     std::shared_ptr<const GlobalSemaphore> const& from_remote_sems,
-    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem) {
+    std::shared_ptr<const GlobalSemaphore> const& to_remote_sem,
+    const std::optional<SubDeviceId>& sub_device_id) {
     using namespace ttnn::ccl::worker_detail;
     bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
@@ -2161,7 +2162,7 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     size_t fabric_buffer_size_pages = fabric.get_edm_buffer_size_bytes() / get_page_size(input_tensor);
     auto const& topology_config = LineTopology(line_size, line_index);
 
-    auto const& worker_cores = select_worker_cores(topology, num_links, device);
+    auto const& worker_cores = select_worker_cores(topology, num_links, device, sub_device_id);
 
     constexpr size_t local_input_tensor_idx = 0;
     constexpr size_t local_final_output_tensor_idx = 1;
@@ -2461,6 +2462,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     std::optional<size_t> num_links_preferred,
     std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& from_remote_sem,
     std::shared_ptr<const tt::tt_metal::GlobalSemaphore> const& to_remote_sem,
+    const std::optional<SubDeviceId>& sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
     auto program = tt::tt_metal::Program();
 
@@ -2504,7 +2506,8 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         ttnn::ccl::Topology::Linear,
         fabric_mode,
         from_remote_sem,
-        to_remote_sem);
+        to_remote_sem,
+        sub_device_id);
 }
 
 }  // namespace ttnn::ccl::reduce_scatter_detail

@@ -5,13 +5,12 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "noc/noc_parameters.h"
-
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -43,7 +42,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t alignment = src0_is_dram ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, alignment};
 
