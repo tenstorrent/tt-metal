@@ -48,7 +48,7 @@ tests/scripts/tg/ @tenstorrent/metalium-developers-infra
 tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_fabric/ @ubcheema @aliuTT
+tt_fabric/ @ubcheema @aliuTT @aagarwalTT @eelkozahTT
 
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
