@@ -70,7 +70,7 @@ class TtSegformerDecodeHead:
                 encoder_hidden_state.shape[0] * encoder_hidden_state.shape[1] * encoder_hidden_state.shape[2] / ncores
             )
             shard_width = encoder_hidden_state.shape[3]
-            shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
+            shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation)
             input_memory_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )

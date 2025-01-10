@@ -1184,7 +1184,6 @@ def run_all_gather_sharded(
         shard_grid,
         input_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_shard_shape = list(input_shard_shape)
@@ -1196,7 +1195,6 @@ def run_all_gather_sharded(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
