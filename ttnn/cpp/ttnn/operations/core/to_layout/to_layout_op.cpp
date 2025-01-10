@@ -141,8 +141,10 @@ Tensor to_layout_impl(
                     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
             SmallVector<uint32_t> output_tensor_end;
-            for (auto index = 0; index < tensor.get_logical_shape().rank(); ++index) {
-                output_tensor_end.push_back(tensor.get_logical_shape()[index] - 1);
+            int logical_rank = tensor.get_logical_shape().rank();
+            int padded_rank = tensor.get_padded_shape().rank();
+            for (auto index = 0; index < padded_rank; ++index) {
+                output_tensor_end.push_back(index < logical_rank ? tensor.get_logical_shape()[index] - 1 : 0);
             }
 
             tensor =
