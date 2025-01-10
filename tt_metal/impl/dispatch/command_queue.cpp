@@ -2025,8 +2025,7 @@ void EnqueueReadSubBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
@@ -2035,8 +2034,7 @@ void EnqueueReadSubBuffer(
         .blocking = blocking,
         .buffer = buffer,
         .dst = dst,
-        .region = region,
-        .sub_device_ids = sub_device_ids});
+        .region = region});
 }
 
 void EnqueueWriteBuffer(
@@ -2171,8 +2169,7 @@ void EnqueueWriteBufferImpl(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    bool blocking) {
     cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 

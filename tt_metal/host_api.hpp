@@ -642,7 +642,6 @@ void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::ve
  * | dst            | The memory where the result will be stored                                        | void*                               |                                    | Yes      |
  * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 // clang-format on
 void EnqueueReadSubBuffer(
@@ -650,8 +649,7 @@ void EnqueueReadSubBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool blocking);
 
 // clang-format off
 /**
@@ -666,19 +664,13 @@ void EnqueueReadSubBuffer(
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                    | Yes      |
  * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 // clang-format on
 template <typename DType>
 void EnqueueReadSubBuffer(
-    CommandQueue& cq,
-    Buffer& buffer,
-    std::vector<DType>& dst,
-    const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
+    CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, const BufferRegion& region, bool blocking) {
     dst.resize(region.size / sizeof(DType));
-    EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), region, blocking, sub_device_ids);
+    EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), region, blocking);
 }
 template <typename DType>
 void EnqueueReadSubBuffer(
@@ -686,9 +678,8 @@ void EnqueueReadSubBuffer(
     std::shared_ptr<Buffer> buffer,
     std::vector<DType>& dst,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    EnqueueReadSubBuffer(cq, *buffer, dst, region, blocking, sub_device_ids);
+    bool blocking) {
+    EnqueueReadSubBuffer(cq, *buffer, dst, region, blocking);
 }
 
 // clang-format off
@@ -747,7 +738,6 @@ void EnqueueWriteBuffer(
  * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
  * | region         | The region of the buffer that we are writing to                                   | const BufferRegion &                |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 // clang-format on
 void EnqueueWriteSubBuffer(
@@ -755,8 +745,7 @@ void EnqueueWriteSubBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    bool blocking);
 
 // clang-format off
 /**
@@ -771,7 +760,6 @@ void EnqueueWriteSubBuffer(
  * | src            | The memory we are writing to the device                                           | std::vector<DType>&                 |                                    | Yes      |
  * | region         | The region of the buffer that we are writing to the device                        | const BufferRegion &                |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
- * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t>       |                                    | No       |
  */
 // clang-format on
 template <typename DType>
@@ -780,9 +768,8 @@ void EnqueueWriteSubBuffer(
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<DType>& src,
     const BufferRegion& region,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    EnqueueWriteSubBuffer(cq, buffer, src.data(), region, blocking, sub_device_ids);
+    bool blocking) {
+    EnqueueWriteSubBuffer(cq, buffer, src.data(), region, blocking);
 }
 
 // clang-format off
