@@ -166,7 +166,9 @@ def test_to_layout_6D(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]])
+@pytest.mark.parametrize(
+    "shape", [[3, 1370, 1, 1, 1280], [3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]]
+)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_to_layout_nd_hangs(shape, input_layout, output_layout, device):

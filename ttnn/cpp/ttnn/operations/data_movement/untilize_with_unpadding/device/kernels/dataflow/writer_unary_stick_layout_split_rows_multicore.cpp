@@ -59,11 +59,24 @@ void kernel_main() {
 
     uint32_t stick_id = start_stick_id;
     uint32_t rt_arg_idx = 5;
+    uint32_t count_repeat_idx = 9;
+    uint32_t count = 1;
+
     for (uint32_t block_rep_idx = 0; block_rep_idx < n_block_reps; ++block_rep_idx) {
-        const uint32_t n_data = get_arg_val<uint32_t>(rt_arg_idx++);   // number of full tile-rows
-        const uint32_t n_mixed = get_arg_val<uint32_t>(rt_arg_idx++);  // number of rows in a partially filled tile-row
-        const uint32_t n_pads = get_arg_val<uint32_t>(rt_arg_idx++);   // number of padding tile-rows
-        const uint32_t times = get_arg_val<uint32_t>(rt_arg_idx++);  // number of times the pattern of tile-rows repeats
+        const uint32_t repeat_count = get_arg_val<uint32_t>(count_repeat_idx);
+        const uint32_t n_data = get_arg_val<uint32_t>(rt_arg_idx);  // number of full tile-rows
+        const uint32_t n_mixed =
+            get_arg_val<uint32_t>(rt_arg_idx + 1);                      // number of rows in a partially filled tile-row
+        const uint32_t n_pads = get_arg_val<uint32_t>(rt_arg_idx + 2);  // number of padding tile-rows
+        const uint32_t times =
+            get_arg_val<uint32_t>(rt_arg_idx + 3);  // number of times the pattern of tile-rows repeats
+        if (count == repeat_count) {
+            rt_arg_idx = rt_arg_idx + 5;
+            count_repeat_idx = count_repeat_idx + 5;
+            count = 1;
+        } else {
+            count++;
+        }
 
         for (uint32_t t = 0; t < times; ++t) {
             for (uint32_t y_t = 0; y_t < n_data; y_t++) {

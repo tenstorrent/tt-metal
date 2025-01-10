@@ -182,6 +182,11 @@ struct FullRep {
     }
 };
 
+inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
+    return (
+        el0.n_data == el1.n_data && el0.n_mixed == el1.n_mixed && el0.n_pads == el1.n_pads && el0.times == el1.times);
+}
+
 inline std::vector<std::vector<BlockRep>> distribute_work(
     const ttnn::SimpleShape& logical_shape,
     const tt::tt_metal::Padding& padding,

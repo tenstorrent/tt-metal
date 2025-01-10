@@ -336,14 +336,28 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
         uint32_t nblocks_per_core = 0;
 
+        BlockRep ref_el = assignment[0];
+        uint32_t count_repeated = 0;
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
-            writer_rt_args.push_back(el.n_data);
-            writer_rt_args.push_back(el.n_mixed);
-            writer_rt_args.push_back(el.n_pads);
-            writer_rt_args.push_back(el.times);
+            if (compare_assignments(ref_el, el)) {
+                count_repeated++;
+            } else {
+                writer_rt_args.push_back(ref_el.n_data);
+                writer_rt_args.push_back(ref_el.n_mixed);
+                writer_rt_args.push_back(ref_el.n_pads);
+                writer_rt_args.push_back(ref_el.times);
+                writer_rt_args.push_back(count_repeated);
+                count_repeated = 1;
+                ref_el = el;
+            }
         }
+        writer_rt_args.push_back(ref_el.n_data);
+        writer_rt_args.push_back(ref_el.n_mixed);
+        writer_rt_args.push_back(ref_el.n_pads);
+        writer_rt_args.push_back(ref_el.times);
+        writer_rt_args.push_back(count_repeated);
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
