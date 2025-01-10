@@ -138,39 +138,42 @@ void kernel_main() {
     constexpr uint32_t face_h_stride_bytes = face_h_stride * element_size;
 
     // ------------------------------------------------------------------------
-    // 4) Build padded shapes
+    // 4) Build padded and tiled shapes
     // ------------------------------------------------------------------------
     uint32_t input_padded_shape[N];
-    for (uint32_t i = 0; i < N - 2; i++) {
-        input_padded_shape[i] = input_shape[i];
-    }
-    input_padded_shape[N - 2] = H_p;
-    input_padded_shape[N - 1] = W_p;
-
     uint32_t input_tiled_shape[N];
-    for (uint32_t i = 0; i < N - 2; i++) {
-        input_tiled_shape[i] = input_padded_shape[i];
+    for (uint32_t i = 0; i < N; i++) {
+        if (i < N - 2) {
+            input_padded_shape[i] = input_shape[i];
+            input_tiled_shape[i] = input_shape[i];
+        } else if (i == N - 2) {
+            input_padded_shape[i] = H_p;
+            input_tiled_shape[i] = H_t;
+        } else {
+            // i == N - 1
+            input_padded_shape[i] = W_p;
+            input_tiled_shape[i] = W_t;
+        }
     }
-    input_tiled_shape[N - 2] = H_t;
-    input_tiled_shape[N - 1] = W_t;
 
     uint32_t output_padded_shape[N];
-    for (uint32_t i = 0; i < N - 2; i++) {
-        output_padded_shape[i] = output_shape[i];
-    }
-    output_padded_shape[N - 2] = X_p;
-    output_padded_shape[N - 1] = W_p;
-
     uint32_t output_tiled_shape[N];
-    for (uint32_t i = 0; i < N - 2; i++) {
-        output_tiled_shape[i] = output_padded_shape[i];
+    for (uint32_t i = 0; i < N; i++) {
+        if (i < N - 2) {
+            output_padded_shape[i] = output_shape[i];
+            output_tiled_shape[i] = output_shape[i];
+        } else if (i == N - 2) {
+            output_padded_shape[i] = X_p;
+            output_tiled_shape[i] = X_t;
+        } else {
+            // i == N - 1
+            output_padded_shape[i] = W_p;
+            output_tiled_shape[i] = W_t;
+        }
     }
-    output_tiled_shape[N - 2] = X_t;
-    output_tiled_shape[N - 1] = W_t;
 
     // ------------------------------------------------------------------------
-    // 5) Build strides for the destination padded shape
-    //    ( ignoring last dimension? )
+    // 5) Build row strides for the destination padded shape
     // ------------------------------------------------------------------------
     uint32_t dest_padded_strides[N];
     dest_padded_strides[N - 1] = 1;
