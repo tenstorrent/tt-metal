@@ -13,7 +13,7 @@ import tempfile
 
 DEBUG = False
 TT_METAL_HOME = os.environ["TT_METAL_HOME"]
-DEFAULT_GTEST = f"{TT_METAL_HOME}/build/test/tt_metal/unit_tests_api"
+DEFAULT_GTEST = f"{TT_METAL_HOME}/build/test/tt_metal/unit_tests_api_wormhole"
 
 
 def extract_list_of_test_points(args: argparse.Namespace):
