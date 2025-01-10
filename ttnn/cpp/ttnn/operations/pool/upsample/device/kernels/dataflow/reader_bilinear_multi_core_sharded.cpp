@@ -44,10 +44,11 @@ void kernel_main() {
     constexpr uint32_t is_reader = get_compile_time_arg_val(7);
 
     uint32_t l1_read_addr = get_read_ptr(in_cb_id);
+    uint32_t total_nsticks_to_process = in_w * scale_w;
     // Calculate the number of sticks to process per core by dividing the total number of sticks (in width direction)
     // by 2.
-    uint32_t nsticks_to_process = (in_w * scale_w) / 2;
-
+    uint32_t nsticks_to_process_on_core =
+        (total_nsticks_to_process % 2) ? total_nsticks_to_process / 2 + 1 : total_nsticks_to_process / 2;
     // assuming shard begins with a new row. TODO: generalize?
     float scale_h_inv = uint32_to_float(scale_h_inv_comp);
     float scale_w_inv = uint32_to_float(scale_w_inv_comp);
@@ -59,11 +60,12 @@ void kernel_main() {
     if (!is_reader) {
         x_index_compute += scale_w_inv;
         // If the total number of sticks is odd, process one less stick.
-        nsticks_to_process = ((in_w * scale_w) % 2) ? nsticks_to_process - 1 : nsticks_to_process;
+        nsticks_to_process_on_core =
+            (total_nsticks_to_process % 2) ? nsticks_to_process_on_core - 1 : nsticks_to_process_on_core;
     }
     for (uint32_t image_row = 0; image_row < in_image_rows_per_core * scale_h; ++image_row) {
         x_index = x_index_compute;
-        for (uint32_t j = 0; j < nsticks_to_process; j++) {
+        for (uint32_t j = 0; j < nsticks_to_process_on_core; j++) {
             cb_reserve_back(out_cb_id, 4);
             cb_reserve_back(in_scalar_cb_id, 1);
 
