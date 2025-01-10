@@ -31,28 +31,18 @@ void NlpCreateHeadsVitDeviceOperation::validate(const std::vector<Tensor>& input
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsVitDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NlpCreateHeadsVitDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    output_shape_vec = {
-        (tt::tt_metal::LegacyShape){input_shape[0], 12, input_shape[2], 64},
-        (tt::tt_metal::LegacyShape){input_shape[0], 12, input_shape[2], 64},
-        (tt::tt_metal::LegacyShape){input_shape[0], 12, input_shape[2], 64}};
-    return output_shape_vec;
-}
-
-std::vector<Tensor> NlpCreateHeadsVitDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
     if (this->output_mem_config.is_sharded()) {
         TT_ASSERT(false);
         return {};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
+    const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_padded_shape();
+    TensorSpec spec(
+        SimpleShape({input_shape[0], 12, input_shape[2], 64}),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    return {spec, spec, spec};
 }
 
 operation::ProgramWithCallbacks NlpCreateHeadsVitDeviceOperation::create_program(

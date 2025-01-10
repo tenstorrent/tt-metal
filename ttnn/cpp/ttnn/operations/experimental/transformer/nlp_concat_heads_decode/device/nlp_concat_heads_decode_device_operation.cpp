@@ -38,10 +38,10 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     auto num_heads = this->num_heads;
     auto sequence_length = input_shape[0];
@@ -54,18 +54,7 @@ std::vector<tt::tt_metal::LegacyShape> NLPConcatHeadsDecodeDeviceOperation::comp
 
     auto hidden_dim = num_heads * head_dim;
 
-    return {{sequence_length, 1, batch, hidden_dim}};
-}
-
-std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto num_heads = this->num_heads;
-    const auto input_shape = input_tensor.get_legacy_shape();
-    auto sequence_length = input_shape[0];
-    auto head_dim = input_shape[3];
-    auto output_shape = this->compute_output_shapes(input_tensors).at(0);
-    auto batch = output_shape[2];
+    SimpleShape output_shape({sequence_length, 1, batch, hidden_dim});
 
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     auto shard_grid = num_cores_to_corerangeset(num_heads, core_grid, true);
@@ -73,8 +62,7 @@ std::vector<Tensor> NLPConcatHeadsDecodeDeviceOperation::create_output_tensors(
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {
-        create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config)};
+    return {TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), Layout::TILE, mem_config))};
 }
 
 operation::ProgramWithCallbacks NLPConcatHeadsDecodeDeviceOperation::create_program(
