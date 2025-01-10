@@ -28,7 +28,16 @@ def pad_to_next_multiple(tensor):
 
 class TtLlamaMLP(LightweightModule):
     def __init__(
-        self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
+        self,
+        mesh_device,
+        args,
+        state_dict,
+        weight_cache_path,
+        layer_num,
+        dtype,
+        model_config,
+        state_dict_prefix=None,
+        prefetcher_setup=None,
     ):
         super().__init__()
 
@@ -37,6 +46,7 @@ class TtLlamaMLP(LightweightModule):
         self.args = args
         self.dim = args.dim
         self.model_config = model_config
+        self.prefetcher_setup = prefetcher_setup
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
 
@@ -45,21 +55,22 @@ class TtLlamaMLP(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
-        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        w1_w3_mem_config = self.model_config[
+            "W1W3_RING_MEMCFG"
+        ]  # args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
+        w2_mem_config = self.model_config[
+            "W2_RING_MEMCFG"
+        ]  # args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
-            pad_to_next_multiple(torch_weight(name[:2])),  # Grab only the wX part of the name
+            pad_to_next_multiple(torch_weight(name[:2])).unsqueeze(0).unsqueeze(0),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
-            if args.is_galaxy
-            else w2_mem_config
-            if "w2" in name
-            else w1_w3_mem_config,
+            memory_config=w2_mem_config if "w2" in name else w1_w3_mem_config,
+            sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
             # cache_file_name=cache_name(name) + "padded",
         )
 
@@ -72,8 +83,14 @@ class TtLlamaMLP(LightweightModule):
         self.w1 = as_sharded_tensor(
             "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
+        if self.model_config["USE_PREFETCHER"]:
+            self.prefetcher_setup.insert_tensor(self.w1)
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
+        if self.model_config["USE_PREFETCHER"]:
+            self.prefetcher_setup.insert_tensor(self.w2)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        if self.model_config["USE_PREFETCHER"]:
+            self.prefetcher_setup.insert_tensor(self.w3)
         # [:2304, :3840]
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -83,11 +100,12 @@ class TtLlamaMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
-        self.w1 = ttnn.to_memory_config(self.w1, self.model_config["W1W3_RING_MEMCFG"])
-        self.w2 = ttnn.to_memory_config(self.w2, self.model_config["W2_RING_MEMCFG"])
-        self.w3 = ttnn.to_memory_config(self.w3, self.model_config["W1W3_RING_MEMCFG"])
+        # self.w1 = ttnn.to_memory_config(self.w1, self.model_config["W1W3_RING_MEMCFG"])
+        # self.w2 = ttnn.to_memory_config(self.w2, self.model_config["W2_RING_MEMCFG"])
+        # self.w3 = ttnn.to_memory_config(self.w3, self.model_config["W1W3_RING_MEMCFG"])
 
-        x = ttnn.to_memory_config(x, self.model_config["SHARDED_FF12_RING_MEMCFG"])
+        # x = ttnn.to_memory_config(x, self.model_config["SHARDED_FF12_RING_MEMCFG"])
+        print(x.shape)
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
 
@@ -122,6 +140,9 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            multi_global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"]
+            else None,
         )
 
         w3_out = ttnn.linear(
@@ -134,7 +155,11 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_3,
             memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+            multi_global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"]
+            else None,
         )
+        print(w3_out)
         ttnn.deallocate(x)
 
         if TG:
@@ -167,6 +192,7 @@ class TtLlamaMLP(LightweightModule):
                 w1_out_torch = ttnn.to_torch(
                     w1_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
+                    sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
                 )  # [4, 1, 32, 12288]
 
                 # print(w1_out_torch.shape)
@@ -181,15 +207,16 @@ class TtLlamaMLP(LightweightModule):
                         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
                     ),
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                    memory_config=self.model_config["SHARDED_FF12_PRE_MUL_RING_MEMCFG"],
+                    sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
                 )
-                # print(w1_out.shape)
 
                 # w1_out = ttnn.to_memory_config(w1_out, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
                 w3_out_torch = ttnn.to_torch(
                     w3_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
+                    sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
                 )
 
                 w3_out_torch_reduced = torch.sum(w3_out_torch, dim=0, keepdim=True)
@@ -201,12 +228,13 @@ class TtLlamaMLP(LightweightModule):
                         mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
                     ),
                     layout=ttnn.TILE_LAYOUT,
-                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                    memory_config=self.model_config["SHARDED_FF12_PRE_MUL_RING_MEMCFG"],
+                    sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
                 )
 
                 # w3_out = ttnn.to_memory_config(w3_out, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
-                # print(w3_out.shape)
+                # print(w3_out)
 
             else:
                 w1_out = tt_all_reduce(
@@ -285,9 +313,12 @@ class TtLlamaMLP(LightweightModule):
             if TG
             else w2_in.memory_config(),
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            multi_global_cb=self.prefetcher_setup.global_circular_buffer
+            if self.model_config["USE_PREFETCHER"]
+            else None,
         )
         ttnn.deallocate(w2_in)
-        # print("w2_out", w2_out)
+        print("w2_out", w2_out.shape)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         # w2_out_reduced = tt_all_reduce(
@@ -307,6 +338,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out_torch = ttnn.to_torch(
             w2_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
+            sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
         )
         w2_out_torch_reduced = torch.sum(w2_out_torch, dim=0, keepdim=True)
         w2_out_reduced = ttnn.as_tensor(
@@ -318,13 +350,16 @@ class TtLlamaMLP(LightweightModule):
             ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            sub_device_ids=[self.prefetcher_setup.worker_sub_device_id],
         )
 
+        print(w2_out_reduced.shape)
+
         # Ensure dim 0 and 1 are 1
-        original_shape = w2_out_reduced.shape
-        w2_out_reduced = ttnn.reshape(
-            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-        )
+        # original_shape = w2_out_reduced.shape
+        # w2_out_reduced = ttnn.reshape(
+        #     w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        # )
         # if mode == "decode":
         #     w2_out_reduced = ttnn.to_memory_config(
         #         w2_out_reduced,

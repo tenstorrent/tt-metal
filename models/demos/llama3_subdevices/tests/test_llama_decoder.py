@@ -19,6 +19,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()
@@ -74,6 +75,11 @@ def test_llama_decoder_inference(
 
     state_dict = model_args.load_state_dict()
 
+    prefetcher_setup = TtLlamaPrefetcherSetup(
+        mesh_device,
+        n_tensors=5,
+        n_layers=1,
+    )
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
     partial_state_dict = {
@@ -136,7 +142,9 @@ def test_llama_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        prefetcher_setup=prefetcher_setup,
     )
+    prefetcher_setup.tensors.append(prefetcher_setup.get_tensor_addrs())
 
     seqlen = 1
 
@@ -160,6 +168,7 @@ def test_llama_decoder_inference(
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id],
     )
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
@@ -188,6 +197,7 @@ def test_llama_decoder_inference(
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+            sub_device_ids=[prefetcher_setup.worker_sub_device_id],
         )
 
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
@@ -219,6 +229,7 @@ def test_llama_decoder_inference(
                 dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
+            sub_device_ids=[prefetcher_setup.worker_sub_device_id],
         )
 
     if all_tests_pass:

@@ -15,6 +15,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()
@@ -47,6 +48,12 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
+    prefetcher_setup = TtLlamaPrefetcherSetup(
+        mesh_device,
+        n_tensors=3,
+        n_layers=1,
+    )
+
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaMLP", 0)
     partial_state_dict = {
@@ -70,7 +77,10 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         layer_num=0,
         dtype=dtype,
         model_config=model_args.get_model_config(),
+        prefetcher_setup=prefetcher_setup,
     )
+
+    prefetcher_setup.tensors.append(prefetcher_setup.get_tensor_addrs())
 
     torch_input = torch.randn(1, 1, seq_len, 9216)
     tt_input = ttnn.from_torch(
@@ -81,19 +91,29 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=(
-            ttnn.DRAM_MEMORY_CONFIG if model_args.is_galaxy else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+            model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
+            if model_args.is_galaxy
+            else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
         )
         if mode == "decode"
         else ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id],
     )
 
     logger.info("Run Llama_MLP")
+    ttnn.dram_prefetcher(
+        prefetcher_setup.tensors,
+        num_layers=1,
+        global_cb=None,
+        multi_global_cb=prefetcher_setup.global_circular_buffer,
+    )
     tt_output = tt_model(tt_input, mode)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id],
     )
 
     tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]

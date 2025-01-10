@@ -8,7 +8,7 @@ from models.demos.llama3_subdevices.tt.llama_ccl import tt_sharded_distributed_r
 
 
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, TG=False):
+    def __init__(self, norm, args, TG=False, prefetcher_setup=None):
         self.norm = norm
         self.args = args
 
@@ -49,6 +49,7 @@ class DistributedNorm(LightweightModule):
             #     packer_l1_acc=False,
             # )
         self.TG = TG
+        self.prefetcher_setup = prefetcher_setup
 
     def forward(self, x, mode):
         """Apply a norm, possibly gathering inputs if required."""
@@ -62,6 +63,7 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    prefetcher_setup=self.prefetcher_setup,
                 )
             else:
                 return tt_distributed_rmsnorm(

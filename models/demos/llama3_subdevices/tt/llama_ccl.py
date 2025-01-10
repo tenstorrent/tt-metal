@@ -182,7 +182,14 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
 
 
 def tt_sharded_distributed_rmsnorm(
-    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+    inp,
+    epsilon,
+    gamma,
+    mesh_device,
+    ln_sharded_input_memcfg,
+    ln_sharded_progcfg,
+    ln_sharded_stats_memcfg,
+    prefetcher_setup,
 ):
     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
@@ -202,7 +209,9 @@ def tt_sharded_distributed_rmsnorm(
 
     grid_offset = ttnn.CoreCoord(1, 0)
     tt_stats_torch = ttnn.to_torch(
-        tt_stats, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
+        tt_stats,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4)),
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id],
     )
 
     tt_global_stats = ttnn.from_torch(
@@ -212,6 +221,7 @@ def tt_sharded_distributed_rmsnorm(
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id],
     )
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
