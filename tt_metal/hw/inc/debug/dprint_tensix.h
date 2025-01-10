@@ -219,6 +219,10 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
     DPRINT << ((word & mask) >> shamt) << "; ";
 }
 
+// NOTE: FUNCTIONS WITHOUT ARCH NAME (GRAYSKULL, WORMHOLE, BLACKHOLE) AND WITHOUT HELPER SUFIX ARE INTENDED TO BE USE
+
+// HARDWARE SPECIFIC FUNCTIONS
+
 #ifdef ARCH_GRAYSKULL
 inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
@@ -384,10 +388,74 @@ inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatil
 }
 #endif  // ARCH_BLACKHOLE
 
+// Printing packer edge offset
+inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1: reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32; break;
+        case 2: reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32; break;
+        case 3: reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32; break;
+        case 4: reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32; break;
+        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
+    }
+
+    ckernel::packer::pck_edge_offset_t edge = ckernel::packer::read_pck_edge_offset(reg_addr, cfg);
+
+    DPRINT << "mask: " << HEX() << edge.mask << "; ";
+    DPRINT << "mode: " << HEX() << edge.mode << "; ";
+    DPRINT << "tile_row_set_select_pack0: " << HEX() << edge.tile_row_set_select_pack0 << "; ";
+    DPRINT << "tile_row_set_select_pack1: " << HEX() << edge.tile_row_set_select_pack1 << "; ";
+    DPRINT << "tile_row_set_select_pack2: " << HEX() << edge.tile_row_set_select_pack2 << "; ";
+    DPRINT << "tile_row_set_select_pack3: " << HEX() << edge.tile_row_set_select_pack3 << "; ";
+    DPRINT << "reserved: " << HEX() << edge.reserved << "; ";
+}
+
+// HELPER FUNCTIONS
+
+// Printing packer counters
+inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1: reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32; break;
+        case 2: reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32; break;
+        case 3: reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32; break;
+        case 4: reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32; break;
+        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
+    }
+
+    ckernel::packer::pack_counters_t counters = ckernel::packer::read_pack_counters(reg_addr, cfg);
+
+    DPRINT << "pack_per_xy_plane: " << counters.pack_per_xy_plane << "; ";
+    DPRINT << "pack_reads_per_xy_plane: " << counters.pack_reads_per_xy_plane << "; ";
+    DPRINT << "pack_xys_per_til: " << counters.pack_xys_per_til << "; ";
+    DPRINT << "pack_yz_transposed: " << HEX() << counters.pack_yz_transposed << "; ";
+    DPRINT << "pack_per_xy_plane_offset: " << counters.pack_per_xy_plane_offset << "; ";
+}
+
+// Printing packer strides
+inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1: reg_addr = PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32; break;
+        case 2: reg_addr = PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32; break;
+        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 2)" << ENDL(); break;
+    }
+
+    // word 0 xy_stride
+    uint32_t word = cfg[reg_addr];
+    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride", true);      // decimal
+    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride", true);  // decimal
+
+    // word 1 zw_stride
+    word = cfg[reg_addr + 1];
+    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride", true);       // decimal
+    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride", true);  // decimal
+}
+
+// FUNCTIONS TO USE
+
 // Print content of the register field by field. Issue: No ENDL.
 inline void dprint_tensix_alu_config() {
-    // Only wormhole and blackhole have this register
-
     ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
     DPRINT << "Fpu_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << "; ";
@@ -408,8 +476,6 @@ inline void dprint_tensix_alu_config() {
 }
 
 inline void dprint_tensix_pack_relu_config() {
-    // Only wormhole and blackhole have this register
-
     ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
 
     DPRINT << "zero_flag_disabled_src: " << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_src << "; ";
@@ -437,39 +503,6 @@ inline void dprint_tensix_dest_rd_ctrl() {
     DPRINT << ENDL();
 }
 
-// Printing packer edge offset
-inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1:
-            reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32;
-            break;
-        case 2:
-            reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32;
-            break;
-        case 3:
-            reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32;
-            break;
-        case 4:
-            reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32;
-            break;
-        default:
-            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
-            return;
-    }
-
-    ckernel::packer::pck_edge_offset_t edge = ckernel::packer::read_pck_edge_offset(reg_addr, cfg);
-
-    DPRINT << "mask: " << HEX() << edge.mask << "; ";
-    DPRINT << "mode: " << HEX() << edge.mode << "; ";
-    DPRINT << "tile_row_set_select_pack0: " << HEX() << edge.tile_row_set_select_pack0 << "; ";
-    DPRINT << "tile_row_set_select_pack1: " << HEX() << edge.tile_row_set_select_pack1 << "; ";
-    DPRINT << "tile_row_set_select_pack2: " << HEX() << edge.tile_row_set_select_pack2 << "; ";
-    DPRINT << "tile_row_set_select_pack3: " << HEX() << edge.tile_row_set_select_pack3 << "; ";
-    DPRINT << "reserved: " << HEX() << edge.reserved << "; ";
-}
-
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
@@ -487,37 +520,6 @@ inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
     }
 
     DPRINT << ENDL();
-}
-
-// Printing packer counters
-inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1:
-            reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32;
-            break;
-        case 2:
-            reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32;
-            break;
-        case 3:
-            reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32;
-            break;
-        case 4:
-            reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32;
-            break;
-        default:
-            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
-            return;
-    }
-
-    ckernel::packer::pack_counters_t counters = ckernel::packer::read_pack_counters(reg_addr, cfg);
-
-    DPRINT << "pack_per_xy_plane: " << counters.pack_per_xy_plane << "; ";
-    DPRINT << "pack_reads_per_xy_plane: " << counters.pack_reads_per_xy_plane << "; ";
-    DPRINT << "pack_xys_per_til: " << counters.pack_xys_per_til << "; ";
-    DPRINT << "pack_yz_transposed: " << HEX() << counters.pack_yz_transposed << "; ";
-    DPRINT << "pack_per_xy_plane_offset: " << counters.pack_per_xy_plane_offset << "; ";
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
@@ -583,33 +585,6 @@ inline void dprint_tensix_pack_config(uint reg_id = 1) {
         dprint_tensix_pack_config_blackhole(reg_addr, cfg);
 #endif
     }
-}
-
-// Printing packer strides
-inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1:
-            reg_addr = PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32;
-            break;
-        case 2:
-            reg_addr = PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32;
-            break;
-        default:
-            DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 2)" << ENDL();
-            break;
-    }
-
-    // word 0 xy_stride
-    uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride", true); // decimal
-    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride", true); // decimal
-
-    // word 1 zw_stride
-    word = cfg[reg_addr + 1];
-    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride", true); // decimal
 }
 
 // Choose what register you want printed (1-2). 0 for all.
