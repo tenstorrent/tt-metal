@@ -47,6 +47,14 @@ class ckernel_template
     // else                                             m_loop_op1 = m_loop_op1;
 
 public:
+    ckernel_template() = delete;
+    ~ckernel_template();
+    ckernel_template(ckernel_template const&) = delete;
+    ckernel_template(ckernel_template &&) = delete;
+    ckernel_template& operator=(ckernel_template const&) = delete;
+    ckernel_template& operator=(ckernel_template &&) = delete;
+
+    ckernel_template(uint outer_loop_len, uint inner_loop_len);
     ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op);
     ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op0, uint loop_op1);
     void set_loop_op0(uint loop_op);
@@ -244,6 +252,19 @@ public:
     void program_and_run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask = 0); // calls program, then run
 };
 
+    inline ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len)
+        : m_outer_loop_len(outer_loop_len)
+        , m_inner_loop_len(inner_loop_len)
+        , m_loop_op0(TT_OP_NOP)
+        , m_loop_op1(TT_OP_NOP)
+        , m_end_op0(TT_OP_NOP)
+        , m_end_op1(TT_OP_NOP)
+        , m_start_op0(TT_OP_NOP)
+        , m_loop0_last_instr(TT_OP_NOP)
+        , m_loop1_last_instr(TT_OP_NOP)
+    {
+    }
+
     inline ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len, uint loop_op)
         : m_outer_loop_len(outer_loop_len)
         , m_inner_loop_len(inner_loop_len)
@@ -268,6 +289,11 @@ public:
     {
         m_loop0_last_instr = loop_op1;
         m_loop1_last_instr = loop_op1;
+    }
+
+    inline ckernel_template::~ckernel_template()
+    {
+        // Empty destructor.
     }
 
     inline void ckernel_template::set_loop_op0(uint loop_op)

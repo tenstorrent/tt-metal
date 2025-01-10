@@ -46,49 +46,62 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
 
     const uint PACK_INTF_SEL = (num_faces>1) ? p_pacr::TWO_INTFS_ACTIVE: p_pacr::SINGLE_INTF_ACTIVE;
 
-    /*
-    Each pack instruction does 2x16 datums if (num_faces>1)
-    Each row of 16 datums, has a stride of 16 from dest read
-    Dest row read in inner loop:
-    tile 0: row 0, row 16
-    tile 1: row 64, row 80
-    .
-    tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
-    */
+    bool outer_loop_valid = (MOP_OUTER_LOOP > 0) && (MOP_OUTER_LOOP < 128);
+    bool inner_loop_valid = (MOP_INNER_LOOP > 0) && (MOP_INNER_LOOP < 128);
+    // Currently no way to check if MOP properly configured when issuing MOP instruction
+    // so we check here and guard with a default configuration that only has NOPs
+    if (outer_loop_valid && inner_loop_valid)
+    {
+        /*
+        Each pack instruction does 2x16 datums if (num_faces>1)
+        Each row of 16 datums, has a stride of 16 from dest read
+        Dest row read in inner loop:
+        tile 0: row 0, row 16
+        tile 1: row 64, row 80
+        .
+        tile block_ct_dim-1: row 64*(block_ct_dim-1), row 64*(block_ct_dim-1)+16
+        */
 
-    ckernel::ckernel_template tmp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, 0, PACK_INTF_SEL, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0),
-        TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0) // w cnt points to the next tile
-    );
+        ckernel::ckernel_template tmp(
+            MOP_OUTER_LOOP,
+            MOP_INNER_LOOP,
+            TT_OP_PACR(p_pacr::CFG_CTXT_0, p_pacr::NO_ROW_PAD_ZERO, p_pacr::DST_ACCESS_STRIDED_MODE, ADDR_MOD_0, p_pacr::ADDR_CNT_CTXT_0, 0, PACK_INTF_SEL, 0, MEGAROW, p_pacr::NO_CTXT_CTRL, 0, 0),
+            TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0) // w cnt points to the next tile
+        );
 
-    //reset ch0_w counters
-    tmp.set_start_op(TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010));
+        //reset ch0_w counters
+        tmp.set_start_op(TT_OP_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010));
 
-    if constexpr (block_ct_dim != full_ct_dim) {
-        const std::uint32_t replay_buf_len = 4;
-        load_replay_buf(ckernel::packer::replay_buf_offset, replay_buf_len, false, [] {
-            // update l1 address
-            TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
-            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-            TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-            TTI_NOP;
+        if constexpr (block_ct_dim != full_ct_dim) {
+            const std::uint32_t replay_buf_len = 4;
+            load_replay_buf(ckernel::packer::replay_buf_offset, replay_buf_len, false, [] {
+                // update l1 address
+                TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
+                TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+                TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+                TTI_NOP;
+            }
+            );
+
+            tmp.set_end_ops(
+                TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0), //inc ch0_y counters
+                TT_OP_REPLAY(ckernel::packer::replay_buf_offset, replay_buf_len, 0, 0) // update row address
+            );
+
+        } else {
+            tmp.set_end_op(
+                TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0) //inc ch0_y counters
+            );
         }
-        );
-
-        tmp.set_end_ops(
-            TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0), //inc ch0_y counters
-            TT_OP_REPLAY(ckernel::packer::replay_buf_offset, replay_buf_len, 0, 0) // update row address
-        );
-
-    } else {
-        tmp.set_end_op(
-            TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0) //inc ch0_y counters
-        );
+        tmp.program(instrn_buffer);
     }
-
-    tmp.program(instrn_buffer);
+    // If wanted MOP config is not valid, create a default one.
+    // This is due to not being able to check if MOP config is valid before issuing in runtime.
+    else
+    {
+        ckernel::ckernel_template tmp(1, 1);
+        tmp.program(instrn_buffer);
+    }
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim = block_ct_dim, bool diagonal = false>
