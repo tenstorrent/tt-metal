@@ -4,6 +4,8 @@
 
 #include <string>
 #include <filesystem>
+#include "tt_metal/jit_build/build.hpp"
+#include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal {
 
@@ -24,6 +26,9 @@ public:
 private:
     std::filesystem::path output_dir_;
     std::filesystem::path firmware_output_dir_;
+
+    std::vector<std::shared_ptr<JitBuildState>> get_build_states(tt_metal::IDevice* device, int id, bool is_fw);
+    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
 };
 
 }  // namespace tt::tt_metal
