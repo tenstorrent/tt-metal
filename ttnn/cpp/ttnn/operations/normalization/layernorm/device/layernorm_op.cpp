@@ -47,10 +47,11 @@ void LayerNorm::validate(
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1],
+                a.get_tensor_spec().physical_shape().width() ==
+                    gamma.value().get_tensor_spec().physical_shape().width(),
                 "{} != {}",
-                a.get_legacy_shape()[-1],
-                gamma.value().get_legacy_shape()[-1]);
+                a.get_tensor_spec().physical_shape().width(),
+                gamma.value().get_tensor_spec().physical_shape().width());
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
@@ -58,8 +59,8 @@ void LayerNorm::validate(
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (gamma.value().get_legacy_shape()[-1] == TILE_WIDTH &&
-                 gamma.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH),
+                (gamma.value().get_tensor_spec().physical_shape().width() == TILE_WIDTH &&
+                 gamma.value().volume() / TILE_WIDTH == a.get_tensor_spec().physical_shape().width() / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -76,7 +77,9 @@ void LayerNorm::validate(
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[-1] == beta.value().get_legacy_shape()[-1], "Error");
+            TT_FATAL(
+                a.get_tensor_spec().physical_shape().width() == beta.value().get_tensor_spec().physical_shape().width(),
+                "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
@@ -84,8 +87,8 @@ void LayerNorm::validate(
         } else {
             TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (beta.value().get_legacy_shape()[-1] == TILE_WIDTH &&
-                 beta.value().volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH),
+                (beta.value().get_tensor_spec().physical_shape().width() == TILE_WIDTH &&
+                 beta.value().volume() / TILE_WIDTH == a.get_tensor_spec().physical_shape().width() / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -119,11 +122,11 @@ void LayerNorm::validate(
         TT_FATAL(stats.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         if (this->norm_type == LayerNormType::LAYERNORM) {
             TT_FATAL(
-                stats.value().get_legacy_shape()[-1] % (2 * TILE_WIDTH) == 0,
+                stats.value().get_tensor_spec().physical_shape().width() % (2 * TILE_WIDTH) == 0,
                 "Stats is expected to have E(x) and E(x^2) for each device stacked interleaved in the last dimension");
         } else {
             TT_FATAL(
-                stats.value().get_legacy_shape()[-1] % TILE_WIDTH == 0,
+                stats.value().get_tensor_spec().physical_shape().width() % TILE_WIDTH == 0,
                 "Stats is expected to have E(x) for each device stacked in the last dimension");
         }
     }
