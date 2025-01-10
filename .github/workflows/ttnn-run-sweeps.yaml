@@ -401,6 +401,7 @@ on:
           - conv2d.full.conv2d_sharding
           - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
+          - conv2d.short.conv2d_ttforge_sweep
           - pooling.global_avg_pool2d
           - pooling.max_pool2d
           - max_pool2d.short.max_pool2d_short_sweep
