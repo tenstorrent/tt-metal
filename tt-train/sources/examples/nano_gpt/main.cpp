@@ -194,8 +194,10 @@ int main(int argc, char **argv) {
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
-
     CLI11_PARSE(app, argc, argv);
+
+    initialize_device(ddp);
+
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);
         if (result == SIG_ERR) {
@@ -267,11 +269,6 @@ int main(int argc, char **argv) {
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
-
-    if (ddp) {
-        // currently supports only N300 device
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
-    }
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();
