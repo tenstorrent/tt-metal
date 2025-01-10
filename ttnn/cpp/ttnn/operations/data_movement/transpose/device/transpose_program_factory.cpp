@@ -676,7 +676,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
     // tiles
     uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
-    bool misaligned = alignment > sub_tile_line_bytes;
+   : bool misaligned = alignment > sub_tile_line_bytes;
     if (row_major) {
         auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1
                                                                                   : num_tiles_per_core_group_2;
