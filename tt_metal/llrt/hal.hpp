@@ -144,6 +144,7 @@ public:
     using ValidRegAddrFunc = std::function<bool(uint32_t)>;
     using NOCXYEncodingFunc = std::function<uint32_t(uint32_t, uint32_t)>;
     using NOCMulticastEncodingFunc = std::function<uint32_t(uint32_t, uint32_t, uint32_t, uint32_t)>;
+    using NOCAddrFunc = std::function<uint64_t(uint64_t)>;
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
 
 private:
@@ -153,6 +154,10 @@ private:
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
     uint32_t num_nocs_;
+    uint32_t noc_overlay_start_addr_;
+    uint32_t noc_stream_reg_space_size_;
+    uint32_t noc_stream_remote_dest_buf_size_reg_index_;
+    uint32_t noc_stream_remote_dest_buf_start_reg_index_;
     bool coordinate_virtualization_enabled_;
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
@@ -166,6 +171,13 @@ private:
     ValidRegAddrFunc valid_reg_addr_func_;
     NOCXYEncodingFunc noc_xy_encoding_func_;
     NOCMulticastEncodingFunc noc_multicast_encoding_func_;
+    NOCAddrFunc noc_mcast_addr_start_x_func_;
+    NOCAddrFunc noc_mcast_addr_start_y_func_;
+    NOCAddrFunc noc_mcast_addr_end_x_func_;
+    NOCAddrFunc noc_mcast_addr_end_y_func_;
+    NOCAddrFunc noc_ucast_addr_x_func_;
+    NOCAddrFunc noc_ucast_addr_y_func_;
+    NOCAddrFunc noc_local_addr_func_;
     StackSizeFunc stack_size_func_;
 
 public:
@@ -174,6 +186,15 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
+
+    uint32_t get_noc_overlay_start_addr() const { return noc_overlay_start_addr_; }
+    uint32_t get_noc_stream_reg_space_size() const { return noc_stream_reg_space_size_; }
+    uint32_t get_noc_stream_remote_dest_buf_size_reg_index() const {
+        return noc_stream_remote_dest_buf_size_reg_index_;
+    }
+    uint32_t get_noc_stream_remote_dest_buf_start_reg_index() const {
+        return noc_stream_remote_dest_buf_start_reg_index_;
+    }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const
@@ -185,6 +206,14 @@ public:
     uint32_t noc_multicast_encoding(uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) const {
         return noc_multicast_encoding_func_(x_start, y_start, x_end, y_end);
     }
+
+    uint64_t get_noc_mcast_addr_start_x(uint64_t addr) const { return noc_mcast_addr_start_x_func_(addr); }
+    uint64_t get_noc_mcast_addr_start_y(uint64_t addr) const { return noc_mcast_addr_start_y_func_(addr); }
+    uint64_t get_noc_mcast_addr_end_x(uint64_t addr) const { return noc_mcast_addr_end_x_func_(addr); }
+    uint64_t get_noc_mcast_addr_end_y(uint64_t addr) const { return noc_mcast_addr_end_y_func_(addr); }
+    uint64_t get_noc_ucast_addr_x(uint64_t addr) const { return noc_ucast_addr_x_func_(addr); }
+    uint64_t get_noc_ucast_addr_y(uint64_t addr) const { return noc_ucast_addr_y_func_(addr); }
+    uint64_t get_noc_local_addr(uint64_t addr) const { return noc_local_addr_func_(addr); }
 
     bool is_coordinate_virtualization_enabled() const { return this->coordinate_virtualization_enabled_; };
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
