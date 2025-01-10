@@ -219,16 +219,8 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
     DPRINT << ((word & mask) >> shamt) << "; ";
 }
 
-// HARDWARE SPECIFIC FUNCTIONS
-
-// UNPACKER CONFIG REGISTERS
-
-// TODO: Change dprint_tensix functions to use struct readers and then print struct fields (where this is possible) 
-
-// GRAYSKULL
 #ifdef ARCH_GRAYSKULL
 inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
-    
     ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
 
     DPRINT << "in_data_format: " << HEX() << tile_descriptor.in_data_format << "; ";
@@ -247,7 +239,6 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
 }
 
 inline void dprint_tensix_unpack_config_grayskull() {
-    
     ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
 
     DPRINT << "out_format: " << HEX() << config.out_data_format << "; ";
@@ -264,16 +255,37 @@ inline void dprint_tensix_unpack_config_grayskull() {
     DPRINT << "res_1: " << HEX() << config.reserved_1 << "; ";
     DPRINT << "uncmpr_cntx4_7: " << HEX() << config.uncompress_cntx4_7 << "; ";
     DPRINT << "res_2: " << HEX() << config.reserved_2 << "; ";
-    DPRINT << "limit_addr: " << HEX() << config.limit_addr << "; "; 
+    DPRINT << "limit_addr: " << HEX() << config.limit_addr << "; ";
     DPRINT << "fifo_sz: " << config.fifo_size << "; ";
-    DPRINT << ENDL();  
+    DPRINT << ENDL();
 }
-#endif // ARCH_GRAYSKULL
 
-// WORMHOLE/BLACKHOLE
+inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
+
+    DPRINT << "row_ptr_sec_sz: " << config.row_ptr_section_size << "; ";
+    DPRINT << "exp_sec_sz: " << config.exp_section_size << "; ";
+    DPRINT << "l1_dst_adr: " << HEX() << config.l1_dest_addr << "; ";
+    DPRINT << "uncmpr: " << HEX() << config.uncompress << "; ";
+    DPRINT << "add_l1_dst_adr_ofs: " << HEX() << config.add_l1_dest_addr_offset << "; ";
+    DPRINT << "r0: " << HEX() << config.reserved_0 << "; ";
+    DPRINT << "out_frmt: " << HEX() << config.out_data_format << "; ";
+    DPRINT << "in_frmt: " << HEX() << config.in_data_format << "; ";
+    DPRINT << "r1: " << HEX() << config.reserved_1 << "; ";
+    DPRINT << "src_if_sel: " << HEX() << config.src_if_sel << "; ";
+    DPRINT << "pck_per_xy_pl: " << config.pack_per_xy_plane << "; ";
+    DPRINT << "l1_src_adr: " << HEX() << config.l1_src_addr << "; ";
+    DPRINT << "dsmpl_mask: " << HEX() << config.downsample_mask << "; ";
+    DPRINT << "dsmpl_shcnt: " << config.downsample_shift_count << "; ";
+    DPRINT << "r_md: " << HEX() << config.read_mode << "; ";
+    DPRINT << "exp_th_en: " << HEX() << config.exp_threshold_en << "; ";
+    DPRINT << "r2: " << HEX() << config.reserved_2 << "; ";
+    DPRINT << "exp_th: " << config.exp_threshold << "; ";
+    DPRINT << ENDL();
+}
+#else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
 inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
-    
-    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor(); 
+    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
 
     DPRINT << "in_data_format: " << HEX() << tile_descriptor.in_data_format << "; ";
     DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << "; ";
@@ -291,7 +303,6 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
 }
 
 inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
-    
     ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
 
     DPRINT << "out_frmt: " << HEX() << config.out_data_format << "; ";
@@ -319,118 +330,63 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
     DPRINT << ENDL();
 }
 
-// PACKER CONFIG REGISTERS
+#ifdef ARCH_WORMHOLE
+inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
 
-inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ) {
-    // word 0
-    uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz", true); // decimal
-
-    // word 1
-    word = cfg[reg_addr + 1];
-    dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
-
-    // word 2
-    word = cfg[reg_addr + 2];
-    dprint_tensix_struct_field(word, 0x1, 0, "uncmpr");
-    dprint_tensix_struct_field(word, 0x2, 1, "add_l1_dst_adr_ofs");
-    dprint_tensix_struct_field(word, 0xc, 2, "r0");
-    dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0xf000, 12, "r1");
-    dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
-    dprint_tensix_struct_field(word, 0xfe0000, 17, "pck_per_xy_pl", true); // decimal
-    dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
-
-    // word 3
-    word = cfg[reg_addr + 3];
-    dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
-    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true);  // decimal
-    dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
-    dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
-    dprint_tensix_struct_field(word, 0xe00000, 21, "r2");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th", true); // decimal
-
+    DPRINT << "r_p_s_sz: " << config.row_ptr_section_size << "; ";
+    DPRINT << "e_s_sz: " << config.exp_section_size << "; ";
+    DPRINT << "l1_d_a: " << HEX() << config.l1_dest_addr << "; ";
+    DPRINT << "ucp: " << HEX() << config.uncompress << "; ";
+    DPRINT << "a_l1_d_a_o: " << HEX() << config.add_l1_dest_addr_offset << "; ";
+    DPRINT << "r0: " << HEX() << config.reserved_0 << "; ";
+    DPRINT << "o_fmt: " << HEX() << config.out_data_format << "; ";
+    DPRINT << "i_fmt: " << HEX() << config.in_data_format << "; ";
+    DPRINT << "r1: " << HEX() << config.reserved_1 << "; ";
+    DPRINT << "sr_if_sl: " << HEX() << config.src_if_sel << "; ";
+    DPRINT << "p_xy_pl: " << config.pack_per_xy_plane << "; ";
+    DPRINT << "l1_sr_ad: " << HEX() << config.l1_src_addr << "; ";
+    DPRINT << "d_msk: " << HEX() << config.downsample_mask << "; ";
+    DPRINT << "d_shcnt: " << config.downsample_shift_count << "; ";
+    DPRINT << "r_md: " << HEX() << config.read_mode << "; ";
+    DPRINT << "e_t_e: " << HEX() << config.exp_threshold_en << "; ";
+    DPRINT << "p_l1_ac_d_p_0_f: " << HEX() << config.pack_l1_acc_disable_pack_zero_flag << "; ";
+    DPRINT << "r2: " << HEX() << config.reserved_2 << "; ";
+    DPRINT << "exp_th: " << config.exp_threshold << "; ";
     DPRINT << ENDL();
 }
+#endif  // ARCH_WORMHOLE
 
-inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ){
-    // word 0
-    uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "r_p_s_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "e_s_sz", true); // decimal
-
-    // word 1
-    word = cfg[reg_addr + 1];
-    dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
-
-    // word 2
-    word = cfg[reg_addr + 2];
-    dprint_tensix_struct_field(word, 0x1, 0, "uncmpr");
-    dprint_tensix_struct_field(word, 0x2, 1, "a_l1_d_a_o");
-    dprint_tensix_struct_field(word, 0xc, 2, "r0");
-    dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0xf000, 12, "r1");
-    dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
-    dprint_tensix_struct_field(word, 0xfe0000, 17, "pck_per_xy_pl", true); // decimal
-    dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
-
-    // word 3
-    word = cfg[reg_addr + 3];
-    dprint_tensix_struct_field(word, 0xffff, 0, "dsmpl_mask");
-    dprint_tensix_struct_field(word, 0x70000, 16, "dsmpl_shcnt", true);  // decimal
-    dprint_tensix_struct_field(word, 0x80000, 19, "r_md");
-    dprint_tensix_struct_field(word, 0x100000, 20, "exp_th_en");
-    dprint_tensix_struct_field(word, 0x600000, 21, "pck_l1_ac_dis_pck_0_flg");
-    dprint_tensix_struct_field(word, 0x800000, 23, "r2");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "exp_th", true); // decimal
-
-    DPRINT << ENDL();
-}
-
+#ifdef ARCH_BLACKHOLE
 inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
-    // word 0
-    uint32_t word = cfg[reg_addr];
-    dprint_tensix_struct_field(word, 0xffff, 0, "row_ptr_sec_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0xffff0000, 16, "exp_sec_sz", true); // decimal
+    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
 
-    // word 1
-    word = cfg[reg_addr + 1];
-    dprint_tensix_struct_field(word, 0xffffffff, 0, "l1_dst_adr");
-
-    // word2
-    word = cfg[reg_addr + 2];
-    dprint_tensix_struct_field(word, 0x1, 0, "uncmps");
-    dprint_tensix_struct_field(word, 0x2, 1, "aldao");
-    dprint_tensix_struct_field(word, 0x4, 2, "dis_pck_0_fl");
-    dprint_tensix_struct_field(word, 0x8, 3, "r0");
-    dprint_tensix_struct_field(word, 0xf0, 4, "out_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0xf00, 8, "in_frmt"); // cast to DataType
-    dprint_tensix_struct_field(word, 0x1000, 12, "dsea");
-    dprint_tensix_struct_field(word, 0x2000, 13, "alpis");
-    dprint_tensix_struct_field(word, 0x4000, 14, "en_out_fifo");
-    dprint_tensix_struct_field(word, 0x8000, 15, "sub_l1_til_h_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0x10000, 16, "src_if_sel");
-    dprint_tensix_struct_field(word, 0x1e0000, 17, "pck_st_intf_pos");
-    dprint_tensix_struct_field(word, 0x200000, 21, "apd0co");
-    dprint_tensix_struct_field(word, 0x400000, 22, "add_til_h_sz", true); // decimal
-    dprint_tensix_struct_field(word, 0x800000, 23, "pdypso");
-    dprint_tensix_struct_field(word, 0xff000000, 24, "l1_src_adr");
-
+    DPRINT << "row_ptr_sec_sz: " << HEX() << config.row_ptr_section_size << "; ";
+    DPRINT << "exp_sec_sz: " << HEX() << config.exp_section_size << "; ";
+    DPRINT << "l1_dst_adr: " << HEX() << config.l1_dest_addr << "; ";
+    DPRINT << "uncmps: " << HEX() << config.uncompress << "; ";
+    DPRINT << "aldao: " << HEX() << config.add_l1_dest_addr_offset << "; ";
+    DPRINT << "dis_pck_0_fl: " << HEX() << config.disable_pack_zero_flag << "; ";
+    DPRINT << "r0: " << HEX() << config.reserved_0 << "; ";
+    DPRINT << "out_frmt: " << HEX() << config.out_data_format << "; ";
+    DPRINT << "in_frmt: " << HEX() << config.in_data_format << "; ";
+    DPRINT << "dsea: " << HEX() << config.dis_shared_exp_assembler << "; ";
+    DPRINT << "alpis: " << HEX() << config.auto_set_last_pacr_intf_sel << "; ";
+    DPRINT << "en_out_fifo: " << HEX() << config.enable_out_fifo << "; ";
+    DPRINT << "sub_l1_til_h_sz: " << config.sub_l1_tile_header_size << "; ";
+    DPRINT << "src_if_sel: " << HEX() << config.src_if_sel << "; ";
+    DPRINT << "pck_st_intf_pos: " << HEX() << config.pack_start_intf_pos << "; ";
+    DPRINT << "apd0co: " << HEX() << config.all_pack_disable_zero_compress_ovrd << "; ";
+    DPRINT << "add_til_h_sz: " << config.add_tile_header_size << "; ";
+    DPRINT << "pdypso: " << HEX() << config.pack_dis_y_pos_start_offset << "; ";
+    DPRINT << "l1_src_adr: " << HEX() << config.l1_src_addr << "; ";
     DPRINT << ENDL();
 }
-
-// COMBINED FUNCTIONS
+#endif  // ARCH_BLACKHOLE
 
 // Print content of the register field by field. Issue: No ENDL.
 inline void dprint_tensix_alu_config() {
-// Only wormhole and blackhole have this register
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO ALU CONFIG REGISTERS" << ENDL();
-    return;
-#endif
+    // Only wormhole and blackhole have this register
 
     ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
@@ -451,107 +407,33 @@ inline void dprint_tensix_alu_config() {
     DPRINT << ENDL();
 }
 
-inline void dprint_tensix_unpack_tile_descriptor(){
-#ifdef ARCH_GRAYSKULL
-    dprint_tensix_unpack_tile_descriptor_grayskull();
-#else
-    dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
-#endif
-}
-
-inline void dprint_tensix_unpack_config(){
-#ifdef ARCH_GRAYSKULL
-    dprint_tensix_unpack_config_grayskull();
-#else
-    dprint_tensix_unpack_config_wormhole_or_blackhole();
-#endif
-}
-
-// Choose what register you want printed with reg_id (1-4), ALL not implemented due to dprint buffer size restriction
-inline void dprint_tensix_pack_config(uint reg_id = 1) {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
-    if (reg_id) {
-        uint32_t reg_addr = 0;
-        switch (reg_id) {
-            case 1:
-                reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32;
-                break;
-            case 2:
-                reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32;
-                break;
-            case 3:
-                reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32;
-                break;
-            case 4:
-                reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32;
-                break;
-            default:
-                DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
-                return;
-        }
-
-    DPRINT << "REG_ID: " << reg_id << " ";
-
-    #ifdef ARCH_GRAYSKULL
-        dprint_tensix_pack_config_grayskull(reg_addr, cfg);
-    #elif  ARCH_WORMHOLE
-        dprint_tensix_pack_config_wormhole(reg_addr, cfg);
-    #else
-        dprint_tensix_pack_config_blackhole(reg_addr, cfg);
-    #endif
-    }
-}
-
 inline void dprint_tensix_pack_relu_config() {
-// Only wormhole and blackhole have this register
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO RELU CONFIG REGISTERS" << ENDL();
-    return;
-#endif
+    // Only wormhole and blackhole have this register
 
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-    uint32_t reg_val = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
+    ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
 
-    DPRINT << "ALU_ACC_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_src, "zero_flag_disabled_src", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, ALU_ACC_CTRL_Zero_Flag_disabled_dst, "zero_flag_disabled_dst", false);
-    DPRINT << "STACC_RELU: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ApplyRelu, "apply_relu", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, STACC_RELU_ReluThreshold, "relu_threshold", true); // decimal
-    DPRINT << "DISABLE_RISC_BP_Disable: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_main, "main", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_trisc, "trisc", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_ncrisc, "ncrisc", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_main, "bmp_clear_main", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_trisc, "bmp_clear_trisc", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, DISABLE_RISC_BP_Disable_bmp_clear_ncrisc, "bmp_clear_ncrisc", false);
+    DPRINT << "zero_flag_disabled_src: " << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_src << "; ";
+    DPRINT << "zero_flag_disabled_dst: " << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_dst << "; ";
+    DPRINT << "apply_relu: " << HEX() << config.STACC_RELU_ApplyRelu << "; ";
+    DPRINT << "relu_threshold: " << config.STACC_RELU_ReluThreshold << "; ";
+    DPRINT << "main: " << HEX() << config.DISABLE_RISC_BP_Disable_main << "; ";
+    DPRINT << "trisc: " << HEX() << config.DISABLE_RISC_BP_Disable_trisc << "; ";
+    DPRINT << "ncrisc: " << HEX() << config.DISABLE_RISC_BP_Disable_ncrisc << "; ";
+    DPRINT << "bmp_clear_main: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_main << "; ";
+    DPRINT << "bmp_clear_trisc: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_trisc << "; ";
+    DPRINT << "bmp_clear_ncrisc: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc << "; ";
     DPRINT << ENDL();
 }
 
 // Printing dest control bits
 inline void dprint_tensix_dest_rd_ctrl() {
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO DEST RD CTRL REGISTERS" << ENDL();
-    return;
-#endif
+    ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
 
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
-    uint32_t reg_val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
-
-    DPRINT << "PCK_DEST_RD_CTRL: ";
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_32b_data, "read_32b_data", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_unsigned, "read_unsigned", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Read_int8, "read_int8", false);
-    DPRINT_TENSIX_CONFIG_FIELD(reg_val, PCK_DEST_RD_CTRL_Round_10b_mant, "round_10b_mant", false);
-
-    // Can't write to reserved? -> always prints 0
-    // reg_val gets only last 4 bits
-    //dprint_tensix_struct_field(reg_val, 0xfffffff0, 4, "reserved");
-
+    DPRINT << "read_32b_data: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << "; ";
+    DPRINT << "read_unsigned: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << "; ";
+    DPRINT << "read_int8: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << "; ";
+    DPRINT << "round_10b_mant: " << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << "; ";
+    DPRINT << "reserved: " << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << "; ";
     DPRINT << ENDL();
 }
 
@@ -576,24 +458,20 @@ inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uin
             DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
             return;
     }
-    // Get pointer to registers for current state ID
-    uint32_t reg_val = cfg[reg_addr];
 
-    dprint_tensix_struct_field(reg_val, 0xffff, 0, "mask");
-    dprint_tensix_struct_field(reg_val, 0x10000, 16, "mode");
-    dprint_tensix_struct_field(reg_val, 0x60000, 17, "tile_row_set_select_pack0");
-    dprint_tensix_struct_field(reg_val, 0x180000, 19, "tile_row_set_select_pack1");
-    dprint_tensix_struct_field(reg_val, 0x600000, 21, "tile_row_set_select_pack2");
-    dprint_tensix_struct_field(reg_val, 0x1800000, 23, "tile_row_set_select_pack3");
+    ckernel::packer::pck_edge_offset_t edge = ckernel::packer::read_pck_edge_offset(reg_addr, cfg);
+
+    DPRINT << "mask: " << HEX() << edge.mask << "; ";
+    DPRINT << "mode: " << HEX() << edge.mode << "; ";
+    DPRINT << "tile_row_set_select_pack0: " << HEX() << edge.tile_row_set_select_pack0 << "; ";
+    DPRINT << "tile_row_set_select_pack1: " << HEX() << edge.tile_row_set_select_pack1 << "; ";
+    DPRINT << "tile_row_set_select_pack2: " << HEX() << edge.tile_row_set_select_pack2 << "; ";
+    DPRINT << "tile_row_set_select_pack3: " << HEX() << edge.tile_row_set_select_pack3 << "; ";
+    DPRINT << "reserved: " << HEX() << edge.reserved << "; ";
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO PACK EDGE OFFSET REGISTERS" << ENDL();
-    return;
-#endif
-
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
     if (reg_id) {
@@ -609,7 +487,6 @@ inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
     }
 
     DPRINT << ENDL();
-
 }
 
 // Printing packer counters
@@ -633,22 +510,18 @@ inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint 
             DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL();
             return;
     }
-    // Get pointer to registers for current state ID
-    uint32_t reg_val = cfg[reg_addr];
 
-    dprint_tensix_struct_field(reg_val, 0xff, 0, "pack_per_xy_plane", true); // decimal
-    dprint_tensix_struct_field(reg_val, 0xff00, 8, "pack_reads_per_xy_plane", true); // decimal
-    dprint_tensix_struct_field(reg_val, 0x7f0000, 16, "pack_xys_per_til", true); // decimal
-    dprint_tensix_struct_field(reg_val, 0x800000, 23, "pack_yz_transposed");
-    dprint_tensix_struct_field(reg_val, 0xff000000, 24, "pack_per_xy_plane_offset", true); // decimal
+    ckernel::packer::pack_counters_t counters = ckernel::packer::read_pack_counters(reg_addr, cfg);
+
+    DPRINT << "pack_per_xy_plane: " << counters.pack_per_xy_plane << "; ";
+    DPRINT << "pack_reads_per_xy_plane: " << counters.pack_reads_per_xy_plane << "; ";
+    DPRINT << "pack_xys_per_til: " << counters.pack_xys_per_til << "; ";
+    DPRINT << "pack_yz_transposed: " << HEX() << counters.pack_yz_transposed << "; ";
+    DPRINT << "pack_per_xy_plane_offset: " << counters.pack_per_xy_plane_offset << "; ";
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
-#ifdef ARCH_GRAYSKULL
-    DPRINT << "GRAYSKULL HAS NO PACK COUNTERS REGISTERS" << ENDL();
-    return;
-#endif
     // Get pointer to registers for current state ID
     volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
@@ -665,6 +538,51 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
     }
 
     DPRINT << ENDL();
+}
+
+#endif  // END OF ELSE
+
+inline void dprint_tensix_unpack_tile_descriptor() {
+#ifdef ARCH_GRAYSKULL
+    dprint_tensix_unpack_tile_descriptor_grayskull();
+#else
+    dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+#endif
+}
+
+inline void dprint_tensix_unpack_config() {
+#ifdef ARCH_GRAYSKULL
+    dprint_tensix_unpack_config_grayskull();
+#else
+    dprint_tensix_unpack_config_wormhole_or_blackhole();
+#endif
+}
+
+// Choose what register you want printed with reg_id (1-4), ALL not implemented due to dprint buffer size restriction
+inline void dprint_tensix_pack_config(uint reg_id = 1) {
+    // Get pointer to registers for current state ID
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+    if (reg_id) {
+        uint32_t reg_addr = 0;
+        switch (reg_id) {
+            case 1: reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32; break;
+            case 2: reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32; break;
+            case 3: reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32; break;
+            case 4: reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32; break;
+            default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
+        }
+
+        DPRINT << "REG_ID: " << reg_id << " ";
+
+#ifdef ARCH_GRAYSKULL
+        dprint_tensix_pack_config_grayskull(reg_addr, cfg);
+#elif ARCH_WORMHOLE
+        dprint_tensix_pack_config_wormhole(reg_addr, cfg);
+#else
+        dprint_tensix_pack_config_blackhole(reg_addr, cfg);
+#endif
+    }
 }
 
 // Printing packer strides
@@ -712,36 +630,5 @@ inline void dprint_tensix_pack_strides(uint reg_id = 0) {
         }
     }
 
-    DPRINT << ENDL();
-}
-
-inline void test_read_pack_config() {
-    ckernel::packer::pack_counters_u config;
-    config.f = ckernel::packer::read_pack_counters(1);
-    DPRINT << config.f.pack_per_xy_plane << "; ";
-    DPRINT << config.f.pack_reads_per_xy_plane << "; ";
-    DPRINT << config.f.pack_xys_per_til << "; ";
-    DPRINT << config.f.pack_yz_transposed << "; ";
-    DPRINT << config.f.pack_per_xy_plane_offset << "; ";
-    DPRINT << ENDL();    
-}
-
-inline void test_read_unpack_config() {
-    ckernel::unpacker::alu_config_u config;
-    config.f = ckernel::unpacker::read_alu_config();
-    DPRINT << config.f.ALU_ROUNDING_MODE_Fpu_srnd_en << "; ";
-    DPRINT << config.f.ALU_ROUNDING_MODE_Gasket_srnd_en << "; ";
-    DPRINT << config.f.ALU_ROUNDING_MODE_Packer_srnd_en << "; ";
-    DPRINT << config.f.ALU_ROUNDING_MODE_Padding << "; ";
-    DPRINT << config.f.ALU_ROUNDING_MODE_GS_LF << "; ";
-    DPRINT << config.f.ALU_ROUNDING_MODE_Bfp8_HF << "; ";
-    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << "; ";
-    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << "; ";
-    DPRINT << config.f.ALU_FORMAT_SPEC_REG0_SrcA << "; ";
-    DPRINT << config.f.ALU_FORMAT_SPEC_REG1_SrcB << "; ";
-    DPRINT << config.f.ALU_FORMAT_SPEC_REG2_Dstacc << "; ";
-    DPRINT << config.f.ALU_ACC_CTRL_Fp32_enabled << "; ";
-    DPRINT << config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled << "; ";
-    DPRINT << config.f.ALU_ACC_CTRL_INT8_math_enabled << "; ";
     DPRINT << ENDL();
 }
