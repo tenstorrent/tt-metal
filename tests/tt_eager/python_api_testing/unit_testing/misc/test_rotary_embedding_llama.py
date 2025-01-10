@@ -52,7 +52,6 @@ class TtLlamaRotary(torch.nn.Module):
     def apply_rotary(self, x, cos, sin):
         # n_head = 8 for Q
         # n_head = 1 for K
-
         rotary_output = ttnn.experimental.rotary_embedding_llama(
             x,
             cos,
@@ -284,7 +283,6 @@ def run_test_rotary_embedding_llama(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
@@ -303,7 +301,7 @@ def run_test_rotary_embedding_llama(
         (32, 1),
         (15, 1),
         (8, 1),
-        (1, 1),
+        (1, 1),  # Llama 8B and 70B #16013
     ),
     ids=(
         "prefill_32",
@@ -329,6 +327,7 @@ def run_test_rotary_embedding_llama(
         (8, 1, 64),
         (8, 1, 128),
         (11, 3, 128),
+        (32, 32, 128),  # Llama 8B and 70B #16013
         (71, 32, 64),
         (8, 1, 96),
         (8, 1, 256),
@@ -374,7 +373,6 @@ def test_rotary_embedding_llama(
     )
 
 
-@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
