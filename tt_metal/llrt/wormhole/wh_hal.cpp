@@ -101,6 +101,8 @@ void Hal::initialize_wh() {
     };
 
     this->num_nocs_ = NUM_NOCS;
+    this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
     this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
     this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
     this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;

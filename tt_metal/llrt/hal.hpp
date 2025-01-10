@@ -154,6 +154,8 @@ private:
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
     uint32_t num_nocs_;
+    uint32_t noc_addr_node_id_bits_;
+    uint32_t noc_coord_reg_offset_;
     uint32_t noc_overlay_start_addr_;
     uint32_t noc_stream_reg_space_size_;
     uint32_t noc_stream_remote_dest_buf_size_reg_index_;
@@ -186,6 +188,8 @@ public:
     tt::ARCH get_arch() const { return arch_; }
 
     uint32_t get_num_nocs() const { return num_nocs_; }
+    uint32_t get_noc_addr_node_id_bits() const { return noc_addr_node_id_bits_; }
+    uint32_t get_noc_coord_reg_offset() const { return noc_coord_reg_offset_; }
 
     uint32_t get_noc_overlay_start_addr() const { return noc_overlay_start_addr_; }
     uint32_t get_noc_stream_reg_space_size() const { return noc_stream_reg_space_size_; }
