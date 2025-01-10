@@ -5,6 +5,10 @@
 // This file contains common kernel functions used for debugging
 #pragma once
 #include "debug/dprint.h"
+
+#if (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)) && defined(DEBUG_PRINT_ENABLED) && \
+    !defined(FORCE_DPRINT_OFF)
+
 namespace tt::data_movement::common {
 inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
@@ -39,4 +43,7 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
         DPRINT << ENDL();
     }
 }
+
 }  // namespace tt::data_movement::common
+
+#endif
