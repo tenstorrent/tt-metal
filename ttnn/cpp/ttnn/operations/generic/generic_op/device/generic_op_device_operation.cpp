@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,4 +30,20 @@ GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create
     return tensor_args.io_tensors.back();
 }
 
-}  // namespace ttnn::operation::generic
+std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
+GenericOpDeviceOperation::invoke(
+    const Tensor& input,
+    const std::unordered_map<uint8_t, circular_buffer_attributes_t>& circular_buffer_attributes,
+    const std::vector<data_movement_attributes_t>& data_movement_attributes,
+    const std::vector<compute_attributes_t>& compute_attributes,
+    const std::vector<Tensor>& io_tensors) {
+    return {
+        operation_attributes_t{
+            circular_buffer_attributes,
+            data_movement_attributes,
+            compute_attributes,
+        },
+        tensor_args_t{io_tensors}};
+}
+
+}  // namespace ttnn::operations::generic
