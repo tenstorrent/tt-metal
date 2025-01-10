@@ -109,6 +109,7 @@ def run_test(
             ),
             [N_HEADS_PADDED, HEAD_DIM],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -126,6 +127,7 @@ def run_test(
             ),
             [HEAD_DIM, SEQ_LEN],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -143,6 +145,7 @@ def run_test(
             ),
             [N_HEADS_PADDED, SEQ_LEN],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 

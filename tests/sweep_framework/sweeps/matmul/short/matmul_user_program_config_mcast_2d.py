@@ -51,6 +51,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -77,6 +78,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -104,6 +106,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -130,6 +133,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -157,6 +161,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -183,6 +188,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -213,6 +219,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 4))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -239,6 +246,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -266,6 +274,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -292,6 +301,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -319,6 +329,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -345,6 +356,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -373,6 +385,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 4))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             )
         ],
@@ -399,6 +412,7 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 6))}),
                     (128, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.COL_MAJOR,
+                    False,
                 ),
             )
         ],

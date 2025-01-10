@@ -750,7 +750,7 @@ class resnet50:
             x.volume() // x.shape.with_tile_padding()[-1],
             x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
@@ -971,7 +971,7 @@ class resnet50:
             x.volume() // x.shape.with_tile_padding()[-1],
             x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )

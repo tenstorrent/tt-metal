@@ -128,7 +128,8 @@ ttnn::MemoryConfig create_sharded_memory_config(
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape,
-    const tt::tt_metal::Layout& layout) {
+    const tt::tt_metal::Layout& layout,
+    bool halo) {
     auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
@@ -185,7 +186,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
                  computed_shard_shape[0], computed_shard_shape[1], tt::constants::TILE_WIDTH, tt::constants::TILE_HEIGHT);
     }
 
-    auto shard_spec = tt::tt_metal::ShardSpec(core_grid, computed_shard_shape, orientation);
+    auto shard_spec = tt::tt_metal::ShardSpec(core_grid, computed_shard_shape, orientation, halo);
     return ttnn::MemoryConfig(tensor_memory_layout, ttnn::BufferType::L1, shard_spec);
 }
 

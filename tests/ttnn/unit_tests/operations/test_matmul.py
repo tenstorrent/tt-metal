@@ -359,7 +359,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     )
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
@@ -376,7 +376,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
-        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
@@ -1889,6 +1889,7 @@ def test_matmul_in0_in1_bias_sharded(
                 N_padded // num_compute_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -1903,6 +1904,7 @@ def test_matmul_in0_in1_bias_sharded(
                     N_padded // num_compute_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             ),
         )
 
@@ -1917,6 +1919,7 @@ def test_matmul_in0_in1_bias_sharded(
                 K // num_activation_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 

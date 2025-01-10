@@ -319,7 +319,7 @@ def test_embedding_tiled_sharded_output(
         shard_shape = (fused_height // (num_cores_x * num_cores_y), width)
     else:
         shard_shape = (fused_height // num_cores_y, width // num_cores_x)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
     output_mem_config = ttnn.MemoryConfig(
         output_memory_layout,
         ttnn.BufferType.L1,
@@ -392,6 +392,7 @@ def test_tg_llama_sharded_embedding(
         shard_grid,
         (batch_size * sentence_size // num_cores, hidden_embedding_dim),
         ttnn.ShardOrientation.ROW_MAJOR,
+        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

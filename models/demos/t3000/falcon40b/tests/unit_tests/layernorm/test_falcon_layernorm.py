@@ -89,6 +89,7 @@ class TtFalconLayernorm:
             #                 shard_width_hidden_dim_across_32_cores,
             #             ],
             #             ttnn.ShardOrientation.ROW_MAJOR,
+            #             False,
             #         ),
             #     ),
             #     program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -116,6 +117,7 @@ class TtFalconLayernorm:
                             1024,
                         ],
                         ttnn.ShardOrientation.ROW_MAJOR,
+                        False,
                     ),
                 ),
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -195,6 +197,7 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
         #                 config.hidden_size // 32,
         #             ],
         #             ttnn.ShardOrientation.ROW_MAJOR,
+        #             False,
         #         ),
         #     ),
         # )
@@ -220,6 +223,7 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
                         1024,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 ),
             ),
         )

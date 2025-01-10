@@ -70,6 +70,7 @@ def run_test_rotary_matmul1(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -182,6 +183,7 @@ def run_test_rotary_matmul2(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -295,6 +297,7 @@ def run_test_rotary_matmul3(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     L1_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
@@ -405,6 +408,7 @@ def run_test_rotary_matmul4(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     ROT_MAT_MM_IN1_MEMCFG = ttnn.MemoryConfig(
@@ -417,6 +421,7 @@ def run_test_rotary_matmul4(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
     ROT_MAT_MM_PROGCFG = ttnn.MatmulMultiCoreReuseProgramConfig(

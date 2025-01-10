@@ -48,6 +48,7 @@ class TestUpdateCache:
                         xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -115,6 +116,7 @@ class TestUpdateCache:
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -181,6 +183,7 @@ class TestUpdateCacheFP32:
                         xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
+                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -246,6 +249,7 @@ class TestUpdateCacheFP32:
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec

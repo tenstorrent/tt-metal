@@ -40,6 +40,7 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, IDe
                 CoreRangeSet(CoreRange(worker_core)),
                 {cb_n_pages, cb_n_pages},
                 ShardOrientation::ROW_MAJOR,
+                false,
                 {cb_n_pages, cb_n_pages},
                 {1, 1}),
         };

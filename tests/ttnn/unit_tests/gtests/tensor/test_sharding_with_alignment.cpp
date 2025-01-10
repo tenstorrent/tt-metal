@@ -83,15 +83,18 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     const auto& params = GetParam();
 
     // Only shard shapes and shard mode matters for this test
-    auto shard_spec =
-        params.inputs.physical_shard_shape.has_value()
-            ? ShardSpec(
-                  CoreRangeSet{},
-                  params.inputs.logical_shard_shape,
-                  params.inputs.physical_shard_shape.value(),
-                  ShardOrientation::ROW_MAJOR)
-            : ShardSpec(
-                  CoreRangeSet{}, params.inputs.logical_shard_shape, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL);
+    auto shard_spec = params.inputs.physical_shard_shape.has_value() ? ShardSpec(
+                                                                           CoreRangeSet{},
+                                                                           params.inputs.logical_shard_shape,
+                                                                           params.inputs.physical_shard_shape.value(),
+                                                                           ShardOrientation::ROW_MAJOR,
+                                                                           false)
+                                                                     : ShardSpec(
+                                                                           CoreRangeSet{},
+                                                                           params.inputs.logical_shard_shape,
+                                                                           ShardOrientation::ROW_MAJOR,
+                                                                           false,
+                                                                           ShardMode::LOGICAL);
     MemoryConfig memory_config{
         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
@@ -131,15 +134,18 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
     const auto& params = GetParam();
 
     // Only shard shapes and shard mode matters for this test
-    auto shard_spec =
-        params.inputs.physical_shard_shape.has_value()
-            ? ShardSpec(
-                  CoreRangeSet{},
-                  params.inputs.logical_shard_shape,
-                  params.inputs.physical_shard_shape.value(),
-                  ShardOrientation::ROW_MAJOR)
-            : ShardSpec(
-                  CoreRangeSet{}, params.inputs.logical_shard_shape, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL);
+    auto shard_spec = params.inputs.physical_shard_shape.has_value() ? ShardSpec(
+                                                                           CoreRangeSet{},
+                                                                           params.inputs.logical_shard_shape,
+                                                                           params.inputs.physical_shard_shape.value(),
+                                                                           ShardOrientation::ROW_MAJOR,
+                                                                           false)
+                                                                     : ShardSpec(
+                                                                           CoreRangeSet{},
+                                                                           params.inputs.logical_shard_shape,
+                                                                           ShardOrientation::ROW_MAJOR,
+                                                                           false,
+                                                                           ShardMode::LOGICAL);
     MemoryConfig memory_config{
         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
@@ -772,6 +778,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
                             {48, 32},
                             ShardOrientation::ROW_MAJOR,
+                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -795,6 +802,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
                             {64, 32},
                             ShardOrientation::ROW_MAJOR,
+                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -840,6 +848,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(5, 1), grid_size, /*row_wise=*/true),
                             {20, 1},
                             ShardOrientation::ROW_MAJOR,
+                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -863,6 +872,7 @@ INSTANTIATE_TEST_SUITE_P(
                             num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
                             {20, 4},
                             ShardOrientation::ROW_MAJOR,
+                            false,
                             ShardMode::LOGICAL}
                     }
             },
@@ -907,7 +917,8 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 5})),
                             {48, 10},
                             {64, 48},
-                            ShardOrientation::ROW_MAJOR}
+                            ShardOrientation::ROW_MAJOR,
+                            false}
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
@@ -930,7 +941,8 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{2, 3})),
                             {5, 2},
                             {7, 3},
-                            ShardOrientation::ROW_MAJOR}
+                            ShardOrientation::ROW_MAJOR,
+                            false}
                     }
             },
             CreateShardedTensorWithAlignmentExpected{

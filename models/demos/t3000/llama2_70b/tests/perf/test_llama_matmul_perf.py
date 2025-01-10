@@ -223,6 +223,7 @@ def run_prefill_MLP_128(
                 inp_shape[-1] // n_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -243,6 +244,7 @@ def run_prefill_MLP_128(
                 inp_allgather_shape[-1] // n_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -294,6 +296,7 @@ class Prefill_MLP_2k:
                     4096 // 8,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             ),
         )
         in0_block_w = 4
@@ -411,6 +414,7 @@ def run_decode_ff1(
                 inp_shape[-1] // n_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 
@@ -449,6 +453,7 @@ def run_decode_ff2(
                 inp_shape[-1] // n_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
+            False,
         ),
     )
 

@@ -113,6 +113,7 @@ def run_test_ff1(
                     int(8 * 1024 / n_cores),
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
+                False,
             ),
         )
 
