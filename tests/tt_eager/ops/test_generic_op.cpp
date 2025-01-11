@@ -6,7 +6,8 @@
 
 #include "base_types.hpp"
 #include "common/constants.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt_metal/common/core_coord.hpp>
+#include <tt_metal/common/work_split.hpp>
 #include "logger.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
@@ -20,13 +21,15 @@
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using tt::tt_metal::DataType;
-using tt::tt_metal::Device;
+using tt::tt_metal::IDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
-using tt::tt_metal::Shape;
+using Shape = tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
 namespace detail {
@@ -77,8 +80,8 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(Device* device, const Shape& shape, float low, float high, Args... args) {
-    auto input_tensor = tt::numpy::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
+bool run_test(IDevice* device, const Shape& shape, float low, float high, Args... args) {
+    auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
@@ -86,35 +89,35 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
         auto device_output = ttnn::sqrt(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);
         auto device_output = ttnn::exp(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RECIP) {
         auto host_output = host_function<::detail::recip>(input_tensor);
         auto device_output = ttnn::reciprocal(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::GELU) {
         auto host_output = host_function<::detail::gelu>(input_tensor);
         auto device_output = ttnn::gelu(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RELU) {
         auto host_output = host_function<::detail::relu>(input_tensor);
         auto device_output = ttnn::relu(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::SIGMOID) {
         auto host_output = host_function<::detail::sigmoid>(input_tensor);
         auto device_output = ttnn::sigmoid(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::LOG) {
         auto host_output = host_function<::detail::log>(input_tensor);
         auto device_output = ttnn::log(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);
         auto device_output =ttnn::tanh(input_tensor.to(device)).cpu();
-        return tt::numpy::allclose<bfloat16>(host_output, device_output, args...);
+        return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
     TT_ASSERT(false, "Unsupported function");
     return false;
@@ -130,7 +133,7 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
 //     auto device = tt::tt_metal::CreateDevice(device_id);
 
 //     auto shape = Shape{1, 1, TILE_HEIGHT, TILE_WIDTH};
-//     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
+//     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
 //     auto op = tt::tt_metal::operation::DeviceOperation(ttnn::operations::unary::Unary{
 //         {UnaryWithParam{UnaryOpType::SQRT}},
@@ -162,7 +165,7 @@ bool run_test(Device* device, const Shape& shape, float low, float high, Args...
 
 //     tt::tt_metal::Array4D input_shape = {1, 1, 13, 18};
 //     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
-//     auto input_tensor = tt::numpy::random::uniform(bfloat16(0), bfloat16(1), input_shape);
+//     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
 //     auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
@@ -265,7 +268,7 @@ void test_numerically() {
         auto shape = Shape{13, 6, TILE_HEIGHT, TILE_WIDTH};
 
         tt::log_info(tt::LogTest, "generic_op sqrt");
-        auto input_tensor = tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(1.0f), shape).to(Layout::TILE);
+        auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(1.0f), shape).to(Layout::TILE);
 
         // "sqrt golden"
         auto host_output = host_function<::detail::sqrt>(input_tensor);
@@ -279,74 +282,67 @@ void test_numerically() {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        auto [num_worker_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            split_work_to_cores(compute_with_storage_grid_size, input_tensor.volume() / tt::constants::TILE_HW);
+        auto
+            [num_worker_cores,
+             all_cores,
+             core_group_1,
+             core_group_2,
+             num_tiles_per_core_group_1,
+             num_tiles_per_core_group_2] =
+                tt::tt_metal::split_work_to_cores(
+                    compute_with_storage_grid_size, input_tensor.volume() / tt::constants::TILE_HW);
 
-        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes =
-        {
-            .circular_buffer_attributes =
+        std::vector<ttnn::operations::generic::compute_attributes_t> comp_attr = {
             {
-                {
-                    tt::CB::c_in0,
+                .core_spec = core_group_1,
+                .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                .config =
                     {
-                        .core_spec = all_cores,
-                        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-                        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
-                        .data_format = input_cb_data_format,
-                    }
-                },
-                {
-                    tt::CB::c_out0,
-                    {
-                        .core_spec = all_cores,
-                        .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-                        .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
-                        .data_format = input_cb_data_format,
-                    }
-                }
-            },
-            .data_movement_attributes =
-            {
-                {
-                    .core_spec = all_cores,
-                    .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-                    .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)is_dram_input})
-                },
-                {
-                    .core_spec = all_cores,
-                    .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-                    .config = tt::tt_metal::WriterDataMovementConfig({(uint32_t)tt::CB::c_out0, (uint32_t)is_dram_input})
-                }
-            },
-                // per_core_block_cnt; per_core_block_size
-            .compute_attributes =
-            {
-                {
-                    .core_spec = core_group_1,
-                    .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                    .config = {
                         .math_fidelity = MathFidelity::HiFi4,
                         .fp32_dest_acc_en = false,
-                        .preserve_fp32_precision = false,
                         .math_approx_mode = false,
                         .compile_args = {num_tiles_per_core_group_1, 1},
                         .defines = defines_sqrt,
                     },
-                },
-                {
-                    .core_spec = core_group_2,
-                    .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                    .config = {
+            },
+            {
+                .core_spec = core_group_2,
+                .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                .config =
+                    {
                         .math_fidelity = MathFidelity::HiFi4,
                         .fp32_dest_acc_en = false,
-                        .preserve_fp32_precision = false,
                         .math_approx_mode = false,
                         .compile_args = {num_tiles_per_core_group_2, 1},
                         .defines = defines_sqrt,
                     },
-                },
-            },
-        };
+            }};
+
+        ttnn::operations::generic::cb_attr_map cb_attr = {
+            {tt::CBIndex::c_0,
+             {
+                 .core_spec = all_cores,
+                 .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+                 .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+                 .data_format = input_cb_data_format,
+             }},
+            {tt::CBIndex::c_1,
+             {
+                 .core_spec = all_cores,
+                 .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+                 .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+                 .data_format = input_cb_data_format,
+             }}};
+
+        std::vector<ttnn::operations::generic::data_movement_attributes_t> dm_attr = {
+            {.core_spec = all_cores,
+             .kernel_path =
+                 "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+             .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)is_dram_input})},
+            {.core_spec = all_cores,
+             .kernel_path =
+                 "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+             .config = tt::tt_metal::WriterDataMovementConfig({(uint32_t)tt::CB::c_out0, (uint32_t)is_dram_input})}};
 
         // Data movement kernel needs output tensor address to be passed as a runtime argument.
         auto device_output_tensor = tt::tt_metal::create_device_tensor(
@@ -368,16 +364,18 @@ void test_numerically() {
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
             }
-            program_attributes.data_movement_attributes[0].runtime_args_per_core[core] = {device_input_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
-            program_attributes.data_movement_attributes[1].runtime_args_per_core[core] = {device_output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
+            dm_attr[0].runtime_args_per_core[core] = {
+                device_input_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
+            dm_attr[1].runtime_args_per_core[core] = {
+                device_output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
 
             num_tiles_written += num_tiles_per_core;
         }
         // end of data movement runtime arguments calculus
 
-        ttnn::generic_op(device_input_tensor, device_output_tensor, program_attributes);
+        auto device_output_tensor = ttnn::generic_op(device_input_tensor, cb_attr, dm_attr, comp_attr, tensor_);
         auto device_output = device_output_tensor.cpu();
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
 
@@ -398,7 +396,7 @@ void test_numerically() {
             .shard_spec = std::make_optional<tt::tt_metal::ShardSpec>(ShardSpec(all_cores, { 16 * TILE_HEIGHT, TILE_WIDTH}, tt::tt_metal::ShardOrientation::ROW_MAJOR)),
         };
 
-        auto input_tensor = tt::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), shape).to(Layout::TILE);
+        auto input_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), shape).to(Layout::TILE);
 
         // "relu golden"
         auto host_output = host_function<::detail::relu>(input_tensor);
@@ -406,7 +404,7 @@ void test_numerically() {
         // unary relu with sharding
         auto device_input_tensor = input_tensor.to(device, mem_config);
         auto device_output_ref = ttnn::relu(device_input_tensor).cpu();
-        auto allclose_ref = tt::numpy::allclose<bfloat16>(host_output, device_output_ref, 1e-1f, 1e-5f);
+        auto allclose_ref = ttnn::allclose<bfloat16>(host_output, device_output_ref, 1e-1f, 1e-5f);
         TT_FATAL(allclose_ref);
 
         tt::log_info(tt::LogTest, "generic_op relu");
@@ -434,56 +432,45 @@ void test_numerically() {
 
         uint32_t aligned_input_tile_nbytes = round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
 
-        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes =
-        {
+        ttnn::operations::generic::GenericOpDeviceOperation::operation_attributes_t program_attributes = {
             .circular_buffer_attributes =
-            {
-                {
-                    tt::CB::c_in0,
-                    {
-                        .core_spec = all_cores,
-                        .total_size = aligned_input_tile_nbytes * num_tile_per_core,
-                        .page_size = aligned_input_tile_nbytes,
-                        .data_format = input_cb_data_format,
-                        .set_globally_allocated_address = 0,
-                    }
-                },
-                {
-                    tt::CB::c_out0,
-                    {
-                        .core_spec = all_cores,
-                        .total_size = aligned_input_tile_nbytes * num_tile_per_core,
-                        .page_size = aligned_input_tile_nbytes,
-                        .data_format = input_cb_data_format,
-                        .set_globally_allocated_address = 1,
-                    }
-                }
-            },
+                {{tt::CBIndex::c0,
+                  {
+                      .core_spec = all_cores,
+                      .total_size = aligned_input_tile_nbytes * num_tile_per_core,
+                      .page_size = aligned_input_tile_nbytes,
+                      .data_format = input_cb_data_format,
+                      .set_globally_allocated_address = 0,
+                  }},
+                 {tt::CBIndex::c1,
+                  {
+                      .core_spec = all_cores,
+                      .total_size = aligned_input_tile_nbytes * num_tile_per_core,
+                      .page_size = aligned_input_tile_nbytes,
+                      .data_format = input_cb_data_format,
+                      .set_globally_allocated_address = 1,
+                  }}},
             .data_movement_attributes =
-            {
-                {
-                    .core_spec = all_cores,
-                    .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-                    .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)tt::CB::c_in0})
-                }
-            },
-            .compute_attributes =
-            {
+                {{.core_spec = all_cores,
+                  .kernel_path =
+                      "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+                  .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)tt::CB::c_in0})}},
+            .compute_attributes = {
                 {
                     .core_spec = all_cores,
                     .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                    .config = {
-                        .math_fidelity = MathFidelity::HiFi4,
-                        .fp32_dest_acc_en = false,
-                        .preserve_fp32_precision = false,
-                        .math_approx_mode = false,
-                        .compile_args = {1, num_tile_per_core},
-                        .defines = defines_relu,
-                    },
+                    .config =
+                        {
+                            .math_fidelity = MathFidelity::HiFi4,
+                            .fp32_dest_acc_en = false,
+                            .preserve_fp32_precision = false,
+                            .math_approx_mode = false,
+                            .compile_args = {1, num_tile_per_core},
+                            .defines = defines_relu,
+                        },
                     .runtime_args_per_core = test::detail::cast_args_to_core_coords(all_cores, {num_tile_per_core}),
                 },
-            }
-        };
+            }};
 
         // // calculate data movement runtime arguments
         for (uint32_t i = 0; i < compute_with_storage_grid_size.x * compute_with_storage_grid_size.y; i++) {
@@ -503,7 +490,7 @@ void test_numerically() {
 
         ttnn::generic_op(device_input_tensor, device_output_tensor, program_attributes);
         auto device_output = device_output_tensor.cpu();
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
         TT_FATAL(allclose);
     }
 
@@ -522,7 +509,7 @@ void test_numerically() {
             input_tensor_b.to(Layout::TILE).to(device)
             ).cpu().to(Layout::ROW_MAJOR);
 
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output);
         TT_FATAL(allclose);
     }
 
@@ -675,7 +662,7 @@ void test_numerically() {
         ttnn::generic_op(std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b}, device_output_tensor, program_attributes);
         auto device_output = device_output_tensor.cpu().to(Layout::ROW_MAJOR);
 
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output);
         TT_FATAL(allclose);
     }
 
@@ -708,7 +695,7 @@ void test_numerically() {
             device_input_tensor_b
             ).cpu().to(Layout::ROW_MAJOR);
 
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output);
         TT_FATAL(allclose);
     }
 
@@ -907,7 +894,7 @@ void test_numerically() {
         ttnn::generic_op(std::vector<Tensor>{device_input_tensor_a, device_input_tensor_b}, device_output_tensor, program_attributes);
         auto device_output = device_output_tensor.cpu().to(Layout::ROW_MAJOR);
 
-        auto allclose = tt::numpy::allclose<bfloat16>(host_output, device_output);
+        auto allclose = ttnn::allclose<bfloat16>(host_output, device_output);
         TT_FATAL(allclose);
     }
 
@@ -1209,7 +1196,7 @@ void test_numerically() {
 
         auto output_tensor = reshaped_device_output_tensor.cpu();
 
-        auto allclose = tt::numpy::allclose<bfloat16>(output_tensor_original, output_tensor);
+        auto allclose = ttnn::allclose<bfloat16>(output_tensor_original, output_tensor);
 
         TT_FATAL(allclose);
     }
@@ -1468,7 +1455,7 @@ void test_numerically() {
 
         auto output_tensor = output.cpu();
 
-        auto allclose = tt::numpy::allclose<bfloat16>(mm.cpu(), output_tensor);
+        auto allclose = ttnn::allclose<bfloat16>(mm.cpu(), output_tensor);
 
         TT_FATAL(allclose);
     }
@@ -1505,7 +1492,7 @@ void test_program_cache() {
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor =
-            tt::numpy::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+            ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
 
         // Program Cache Hit
         run_test<UnaryOpType::EXP>(device, {1, 1, TILE_HEIGHT, TILE_WIDTH}, 0.0f, 1.0f, 1e-1f, 1e-5f);
