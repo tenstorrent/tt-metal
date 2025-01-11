@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     auto halo_shard_shape = halo_in.shard_spec().value().shape;
 
     // CBs
-    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
+    uint32_t buffering_factor = 2;
 
     // input data is in a sharded CB
     uint32_t in_cb_id = CBIndex::c_0;
@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t in_cb_id1 = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(
-            4 * in_cb_pagesize,  // since 4 pixels per page are needed for intermediate tensor.
+            4 * in_cb_pagesize * buffering_factor,  // since 4 pixels per page are needed for intermediate tensor.
             {{in_cb_id1, input_cb_data_format}})
             .set_page_size(in_cb_id1, in_cb_pagesize);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
@@ -164,20 +164,20 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     uint32_t in_cb_id2 = CBIndex::c_2;
     CircularBufferConfig cb_src2_config =
         CircularBufferConfig(
-            4 * in_cb_pagesize,  // since 4 pixels per page are needed for intermediate tensor.
+            4 * in_cb_pagesize * buffering_factor,  // since 4 pixels per page are needed for intermediate tensor.
             {{in_cb_id2, input_cb_data_format}})
             .set_page_size(in_cb_id2, in_cb_pagesize);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
     // scaler CB
-    uint32_t in_scalar_cb_id1 = CBIndex::c_4;
     uint32_t in_scalar_cb_pagesize = tile_size(input_cb_data_format);
-    uint32_t in_scalar_cb_npages = 1;
-    CircularBufferConfig in_scalar_cb_config =
+    uint32_t in_scalar_cb_npages = 1 * buffering_factor;
+    uint32_t in_scalar_cb_id1 = CBIndex::c_4;
+    CircularBufferConfig in_scalar_cb_config1 =
         CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id1, input_cb_data_format}})
             .set_page_size(in_scalar_cb_id1, in_scalar_cb_pagesize);
 
-    auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
+    auto in_scalar_cb1 = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config1);
 
     uint32_t in_scalar_cb_id2 = CBIndex::c_5;
     CircularBufferConfig in_scalar_cb_config2 =
