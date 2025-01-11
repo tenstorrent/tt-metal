@@ -30,7 +30,7 @@ ALWI void subtract_bcast_tiles(
         cb_push_back(cb_out, onetile);
         cb_pop_front(cb_other, onetile);
     }
-    cb_pop_front(cb_bcast, onetile);
+    // cb_pop_front(cb_bcast, onetile);
 }
 
 void MAIN {
@@ -63,6 +63,10 @@ void MAIN {
     constexpr auto cb_updated_running_mean = tt::CBIndex::c_27;  // updated running mean tensor
     constexpr auto cb_updated_running_var = tt::CBIndex::c_28;   // updated running var tensor
     constexpr auto cb_momentum = tt::CBIndex::c_24;              // momentum
+    constexpr auto cb_one = tt::CBIndex::c_19;                   // stores 1
+    constexpr auto cb_tmp1 = tt::CBIndex::c_29;                  // tmp 1
+    constexpr auto cb_tmp2 = tt::CBIndex::c_30;                  // tmp 2
+    constexpr auto cb_tmp3 = tt::CBIndex::c_31;                  // tmp 3
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
@@ -102,7 +106,7 @@ void MAIN {
         pack_tile_with_dt(dst0, cb_den);
         tile_regs_release();
 
-        cb_pop_front(cb_batch_var, 1);
+        // cb_pop_front(cb_batch_var, 1);
         cb_pop_front(cb_eps, 1);
         cb_push_back(cb_den, onetile);
 
@@ -127,9 +131,18 @@ void MAIN {
         if constexpr (is_training_mode) {
             // updated running stats
             if constexpr (old_running_mean_has_value) {
+                sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);           // 1 - momentum
+                mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, tile_id, 0, 0);    // momentum * running stats
+                mul_tiles_to_cb(cb_tmp1, cb_old_running_mean, cb_tmp3, 0, tile_id, 1, 0);  // cb_tmp1 * batch stat
+                add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_mean, 0, 0, 1, 1);
             }
 
             if constexpr (old_running_var_has_value) {
+                sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);          // 1 - momentum
+                mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, tile_id, 0, 0);    // momentum * batch stat
+                mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, tile_id, 0, 1);  // cb_tmp1 * running stats
+                DPRINT << TSLICE(tt::CBIndex::c_26, 0, SliceRange::hw0_32_16()) << ENDL();
+                add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);
             }
         }
 
