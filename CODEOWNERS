@@ -98,12 +98,12 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/cpp/ttnn/operations/ccl/ @SeanNijjar @cfjchu @jvegaTT @tt-aho
-ttnn/cpp/ttnn/operations/pool/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/conv/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/sliding_window/ @mywoodstock @sankarmanoj-tt @pavlejosipovic
+ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/conv/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/sliding_window/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/data_movement/ @ntarafdar @sjameelTT @jaykru-tt @yugi957 @jvegaTT @llongTT @nardoTT
-ttnn/cpp/ttnn/operations/data_movement/fold/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
-ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
+ttnn/cpp/ttnn/operations/data_movement/fold/ @tenstorrent/metalium-developers-convolutions
+ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @asandhupatlaTT
@@ -120,7 +120,7 @@ tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonla
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
-tests/sweep_framework/sweeps/conv2d/  @nkpatel-tt @mywoodstock @shwetankTT @sankarmanoj-tt @pavlejosipovic
+tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT @nardoTT
 tests/sweep_framework/sweeps/fused/  @bbradelTT @asandhupatlaTT @sjameelTT
 tests/sweep_framework/sweeps/matmul/  @bbradelTT @asandhupatlaTT @sjameelTT
@@ -134,7 +134,7 @@ tests/ttnn/distributed/ @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @omilyutin-tt
 # models
 /models/ @uaydonat
 /models/*/**
-models/conv_on_device_utils*.py @mywoodstock @shwetankTT @sankarmanoj-tt
+models/conv_on_device_utils*.py @tenstorrent/metalium-developers-convolutions
 functional_*/ @uaydonat @esmalTT
 models/demos @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
@@ -146,7 +146,7 @@ models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mistral7b @yieldthought @uaydonat @mtairum
-models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @mywoodstock
+models/demos/wormhole/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
 models/demos/t3000/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/t3000/llama2_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
@@ -155,10 +155,10 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat
-models/demos/yolov4 @dvartaniansTT @shwetankTT
-models/demos/wormhole/yolov4 @dvartaniansTT @shwetankTT
-models/demos/**/*resnet* @mywoodstock @shwetankTT @tt-aho
-models/experimental/functional_unet @esmalTT @uaydonat @mywoodstock
+models/demos/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
+models/demos/wormhole/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
+models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
+models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT
@@ -169,9 +169,9 @@ docs/source/ttnn/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zar
 docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
-tests/**/dtx/ @mywoodstock @sankarmanoj-tt
-tests/**/*test*conv*.py @mywoodstock @sankarmanoj-tt
-tests/python_api_testing/conv/ @mywoodstock @sankarmanoj-tt
+tests/**/dtx/ @tenstorrent/metalium-developers-convolutions
+tests/**/*test*conv*.py @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/operations/convolution @tenstorrent/metalium-developers-convolutions
 tests/python_api_testing/unit_testing/fallback_ops @tt-aho
 scripts/profiler/ @mo-tenstorrent
 scripts/docker @tenstorrent/metalium-developers-infra
