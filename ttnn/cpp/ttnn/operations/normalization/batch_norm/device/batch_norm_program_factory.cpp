@@ -262,7 +262,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         b_num_tiles_per_cb,
         h_data_format);  // updated running var
 
-    // Intermediate buffer
+    // Intermediate buffers required for uodation of running stats
     auto [one_cb, one_cb_handle] = create_cb(
         tt::CBIndex::c_19,
         program,
@@ -271,29 +271,14 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         b_num_tiles_per_cb,
         h_data_format);  // to store 1
 
-    auto [tmp1_cb, tmp1_cb_handle] = create_cb(
-        tt::CBIndex::c_29,
-        program,
-        all_device_cores,
-        h_single_tile_size,
-        b_num_tiles_per_cb,
-        h_data_format);  // to store tmp
+    auto [tmp1_cb, tmp1_cb_handle] =
+        create_cb(tt::CBIndex::c_29, program, all_device_cores, h_single_tile_size, b_num_tiles_per_cb, h_data_format);
 
-    auto [tmp2_cb, tmp2_cb_handle] = create_cb(
-        tt::CBIndex::c_30,
-        program,
-        all_device_cores,
-        h_single_tile_size,
-        b_num_tiles_per_cb,
-        h_data_format);  // to store tmp
+    auto [tmp2_cb, tmp2_cb_handle] =
+        create_cb(tt::CBIndex::c_30, program, all_device_cores, h_single_tile_size, b_num_tiles_per_cb, h_data_format);
 
-    auto [tmp3_cb, tmp3_cb_handle] = create_cb(
-        tt::CBIndex::c_31,
-        program,
-        all_device_cores,
-        h_single_tile_size,
-        b_num_tiles_per_cb,
-        h_data_format);  // to store tmp
+    auto [tmp3_cb, tmp3_cb_handle] =
+        create_cb(tt::CBIndex::c_31, program, all_device_cores, h_single_tile_size, b_num_tiles_per_cb, h_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(a.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(b.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
