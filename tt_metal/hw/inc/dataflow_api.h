@@ -1762,9 +1762,13 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
     do {
         invalidate_l1_cache();
     } while (!ncrisc_noc_reads_flushed(noc_idx));
+    WAYPOINT("NFCW");
     while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+    WAYPOINT("NFDW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+    WAYPOINT("NFEW");
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    WAYPOINT("NFFW");
     while (!ncrisc_noc_posted_writes_sent(noc_idx));
     WAYPOINT("NFBD");
 }
