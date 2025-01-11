@@ -385,6 +385,10 @@ def test_line_reduce_scatter_async_post_commit(
     [
         (2, 2, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
         (2, 2, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (2, 1, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
