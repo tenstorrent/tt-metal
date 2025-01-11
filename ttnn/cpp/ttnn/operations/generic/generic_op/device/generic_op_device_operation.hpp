@@ -10,13 +10,16 @@
 #include <variant>
 #include "ttnn/decorators.hpp"
 
-#include "tt_metal/common/core_coord.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt_metal/common/core_coord.hpp>
+#include <tt_metal/impl/kernels/kernel_types.hpp>
+#include <tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRangeSet;
 namespace ttnn::operations::generic {
 
 struct circular_buffer_attributes_t {
@@ -51,11 +54,11 @@ struct compute_attributes_t {
 
 };
 
+using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
 struct GenericOpDeviceOperation {
 
     struct operation_attributes_t {
-
-        std::unordered_map<uint8_t, circular_buffer_attributes_t> circular_buffer_attributes;
+        cb_attr_map circular_buffer_attributes;
 
         std::vector<data_movement_attributes_t> data_movement_attributes;
 
@@ -132,10 +135,10 @@ struct GenericOpDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
-        const std::unordered_map<uint8_t, circular_buffer_attributes_t>& circular_buffer_attributes,
-        const std::vector<data_movement_attributes_t>& data_movement_attributes,
-        const std::vector<compute_attributes_t>& compute_attributes,
-        const std::vector<Tensor>& io_tensors);
+        const cb_attr_map&,
+        const std::vector<data_movement_attributes_t>&,
+        const std::vector<compute_attributes_t>&,
+        const std::vector<Tensor>&);
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
