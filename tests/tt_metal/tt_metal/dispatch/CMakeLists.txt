@@ -8,6 +8,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dispatch_util)
 function(create_unit_test_executable arch_name)
     # Define the test executable name using the architecture name
     set(exec_name unit_tests_dispatch_${arch_name})
+    string(REPLACE "wormhole" "wormhole_b0" exec_name ${exec_name})
 
     # Create the test executable
     add_executable(${exec_name})
@@ -31,13 +32,14 @@ function(create_unit_test_executable arch_name)
     # Set include directories
     target_include_directories(
         ${exec_name}
+        BEFORE
         PRIVATE
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch_name}
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/common
-            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch_name}
     )
 
     # Set runtime output directory
