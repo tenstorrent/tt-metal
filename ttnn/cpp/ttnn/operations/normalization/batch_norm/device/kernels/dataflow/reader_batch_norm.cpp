@@ -37,13 +37,19 @@ void kernel_main() {
     uint32_t start_t = start_remaining % HtWt;
 
     constexpr auto cb_id_eps = tt::CBIndex::c_4;
+    constexpr auto cb_id_one = tt::CBIndex::c_19;
 
     cb_reserve_back(cb_id_eps, onetile);
     fill_with_val_bfloat16(cb_id_eps, eps);
     cb_push_back(cb_id_eps, onetile);
 
     constexpr auto cb_id_momentum = tt::CBIndex::c_24;
-
+    union {
+        float f;
+        uint32_t u;
+    } scalar;
+    scalar.f = 1.0f;
+    fill_cb_with_value(cb_id_one, scalar.u);
     cb_reserve_back(cb_id_momentum, onetile);
     fill_with_val_bfloat16(cb_id_momentum, momentum);
     cb_push_back(cb_id_momentum, onetile);
