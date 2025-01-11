@@ -190,7 +190,7 @@ bool run_test(IDevice* device, const Shape& shape, float low, float high, Args..
 
 namespace test {
     namespace detail {
-        std::unordered_map<CoreCoord, std::vector<uint32_t>> cast_args_to_core_coords(const CoreRangeSet& core_spec, std::vector<uint32_t> args) {
+        std::unordered_map<CoreCoord, std::vector<uint32_t>> cast_args_to_core_coords(const CoreRangeSet& core_spec, const std::vector<uint32_t>& args) {
             std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core;
             for (const auto& core_range : core_spec.ranges()) {
                 for (const auto& core : core_range)
