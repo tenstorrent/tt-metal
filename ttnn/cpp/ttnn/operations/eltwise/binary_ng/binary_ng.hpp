@@ -7,7 +7,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
-#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::binary_ng {
@@ -63,7 +62,13 @@ struct InplaceBinaryNg {
         uint8_t queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
         tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
@@ -72,15 +77,6 @@ struct InplaceBinaryNg {
         uint8_t queue_id,
         const Tensor& input_tensor,
         const float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
-
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
@@ -88,17 +84,12 @@ struct InplaceBinaryNg {
     static Tensor invoke(
         const Tensor& input_tensor,
         const float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 };
 
 }  // namespace ttnn::operations::binary_ng
-
-inline Tensor typecast_to(DataType dtype, const Tensor& input) {
-    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
-}
 
 namespace ttnn::experimental {
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
