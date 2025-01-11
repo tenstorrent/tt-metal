@@ -55,11 +55,11 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
-    )(input_shape)
+    torch_input_tensor = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_dtype)(
+        input_shape
+    )
 
-    torch_output_tensor = torch.abs(torch_input_tensor)
+    torch_output_tensor = torch.acos(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -70,7 +70,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    result = ttnn.abs(input_tensor, memory_config=output_memory_config)
+    result = ttnn.acos(input_tensor, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
