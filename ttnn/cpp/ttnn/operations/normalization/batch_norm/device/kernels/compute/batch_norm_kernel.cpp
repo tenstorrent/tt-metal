@@ -128,8 +128,9 @@ void MAIN {
         cb_pop_front(cb_den, 1);
         cb_push_back(cb_affine_or_out, onetile);
 
+        // Updation of running stats
         if constexpr (is_training_mode) {
-            // updated running stats
+            // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
             if constexpr (old_running_mean_has_value) {
                 sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);           // 1 - momentum
                 mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, tile_id, 0, 0);    // momentum * running stats
@@ -141,7 +142,6 @@ void MAIN {
                 sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);          // 1 - momentum
                 mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, tile_id, 0, 0);    // momentum * batch stat
                 mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, tile_id, 0, 1);  // cb_tmp1 * running stats
-                DPRINT << TSLICE(tt::CBIndex::c_26, 0, SliceRange::hw0_32_16()) << ENDL();
                 add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);
             }
         }

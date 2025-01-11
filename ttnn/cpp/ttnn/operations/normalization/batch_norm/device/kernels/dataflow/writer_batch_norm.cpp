@@ -148,7 +148,7 @@ void kernel_main() {
                 cb_push_back(cb_id_bias, onetile);
             }
 
-            // to read running stats value for updation
+            // Updation of running stats
             if constexpr (is_training_mode) {
                 if constexpr (old_running_mean_has_value) {
                     // read data
