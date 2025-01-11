@@ -443,7 +443,7 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, 
     if (available_cores.num_cores() < total_cores_needed) {
         log_warning(
             tt::LogOp,
-            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "Reduce Scatter is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
             "cores are available ({} per link and {} links) are made available but only {} are available. This may "
             "lead to performance loss.",
             total_cores_needed,
@@ -1224,10 +1224,10 @@ static void populate_partial_reduce_rt_args(
 
     for (auto line_direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         bool is_forward_direction = line_direction == LineDirection::FORWARD;
-        auto fwd_fabric_connection = get_fabric_connection(is_forward_direction, Direction::FORWARD);
-        auto bwd_fabric_connection = get_fabric_connection(!is_forward_direction, Direction::BACKWARD);
-
         for (size_t i = 0; i < partial_reducer_worker_cores_vec[line_direction].size(); i++) {
+            auto fwd_fabric_connection = get_fabric_connection(is_forward_direction, Direction::FORWARD);
+            auto bwd_fabric_connection = get_fabric_connection(!is_forward_direction, Direction::BACKWARD);
+
             auto const& w_logical = partial_reducer_worker_cores_vec[line_direction][i];
             // Reader kernel RT args
 
@@ -1546,10 +1546,6 @@ static void create_end_of_line_worker_runtime_args(
         auto const& reader_worker_cores = reader_worker_cores_per_direction[direction];
         bool is_forward_direction = direction == LineDirection::FORWARD;
 
-        auto fwd_fabric_connection =
-            get_fabric_connection(is_forward_direction && is_start_of_line, Direction::FORWARD);
-        auto bwd_fabric_connection =
-            get_fabric_connection(!is_forward_direction && is_start_of_line, Direction::BACKWARD);
 
         Tensor* output_tensor_ptr = nullptr;
         auto input_tensor_ptrs = std::vector<Tensor const*>{nullptr, nullptr};
@@ -1571,7 +1567,11 @@ static void create_end_of_line_worker_runtime_args(
         }
 
         for (size_t i = 0; i < num_workers; i++) {
-            auto const& w_logical = reader_worker_cores[i];
+            auto fwd_fabric_connection =
+                get_fabric_connection(is_forward_direction && is_start_of_line, Direction::FORWARD);
+            auto bwd_fabric_connection =
+                get_fabric_connection(!is_forward_direction && is_start_of_line, Direction::BACKWARD);
+            CoreCoord const& w_logical = reader_worker_cores[i];
             size_t num_math_pages = is_start_of_line ? 0 : worker_math_page_counts.at(w_logical);
 
             TT_FATAL(output_tensor_ptr != nullptr, "Internal error. Expected output tensor to be populated");
@@ -2480,7 +2480,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
             backward_device,
             &program,
             persistent_fabric,
-            num_links_preferred.value_or(line_size),
+            num_links_preferred,
             true);
     }
 
