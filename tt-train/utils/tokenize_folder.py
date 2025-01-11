@@ -5,8 +5,9 @@ import argparse
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.pre_tokenizers import Whitespace, ByteLevel
 from tokenizers.normalizers import Sequence, NFD, Lowercase
+from tokenizers.decoders import ByteLevel as ByteLevelDecoder
 
 
 def gather_source_files(folder):
@@ -25,15 +26,17 @@ def gather_source_files(folder):
 def merge_into_one_file(file_paths, merged_file_path="merged.txt"):
     """
     Merges the content of all files in `file_paths` into
-    a single text file `merged_file_path`.
+    a single text file `merged_file_path`, removing trailing
+    whitespace from each line.
     """
     with open(merged_file_path, "w", encoding="utf-8") as writer:
         for path in file_paths:
             try:
                 with open(path, "r", encoding="utf-8") as reader:
-                    # Write file content + a newline for separation
-                    writer.write(reader.read())
-                    writer.write("\n")
+                    for line in reader:
+                        # Remove trailing whitespace from each line
+                        line = " ".join(line.split())
+                        writer.write(line + "\n")
             except Exception as e:
                 print(f"Warning: Could not read file {path}: {e}")
     return merged_file_path
@@ -43,12 +46,14 @@ def train_bpe_tokenizer(text_file, output_tokenizer="tokenizer.json", vocab_size
     """
     Trains a BPE tokenizer on the text file, saves it to `output_tokenizer`.
     """
-    # 1. Create a Byte-Pair Encoding (BPE) tokenizer
-    tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
+    tokenizer = Tokenizer(BPE(unk_token=None))
+    # 2. No normalizer; GPT-2 works byte-level, so we skip lowercasing or accent-stripping
+    # tokenizer.normalizer = None
 
-    # 2. Set normalizer & pre-tokenizer (example: Unicode NFD & Lowercase + Whitespace)
-    tokenizer.normalizer = Sequence([NFD(), Lowercase()])
-    tokenizer.pre_tokenizer = Whitespace()
+    # 3. Byte-level pre-tokenizer + Byte-level decoder
+    tokenizer.pre_tokenizer = ByteLevel()
+    tokenizer.decoder = ByteLevelDecoder()
+    # tokenizer.pre_tokenizer = Whitespace()
 
     # 3. Setup BPE trainer with desired vocab size + special tokens
     trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])

@@ -2,26 +2,26 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 100
-  model_path: "ttnn_gpt2s.msgpack"
+  model_path: "ttnn_gpt2s_bpe.msgpack"
   batch_size: 16
   num_epochs: 1
-  max_steps: 2000 #1B tokens used for training
+  max_steps: 5000 #2.5B tokens used for training
   learning_rate: 0.0003
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  gradient_accumulation_steps: 32
+  gradient_accumulation_steps: 8
   tokenizer_path: "data/train_ttnn/tokenizer.json"
   data_path: "data/train_ttnn/data.txt"
   scheduler_type: "warmup_linear"
-  tokenizer_type: bpe
+  #tokenizer_type: bpe
   transformer_config:
     runner_type: memory_efficient
     num_heads: 12
     embedding_dim: 768
     dropout_prob: 0.2
     num_blocks: 12
-    vocab_size: 16384
+    vocab_size: 224
     max_sequence_length: 1024
     experimental:
-      use_composite_layernorm: true
+      use_composite_layernorm: false

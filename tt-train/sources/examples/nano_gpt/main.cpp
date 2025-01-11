@@ -51,7 +51,7 @@ using DataLoader = ttml::datasets::DataLoader<
 uint32_t sample(std::span<const float> log_softmax) {
     auto probabilities_vector = std::vector<float>(log_softmax.size());
     std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
+        return std::exp(value / 0.8F);
     });
     auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
     return distribution(ttml::autograd::ctx().get_generator());
@@ -80,7 +80,7 @@ void generate(
 
     auto pad_token_id = 0U;
 
-    auto vocab_size = tokenizer.get_vocab_size();
+    auto vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
 
     std::vector<float> mask;
     mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length * num_heads));
@@ -332,7 +332,7 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = 16384;  // round_up_to_tile(tokenizer->get_vocab_size());
+    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
     auto model = ttml::models::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
