@@ -49,7 +49,7 @@ def run_gtest_profiler_test(testbin, testname):
         get_device_data()
 
 
-def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
+def run_device_profiler_test(testName=None, setupAutoExtract=False, slowDispatch=False):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
@@ -63,7 +63,7 @@ def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
     assert profilerRun == 0
 
     setupStr = ""
-    if setup:
+    if setupAutoExtract:
         setupStr = f"-s {name}"
 
     return get_device_data(setupStr)
@@ -86,7 +86,7 @@ def test_multi_op():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -106,7 +106,7 @@ def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
     REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
-    devicesData = run_device_profiler_test(setup=True, slowDispatch=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -128,7 +128,7 @@ def test_custom_cycle_count():
     REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
     REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -156,7 +156,7 @@ def test_full_buffer():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -195,7 +195,7 @@ def test_dispatch_cores():
 
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -212,6 +212,37 @@ def test_dispatch_cores():
             if statType in stat:
                 statTypesSet.remove(statType)
     assert len(statTypesSet) == 0
+    os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
+
+
+@skip_for_grayskull()
+def test_ethernet_dispatch_cores():
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [17, 12, 3942],
+        "Ethernet CQ Prefetch": [18, 1932],
+    }
+    os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
+    devicesData = run_device_profiler_test(
+        testName="WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest ./tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops",
+        setupAutoExtract=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                assert (
+                    deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"] in counts
+                ), "Wrong ethernet dispatch zone count"
+
+    devicesData = run_device_profiler_test(
+        testName="WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest ./tests/ttnn/tracy/test_dispatch_profiler.py::test_all_devices",
+        setupAutoExtract=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                assert (
+                    deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"] in counts
+                ), "Wrong ethernet dispatch zone count"
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
 
 
@@ -272,7 +303,7 @@ def test_timestamped_events():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(
