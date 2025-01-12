@@ -156,15 +156,15 @@ def run_all_gather_impl(
         ]
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_stall_group = [worker_sub_device_id]
     if create_persistent_fabric:
         mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
             mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
         )
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = create_global_semaphore_with_same_address(
-        mesh_device, ccl_sub_device_crs, 0, [worker_sub_device_id]
-    )
+    ccl_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -227,9 +227,7 @@ def run_all_gather_impl(
         tt_input_tensors = []
         for i, t in enumerate(input_tensors):
             tt_input_tensors.append(
-                ttnn.Tensor(t, input_dtype)
-                .to(layout)
-                .to(mesh_device.get_devices()[i], input_mem_config, sub_device_ids=[worker_sub_device_id])
+                ttnn.Tensor(t, input_dtype).to(layout).to(mesh_device.get_devices()[i], input_mem_config)
             )
             logger.info(f"using device {mesh_device.get_devices()[i].id()}")
 
@@ -281,15 +279,14 @@ def run_all_gather_impl(
             tt_out_tensor_list.append(tt_out_tensor)
 
             logger.info(f"Waiting for op {i}")
-            for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
+            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done iteration {i}")
 
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
         output_tensor = output_tensor_goldens_list[tensor_index]
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            tt_output_tensor = t.cpu(sub_device_ids=[worker_sub_device_id]).to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
             logger.info(f"Checking for device {t.device().id()}")
 
             if input_dtype == ttnn.bfloat16:
@@ -301,6 +298,7 @@ def run_all_gather_impl(
             assert eq, f"{i} FAILED: {output}"
 
     if enable_persistent_fabric and teardown_persistent_fabric:
+        mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
 
 
@@ -736,9 +734,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     )
 
 
-@pytest.mark.skip(
-    "persistent fabric test with cluster-axis API and multiple concurrent all-gather instances not enabled yet"
-)
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices1, num_links1, per_chip_output_shape1, dim1, layout1",

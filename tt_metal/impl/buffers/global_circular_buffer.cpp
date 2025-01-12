@@ -27,8 +27,7 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) :
+    BufferType buffer_type) :
     device_(device), sender_receiver_core_mapping_(sender_receiver_core_mapping), size_(size) {
     TT_FATAL(this->device_ != nullptr, "Device cannot be null");
     uint32_t num_sender_cores = sender_receiver_core_mapping.size();
@@ -47,11 +46,10 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     TT_FATAL(num_receiver_cores == this->receiver_cores_.num_cores(), "Duplicate receiver cores found");
     this->all_cores_ = this->sender_cores_.merge(this->receiver_cores_);
     TT_FATAL(this->all_cores_.num_cores() == num_sender_cores + num_receiver_cores, "Duplicate cores found");
-    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender, sub_device_ids);
+    this->setup_cb_buffers(buffer_type, max_num_receivers_per_sender);
 }
 
-void GlobalCircularBuffer::setup_cb_buffers(
-    BufferType buffer_type, uint32_t max_num_receivers_per_sender, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global circular buffer can only be created for L1 buffer types");
@@ -97,8 +95,7 @@ void GlobalCircularBuffer::setup_cb_buffers(
                        buffer_address = this->cb_buffer_->address(),
                        cb_config_buffer = this->cb_config_buffer_,
                        size = this->size_,
-                       sender_receiver_core_mapping = this->sender_receiver_core_mapping_,
-                       sub_device_ids = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end())] {
+                       sender_receiver_core_mapping = this->sender_receiver_core_mapping_] {
         auto config_buffer_address = cb_config_buffer->address();
         const auto& core_to_core_id = cb_config_buffer->get_buffer_page_mapping()->core_to_core_id_;
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
@@ -141,8 +138,7 @@ void GlobalCircularBuffer::setup_cb_buffers(
             detail::WriteToBuffer(*cb_config_buffer, cb_config_host_buffer);
             tt::Cluster::instance().l1_barrier(device->id());
         } else {
-            EnqueueWriteBuffer(
-                device->command_queue(), cb_config_buffer, cb_config_host_buffer.data(), false, sub_device_ids);
+            EnqueueWriteBuffer(device->command_queue(), cb_config_buffer, cb_config_host_buffer.data(), false);
         }
     });
 }

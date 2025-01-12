@@ -76,21 +76,11 @@ auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T
     return std::visit([&res](auto&& arg) { return arg.compose(res); }, composer);
 }
 
-template <class T = float>
+template <class T = float, DataType TensorType = DataType::BFLOAT16>
 tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& tensor,
     ttnn::distributed::MeshDevice* device,
     const XTensorToMeshVariant<T>& composer,
-    Layout layout = Layout::TILE) {
-    auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
-    auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
-    auto output = from_xtensors_to_host(sharded_tensors, config);
-    MemoryConfig output_mem_config{};
-    output = ttnn::to_device(output, device, output_mem_config);
-    if (layout == Layout::TILE) {
-        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-    }
-    return output;
-}
+    Layout layout = Layout::TILE);
 
 }  // namespace ttml::core
