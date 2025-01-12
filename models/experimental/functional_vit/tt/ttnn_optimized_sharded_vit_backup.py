@@ -35,7 +35,6 @@ def update_model_config(config, batch_size):
                     192,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         ),
         "embedding_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -195,7 +194,6 @@ def vit_patch_embeddings(
     #         ),
     #         [224,192],
     #         ttnn.ShardOrientation.ROW_MAJOR,
-    #         False,
     #     ),
     # )
     # resharded_pixel_values = ttnn.reshard(pixel_values, post_fold_config)

@@ -453,14 +453,12 @@ def run_reduce_scatter_sharded_test(
         in_shard_grid,
         tuple(input_shard_shape),
         orientation,
-        False,
     )
 
     output_shard_spec = ttnn.ShardSpec(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_mem_config = ttnn.MemoryConfig(

@@ -84,7 +84,6 @@ def run(
         ttnn.num_cores_to_corerangeset(num_cores_width, core_grid, row_wise=True),
         (total_height, per_core_width),
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     input_shape_a = (*batch_sizes, m_size, k_size)

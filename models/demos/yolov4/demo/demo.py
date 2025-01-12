@@ -436,7 +436,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
                 }
             )
             n_cores = 64
-            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )

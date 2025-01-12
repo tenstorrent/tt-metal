@@ -54,13 +54,13 @@ params += [
                 ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
-                    ttnn.ShardSpec(create_grid(1, 2), [64, input_x], ttnn.ShardOrientation.ROW_MAJOR, False),
+                    ttnn.ShardSpec(create_grid(1, 2), [64, input_x], ttnn.ShardOrientation.ROW_MAJOR),
                 )
             ],
             "output_mem_config": ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(create_grid(1, 2), [64, input_x // 2], ttnn.ShardOrientation.ROW_MAJOR, False),
+                ttnn.ShardSpec(create_grid(1, 2), [64, input_x // 2], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             "output_tensor_start": [0, 0, 0, 0],
             "output_tensor_end": [0, 0, 127, (input_x // 2) - 1],

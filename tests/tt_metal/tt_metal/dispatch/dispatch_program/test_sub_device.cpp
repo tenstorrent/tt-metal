@@ -28,8 +28,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
 
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
-        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
         nullptr,

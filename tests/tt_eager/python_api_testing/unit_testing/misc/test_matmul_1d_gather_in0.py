@@ -216,7 +216,6 @@ def run_multi_core_matmul_1d(
             core_range_set,
             [M, K // num_cores],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -227,7 +226,6 @@ def run_multi_core_matmul_1d(
             core_range_set,
             [K, N // num_cores],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -238,7 +236,6 @@ def run_multi_core_matmul_1d(
             core_range_set,
             [M, N // num_cores],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 

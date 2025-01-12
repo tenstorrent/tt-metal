@@ -24,7 +24,6 @@ def run_tests(
     shard_grid,
     shard_shape,
     shard_orientation,
-    halo,
     torch_op,
     ttnn_op,
     gen_infs,
@@ -41,7 +40,7 @@ def run_tests(
 
     torch_output_tensor = torch_input_tensor_a
 
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation, halo)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     sharded_config = ttnn.MemoryConfig(tensor_memory_layout, byffer_type, shard_spec)
 
     input_tensor_a = ttnn.from_torch(
@@ -69,7 +68,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],  # shard shape
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (256, 2, 5, 1536),
@@ -80,7 +78,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,  # halo
     ),
     (
         (256, 2, 5, 1536),
@@ -91,7 +88,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [320, 192],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -102,7 +98,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -113,7 +108,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,  # halo
     ),
     (
         (1, 256, 2, 2304),
@@ -124,7 +118,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [64, 288],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -135,7 +128,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -146,7 +138,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,  # halo
     ),
     (
         (32, 4, 8, 768),
@@ -157,7 +148,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 96],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 25, 160, 32),
@@ -168,7 +158,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 160],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 25, 160, 32),
@@ -179,7 +168,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 160],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 2, 1248, 32),
@@ -190,7 +178,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 1248],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 2, 1248, 32),
@@ -201,7 +188,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 1248],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 2, 1472, 32),
@@ -212,7 +198,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 1472],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (1, 2, 1472, 32),
@@ -223,7 +208,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [32, 1472],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
     (
         (2, 1, 224, 128),
@@ -234,7 +218,6 @@ test_sweep_args = [
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # core grid
         [128, 224],
         ttnn.ShardOrientation.COL_MAJOR,
-        False,  # halo
     ),
 ]
 
@@ -244,7 +227,7 @@ def nop(x, memory_config=None):
 
 
 @pytest.mark.parametrize(
-    "input_shape, dtype, dlayout, tensor_memory_layout, byffer_type, shard_grid, shard_shape, shard_orientation, halo",
+    "input_shape, dtype, dlayout, tensor_memory_layout, byffer_type, shard_grid, shard_shape, shard_orientation",
     (test_sweep_args),
 )
 def test_eltwise_nop(
@@ -256,7 +239,6 @@ def test_eltwise_nop(
     shard_grid,
     shard_shape,
     shard_orientation,
-    halo,
     device,
 ):
     run_tests(
@@ -268,7 +250,6 @@ def test_eltwise_nop(
         shard_grid,
         shard_shape,
         shard_orientation,
-        halo,
         nop,
         nop,
         False,

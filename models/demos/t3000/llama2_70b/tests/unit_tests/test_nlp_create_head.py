@@ -69,7 +69,6 @@ def run_test_create_head1(
                 1280,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
@@ -181,7 +180,6 @@ def run_test_create_head2(
                 1280,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
@@ -301,7 +299,6 @@ def run_test_create_head3(
                 32,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     HEIGHT_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
