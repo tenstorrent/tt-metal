@@ -47,7 +47,6 @@ void kernel_main() {
     const InterleavedAddrGenFast<true> s_weight = {
         .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
 #ifdef FUSE_BIAS
-
     const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
     const DataFormat bias_df = get_dataformat(bias_cb_id);
     const InterleavedAddrGenFast<bias_in_dram> s_bias = {
