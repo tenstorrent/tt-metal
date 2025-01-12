@@ -383,8 +383,12 @@ def test_line_reduce_scatter_async_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_input_shape, dim, layout",
     [
+        (2, 2, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (2, 2, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
         (2, 1, [1, 2, 32, 1280], 1, ttnn.TILE_LAYOUT),
         (2, 1, [2, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (2, 2, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (2, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
