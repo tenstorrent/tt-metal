@@ -153,6 +153,6 @@ if [[ $ARCH_NAME == "wormhole_b0" ]]; then
     echo "::notice Running mux, demux, vc router perf ubench test now..."
     for max_packet_size_words in 256 512 1024 2048; do
         run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_mux_demux_${ARCH_NAME} --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
-        run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
+        run_test "./build/test/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux_${ARCH_NAME} --max_packet_size_words $max_packet_size_words --tx_skip_pkt_content_gen 1 --rx_disable_data_check 1 --rx_disable_header_check 1 --tx_pkt_dest_size_choice 1 --check_txrx_timeout 0 --data_kb_per_tx 1048576 --tx_queue_size_bytes 65536 --rx_queue_size_bytes 131072 --mux_queue_size_bytes 65536 --demux_queue_size_bytes 131072"
     done
 fi
