@@ -34,18 +34,12 @@ void ConvertToCHW::validate(const std::vector<Tensor>& input_tensors) const {
         "Output tensor must be width sharded");
 }
 
-std::vector<tt::tt_metal::LegacyShape> ConvertToCHW::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> ConvertToCHW::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = input_tensors.at(0).get_logical_shape();
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
-    return {LegacyShape({B, 1, C, HW}, {B, 1, C, HW})};
-}
-
-std::vector<Tensor> ConvertToCHW::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->dtype, Layout::ROW_MAJOR, this->memory_config);
+    return {TensorSpec(SimpleShape({B, 1, C, HW}), TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
 }
 
 operation::ProgramWithCallbacks ConvertToCHW::create_program(
