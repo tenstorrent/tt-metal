@@ -51,7 +51,17 @@ static ttnn::Tensor pad_impl(
         const auto rank = input_tensor_shape.rank();
 
         TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
-
+        bool input_output_same = true;
+        for (size_t i = 0; i < rank; i++) {
+            if (input_tensor_shape[i] != output_padded_shape[i]) {
+                input_output_same = false;
+                break;
+            }
+        }
+        if (input_output_same) {
+            tt::log_debug("Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
+            return input_tensor;
+        }
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
         using Layout = tt::tt_metal::Layout;
