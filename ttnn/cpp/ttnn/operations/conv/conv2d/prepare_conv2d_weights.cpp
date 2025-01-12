@@ -9,6 +9,10 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 using namespace tt;
 namespace ttnn {
 namespace operations::conv {
@@ -644,6 +648,156 @@ static OptimizedConvBlockConfig get_opt_block_config(
 }
 
 template <typename T>
+std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device(
+    const ttnn::Tensor& weight_tensor,
+    std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t input_channels_alignment,
+    DataType weights_bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const sliding_window::ParallelConfig& output_parallel_config,
+    T* device,
+    uint32_t groups,
+    uint32_t act_block_h_ntiles,
+    uint32_t input_width,
+    const bool parameters_on_device,
+    bool is_non_tile_mul_width) {
+    std::cout << "Preparing weights on device " << std::endl;
+
+    validate_weight_tensor(weight_tensor);
+    ttnn::Tensor weight_tensor_;  // tensor to return
+    ttnn::Tensor bias_tensor_;
+
+    auto original_weights_shape = weight_tensor.get_shape();
+    uint32_t original_weights_out_channels = original_weights_shape[0];
+    uint32_t original_weights_in_channels = original_weights_shape[1];
+    uint32_t original_weights_window_h = original_weights_shape[2];
+    uint32_t original_weights_window_w = original_weights_shape[3];
+
+    bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
+    bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
+
+    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor, device, std::nullopt);
+
+    // Convert weight tensor to 0 padded shape if groups > 1
+    // if (!is_conv1d and groups > 1) {
+    //     weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups,
+    //     weights_bias_dtype);
+    // }
+    // else if (is_conv1d and groups > 1) {
+    //     if (is_depthwise_conv) {
+    //         weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles,
+    //         weights_bias_dtype); weight_block_h_ntiles = act_block_h_ntiles;
+    //     }
+    //     else{
+    //        weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups,
+    //        weights_bias_dtype);
+    //     }
+    // }
+
+    auto weights_shape = weight_tensor_.get_shape();
+    uint32_t out_channels = weights_shape[0];
+    uint32_t in_channels = weights_shape[1];
+    uint32_t window_h = weights_shape[2];
+    uint32_t window_w = weights_shape[3];
+
+    uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(input_parallel_config);
+    uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
+
+    uint32_t out_channels_padded = tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
+    uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
+    uint32_t out_channel_padding = out_channels_padded - out_channels;
+
+    tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(
+        std::array<uint32_t, 4>({out_channels_padded, in_channels_padded, window_h, window_w}));
+    if (is_non_tile_mul_width) {
+        weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
+            {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
+        out_channels_padded = tt::round_up(out_channels, 32);
+    }
+    if (weights_bias_dtype == DataType::BFLOAT8_B) {
+        TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
+        if (bias_tensor.has_value()) {
+            TT_ASSERT(bias_tensor.value().get_dtype() == DataType::FLOAT32);
+        }
+    } else {
+        // TODO: fix the need to check this. We should be able to accept any datatype and convert
+        TT_ASSERT(weight_tensor_.get_dtype() == weights_bias_dtype);
+        if (bias_tensor.has_value()) {
+            TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
+        }
+    }
+    weight_tensor_ =
+        ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+
+    // First reshape the weights to 5D, and permute in 5D.
+    weight_tensor_ =
+        ttnn::reshape(weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
+    // for conv op, pad the weights to block shape
+    // if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+
+    weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({0, 3, 4, 2, 1}));
+    weight_tensor_ = ttnn::reshape(
+        weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+    weight_tensor_ = ttnn::tilize(
+        weight_tensor_,
+        ttnn::MemoryConfig(
+            {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+             .buffer_type = tt::tt_metal::BufferType::DRAM}),
+        weights_bias_dtype,
+        true);
+
+    // weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
+    //     weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
+    // } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+    //     weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
+    //         weight_tensor_, num_cores_channels, weights_bias_dtype);
+    // } else {
+    //     weight_tensor_ =
+    //         ttnn::reshape(weight_tensor_, ttnn::Shape({out_channels_padded, in_channels_padded * window_h *
+    //         window_w}));
+
+    // }
+
+    uint32_t weight_matrix_height = in_channels * window_h * window_w;
+    int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
+    TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
+
+    // auto target_shape = ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
+    //     std::array<std::array<uint32_t, 2>, 4>{
+    //         std::array<uint32_t, 2>{0, 0},
+    //         std::array<uint32_t, 2>{0, 0},
+    //         std::array<uint32_t, 2>{0, weight_matrix_height_padding},
+    //         std::array<uint32_t, 2>{0, out_channel_padding}
+    // });
+    // weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
+
+    // if(parameters_on_device)
+    //     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
+
+    if (bias_tensor.has_value()) {
+        bias_tensor_ = bias_tensor.value();
+        bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
+        if (!is_bias_tensor_is_on_device) {
+            TT_FATAL(bias_tensor_.shape()[3] == out_channels, "Bias must have the same length as output channels");
+            bias_tensor_ = conv_bias_layout_convert(
+                bias_tensor_,
+                weights_bias_dtype,
+                weight_block_h_ntiles,
+                weight_block_w_ntiles,
+                output_parallel_config,
+                device,
+                out_channels_padded,
+                is_non_tile_mul_width);
+            bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
+        }
+    }
+
+    return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
+}
+
+template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     std::optional<const ttnn::Tensor>& bias_tensor,
@@ -1014,6 +1168,38 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     MeshDevice* device,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+
+template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<IDevice>(
+    const ttnn::Tensor& weight_tensor,
+    std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t input_channels_alignment,
+    DataType weights_bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const sliding_window::ParallelConfig& output_parallel_config,
+    IDevice* device,
+    uint32_t groups,
+    uint32_t act_block_h_ntiles,
+    uint32_t input_width,
+    const bool parameters_on_device,
+    bool is_non_tile_mul_width);
+
+template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<MeshDevice>(
+    const ttnn::Tensor& weight_tensor,
+    std::optional<const ttnn::Tensor>& bias_tensor,
+    uint32_t input_channels_alignment,
+    DataType weights_bias_dtype,
+    uint32_t weight_block_h_ntiles,
+    uint32_t weight_block_w_ntiles,
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const sliding_window::ParallelConfig& output_parallel_config,
+    MeshDevice* device,
+    uint32_t groups,
+    uint32_t act_block_h_ntiles,
+    uint32_t input_width,
+    const bool parameters_on_device,
+    bool is_non_tile_mul_width);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
