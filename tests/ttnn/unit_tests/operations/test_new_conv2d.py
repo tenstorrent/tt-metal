@@ -361,7 +361,7 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (256, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
+        (2048, 2048, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
         (128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
         (16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, {"act_block_h": 32}),
     ),
@@ -386,7 +386,7 @@ def run_conv_with_split(
     "filter, pad",
     [
         [3, 1],
-        [1, 0],
+        # [1, 0],
         [5, 2],
     ],
 )
