@@ -174,5 +174,7 @@ struct CCLWorkerArgBuilder {
     bool dst_is_dram;
 };
 
+bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor);
+
 }  // namespace worker_detail
 }  // namespace ttnn::ccl

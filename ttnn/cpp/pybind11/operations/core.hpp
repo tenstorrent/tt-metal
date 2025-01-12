@@ -65,31 +65,21 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<
-            const ttnn::Tensor&,
-            IDevice*,
-            const std::optional<MemoryConfig>&,
-            uint8_t,
-            const std::vector<SubDeviceId>&>(&ttnn::operations::core::to_device),
+        py::overload_cast<const ttnn::Tensor&, IDevice*, const std::optional<MemoryConfig>&, uint8_t>(
+            &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());  // TODO #16492: Remove argument
+        py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "to_device",
-        py::overload_cast<
-            const ttnn::Tensor&,
-            MeshDevice*,
-            const std::optional<MemoryConfig>&,
-            uint8_t,
-            const std::vector<SubDeviceId>&>(&ttnn::operations::core::to_device),
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, uint8_t>(
+            &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Copy tensor from host to device.
 
@@ -98,8 +88,6 @@ void py_module(py::module& module) {
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
                 cq_id (int, optional): The command queue ID to use. Defaults to `0`.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to wait on before writing the tensor to device memory.
-                If it is not provided, device will stall for all programs of the specified cq to finish before writing the tensor to device memory.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -118,7 +106,6 @@ void py_module(py::module& module) {
         py::arg("blocking") = true,
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>(),  // TODO #16492: Remove argument
         R"doc(
             Copy tensor from device to host.
 
@@ -128,8 +115,6 @@ void py_module(py::module& module) {
 
             Keyword args:
                 cq_id (int, optional): the command queue ID to use. Defaults to `0`.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): the sub-device IDs to wait on before reading the tensor from device memory.
-                If it is not provided, device will stall for all programs of the specified cq to finish before reading the tensor from device memory.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.
@@ -261,8 +246,7 @@ void py_module(py::module& module) {
         &ttnn::operations::core::copy_host_to_device_tensor,
         py::arg("host_tensor"),
         py::arg("device_tensor"),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
-        py::arg("sub_device_ids") = std::vector<SubDeviceId>());  // TODO #16492: Remove argument
+        py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "begin_trace_capture",

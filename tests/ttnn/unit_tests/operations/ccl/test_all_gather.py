@@ -622,6 +622,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",

@@ -185,18 +185,13 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
         this->num_links_preferred,
         this->from_remote_sem,
         this->to_remote_sem,
+        this->sub_device_id,
         this->fabric_handle);
 }
 
 operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<ReduceScatterAsync>(
-        this->binary_op_type,
-        this->scatter_dim,
-        this->ring_size,
-        this->ring_index,
-        this->topology,
-        this->from_remote_sem,
-        this->to_remote_sem);
+        this->binary_op_type, this->scatter_dim, this->ring_size, this->ring_index, this->topology);
 }
 
 namespace {

@@ -232,4 +232,5 @@ void kernel_main() {
         }
         in0_tensor_start_tile_id += MtKt;
     }
+    noc_async_write_barrier();
 }

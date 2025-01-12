@@ -1225,13 +1225,6 @@ Matmul create_matmul_struct(
          (input_tensor_b.get_dtype() == DataType::BFLOAT8_B || input_tensor_b.get_dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch,
-        parameters.compute_kernel_config,
-        math_fidelity,
-        /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/false,
-        /*default_l1_acc=*/true);
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
@@ -1267,7 +1260,14 @@ Matmul create_matmul_struct(
             output_dtype = input_tensor_a.get_dtype();
         }
     }
-
+    bool is_float_32 = output_dtype==DataType::FLOAT32;
+    auto kernel_config_val = init_device_compute_kernel_config(
+        arch,
+        parameters.compute_kernel_config,
+        math_fidelity,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/is_float_32,
+        /*default_l1_acc=*/!is_float_32);
     auto in0_tile = input_tensor_a.get_tensor_spec().tile();
     auto in1_tile = input_tensor_b.get_tensor_spec().tile();
     tt::tt_metal::Tile output_tile = get_output_tile(output_mem_config, in0_tile, in1_tile, parameters.output_tile);
@@ -1284,7 +1284,8 @@ Matmul create_matmul_struct(
         parameters.user_run_batched,
         parameters.transpose_a,
         parameters.transpose_b,
-        output_tile};
+        output_tile,
+        parameters.global_cb};
 }
 
 Tensor matmul(
@@ -1491,18 +1492,16 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
-                    TT_FATAL(
-                        input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
-                        "Input tensor A and B must be sharded on the same cores when using gather_in0.");
-
+                    if (!this->global_cb.has_value()) {
+                        TT_FATAL(
+                            input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
+                            "Input tensor A and B must be sharded on the same cores when using gather_in0.");
+                    }
                     TT_FATAL(
                         this->output_mem_config.is_sharded(), "Output tensor must be sharded when using gather_in0.");
                     TT_FATAL(
                         this->output_mem_config.shard_spec.has_value(),
                         "Output shard spec must be provided when using gather_in0.");
-                    TT_FATAL(
-                        input_tensor_a.shard_spec().value().grid == this->output_mem_config.shard_spec.value().grid,
-                        "Output tensor must be sharded on the same cores as the input when using gather_in0.");
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 }
@@ -2125,7 +2124,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     program_config.mcast_in0,
                     program_config.gather_in0,
-                    this->untilize_out);
+                    program_config.hop_cores,
+                    this->untilize_out,
+                    this->global_cb,
+                    program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
