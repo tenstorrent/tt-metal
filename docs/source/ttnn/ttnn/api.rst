@@ -444,6 +444,7 @@ Normalization
    ttnn.group_norm
    ttnn.layer_norm
    ttnn.rms_norm
+   ttnn.batch_norm
 
 
 Moreh Operations
