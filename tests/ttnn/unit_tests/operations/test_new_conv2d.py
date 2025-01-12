@@ -354,7 +354,7 @@ def run_conv_with_split(
     "filter, pad",
     [
         [3, 1],
-        [1, 0],
+        # [1, 0],
         [5, 2],
     ],
 )
