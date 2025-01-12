@@ -68,7 +68,6 @@ std::vector<ttnn::TensorSpec> UntilizeWithHaloV2::compute_output_specs(const std
     auto out_mem_config = out_mem_config_;
     out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], ncores_nhw_);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
-    out_mem_config.shard_spec->halo = true;
     return {TensorSpec(
         output_shape.logical_shape(),
         TensorLayout::fromPaddedShape(
