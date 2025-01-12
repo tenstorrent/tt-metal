@@ -84,6 +84,8 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -156,6 +158,8 @@ def test_rotary_embedding_decode(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -229,6 +233,8 @@ def test_rotary_embedding_prefill_fp32(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -299,6 +305,8 @@ def test_rotary_embedding_decode_fp32(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 

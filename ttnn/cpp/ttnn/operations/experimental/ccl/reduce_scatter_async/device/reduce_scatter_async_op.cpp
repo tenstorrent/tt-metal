@@ -91,20 +91,16 @@ void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) cons
     }
 }
 
-std::vector<ttnn::SimpleShape> ReduceScatterAsync::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
+std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto shape = input_tensor.get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}",
         shape[this->scatter_dim],
         this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
 
-std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
     // output tensors
     // 0. final (real) output_tensor
     // 1. input_tensor_from_remote_forward_direction (shape of input tensor)
@@ -116,48 +112,22 @@ std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<
     std::optional<tt::tt_metal::Tile> tile =
         is_tile_layout ? input_tensor.get_tensor_spec().tile() : std::optional<tt::tt_metal::Tile>(std::nullopt);
 
-    std::vector<Tensor> output_tensors;
+    std::vector<TensorSpec> output_tensors;
     output_tensors.reserve(5);
     // real_output_tensor
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
     // temporary_input_from_remote_tensor_for_forward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile));
+    output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_input_from_remote_tensor_for_backward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile));
+    output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_partial_output_tensor_for_forward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
     // temporary_partial_output_tensor_for_backward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape,
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), this->output_mem_config)));
 
     return output_tensors;
 }

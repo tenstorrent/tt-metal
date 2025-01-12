@@ -105,11 +105,19 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
     return;
 }
 
-NlpCreateHeadsDeviceOperation::shape_return_value_t NlpCreateHeadsDeviceOperation::compute_output_shapes(
+NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
+    if (tensor_args.optional_output_tensors.size() == 3) {
+        const auto& output_tensors = tensor_args.optional_output_tensors;
+        return {
+            output_tensors.at(0)->get_tensor_spec(),
+            output_tensors.at(1)->get_tensor_spec(),
+            output_tensors.at(2)->get_tensor_spec()};
+    }
+
     const auto& input_tensor = tensor_args.input_tensor_q;
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     auto sequence_length = input_shape[2];
     auto head_dim = operation_attributes.head_dim;
@@ -120,25 +128,13 @@ NlpCreateHeadsDeviceOperation::shape_return_value_t NlpCreateHeadsDeviceOperatio
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
 
-    const tt::tt_metal::LegacyShape q_output_shape = {
-        input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim};
-    const tt::tt_metal::LegacyShape v_output_shape = {
-        input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim};
-    const tt::tt_metal::LegacyShape k_output_shape =
+    const SimpleShape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
+    const SimpleShape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
+    const SimpleShape k_output_shape =
         operation_attributes.transpose_k_heads
-            ? (tt::tt_metal::LegacyShape){input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length}
+            ? SimpleShape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
             : v_output_shape;
-    return {ttnn::Shape(q_output_shape), ttnn::Shape(k_output_shape), ttnn::Shape(v_output_shape)};
-}
 
-NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperation::create_output_tensors(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    using namespace tt::constants;
-    const auto& input_tensor = tensor_args.input_tensor_q;
-    if (tensor_args.optional_output_tensors.size() == 3) {
-        const auto& output_tensors = tensor_args.optional_output_tensors;
-        return {output_tensors.at(0).value(), output_tensors.at(1).value(), output_tensors.at(2).value()};
-    }
     if (operation_attributes.output_mem_config.is_sharded()) {
         auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
         auto q_shard_grid = num_cores_to_corerangeset(operation_attributes.num_q_heads, core_grid, true);
@@ -149,49 +145,44 @@ NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperati
         ShardSpec kv_shard_spec{kv_shard_grid, {TILE_HEIGHT, operation_attributes.head_dim}};
         auto kv_mem_config = operation_attributes.output_mem_config;
         kv_mem_config.shard_spec = kv_shard_spec;
-        auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
         return {
-            create_device_tensor(
-                std::get<0>(output_shapes),
-                input_tensor.get_dtype(),
-                input_tensor.get_layout(),
-                input_tensor.device(),
-                q_mem_config),
-            create_device_tensor(
-                std::get<1>(output_shapes),
-                input_tensor.get_dtype(),
-                input_tensor.get_layout(),
-                input_tensor.device(),
-                kv_mem_config),
-            create_device_tensor(
-                std::get<2>(output_shapes),
-                input_tensor.get_dtype(),
-                input_tensor.get_layout(),
-                input_tensor.device(),
-                kv_mem_config)};
-
-    } else {
-        auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-        return {
-            create_device_tensor(
-                std::get<0>(output_shapes),
-                input_tensor.get_dtype(),
-                Layout::TILE,
-                input_tensor.device(),
-                operation_attributes.output_mem_config),
-            create_device_tensor(
-                std::get<1>(output_shapes),
-                input_tensor.get_dtype(),
-                Layout::TILE,
-                input_tensor.device(),
-                operation_attributes.output_mem_config),
-            create_device_tensor(
-                std::get<2>(output_shapes),
-                input_tensor.get_dtype(),
-                Layout::TILE,
-                input_tensor.device(),
-                operation_attributes.output_mem_config)};
+            TensorSpec(
+                q_output_shape,
+                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), q_mem_config)),
+            TensorSpec(
+                k_output_shape,
+                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), kv_mem_config)),
+            TensorSpec(
+                v_output_shape,
+                TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), kv_mem_config))};
     }
+
+    return {
+        TensorSpec(
+            q_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
+        TensorSpec(
+            k_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config)),
+        TensorSpec(
+            v_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), operation_attributes.output_mem_config))};
+}
+
+NlpCreateHeadsDeviceOperation::tensor_return_value_t NlpCreateHeadsDeviceOperation::create_output_tensors(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    using namespace tt::constants;
+    const auto& input_tensor = tensor_args.input_tensor_q;
+    if (tensor_args.optional_output_tensors.size() == 3) {
+        const auto& output_tensors = tensor_args.optional_output_tensors;
+        return {output_tensors.at(0).value(), output_tensors.at(1).value(), output_tensors.at(2).value()};
+    }
+    auto output_specs = compute_output_specs(operation_attributes, tensor_args);
+    return {
+        create_device_tensor(std::get<0>(output_specs), input_tensor.device()),
+        create_device_tensor(std::get<1>(output_specs), input_tensor.device()),
+        create_device_tensor(std::get<2>(output_specs), input_tensor.device()),
+    };
 }
 
 NlpCreateHeadsDeviceOperation::program_factory_t NlpCreateHeadsDeviceOperation::select_program_factory(

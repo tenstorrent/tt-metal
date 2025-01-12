@@ -20,9 +20,8 @@ void PlusOne::validate_with_output_tensors(
     TT_FATAL(input_shape.size() == 1, "must have 1 dimension");
 }
 
-std::vector<tt::tt_metal::LegacyShape> PlusOne::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto input_shape = input_tensors[0].get_legacy_shape();
-    return {input_shape};
+std::vector<ttnn::TensorSpec> PlusOne::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    return {input_tensors.at(0).get_tensor_spec()};
 }
 
 std::vector<Tensor> PlusOne::create_output_tensors(

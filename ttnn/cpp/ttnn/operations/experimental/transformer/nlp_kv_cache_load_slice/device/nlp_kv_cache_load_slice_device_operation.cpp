@@ -25,7 +25,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
         TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
     }
 
-    tt::tt_metal::LegacyShape output_tensor_shape = this->compute_output_shapes(input_tensors)[0];
+    SimpleShape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
     auto num_dims = input_tensor_a.get_legacy_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
     const auto input_shape = input_tensor_a.get_legacy_shape();
@@ -43,21 +43,18 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
         (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->output_tensor_start[-1] % TILE_WIDTH == 0),
         "Can only unpad tilized tensor with full tiles");
 }
-std::vector<tt::tt_metal::LegacyShape> NlpKVCacheLoadSliceDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NlpKVCacheLoadSliceDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto input_shape = input_tensor_a.get_padded_shape();
+
     SmallVector<uint32_t> out_shape;
-    auto rank = input_tensors[0].get_legacy_shape().rank();
+    auto rank = input_shape.rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] - this->output_tensor_start[i] + 1);
     }
-    tt::tt_metal::LegacyShape output_tensor_shape(out_shape);
-    return {output_tensor_shape};
-}
-std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto input_shape = input_tensor_a.get_legacy_shape();
+
     auto dim0 = input_shape[0];
     auto dim1 = input_shape[1];
     auto unpad_length = this->output_tensor_end[2] - this->output_tensor_start[2] + 1;
@@ -70,12 +67,9 @@ std::vector<Tensor> NlpKVCacheLoadSliceDeviceOperation::create_output_tensors(
     auto mem_config = tt::tt_metal::MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1};
     mem_config.shard_spec = shard_spec;
 
-    return {create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout(),
-        input_tensor_a.device(),
-        mem_config)};
+    return {TensorSpec(
+        SimpleShape(out_shape),
+        TensorLayout(input_tensor_a.get_dtype(), PageConfig(input_tensor_a.get_layout()), mem_config))};
 }
 operation::ProgramWithCallbacks NlpKVCacheLoadSliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {

@@ -44,17 +44,12 @@ void HCSumReduce::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(((ashape[3] / TILE_WIDTH) % latent == 0), "Final dim/TILE_SIZE must be a multiple of latent size!");
 }
 
-std::vector<tt::tt_metal::LegacyShape> HCSumReduce::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> HCSumReduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto shape_a = input_tensor_a.get_legacy_shape();
-    return {{shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent}};
-}
-
-std::vector<Tensor> HCSumReduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->dtype, Layout::TILE, this->memory_config);
+    const auto shape_a = input_tensor_a.get_padded_shape();
+    SimpleShape output_shape({shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent});
+    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 
 operation::ProgramWithCallbacks HCSumReduce::create_program(

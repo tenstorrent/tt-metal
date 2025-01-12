@@ -205,13 +205,7 @@ void PagedUpdateCacheDeviceOperation::validate(
     }
 }
 
-const std::vector<tt::tt_metal::LegacyShape> PagedUpdateCacheDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
-}
-
-std::vector<Tensor> PagedUpdateCacheDeviceOperation::create_output_tensors(
+const std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};

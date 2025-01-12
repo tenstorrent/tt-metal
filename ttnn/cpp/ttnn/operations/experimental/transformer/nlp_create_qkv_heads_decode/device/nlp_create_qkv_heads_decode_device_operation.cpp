@@ -86,37 +86,19 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     auto batch = input_tensor.get_shape()[2];
     auto head_dim = this->head_dim;
 
-    // pad up to nearest multiple of TILE_HEIGHT for num_q_heads and num_kv_heads
-    auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    auto num_kv_heads_padded = ((this->num_kv_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    const SimpleShape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});
+    const SimpleShape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
+    const SimpleShape k_output_shape = v_output_shape;
 
-    const tt::tt_metal::LegacyShape q_output_shape = tt::tt_metal::LegacyShape(
-        {input_shape[0], batch, this->num_q_heads, head_dim}, {input_shape[0], batch, num_q_heads_padded, head_dim});
-    const tt::tt_metal::LegacyShape v_output_shape = tt::tt_metal::LegacyShape(
-        {input_shape[0], batch, this->num_kv_heads, head_dim}, {input_shape[0], batch, num_kv_heads_padded, head_dim});
-    const tt::tt_metal::LegacyShape k_output_shape = v_output_shape;
-    return {q_output_shape, k_output_shape, v_output_shape};
-}
-
-std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    using namespace tt::constants;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shapes = this->compute_output_shapes(input_tensors);
-    const auto& q_output_shape = output_shapes[0];
-
-    auto batch = q_output_shape[1];
     auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
 
@@ -134,7 +116,6 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
                 num_cores_to_corerangeset(CoreCoord{batch % core_grid.x, batch / core_grid.x}, batch, core_grid, true);
         }
         v_shard_grid = q_shard_grid;
-
     } else {
         auto input_core_grid = input_tensor.shard_spec().value().grid;
         auto start_core_coord = input_core_grid.bounding_box().start_coord;
@@ -159,10 +140,15 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
     v_mem_config.shard_spec = v_shard_spec;
 
     return {
-        create_device_tensor(output_shapes[0], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), q_mem_config),
-        create_device_tensor(output_shapes[1], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), k_mem_config),
-        create_device_tensor(output_shapes[2], input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), v_mem_config)
-    };
+        TensorSpec(
+            q_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), q_mem_config)),
+        TensorSpec(
+            k_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), k_mem_config)),
+        TensorSpec(
+            v_output_shape,
+            TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), v_mem_config))};
 }
 
 operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(
