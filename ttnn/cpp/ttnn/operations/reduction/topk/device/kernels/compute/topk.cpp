@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "debug/dprint.h"  // required in all kernels using DPRINT
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/transpose_wh.h"
@@ -27,6 +28,10 @@ void MAIN {
     constexpr uint32_t K = get_compile_time_arg_val(8);
     constexpr uint32_t logk = get_compile_time_arg_val(9);
     constexpr uint32_t logWt = get_compile_time_arg_val(10);
+    constexpr uint32_t largest = get_compile_time_arg_val(11);
+    constexpr uint32_t sorted = get_compile_time_arg_val(12);
+
+    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -40,7 +45,7 @@ void MAIN {
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = false;
+        bool ascending = !largest;
         cb_reserve_back(input_transposed_cb_index, Wt);
         cb_reserve_back(index_transposed_cb_index, Wt);
 
@@ -50,6 +55,7 @@ void MAIN {
             // local sort into k groups
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
+            // UNPACK(DPRINT << "INPUT VALUES ARE " << TSLICE(input_cb_index, 0, sr) << ENDL());
 
             reconfig_data_format_srca(input_cb_index);
             transpose_wh_init_short(input_cb_index);
@@ -87,9 +93,11 @@ void MAIN {
         // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            bool a = false;
+            bool a = !largest;
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
+            // UNPACK(DPRINT << "input_transposed_cb_index VALUES ARE " << TSLICE(input_transposed_cb_index, 0, sr) <<
+            // ENDL());
 
             for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
                 uint32_t right_ind = left_ind + (1 << m_iter);
