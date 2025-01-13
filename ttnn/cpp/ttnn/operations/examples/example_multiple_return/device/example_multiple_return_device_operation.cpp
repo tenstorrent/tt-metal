@@ -51,7 +51,6 @@ ExampleMultipleReturnDeviceOperation::tensor_return_value_t ExampleMultipleRetur
     }
     if (output2_spec_opt) {
         ret[1] = create_device_tensor(*output2_spec_opt, tensor_args.input_tensor.device());
-        ;
     }
 
     return ret;
