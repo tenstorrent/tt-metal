@@ -158,6 +158,14 @@ struct BufferPageMapping {
 
 inline namespace v0 {
 
+struct BufferRegion {
+    DeviceAddr offset = 0;
+    DeviceAddr size = 0;
+
+    BufferRegion() = delete;
+    BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
+};
+
 class Buffer final {
     struct Private { explicit Private() = default; };
 
@@ -207,6 +215,9 @@ class Buffer final {
     bool is_l1() const;
     bool is_dram() const;
     bool is_trace() const;
+
+    bool is_valid_region(const BufferRegion& region) const;
+    bool is_valid_partial_region(const BufferRegion& region) const;
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 

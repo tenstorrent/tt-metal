@@ -215,10 +215,10 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 break;
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
-                    " (packed_page_flags={:#02x}, length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
+                    " (start_page={:#02x}, is_dram_and_length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
                     "pages={:#010x})",
-                    val(cmd->relay_paged.packed_page_flags),
-                    val(cmd->relay_paged.length_adjust),
+                    val(cmd->relay_paged.start_page),
+                    val(cmd->relay_paged.is_dram_and_length_adjust),
                     val(cmd->relay_paged.base_addr),
                     val(cmd->relay_paged.page_size),
                     val(cmd->relay_paged.pages));
