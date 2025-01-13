@@ -28,7 +28,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [(4, 1)],
-    # [(4, 3)], Multi-links fails
+    # [(4, 3)], Multi-links fails https://github.com/tenstorrent/tt-metal/issues/16699
 )
 @pytest.mark.parametrize(
     "input_dtype",
@@ -84,7 +84,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and per_chip_output_shape == (1, 1, 32, 1024 * 4):
-        pytest.skip("Skiped due to hang")
+        pytest.skip("Skiped due to hang Issue #16699")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
@@ -121,7 +121,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     [
         (8, 1),
     ],
-    # [(8, 4), (8, 3), (8, 2)], Multi-links fails
+    # [(8, 4), (8, 3), (8, 2)], Multi-links fails https://github.com/tenstorrent/tt-metal/issues/16699
 )
 @pytest.mark.parametrize(
     "input_dtype",
@@ -224,7 +224,7 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and input_shape == (1, 1, 256, 2048):
-        pytest.skip("Skiped due to hang")
+        pytest.skip("Skiped due to hang Issue #16699")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
@@ -265,6 +265,12 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
         (8, 1, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
         (8, 1, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
         (8, 1, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
+        # multi-links fails: https://github.com/tenstorrent/tt-metal/issues/16699
+        # (8, 4, [1, 8, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        # (8, 4, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        # (8, 4, [1, 8, 32, 2048], 1, ttnn.TILE_LAYOUT),
+        # (8, 4, [1, 8, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        # (8, 4, [1, 8, 32, 4096], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(

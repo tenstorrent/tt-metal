@@ -23,7 +23,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
-        (4, 1, [1, 4, 32, 2304], 1, ttnn.TILE_LAYOUT),
+        (4, 2, [1, 4, 32, 2304], 1, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -91,8 +91,8 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
-        (8, 1, [1, 8, 32, 1280], 1, ttnn.TILE_LAYOUT),
-        (8, 1, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
+        (8, 2, [1, 8, 32, 1280], 1, ttnn.TILE_LAYOUT),
+        (8, 2, [8, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
