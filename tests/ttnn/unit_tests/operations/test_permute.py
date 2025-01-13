@@ -369,6 +369,8 @@ def test_permute_identity(shape, device):
 @pytest.mark.parametrize("perm", [(0, 1, 3, 2, 4)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_xh_pad(shape, perm, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
@@ -389,6 +391,8 @@ def generate_fixed_w_permutations(N):
 @pytest.mark.parametrize("perm", generate_fixed_w_permutations(5))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permutations_5d_fixed_w(shape, perm, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
@@ -405,7 +409,7 @@ def test_permutations_5d_fixed_w(shape, perm, dtype, device):
 def test_permute_adversarial(shape, perm, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
@@ -420,7 +424,7 @@ def test_permute_adversarial(shape, perm, device):
 def test_permute_4d_fixed_w(shape, perm, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
