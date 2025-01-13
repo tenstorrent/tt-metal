@@ -55,14 +55,13 @@ struct L1Config {
             {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
              (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
-            false,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {num_cores_height * num_tiles_per_core_height * num_cores_height,
              num_tiles_per_core_width * num_cores_width});
     }
 };
 
-std::shared_ptr<Buffer> MakeShardedL1BufferBFP16(Device* device, const L1Config& test_config) {
+std::shared_ptr<Buffer> MakeShardedL1BufferBFP16(IDevice* device, const L1Config& test_config) {
     return CreateBuffer(tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = test_config.size_bytes,
@@ -107,7 +106,14 @@ int main(int argc, char** argv) {
     // used fixed seed for reproducibility and deterministic results
     int seed = 0x1234567;
     int device_id = 0;
-    string sharding_type = "height";
+    std::string sharding_type = "height";
+
+    // sharding configuration, 4x4 of tiles bfloat16, each core has 2x2 tiles, sharded to 4 core
+    const std::unordered_map<std::string_view, L1Config> test_configs{
+        {"height", {TensorMemoryLayout::HEIGHT_SHARDED, 4, 1}},
+        {"width", {TensorMemoryLayout::WIDTH_SHARDED, 1, 4}},
+        {"block", {TensorMemoryLayout::BLOCK_SHARDED, 2, 2}},
+    };
 
     // Quick and dirty argument parsing.
     for (int i = 1; i < argc; i++) {
@@ -119,7 +125,7 @@ int main(int argc, char** argv) {
             return 0;
         } else if (arg == "--sharding_type" || arg == "-s") {
             sharding_type = next_arg(i, argc, argv);
-            if (sharding_type != "height" && sharding_type != "width" && sharding_type != "block") {
+            if (not test_configs.contains(sharding_type)) {
                 std::cout << "Invalid sharding type: " << sharding_type << std::endl;
                 help(argv[0]);
                 return 1;
@@ -130,31 +136,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
     Program program = CreateProgram();
 
-    // sharding configuration, 4x4 of tiles bfloat16, each core has 2x2 tiles, sharded to 4 core
-    uint32_t num_cores_height;
-    uint32_t num_cores_width;
-    TensorMemoryLayout layout;
-    // std::shared_ptr<L1Config> test_config;
-    if (sharding_type == "height") {
-        num_cores_height = 4;
-        num_cores_width = 1;
-        layout = TensorMemoryLayout::HEIGHT_SHARDED;
-        std::cout << "Sharding type: height" << std::endl;
-    } else if (sharding_type == "width") {
-        num_cores_height = 1;
-        num_cores_width = 4;
-        layout = TensorMemoryLayout::WIDTH_SHARDED;
-        std::cout << "Sharding type: width" << std::endl;
-    } else {
-        num_cores_height = 2;
-        num_cores_width = 2;
-        layout = TensorMemoryLayout::BLOCK_SHARDED;
-        std::cout << "Sharding type: block" << std::endl;
-    }
-    L1Config test_config(layout, num_cores_height, num_cores_width);
+    std::cout << "Sharding type: " << sharding_type << std::endl;
+    const auto& test_config = test_configs.at(sharding_type);
 
     // Create the input and output buffers.
     auto a = MakeShardedL1BufferBFP16(device, test_config);
@@ -162,14 +148,14 @@ int main(int argc, char** argv) {
     auto c = MakeShardedL1BufferBFP16(device, test_config);
 
     std::mt19937 rng(seed);
-    std::vector<bfloat16> a_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
-    std::vector<bfloat16> b_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
+    auto a_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
+    auto b_data = create_random_vector_of_bfloat16_native(test_config.size_bytes, 10, rng());
 
-    CBHandle cb_a =
+    auto cb_a =
         MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_0, test_config.num_tiles_per_core, a);
-    CBHandle cb_b =
+    auto cb_b =
         MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_1, test_config.num_tiles_per_core, b);
-    CBHandle cb_c =
+    auto cb_c =
         MakeCircularBufferBFP16(program, test_config.cores, tt::CBIndex::c_2, test_config.num_tiles_per_core, c);
 
     auto compute = CreateKernel(
