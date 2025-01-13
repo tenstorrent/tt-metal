@@ -170,7 +170,9 @@ class Program_ {
     bool finalized_;
     bool cached_;
 
-    std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>> sub_device_ids_;
+    // TODO: Should map based on the hash of the configured sub-devices
+    // This way we can cache it agnostic of the device
+    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
@@ -1196,14 +1198,18 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
     auto sub_device_manager_id = device->get_active_sub_device_manager_id();
-    auto sub_device_ids = this->sub_device_ids_.find(sub_device_manager_id);
-    if (this->compiled_.empty() || sub_device_ids == this->sub_device_ids_.end()) {
+    auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
+    auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
+    if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
         if (!this->compiled_.empty()) {
-            TT_FATAL(this->sub_device_ids_.empty(), "Multiple sub device managers are not currently supported for a single program");
+            TT_FATAL(
+                sub_device_ids_map.empty(),
+                "Multiple sub device managers are not currently supported for a single program");
         }
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr || sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
-            auto [sub_device_ids, _] = this->sub_device_ids_.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
+            auto [sub_device_ids, _] =
+                sub_device_ids_map.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
             return sub_device_ids->second;
         } else {
             std::unordered_set<SubDeviceId> used_sub_device_ids;
@@ -1232,7 +1238,9 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
-            auto [sub_device_ids, _] = this->sub_device_ids_.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
+            auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
+                sub_device_manager_id,
+                std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
             return sub_device_ids->second;
         }
     }
@@ -1286,7 +1294,7 @@ void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
-        this->sub_device_ids_.erase(device->get_active_sub_device_manager_id());
+        this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
     TT_FATAL(

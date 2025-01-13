@@ -11,7 +11,6 @@
 
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/memcpy.hpp"
-#include "tt_metal/impl/kernels/data_types.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
@@ -25,7 +24,6 @@ inline namespace v0 {
 class IDevice;
 }  // namespace v0
 
-namespace detail {
 class SubDeviceManager {
 public:
     static constexpr uint32_t MAX_NUM_SUB_DEVICES = 16;
@@ -44,6 +42,8 @@ public:
     SubDeviceManager& operator=(SubDeviceManager&& other) noexcept = default;
 
     ~SubDeviceManager();
+
+    SubDeviceManagerId id() const;
 
     const std::vector<SubDeviceId>& get_sub_device_ids() const;
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
@@ -85,6 +85,10 @@ private:
     void populate_noc_data();
     void populate_worker_launch_message_buffer_state();
 
+    static std::atomic<uint64_t> next_sub_device_manager_id_;
+
+    SubDeviceManagerId id_;
+
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
     std::vector<SubDevice> sub_devices_;
     std::vector<SubDeviceId> sub_device_ids_;
@@ -110,7 +114,5 @@ private:
     // TODO #15944: Temporary until migration to actual fabric is complete
     std::optional<SubDeviceId> fabric_sub_device_id_ = std::nullopt;
 };
-
-}  // namespace detail
 
 }  // namespace tt::tt_metal
