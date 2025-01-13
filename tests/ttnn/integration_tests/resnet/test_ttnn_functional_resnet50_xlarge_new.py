@@ -19,7 +19,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     pad_and_fold_conv_filters_for_unity_stride,
     enable_memory_reports,
-    skip_for_grayskull,
     is_wormhole_b0,
     is_blackhole,
     is_grayskull,
@@ -264,7 +263,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-@pytest.mark.skipif(is_grayskull() or is_wormhole_b0() or is_blackhole(), reason="Only works for Grayskull.")
+@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Only works for Grayskull.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
