@@ -43,6 +43,7 @@ jobs:
 
   clang-tidy:
     needs: build-docker-image
+    if: always()
     env:
       ARCH_NAME: wormhole_b0
     runs-on:
