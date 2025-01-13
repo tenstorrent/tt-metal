@@ -51,7 +51,7 @@ struct ExampleDeviceOperation {
     };
 
     // Define the TensorSpec for the output Tensor(s)
-    // Can be a single TensorSpec, std::optional<TensorSpec>, std::vector<TensorSpec>, std::tuple<TensorSpec> etc.    
+    // Can be a single TensorSpec, std::optional<TensorSpec>, std::vector<TensorSpec>, std::tuple<TensorSpec> etc.
     using spec_return_value_t = TensorSpec;
 
     // Define the return types for the tensor(s) of the operation
