@@ -244,6 +244,50 @@ static_assert(remote_tx_network_type[1] != DispatchRemoteNetworkType::ETH);
 static_assert(remote_tx_network_type[2] != DispatchRemoteNetworkType::ETH);
 static_assert(remote_tx_network_type[3] != DispatchRemoteNetworkType::ETH);
 
+static_assert(vc_packet_router_input_ptr_buffers[0]);
+static_assert(router_lanes < 2 || vc_packet_router_input_ptr_buffers[1]);
+static_assert(router_lanes < 3 || vc_packet_router_input_ptr_buffers[2]);
+static_assert(router_lanes < 4 || vc_packet_router_input_ptr_buffers[3]);
+static_assert(router_lanes < 5 || vc_packet_router_input_ptr_buffers[4]);
+static_assert(router_lanes < 6 || vc_packet_router_input_ptr_buffers[5]);
+static_assert(router_lanes < 7 || vc_packet_router_input_ptr_buffers[6]);
+static_assert(router_lanes < 8 || vc_packet_router_input_ptr_buffers[7]);
+static_assert(router_lanes < 9 || vc_packet_router_input_ptr_buffers[8]);
+static_assert(router_lanes < 10 || vc_packet_router_input_ptr_buffers[9]);
+
+static_assert(input_packetize[0] || vc_packet_router_input_remote_ptr_buffers[0]);
+static_assert(router_lanes < 2 || input_packetize[1] || vc_packet_router_input_remote_ptr_buffers[1]);
+static_assert(router_lanes < 3 || input_packetize[2] || vc_packet_router_input_remote_ptr_buffers[2]);
+static_assert(router_lanes < 4 || input_packetize[3] || vc_packet_router_input_remote_ptr_buffers[3]);
+static_assert(router_lanes < 5 || input_packetize[4] || vc_packet_router_input_remote_ptr_buffers[4]);
+static_assert(router_lanes < 6 || input_packetize[5] || vc_packet_router_input_remote_ptr_buffers[5]);
+static_assert(router_lanes < 7 || input_packetize[6] || vc_packet_router_input_remote_ptr_buffers[6]);
+static_assert(router_lanes < 8 || input_packetize[7] || vc_packet_router_input_remote_ptr_buffers[7]);
+static_assert(router_lanes < 9 || input_packetize[8] || vc_packet_router_input_remote_ptr_buffers[8]);
+static_assert(router_lanes < 10 || input_packetize[9] || vc_packet_router_input_remote_ptr_buffers[9]);
+
+static_assert(vc_packet_router_output_ptr_buffers[0]);
+static_assert(router_lanes < 2 || vc_packet_router_output_ptr_buffers[1]);
+static_assert(router_lanes < 3 || vc_packet_router_output_ptr_buffers[2]);
+static_assert(router_lanes < 4 || vc_packet_router_output_ptr_buffers[3]);
+static_assert(router_lanes < 5 || vc_packet_router_output_ptr_buffers[4]);
+static_assert(router_lanes < 6 || vc_packet_router_output_ptr_buffers[5]);
+static_assert(router_lanes < 7 || vc_packet_router_output_ptr_buffers[6]);
+static_assert(router_lanes < 8 || vc_packet_router_output_ptr_buffers[7]);
+static_assert(router_lanes < 9 || vc_packet_router_output_ptr_buffers[8]);
+static_assert(router_lanes < 10 || vc_packet_router_output_ptr_buffers[9]);
+
+static_assert(output_depacketize[0] || vc_packet_router_output_remote_ptr_buffers[0]);
+static_assert(router_lanes < 2 || output_depacketize[1] || vc_packet_router_output_remote_ptr_buffers[1]);
+static_assert(router_lanes < 3 || output_depacketize[2] || vc_packet_router_output_remote_ptr_buffers[2]);
+static_assert(router_lanes < 4 || output_depacketize[3] || vc_packet_router_output_remote_ptr_buffers[3]);
+static_assert(router_lanes < 5 || output_depacketize[4] || vc_packet_router_output_remote_ptr_buffers[4]);
+static_assert(router_lanes < 6 || output_depacketize[5] || vc_packet_router_output_remote_ptr_buffers[5]);
+static_assert(router_lanes < 7 || output_depacketize[6] || vc_packet_router_output_remote_ptr_buffers[6]);
+static_assert(router_lanes < 8 || output_depacketize[7] || vc_packet_router_output_remote_ptr_buffers[7]);
+static_assert(router_lanes < 9 || output_depacketize[8] || vc_packet_router_output_remote_ptr_buffers[8]);
+static_assert(router_lanes < 10 || output_depacketize[9] || vc_packet_router_output_remote_ptr_buffers[9]);
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;

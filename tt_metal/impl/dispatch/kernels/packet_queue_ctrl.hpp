@@ -199,3 +199,23 @@ struct packet_queue_ptr_buffer_layout_t {
     static_assert(offsetof(packet_queue_ptr_buffer_t, eth_sent) == ETH_SENT_OFFSET, "eth_sent offset mismatch");
     static_assert(offsetof(packet_queue_ptr_buffer_t, eth_recv) == ETH_RECV_OFFSET, "eth_recv offset mismatch");
 };
+
+// Return the maximum number of packet_queues that can be used in one kernel
+inline uint32_t get_max_queues_used() {
+    return std::max(
+        MAX_SWITCH_FAN_OUT + 1,
+        std::max(
+            MAX_SWITCH_FAN_IN + 1,
+            MAX_TUNNEL_LANES * 2 // bi directional
+        ));
+}
+
+// Return the ptr buffer address based on the queue id
+inline uint32_t get_ptr_addr(const uint32_t ptr_base_addr, const uint32_t queue_id) {
+    uint32_t offset = ptr_base_addr + (queue_id * packet_queue_ptr_buffer_size);
+    if (offset > get_max_queues_used() * packet_queue_ptr_buffer_size) {
+        // L1[0] is an invalid address
+        return 0;
+    }
+    return ptr_base_addr + offset;
+};

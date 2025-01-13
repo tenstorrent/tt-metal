@@ -201,6 +201,17 @@ static_assert(remote_tx_network_type[2] != DispatchRemoteNetworkType::ETH);
 static_assert(remote_tx_network_type[3] != DispatchRemoteNetworkType::ETH);
 static_assert(remote_rx_network_type != DispatchRemoteNetworkType::ETH);
 
+static_assert(demux_input_ptr_buffer && demux_input_remote_ptr_buffer);
+static_assert(demux_output_ptr_buffers[0]);
+static_assert(demux_output_ptr_buffers[1]);
+static_assert(demux_output_ptr_buffers[2]);
+static_assert(demux_output_ptr_buffers[3]);
+
+static_assert(output_depacketize[0] || demux_output_remote_ptr_buffers[0]);
+static_assert(output_depacketize[1] || demux_fan_out < 2 || demux_output_remote_ptr_buffers[1]);
+static_assert(output_depacketize[2] || demux_fan_out < 3 || demux_output_remote_ptr_buffers[2]);
+static_assert(output_depacketize[3] || demux_fan_out < 4 || demux_output_remote_ptr_buffers[3]);
+
 packet_input_queue_state_t input_queue;
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<false>;

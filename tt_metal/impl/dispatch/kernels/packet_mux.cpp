@@ -152,6 +152,19 @@ constexpr uint32_t mux_input_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
 constexpr uint32_t mux_output_ptr_buffer = get_compile_time_arg_val(33);
 constexpr uint32_t mux_output_remote_ptr_buffer = get_compile_time_arg_val(34);
 
+static_assert(mux_input_ptr_buffers[0]);
+static_assert(mux_fan_in < 2 || mux_input_ptr_buffers[1]);
+static_assert(mux_fan_in < 3 || mux_input_ptr_buffers[2]);
+static_assert(mux_fan_in < 4 || mux_input_ptr_buffers[3]);
+
+static_assert(input_packetize[0] || mux_input_remote_ptr_buffers[0]);
+static_assert(input_packetize[1] || mux_fan_in < 2 || mux_input_remote_ptr_buffers[1]);
+static_assert(input_packetize[2] || mux_fan_in < 3 || mux_input_remote_ptr_buffers[2]);
+static_assert(input_packetize[3] || mux_fan_in < 4 || mux_input_remote_ptr_buffers[3]);
+
+static_assert(mux_output_ptr_buffer);
+static_assert(output_depacketize || mux_output_remote_ptr_buffer);
+
 // Packet mux is not a tunneler
 static_assert(remote_rx_network_type[0] != DispatchRemoteNetworkType::ETH);
 static_assert(remote_rx_network_type[1] != DispatchRemoteNetworkType::ETH);

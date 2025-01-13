@@ -227,6 +227,31 @@ constexpr uint32_t vc_eth_tunneler_output_remote_ptr_buffers[MAX_TUNNEL_LANES] =
     get_compile_time_arg_val(87),
 };
 
+
+static_assert(vc_eth_tunneler_input_ptr_buffers[0] && vc_eth_tunneler_input_remote_ptr_buffers[0]);
+// cb_mode is not supported by the eth tunneler
+// pointer buffer addrs are required if the lane is used
+static_assert(tunnel_lanes < 2 || (vc_eth_tunneler_input_ptr_buffers[1] && vc_eth_tunneler_input_remote_ptr_buffers[1]));
+static_assert(tunnel_lanes < 3 || (vc_eth_tunneler_input_ptr_buffers[2] && vc_eth_tunneler_input_remote_ptr_buffers[2]));
+static_assert(tunnel_lanes < 4 || (vc_eth_tunneler_input_ptr_buffers[3] && vc_eth_tunneler_input_remote_ptr_buffers[3]));
+static_assert(tunnel_lanes < 5 || (vc_eth_tunneler_input_ptr_buffers[4] && vc_eth_tunneler_input_remote_ptr_buffers[4]));
+static_assert(tunnel_lanes < 6 || (vc_eth_tunneler_input_ptr_buffers[5] && vc_eth_tunneler_input_remote_ptr_buffers[5]));
+static_assert(tunnel_lanes < 7 || (vc_eth_tunneler_input_ptr_buffers[6] && vc_eth_tunneler_input_remote_ptr_buffers[6]));
+static_assert(tunnel_lanes < 8 || (vc_eth_tunneler_input_ptr_buffers[7] && vc_eth_tunneler_input_remote_ptr_buffers[7]));
+static_assert(tunnel_lanes < 9 || (vc_eth_tunneler_input_ptr_buffers[8] && vc_eth_tunneler_input_remote_ptr_buffers[8]));
+static_assert(tunnel_lanes < 10 || (vc_eth_tunneler_input_ptr_buffers[9] && vc_eth_tunneler_input_remote_ptr_buffers[9]));
+
+static_assert(vc_eth_tunneler_output_ptr_buffers[0] && vc_eth_tunneler_output_remote_ptr_buffers[0]);
+static_assert(tunnel_lanes < 2 || (vc_eth_tunneler_output_ptr_buffers[1] && vc_eth_tunneler_output_remote_ptr_buffers[1]));
+static_assert(tunnel_lanes < 3 || (vc_eth_tunneler_output_ptr_buffers[2] && vc_eth_tunneler_output_remote_ptr_buffers[2]));
+static_assert(tunnel_lanes < 4 || (vc_eth_tunneler_output_ptr_buffers[3] && vc_eth_tunneler_output_remote_ptr_buffers[3]));
+static_assert(tunnel_lanes < 5 || (vc_eth_tunneler_output_ptr_buffers[4] && vc_eth_tunneler_output_remote_ptr_buffers[4]));
+static_assert(tunnel_lanes < 6 || (vc_eth_tunneler_output_ptr_buffers[5] && vc_eth_tunneler_output_remote_ptr_buffers[5]));
+static_assert(tunnel_lanes < 7 || (vc_eth_tunneler_output_ptr_buffers[6] && vc_eth_tunneler_output_remote_ptr_buffers[6]));
+static_assert(tunnel_lanes < 8 || (vc_eth_tunneler_output_ptr_buffers[7] && vc_eth_tunneler_output_remote_ptr_buffers[7]));
+static_assert(tunnel_lanes < 9 || (vc_eth_tunneler_input_ptr_buffers[8] && vc_eth_tunneler_output_remote_ptr_buffers[8]));
+static_assert(tunnel_lanes < 10 || (vc_eth_tunneler_input_ptr_buffers[9] && vc_eth_tunneler_output_remote_ptr_buffers[9]));
+
 packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
 using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
                                                          remote_sender_network_type[1],
