@@ -38,8 +38,7 @@ void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_typ
     TT_FATAL(this->device_ != nullptr, "Device cannot be null");
     TT_FATAL(this->cores_.num_cores() > 0, "CoreRangeSet must have at least one core");
     uint32_t num_cores = this->cores_.num_cores();
-    auto shard_parameters =
-        ShardSpecBuffer(this->cores_, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {num_cores, 1});
+    auto shard_parameters = ShardSpecBuffer(this->cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
     this->buffer_ = Buffer::create(
         this->device_,

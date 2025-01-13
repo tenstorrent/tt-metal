@@ -84,14 +84,16 @@ bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const 
                                                     : device->compute_with_storage_grid_size().x;
     auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
     bool is_non_tile_mul_width =
-        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
+        (conv_config.shard_layout.has_value() && conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+        conv_config.act_block_h_override == 0 &&
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
     return is_non_tile_mul_width;
 }
 
 bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels) {
-    bool use_non_tile_height = conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED &&
+    bool use_non_tile_height = (conv_config.shard_layout.has_value() &&
+                                conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED) &&
                                out_channels <= 256 && conv_config.act_block_h_override == 0 &&
                                (conv_config.dtype == DataType::BFLOAT16 || conv_config.dtype == DataType::FLOAT32) &&
                                conv_config.output_layout == Layout::ROW_MAJOR;
@@ -710,8 +712,18 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
                     ttnn::to_layout(input_tensor, Layout::TILE, std::nullopt, std::nullopt, input_tensor.device());
             }
             if (!auto_shard_mm) {
-                auto resharded_input_tensor =
-                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
+                ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                if (!input_tensor.is_sharded()) {
+                    // In case we need to run Interleaved2Sharded switch fron physical sharding
+                    // to logical sharding, in order to get smaller allocation size of sharded buffer.
+                    input_tensor_sharded_memory_config_to_layout.shard_spec = ShardSpec(
+                        input_tensor_sharded_memory_config.shard_spec.value().grid,
+                        input_tensor_sharded_memory_config.shard_spec.value().shape,
+                        input_tensor_sharded_memory_config.shard_spec.value().shape,
+                        input_tensor_sharded_memory_config.shard_spec.value().orientation);
+                }
+                Tensor resharded_input_tensor =
+                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt);
                 if (conv_config.deallocate_activation) {
                     input_tensor.deallocate(/*force*/ true);
                     resharded_input_tensor = ttnn::move(resharded_input_tensor);

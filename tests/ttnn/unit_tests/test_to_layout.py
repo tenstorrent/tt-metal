@@ -188,3 +188,18 @@ def test_to_layout_for_2D(shape, input_layout, output_layout, device):
     output_tensor = ttnn.to_layout(input_tensor, output_layout)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("w", [1, 5, 14, 97])
+def test_to_from_1d(device, w):
+    torch.manual_seed(2005)
+    torch_input = torch.rand(w)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.float32)
+    ttnn_input = ttnn.to_layout(ttnn_input, ttnn.TILE_LAYOUT)
+    ttnn_input = ttnn.to_device(ttnn_input, device)
+    ttnn_input = ttnn.from_device(ttnn_input)
+    ttnn_input = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn.to_torch(ttnn_input)
+
+    assert_with_pcc(ttnn_input, torch_input)

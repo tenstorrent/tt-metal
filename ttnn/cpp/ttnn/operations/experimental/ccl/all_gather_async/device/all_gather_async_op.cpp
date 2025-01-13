@@ -98,31 +98,13 @@ static void validate_output_tensor_allocation(const std::vector<Tensor>& output_
     }
 }
 
-std::vector<ttnn::SimpleShape> AllGatherAsync::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
-
-std::vector<Tensor> AllGatherAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto output_tensors = std::vector<Tensor>();
-    output_tensors.reserve(1);
-    auto tile = input_tensor.get_tensor_spec().tile();
-    if (this->output_mem_config.is_sharded()) {
-        output_tensors.push_back(create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config,
-            tile));
-    } else {
-        output_tensors = operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config, tile);
-    }
-    log_debug(tt::LogOp, "DEBUG: output_tensors[0] address: {}", output_tensors.at(0).buffer()->address());
-    return output_tensors;
+    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    shape[this->dim] *= this->ring_size;
+    return {TensorSpec(
+        shape,
+        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks AllGatherAsync::create_program(

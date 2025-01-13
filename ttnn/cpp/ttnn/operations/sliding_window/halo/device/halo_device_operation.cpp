@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
+#include <array>
 
 namespace ttnn::operations::sliding_window::halo {
 
@@ -69,9 +70,14 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     }
 
     auto out_mem_config = output_memory_config_;
-    out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw);
-    out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
-    out_mem_config.shard_spec->halo = true;
+    std::array<uint32_t, 2> shard_shape = {
+        tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
+        input_tensor.memory_config().shard_spec->shape[1]};
+    out_mem_config.shard_spec = ShardSpec{
+        output_memory_config_.shard_spec->grid,
+        shard_shape,
+        shard_shape,
+        output_memory_config_.shard_spec->orientation};
     return {TensorSpec(
         output_shape,
         TensorLayout::fromLegacyPaddedShape(

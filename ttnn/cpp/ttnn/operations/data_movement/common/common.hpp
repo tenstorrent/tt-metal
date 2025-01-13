@@ -170,8 +170,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape = std::nullopt,
-    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR,
-    bool halo = false);
+    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
 
 std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coord(
     const std::span<const uint32_t>& tensor_shape,

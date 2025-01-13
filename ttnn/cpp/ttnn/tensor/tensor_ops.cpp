@@ -316,14 +316,12 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
         input_tensor.get_padded_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
             input_tensor.get_padded_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
         "Last 2 dims of output must be within range to have been padded to input");
-    ttnn::SmallVector<uint32_t> output_tensor_start{};
-    ttnn::SmallVector<uint32_t> output_tensor_end{};
-    for (auto index = 0; index < input_tensor.get_padded_shape().rank(); index++) {
-        output_tensor_start.push_back(0);
-        output_tensor_end.push_back(index < output_tensor_shape.rank() ? output_tensor_shape[index] : 1);
+    SimpleShape output_tensor_start(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
+    SimpleShape output_tensor_end(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
+    for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
+        output_tensor_end[index] = output_tensor_shape[index];
     }
-    auto output = input_tensor.unpad(
-        ttnn::SimpleShape(std::move(output_tensor_start)), ttnn::SimpleShape(std::move(output_tensor_end)));
+    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
