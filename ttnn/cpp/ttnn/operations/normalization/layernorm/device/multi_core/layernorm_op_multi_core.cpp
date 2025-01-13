@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_two_stage_reduce = false;
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x <= device->compute_with_storage_grid_size().x &&
+        if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
             grid_size.y > 1) {  // row major and multiple rows
             use_two_stage_reduce = true;
         } else if (

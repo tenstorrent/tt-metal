@@ -261,10 +261,17 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 TensorLayout::fromLegacyPaddedShape(
                     dtype, PageConfig(output_layout), mem_config, ttnn::Shape(output_shape)))};
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto shard_grid = this->memory_config.shard_spec.value().grid;
+            auto shard_spec = ShardSpec{
+                shard_grid,
+                this->memory_config.shard_spec.value().shape,
+                this->memory_config.shard_spec.value().orientation};
+            auto mem_config = this->memory_config;
+            mem_config.shard_spec = shard_spec;
             return {TensorSpec(
                 output_shape.logical_shape(),
                 TensorLayout::fromLegacyPaddedShape(
-                    dtype, PageConfig(output_layout), memory_config, ttnn::Shape(output_shape)))};
+                    dtype, PageConfig(output_layout), mem_config, ttnn::Shape(output_shape)))};
         } else {
             TT_THROW("Unsupported shard scheme");
         }

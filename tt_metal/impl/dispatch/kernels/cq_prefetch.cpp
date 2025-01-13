@@ -603,10 +603,11 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     uint32_t base_addr = cmd->relay_paged.base_addr;
     uint32_t page_size = cmd->relay_paged.page_size;
     uint32_t pages = cmd->relay_paged.pages;
+    uint16_t length_adjust = cmd->relay_paged.is_dram_and_length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
 
     if (page_size > scratch_db_half_size) {
         return process_relay_paged_cmd_large<is_dram>(
-            cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, cmd->relay_paged.length_adjust);
+            cmd_ptr, downstream_data_ptr, page_id, base_addr, page_size, pages, length_adjust);
     }
 
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
@@ -665,9 +666,9 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     // Third step - write from DB
     // Note that we may write less than full pages despite reading full pages based on length_adjust
     // Expectation is that the gain from reading less is small to 0, revisit as needed
-    ASSERT(cmd->relay_paged.length_adjust < page_size);
+    ASSERT(length_adjust < page_size);
     scratch_write_addr = scratch_db_top[db_toggle];
-    uint32_t amt_to_write = amt_read - cmd->relay_paged.length_adjust;
+    uint32_t amt_to_write = amt_read - length_adjust;
     uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -1144,10 +1145,9 @@ bool process_cmd(
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay dram page: " << cmd_ptr << ENDL();
             {
-                uint32_t packed_page_flags = cmd->relay_paged.packed_page_flags;
-                uint32_t is_dram = packed_page_flags & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
-                uint32_t start_page = (packed_page_flags >> CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT) &
-                                      CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
+                uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
+                uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
+                uint32_t start_page = cmd->relay_paged.start_page;
                 if (is_dram) {
                     stride = process_relay_paged_cmd<true>(cmd_ptr, downstream_data_ptr, start_page);
                 } else {

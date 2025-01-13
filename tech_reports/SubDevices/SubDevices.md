@@ -217,7 +217,9 @@ Sender APIs:
 
 * `remote_cb_push_back_and_write_pages(cb_id, local_cb_addr, num_pages, num_rows, coalesced_num_pages_per_row, coalesced_page_size, noc)`
 
-  Used by a sender core to write data to each of its associated receiver cores. This is a combined write and signalling function, where the signalling is similar to `cb_push_back`
+  Used by a sender core to write data to each of its associated receiver cores. This is a combined write and signalling function, where the signalling is similar to `cb_push_back`.
+  `num_pages` refers to the number of pages to send, `num_rows` refers to the number of rows (in tile) of the tensor / block. `coalesced_page_size` refers to the maximum coalesced page size for
+  a single NoC transfer, it can group one or several page size into one `coalesced_page_size`. `coalesced_num_pages_per_row` refers to the number of coalesced pages for a single tensor / block row.
 
 * `resize_remote_receiver_cb_interface(cb_id, page_size, noc)`
 
