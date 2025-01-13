@@ -151,7 +151,8 @@ Tensor to_layout_impl(
 
             tensor = ttnn::untilize_with_unpadding(
                 tensor,
-                tt::tt_metal::LegacyShape(output_tensor_end.view()),
+                // tt::tt_metal::LegacyShape(output_tensor_end.view()),
+                output_tensor_end,
                 output_memory_config,
                 use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
