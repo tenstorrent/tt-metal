@@ -283,9 +283,9 @@ void add_prefetcher_paged_read_cmd(
     CQPrefetchCmd cmd;
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
-    cmd.relay_paged.packed_page_flags =
-        (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) | (start_page << CQ_PREFETCH_RELAY_PAGED_START_PAGE_SHIFT);
-    cmd.relay_paged.length_adjust = length_adjust;
+    cmd.relay_paged.start_page = start_page & CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
+    cmd.relay_paged.is_dram_and_length_adjust = (is_dram << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT) |
+                                                (length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK);
     cmd.relay_paged.base_addr = base_addr;
     cmd.relay_paged.page_size = page_size;
     cmd.relay_paged.pages = pages;
@@ -887,8 +887,9 @@ void gen_rnd_dram_paged_cmd(
 
     uint32_t length_adjust = std::rand() % page_size;
     length_adjust = (length_adjust >> 5) << 5;
-    if (length_adjust >= 64 * 1024) {
-        length_adjust = 63 * 1024;
+    if (length_adjust > CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK) {
+        length_adjust = CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK;
+        length_adjust = (length_adjust >> 5) << 5;
     }
 
     if (device_data.size() * sizeof(uint32_t) + page_size * pages - length_adjust + l1_buf_base_g >=
