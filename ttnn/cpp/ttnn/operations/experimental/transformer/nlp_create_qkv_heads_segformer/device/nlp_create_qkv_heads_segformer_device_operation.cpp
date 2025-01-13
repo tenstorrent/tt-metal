@@ -31,32 +31,21 @@ void NlpCreateHeadsSegformerDeviceOperation::validate(const std::vector<Tensor>&
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsSegformerDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    const auto head_dim = 32;                                      // head_dim is hard-coded = 32
-    auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT;  // head_dim is hard-coded = 32
-    output_shape_vec = {
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim}};
-    // output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim},  };
-
-    return output_shape_vec;
-}
-
-std::vector<Tensor> NlpCreateHeadsSegformerDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    if (this->output_mem_config.is_sharded()) {
+    if (output_mem_config.is_sharded()) {
         TT_ASSERT(false);
         return {};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
+
+    const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_padded_shape();
+    const auto head_dim = 32;                                      // head_dim is hard-coded = 32
+    auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT;  // head_dim is hard-coded = 32
+    TensorSpec spec(
+        SimpleShape({input_shape[0], num_heads, input_shape[2], head_dim}),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    return {spec, spec, spec};
 }
 
 operation::ProgramWithCallbacks NlpCreateHeadsSegformerDeviceOperation::create_program(
