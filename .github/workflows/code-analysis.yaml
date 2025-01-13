@@ -94,7 +94,7 @@ jobs:
 
       - name: Create baseline
         if: github.ref_name != 'main' && !inputs.full-scan
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
@@ -146,7 +146,7 @@ jobs:
           clean: false
 
       - name: Analyze code with clang-tidy
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
