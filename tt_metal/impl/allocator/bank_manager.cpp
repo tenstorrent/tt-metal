@@ -7,6 +7,7 @@
 #include <util.hpp>
 #include <math.hpp>
 #include <magic_enum/magic_enum.hpp>
+#include <hal.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
 namespace tt {
@@ -51,7 +52,7 @@ BankManager::BankManager(
     }
     interleaved_address_limit_ = 0;
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
+    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 BankManager::BankManager(
@@ -67,7 +68,7 @@ BankManager::BankManager(
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes) {
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
+    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
