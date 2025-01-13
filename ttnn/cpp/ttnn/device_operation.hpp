@@ -77,6 +77,17 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
 
+template <typename device_operation_t>
+concept HasSkipLaunch = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    {
+        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::convertible_to<bool>;
+};
+
 namespace detail {
 template <typename... Ts>
 [[nodiscard]] std::variant<Ts...> map_index_to_variant(std::size_t i, std::variant<Ts...>) {
@@ -237,6 +248,12 @@ inline void log_operation(
 template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
 
     auto& program_cache = device->get_program_cache();
 

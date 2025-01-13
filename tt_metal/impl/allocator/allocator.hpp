@@ -76,6 +76,8 @@ public:
 
     void dump_blocks(std::ofstream& out) const;
 
+    MemoryBlockTable get_memory_block_table() const;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true);
     void reset_size();
 
@@ -123,6 +125,8 @@ uint32_t get_alignment(const Allocator& alloator, const BufferType& buffer_type)
 Statistics get_statistics(const Allocator& allocator, const BufferType& buffer_type);
 
 void dump_memory_blocks(const Allocator& allocator, const BufferType& buffer_type, std::ofstream& out);
+
+MemoryBlockTable get_memory_block_table(const Allocator& allocator, const BufferType& buffer_type);
 
 std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator& allocator, uint32_t bank_id);
 

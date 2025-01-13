@@ -147,6 +147,8 @@ public:
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const override;
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const override;
 
+    MemoryBlockTable get_memory_block_table(const BufferType &buffer_type) const override;
+
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
