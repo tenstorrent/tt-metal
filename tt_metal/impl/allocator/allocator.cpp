@@ -64,7 +64,10 @@ BankManager::BankManager(
     }
     this->interleaved_address_limit_ = 0;
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
+    this->init_allocator(
+        size_bytes,
+        hal.get_alignment(HalMemType::DRAM),
+        alloc_offset);  // Initialize the allocator with DRAM alignment, to facilitate noc transfer for most cases
 }
 
 BankManager::BankManager(
@@ -80,7 +83,11 @@ BankManager::BankManager(
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
+    this->init_allocator(
+        size_bytes,
+        hal.get_alignment(HalMemType::DRAM),
+        alloc_offset);  // Initialze the allocator with DRAM alignemnt, to be facilitate noc transfer for most of the
+                        // cases
 }
 
 uint32_t BankManager::num_banks() const { return this->bank_id_to_bank_offset_.size(); }

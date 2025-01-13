@@ -205,8 +205,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
         bank_id_to_bank_offset,
         allocatable_l1_size,
         interleaved_address_limit,
-        alloc_config.dram_alignment,  // used DRAM alignment for L1 banks, to be consistent with DRAM and save trouble
-                                      // of meomory address shifting
+        alloc_config.l1_alignment,
         alloc_config.l1_unreserved_base,
         alloc_config.disable_interleaved);
 
