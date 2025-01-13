@@ -7,12 +7,17 @@ if [[ -z "$TT_METAL_HOME" ]]; then
     exit 1
 fi
 
+if [ -z "${ARCH_NAME}" ]; then
+  echo "Error: ARCH_NAME is not set. Exiting." >&2
+  exit 1
+fi
+
 if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     # Watcher dump tool testing
     echo "Running watcher dump tool tests..."
 
     # Run a test that populates basic fields but not watcher fields
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*PrintHanging
+    ./build/test/tt_metal/unit_tests_debug_tools_${ARCH_NAME} --gtest_filter=*PrintHanging
 
     # Run dump tool w/ minimum data - no error expected.
     ./build/tools/watcher_dump -d=0 -w -c
@@ -22,7 +27,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "Watcher dump minimal test - Pass"
 
     # Now run with all watcher features, expect it to throw.
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherAssertBrisc
+    ./build/test/tt_metal/unit_tests_debug_tools_${ARCH_NAME} --gtest_filter=*WatcherAssertBrisc
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.
@@ -30,7 +35,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "Watcher dump all data test - Pass"
 
     # Check that stack dumping is working
-    ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*TestWatcherRingBufferBrisc
+    ./build/test/tt_metal/unit_tests_debug_tools_${ARCH_NAME} --gtest_filter=*TestWatcherRingBufferBrisc
     ./build/tools/watcher_dump -d=0 -w
     grep "brisc highest stack usage:" generated/watcher/watcher.log > /dev/null || { echo "Error: couldn't find stack usage in watcher log after dump." ; exit 1; }
     echo "Watcher stack usage test - Pass"
