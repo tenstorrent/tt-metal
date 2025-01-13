@@ -87,12 +87,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t max_tile_size_tensor_idx = std::distance(tensor_tile_sizes.begin(), max_tile_size_iterator);
     tt::DataFormat max_tile_size_df = tensor_data_formats[max_tile_size_tensor_idx];
 
-    std::vector<uint32_t> block_sizes;
-    for (uint32_t i = 0; i < num_tensors; i++) {
-        block_sizes.push_back(tensor_block_num_tiles[i] * tensor_tile_sizes[i]);
-    }
-    uint32_t max_block_size_per_reader_core = *std::max_element(block_sizes.begin(), block_sizes.end());
+    // std::vector<uint32_t> block_sizes;
+    // for (uint32_t i = 0; i < num_tensors; i++) {
+    //     block_sizes.push_back(tensor_block_num_tiles[i] * tensor_tile_sizes[i]);
+    // }
+    // auto max_block_sizes_it = std::max_element(block_sizes.begin(), block_sizes.end());
+    uint32_t max_block_size_per_reader_core = max_tile_size * max_block_tiles;
     uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
+
     TT_FATAL(
         max_tensor_size <= global_cb.size(),
         "largest tensor {} must fit in global cb {}",
@@ -111,9 +113,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     TT_FATAL(reader_cb_size <= global_cb.size(), "reader_cb_size must not be larger than global cb");
 
     uint32_t reader_cb_index = tt::CBIndex::c_0;
+    tt::log_info(
+        "cb index: {}, page size: {}, cb size: {}", reader_cb_index, reader_cb_single_tile_size, reader_cb_size);
     CircularBufferConfig reader_cb_config = CircularBufferConfig(reader_cb_size, {{reader_cb_index, max_tile_size_df}})
                                                 .set_page_size(reader_cb_index, reader_cb_single_tile_size)
                                                 .set_globally_allocated_address(global_cb_buffer);
+
     auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     /* tensor addresses cb setup */

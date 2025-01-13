@@ -411,6 +411,11 @@ def run_prefetcher_mm(
                 )
                 outputs_l1.append(output_t)
 
+                # print(output_t.shape)
+                # print(output_t.memory_config())
+                # tt_out = ttnn.to_torch(output_t)
+                # print(tt_out[0][0][0][:])
+
             # Send outputs to DRAM to so that we don't run out of L1 memory when testing for large number of layers
             for t in range(num_tensors):
                 outputs_dram.append(ttnn.to_memory_config(outputs_l1[t], ttnn.DRAM_MEMORY_CONFIG))
@@ -440,6 +445,15 @@ def run_prefetcher_mm(
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
             tt_out = ttnn.to_torch(outputs_t[idx])
             pt_out = in0_tensors[t] @ pt_tensors[idx]
+
+            # print(pt_out)
+            # index = 0
+            # print(tt_out[0][0][0][:])
+            # for ele in tt_out[0][0][0][:]:
+            #     if ele != 32.0:
+            #         break
+            #     index+=1
+            # print(index)
 
             dtype = dtypes[t]
             if dtype == ttnn.bfloat4_b:

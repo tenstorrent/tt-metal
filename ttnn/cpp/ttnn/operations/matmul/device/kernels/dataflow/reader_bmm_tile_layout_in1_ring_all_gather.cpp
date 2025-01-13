@@ -31,10 +31,24 @@ void kernel_main() {
 
         cb_push_back(sync_cb2, 1);
 
+        RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(remote_cb_id);
+
+        // DPRINT  << "cb_id_in1_addr before : " << (uint)(remote_cb.fifo_rd_ptr / 16) << ENDL();
+
 #ifdef ENABLE_GLOBAL_CB
         cb_wait_front(sync_cb, 1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
         cb_pop_front(sync_cb, 1);
+
+        // cb_wait_front(tt::CBIndex::c_5, in1_block_num_tiles);
+        // for (uint32_t i=0; i<16; ++i) {
+        //     DPRINT  << "i " << i << ENDL();
+        //     for (uint32_t j=0; j<32; ++j)
+        //         DPRINT  << TSLICE(tt::CBIndex::c_5, i, SliceRange{.h0 = uint8_t(j), .h1 = uint8_t(j+1), .hs = 1, .w0
+        //         = 0, .w1 = 32, .ws = 1}, true, true) << ENDL();
+        // }
+
+        // DPRINT  << "cb_id_in1_addr after : " << (uint)(remote_cb.fifo_rd_ptr / 16) << ENDL();
 #endif
     }
 

@@ -51,7 +51,7 @@ void kernel_main() {
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;
 
-            cb_reserve_back(cb_id, max_block_num_tiles);
+            cb_reserve_back(cb_id, max_block_num_tiles * 3);
 
             uint32_t l1_write_addr_offset = 0;
             uint32_t l1_write_addr_start = get_write_ptr(cb_id);

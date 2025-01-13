@@ -100,7 +100,10 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
     uint32_t prev_fifo_limit_page_aligned = receiver_cb_interface.fifo_limit_page_aligned;
 
+    // DPRINT  << "resize : " << ENDL();
+    // DPRINT  << "fifo_rd_ptr : " << (uint)(fifo_rd_ptr / 16) << ENDL();
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
+    // DPRINT  << "next_fifo_rd_ptr : " << (uint)(next_fifo_rd_ptr / 16) << ENDL();
     if constexpr (update_remote_over_noc) {
         uint32_t aligned_page_adjustment = 0;
         if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {

@@ -48,9 +48,15 @@ void kernel_main() {
             experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
             experimental::remote_cb_reserve_back(remote_cb_id, num_blocks);
 
+            for (volatile int i = 0; i < 10000; ++i) {
+            }
+
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
+
+                    // RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(remote_cb_id);
+                    // DPRINT  << "cb_id_in1_addr : " << (uint)(remote_cb.fifo_wr_ptr / 16) << ENDL();
 
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                     experimental::remote_cb_push_back_and_write_pages(
