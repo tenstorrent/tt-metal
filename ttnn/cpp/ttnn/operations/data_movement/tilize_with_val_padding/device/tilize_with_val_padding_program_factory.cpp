@@ -275,7 +275,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
 
     bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
-    if (enough_space == 0) {
+    if (!enough_space) {
         return tilize_with_val_padding_single_core(a, output, pad_value);
     }
 
