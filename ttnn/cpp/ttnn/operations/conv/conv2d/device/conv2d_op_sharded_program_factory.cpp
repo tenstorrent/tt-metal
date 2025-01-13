@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/math.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "tt_metal/common/work_split.hpp"
@@ -208,10 +207,10 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
             auto compute_cb_output = tt_metal::CreateCircularBuffer(program, core, compute_cb_output_config);
             log_debug(
                 LogOp,
-                "untilized padded out CB(shard widht non-tile multiple): {}, npages: {}, pagesize: {}",
+                "untilized padded out CB(shard width non-tile multiple): {}, npages: {}, pagesize: {}",
                 untilized_padded_out_cb,
                 num_writer_output_tiles,
-                out_tile_size * num_bytes_for_df);
+                out_tile_size);
             CircularBufferConfig cb_output_config =
                 CircularBufferConfig(
                     num_bytes_for_df * output_shard_shape[0] * output_shard_shape[1], {{out0_cb, out_df}})
@@ -234,12 +233,6 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     .set_page_size(out0_cb, aligned_output_stick_nbytes);
             cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
             cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
-            log_debug(
-                LogOp,
-                "output CB: {}, npages: {}, pagesize: {}",
-                out0_cb,
-                aligned_output_num_pages,
-                aligned_output_stick_nbytes);
         }
     } else {
         // Share buffer if same data format
@@ -253,13 +246,14 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_sharded_input_v2(
                     .set_page_size(matmul_partials_cb, out_tile_size);
             if (output.is_sharded()) {
                 cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+            } else {
+                log_debug(
+                    LogOp,
+                    "Matmul Partials CB: {}, npages: {}, pagesize: {}",
+                    matmul_partials_cb,
+                    num_output_tiles,
+                    out_tile_size);
             }
-            log_debug(
-                LogOp,
-                "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-                matmul_partials_cb,
-                num_output_tiles,
-                out_tile_size);
             cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_matmul_partials_config);
         } else {
             // Separate buffer if not same data format
@@ -352,6 +346,8 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
         CircularBufferConfig cb_act_config = CircularBufferConfig(num_cb0_tiles * act_tile_size, {{act_cb, act_df}})
                                                  .set_page_size(act_cb, act_tile_size);
         auto cb_act = tt_metal::CreateCircularBuffer(program, core, cb_act_config);
+        log_debug(LogOp, "Act CB: {}, npages: {}, pagesize: {}", act_cb, num_cb0_tiles, act_tile_size);
+
     } else {
         TT_THROW("Input must be sharded!");
     }
@@ -360,6 +356,7 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
         CircularBufferConfig(num_cb1_tiles * weight_tile_size, {{weight_cb, weight_df}})
             .set_page_size(weight_cb, weight_tile_size);
     auto cb_weight = tt_metal::CreateCircularBuffer(program, core, cb_weight_config);
+    log_debug(LogOp, "Weight CB: {}, npages: {}, pagesize: {}", weight_cb, num_cb1_tiles, weight_tile_size);
 
     // Used for placing tilized activations
     CircularBufferConfig cb_src0_tilized_config =
@@ -367,6 +364,12 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
             num_cb0_tilized_tiles * tilized_act_tile_size, {{tilize_mode_tilized_act_cb, tilized_act_df}})
             .set_page_size(tilize_mode_tilized_act_cb, tilized_act_tile_size);
     auto cb_src0_tilized = tt_metal::CreateCircularBuffer(program, core, cb_src0_tilized_config);
+    log_debug(
+        LogOp,
+        "Act Tilized CB: {}, npages: {}, pagesize: {}",
+        tilize_mode_tilized_act_cb,
+        num_cb0_tilized_tiles,
+        tilized_act_tile_size);
 
     CBHandle cb_output = 0;
     // Share buffer if same data format
@@ -377,10 +380,12 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
         CircularBufferConfig(1 * out_tile_size, {{matmul_partials_cb, out_df}})
             .set_page_size(matmul_partials_cb, out_tile_size);
     auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, core, cb_matmul_partials_config);
+    log_debug(LogOp, "Matmul Partials CB: {}, npages: {}, pagesize: {}", matmul_partials_cb, 1, out_tile_size);
 
     CircularBufferConfig cb_temp_sum_config =
         CircularBufferConfig(1 * out_tile_size, {{temp_sum_cb, out_df}}).set_page_size(temp_sum_cb, out_tile_size);
     auto cb_temp_sum = tt_metal::CreateCircularBuffer(program, core, cb_temp_sum_config);
+    log_debug(LogOp, "Temp Sum CB: {}, npages: {}, pagesize: {}", temp_sum_cb, 1, out_tile_size);
 
     std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {{out0_cb, out_df}};
     CircularBufferConfig cb_output_config =
@@ -389,6 +394,8 @@ std::tuple<CBHandle, CBHandle> create_CBs_for_depthwise_sharded_input(
 
     if (output.is_sharded()) {
         cb_output_config = cb_output_config.set_globally_allocated_address(*output.buffer());
+    } else {
+        log_debug(LogOp, "Output CB: {}, npages: {}, pagesize: {}", out0_cb, num_output_tiles, out_tile_size);
     }
     cb_output = tt_metal::CreateCircularBuffer(program, cores, cb_output_config);
 
@@ -528,10 +535,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t per_core_out_matrix_width_ntiles = div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
     uint32_t per_core_out_matrix_height_ntiles = div_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
     bool block_sharded = a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    bool height_sharded = a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
 
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    if (height_sharded) {
+        TT_FATAL(conv_act_c_blocks == 1, "conv_act_c_blocks == 1 in HS, got {}", conv_act_c_blocks);
+    }
     uint32_t input_channels_padded = 0;
     if (weight_width_sliced) {
         conv_act_c_blocks = a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? num_cores_x : num_cores_y;
@@ -1088,7 +1099,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
     // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
     // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && ((has_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
+    bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
     std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
     if (is_conv1d and is_depthwise_conv) {
@@ -1234,8 +1245,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
         // Local L1 to store temp vars
         CircularBufferConfig cb_for_l1_array_config =
-            CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
-                .set_page_size(cb_for_l1_array, 32 * 2);
+            CircularBufferConfig(l1_scratchpad_CB_size, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+                .set_page_size(cb_for_l1_array, l1_scratchpad_CB_size);
         auto cb_for_l1_array_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
     } else {
         TT_THROW("Sharded input not supported for this conv yet!");

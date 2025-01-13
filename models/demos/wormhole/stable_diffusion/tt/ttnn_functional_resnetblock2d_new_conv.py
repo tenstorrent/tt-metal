@@ -360,7 +360,6 @@ class resnetBlock2D:
             output_shard_grid,
             shard_spec,
             ttnn.ShardOrientation.COL_MAJOR,
-            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             layout,

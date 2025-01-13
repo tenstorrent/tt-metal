@@ -204,10 +204,10 @@ def test_sharded_concat(input_shape, shard_shape, output_shard_shape, shard_grid
     tt_inputs = []
     input_shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     input_shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, input_shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, input_shard_orientation)
     sharded_mem_config = ttnn.MemoryConfig(input_shard_scheme, ttnn.BufferType.L1, shard_spec)
 
-    output_shard_spec = ttnn.ShardSpec(shard_grid, output_shard_shape, input_shard_orientation, False)
+    output_shard_spec = ttnn.ShardSpec(shard_grid, output_shard_shape, input_shard_orientation)
     output_sharded_mem_config = ttnn.MemoryConfig(input_shard_scheme, ttnn.BufferType.L1, output_shard_spec)
 
     total_elements = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
