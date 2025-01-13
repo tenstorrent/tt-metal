@@ -21,6 +21,8 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace tt::tt_metal::tensor_ops {
 
@@ -325,6 +327,14 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
+}
+
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
+    return ttnn::reshape(input_tensor, new_shape);
+}
+
+Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
+    return ttnn::reshape(input_tensor, new_shape);
 }
 
 }  // namespace tt::tt_metal::tensor_ops
