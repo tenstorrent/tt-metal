@@ -20,6 +20,8 @@ typedef struct demux_static_config {
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_cb_log_page_size;  // [26:29]
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_local_sem_id;      // [26:29]
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_remove_header;     // [26:29]
+    std::optional<uint32_t> demux_input_ptr_buffer;
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> demux_output_ptr_buffers;  // [32:35]
 } demux_static_config_t;
 
 typedef struct demux_dependent_config {
@@ -35,6 +37,8 @@ typedef struct demux_dependent_config {
     std::optional<uint32_t> dest_endpoint_output_map_lo;                                           // Dependent
     std::optional<uint32_t> output_depacketize;                                                    // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_downstream_sem_id;  // [26:29], dependent
+    std::optional<uint32_t> demux_input_remote_ptr_buffer;                                         // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> demux_output_remote_ptr_buffers;       // [36:39], dependent
 } demux_dependent_config_t;
 
 class DemuxKernel : public FDKernel {
