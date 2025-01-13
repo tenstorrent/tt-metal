@@ -84,14 +84,16 @@ bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const 
                                                     : device->compute_with_storage_grid_size().x;
     auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
     bool is_non_tile_mul_width =
-        (conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) && conv_config.act_block_h_override == 0 &&
+        (conv_config.shard_layout.has_value() && conv_config.shard_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+        conv_config.act_block_h_override == 0 &&
         (conv_config.weights_dtype == DataType::BFLOAT8_B || conv_config.weights_dtype == DataType::BFLOAT16) &&
         conv_config.output_layout == Layout::ROW_MAJOR && ((elem_size * in_channels) % (16 * num_cores_c)) == 0;
     return is_non_tile_mul_width;
 }
 
 bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels) {
-    bool use_non_tile_height = conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED &&
+    bool use_non_tile_height = (conv_config.shard_layout.has_value() &&
+                                conv_config.shard_layout.value() == TensorMemoryLayout::HEIGHT_SHARDED) &&
                                out_channels <= 256 && conv_config.act_block_h_override == 0 &&
                                (conv_config.dtype == DataType::BFLOAT16 || conv_config.dtype == DataType::FLOAT32) &&
                                conv_config.output_layout == Layout::ROW_MAJOR;

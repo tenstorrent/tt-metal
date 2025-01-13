@@ -201,6 +201,13 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     return hash;
 }
 
+bool UnaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
+}
+
 std::tuple<UnaryDeviceOperation::operation_attributes_t, UnaryDeviceOperation::tensor_args_t>
 UnaryDeviceOperation::invoke(
     const Tensor& input,
