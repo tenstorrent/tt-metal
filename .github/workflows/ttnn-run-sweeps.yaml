@@ -304,6 +304,7 @@ on:
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
+          - eltwise.binary.nextafter.nextafter
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
@@ -320,6 +321,8 @@ on:
           - eltwise.binary.gt.gt_forge
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
+          - eltwise.binary.floor_divide.floor_divide
+          - eltwise.binary.floor_divide.floor_divide_unary
           - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
