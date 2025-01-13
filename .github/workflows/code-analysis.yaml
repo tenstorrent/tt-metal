@@ -11,10 +11,11 @@ on:
         required: false
         type: boolean
         default: false
-      skip-build-docker-image:
+      build-docker:
         required: false
         type: boolean
-        default: false
+        default: true
+        description: "Build docker image"
   workflow_dispatch:
     inputs:
       os:
@@ -25,14 +26,15 @@ on:
         required: false
         type: boolean
         default: false
-      skip-build-docker-image:
+      build-docker:
         required: false
         type: boolean
-        default: false
+        default: true
+        description: "Build docker image"
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.skip-build-docker-image != 'true' }}
+    if: ${{ inputs.build-docker == true }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
