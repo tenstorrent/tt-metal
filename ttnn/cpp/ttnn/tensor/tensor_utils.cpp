@@ -200,12 +200,6 @@ Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor)
     return tensor;
 }
 
-Shape2D get_2d_shape(const ttnn::SimpleShape& shape) {
-    size_t width = shape[-1];
-    size_t height = shape.volume() / width;
-    return Shape2D{height, width};
-}
-
 ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
     const auto last_shard_height =

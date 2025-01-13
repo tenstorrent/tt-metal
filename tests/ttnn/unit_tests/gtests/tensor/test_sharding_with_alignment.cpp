@@ -107,19 +107,19 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     auto physical_shape = tensor_spec.physical_shape();
     ASSERT_EQ(physical_shape, params.expected.physical_shape);
 
-    const auto& logical_data = params.inputs.logical_data;
+    auto logical_data = params.inputs.logical_data;
     const auto& expected_physical_data = params.expected.physical_data;
 
     // Convert output physical data to row major (if necessary) for testing
-    auto physical_data = tensor_impl::encode_tensor_data(logical_data, tensor_spec);
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_tile_to_row_major(
             physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
     }
 
-    // auto shape_2D = tt::tt_metal::get_2d_shape(tensor_spec.logical_shape());
-    // pretty_print_data_as_shards(logical_data, shape_2D, logical_shard_shape);
+    // auto shape_2d = tensor_spec.logical_2d_shape();
+    // pretty_print_data_as_shards(params.inputs.logical_data, shape_2d, logical_shard_shape);
     // pretty_print_data_as_shards(physical_data, physical_shape, physical_shard_shape);
 
     ASSERT_EQ(physical_data.size(), expected_physical_data.size());
@@ -165,11 +165,11 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
         physical_data = tensor_impl::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
     }
-    auto logical_data = tensor_impl::decode_tensor_data(physical_data, tensor_spec);
+    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
-    // auto shape_2D = tt::tt_metal::get_2d_shape(tensor_spec.logical_shape());
-    // pretty_print_data_as_shards(physical_data, physical_shape, physical_shard_shape);
-    // pretty_print_data_as_shards(logical_data, shape_2D, logical_shard_shape);
+    // auto shape_2d = tensor_spec.logical_2d_shape();
+    // pretty_print_data_as_shards(params.expected.physical_data, physical_shape, physical_shard_shape);
+    // pretty_print_data_as_shards(logical_data, shape_2d, logical_shard_shape);
 
     ASSERT_EQ(logical_data.size(), expected_data.size());
     for (size_t i = 0; i < logical_data.size(); i++) {
