@@ -76,6 +76,10 @@
 
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
 
+## Model Bring-Up and Testing
+
+For information regarding model bring-up and model testing, see [Model Bring-up and Testing ReadMe](models/bringup_testing/README.md)
+
 ## TT-NN Tech Reports
 
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Dec 4th, 2024)
