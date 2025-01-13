@@ -283,3 +283,12 @@ def get_device_grid_size():
     ttnn.close_device(device)
     del device
     return y, x
+
+
+def gen_min_max_tensors(input_shape, low=-100, high=100, max_offset=100):
+    min_tensor = torch.Tensor(size=input_shape).uniform_(low, high).to(torch.bfloat16)
+
+    max_tensor = min_tensor + torch.Tensor(size=input_shape).uniform_(0, max_offset)
+    max_tensor = torch.where(max_tensor > high, high, max_tensor)
+
+    return [min_tensor, max_tensor]
