@@ -59,7 +59,7 @@ inline void reblock_and_untilize(
         int block_offset = 0;
 
         // Reblock
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(interm_cb_id);
         cb_reserve_back(reblock_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {

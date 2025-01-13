@@ -196,7 +196,7 @@
                                                                        \
         tile_regs_acquire();                                           \
         for (uint32_t i = 0; i < per_core_block_size; ++i) {           \
-            copy_tile_to_dst_init_short();                             \
+            copy_tile_to_dst_init_short(cb_pre);                       \
             copy_tile(cb_pre, i, i);                                   \
             PROCESS_ACTIVATIONS(op, i);                                \
         }                                                              \

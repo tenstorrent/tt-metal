@@ -62,11 +62,11 @@ void MAIN {
         cb_wait_front(cb_x, onetile);  // comes from the reader
         cb_reserve_back(cb_xabs, onetile);
 
-        copy_tile_init();
+        copy_tile_init(cb_x);
         copy_tile(cb_x, 0, dst0);
 
         if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init();
+            copy_tile_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 0, dst1);
 
             mask_tile_init();
@@ -74,7 +74,7 @@ void MAIN {
         }
 
         if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init();
+            copy_tile_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 1, dst1);
 
             mask_tile_init();
@@ -99,7 +99,7 @@ void MAIN {
             cb_wait_front(cb_correct_xpow, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
-            copy_tile_init();
+            copy_tile_init(cb_correct_xpow);
             copy_tile(cb_correct_xpow, 0, dst0);
             tile_regs_commit();
 
