@@ -9,6 +9,7 @@ set(UNIT_TESTS_INTEGRATION_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_multi_core_X_dram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_single_core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/matmul/test_matmul_X_tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/vecadd/test_vecadd_multi_core.cpp
 )
 
 add_executable(unit_tests_integration ${UNIT_TESTS_INTEGRATION_SRC})
