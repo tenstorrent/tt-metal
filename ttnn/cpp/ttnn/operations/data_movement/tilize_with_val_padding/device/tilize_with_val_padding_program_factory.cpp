@@ -102,8 +102,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     // auto true_input_shape = a.get_legacy_shape();
     // auto true_output_shape = output.get_legacy_shape();
-    auto true_input_shape = a.get_logical_shape();
-    auto true_output_shape = output.get_logical_shape();
+    auto true_input_shape = a.get_padded_shape();
+    auto true_output_shape = output.get_padded_shape();
 
     auto input_w = true_input_shape.rank() >= 4 ? true_input_shape[-4] : 1;
     auto input_z = true_input_shape.rank() >= 3 ? true_input_shape[-3] : 1;
