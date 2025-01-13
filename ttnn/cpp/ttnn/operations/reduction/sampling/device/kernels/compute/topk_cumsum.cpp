@@ -16,12 +16,18 @@ int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(0);
+    mask_cb_index constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(3);
     constexpr uint32_t values_cb_index = get_compile_time_arg_val(4);
     constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t output_local_values_rm_cb_index constexpr uint32_t output_local_indices_rm_cb_index =
+        get_compile_time_arg_val(6);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(6);
+
     constexpr uint32_t Ht = get_compile_time_arg_val(6);
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t K = get_compile_time_arg_val(8);
@@ -167,6 +173,8 @@ void MAIN {
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);
 
+        // add mask
+        // softmax
         // untilize final indices
         // untilize values
         // untilize indices
