@@ -33,14 +33,11 @@ void IndexedFill::validate(const std::vector<Tensor>& input_tensors) const {
         "Index Fill does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> IndexedFill::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(1).get_logical_shape()};
-}
-
-std::vector<Tensor> IndexedFill::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> IndexedFill::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks IndexedFill::create_program(

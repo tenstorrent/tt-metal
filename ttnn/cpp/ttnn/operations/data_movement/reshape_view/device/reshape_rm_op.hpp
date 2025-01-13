@@ -16,8 +16,7 @@ struct RM_RESHAPE_STRUCT {
     //Required functions to all tensor op functions
     void update_structure (const Tensor& input_tensor);
     void validate(const std::vector<Tensor> &input_tensors) const;
-    std::vector<SimpleShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };

@@ -60,14 +60,24 @@ void CopyDeviceOperation::validate_with_output_tensors(
         out_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Copy does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> CopyDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    if (input_tensors.size() == 2) {
-        return {input_tensors[1].get_logical_shape()};
-    } else {
-        const auto& input_tensor = input_tensors.at(0);
-        return {input_tensor.get_logical_shape()};
+std::vector<ttnn::TensorSpec> CopyDeviceOperation::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (!output_tensors.empty() && output_tensors[0].has_value()) {
+        return {output_tensors[0]->get_tensor_spec()};
     }
+    if (input_tensors.size() == 2) {
+        return {input_tensors[1].get_tensor_spec()};
+    }
+
+    const auto& input_tensor = input_tensors.at(0);
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig(input_tensor.get_layout()),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
 }
 
 std::vector<Tensor> CopyDeviceOperation::create_output_tensors(
@@ -77,17 +87,10 @@ std::vector<Tensor> CopyDeviceOperation::create_output_tensors(
     }
     if (input_tensors.size() == 2) {
         return {input_tensors[1]};
-    } else {
-        const auto& input_tensor = input_tensors.at(0);
-        std::vector<Tensor> output_tensors;
-        output_tensors.emplace_back(create_device_tensor(
-            input_tensor.get_legacy_shape(),
-            output_dtype,
-            input_tensors.at(0).get_layout(),
-            input_tensor.device(),
-            output_mem_config));
-        return output_tensors;
     }
+    const auto& input_tensor = input_tensors.at(0);
+    auto spec = compute_output_specs(input_tensors, output_tensors)[0];
+    return {create_device_tensor(spec, input_tensor.device())};
 }
 
 operation::ProgramWithCallbacks CopyDeviceOperation::create_program(

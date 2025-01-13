@@ -21,12 +21,7 @@ void RM_RESHAPE_STRUCT::validate(const std::vector<Tensor>& input_tensors) const
     TT_FATAL(this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Output tensor must have the same memory layout as input tensor");
 }
 
-std::vector<SimpleShape> RM_RESHAPE_STRUCT::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {output_shape.logical_shape()};
-}
-
-std::vector<Tensor> RM_RESHAPE_STRUCT::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    //Create the output tensor
+std::vector<TensorSpec> RM_RESHAPE_STRUCT::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto mem_config = this->output_mem_config;
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -34,7 +29,14 @@ std::vector<Tensor> RM_RESHAPE_STRUCT::create_output_tensors(const std::vector<T
         shard_spec.shape[0] = output_shape[0];
         mem_config.shard_spec = shard_spec;
     }
-    return {create_device_tensor(output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(), mem_config)};
+    return {TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor_a.get_dtype(),
+            PageConfig(input_tensor_a.get_layout()),
+            mem_config,
+            output_shape.logical_shape(),
+            output_shape.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks RM_RESHAPE_STRUCT::create_program( const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const

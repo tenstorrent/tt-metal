@@ -105,31 +105,19 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<ttnn::SimpleShape> ConcatDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> ConcatDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape shape_out = input_tensors[0].get_logical_shape();
+    const Tensor& ref_in_tensor = input_tensors.at(0);
+    ttnn::SimpleShape shape_out = ref_in_tensor.get_logical_shape();
     shape_out[this->dim] = 0;
     for (const Tensor& in_ref : input_tensors) {
         ttnn::SimpleShape curr_shape = in_ref.get_logical_shape();
         shape_out[this->dim] += curr_shape[this->dim];
     }
-    return {shape_out};
-}
 
-std::vector<Tensor> ConcatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const Tensor& ref_in_tensor = input_tensors.at(0);
-
-    if (this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            ref_in_tensor.get_dtype(),
-            ref_in_tensor.get_layout(),
-            ref_in_tensor.device(),
-            this->output_mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, ref_in_tensor.get_dtype(), ref_in_tensor.get_layout(), this->output_mem_config);
-    }
+    return {TensorSpec(
+        shape_out,
+        TensorLayout(ref_in_tensor.get_dtype(), PageConfig(ref_in_tensor.get_layout()), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(

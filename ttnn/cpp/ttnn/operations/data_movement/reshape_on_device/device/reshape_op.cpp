@@ -48,20 +48,17 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     }
 }
 
-std::vector<ttnn::SimpleShape> ReshapeDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {output_shape.logical_shape()};
-}
-
-std::vector<Tensor> ReshapeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    return {create_device_tensor(
-        output_shape,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout(),
-        input_tensor_a.device(),
-        this->output_mem_config,
-        input_tensor_a.get_tensor_spec().tile())};
+    const auto& input_tensor = input_tensors.at(0);
+    return {TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            input_tensor.get_tensor_spec().page_config(),
+            output_mem_config,
+            output_shape.logical_shape(),
+            output_shape.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(
