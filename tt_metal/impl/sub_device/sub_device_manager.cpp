@@ -20,10 +20,16 @@
 
 namespace tt::tt_metal {
 
-namespace detail {
+// assert here to avoid the need to include command_queue_interface.hpp in header
+static_assert(
+    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+
+std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
 SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+    id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
     local_l1_size_(align(local_l1_size, hal.get_alignment(HalMemType::L1))),
     device_(device) {
@@ -36,7 +42,8 @@ SubDeviceManager::SubDeviceManager(
     this->populate_worker_launch_message_buffer_state();
 }
 
-SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) : device_(device) {
+SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
+    id_(next_sub_device_manager_id_++), device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     local_l1_size_ = 0;
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
@@ -72,6 +79,8 @@ SubDeviceManager::~SubDeviceManager() {
         }
     }
 }
+
+SubDeviceManagerId SubDeviceManager::id() const { return id_; }
 
 uint8_t SubDeviceManager::num_sub_devices() const { return sub_devices_.size(); }
 
@@ -360,7 +369,5 @@ void SubDeviceManager::populate_worker_launch_message_buffer_state() {
     worker_launch_message_buffer_state_.resize(this->num_sub_devices());
     this->reset_worker_launch_message_buffer_state();
 }
-
-}  // namespace detail
 
 }  // namespace tt::tt_metal
