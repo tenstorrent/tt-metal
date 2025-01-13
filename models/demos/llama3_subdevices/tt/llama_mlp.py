@@ -86,11 +86,11 @@ class TtLlamaMLP(LightweightModule):
         if self.model_config["USE_PREFETCHER"]:
             self.prefetcher_setup.insert_tensor(self.w1)
         self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
-        if self.model_config["USE_PREFETCHER"]:
-            self.prefetcher_setup.insert_tensor(self.w2)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
         if self.model_config["USE_PREFETCHER"]:
             self.prefetcher_setup.insert_tensor(self.w3)
+        if self.model_config["USE_PREFETCHER"]:
+            self.prefetcher_setup.insert_tensor(self.w2)
         # [:2304, :3840]
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
@@ -105,7 +105,6 @@ class TtLlamaMLP(LightweightModule):
         # self.w3 = ttnn.to_memory_config(self.w3, self.model_config["W1W3_RING_MEMCFG"])
 
         # x = ttnn.to_memory_config(x, self.model_config["SHARDED_FF12_RING_MEMCFG"])
-        print(x.shape)
         seq_len = x.shape[-2]
         TG = self.args.is_galaxy
 
@@ -159,7 +158,6 @@ class TtLlamaMLP(LightweightModule):
             if self.model_config["USE_PREFETCHER"]
             else None,
         )
-        print(w3_out)
         ttnn.deallocate(x)
 
         if TG:
