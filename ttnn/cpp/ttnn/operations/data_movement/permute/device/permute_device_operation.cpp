@@ -50,15 +50,23 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
 void PermuteDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
-PermuteDeviceOperation::shape_return_value_t PermuteDeviceOperation::compute_output_shapes(
+PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_output_specs(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.optional_output_tensor.has_value()) {
+        return tensor_args.optional_output_tensor->get_tensor_spec();
+    }
+
     SmallVector<uint32_t> shape;
-    auto input_shape = tensor_args.input_tensor.get_logical_shape();
+    const auto& input_tensor = tensor_args.input_tensor;
+    auto input_shape = input_tensor.get_logical_shape();
     shape.reserve(input_shape.rank());
     for (auto dim : attributes.dims) {
         shape.push_back(input_shape[dim]);
     }
-    return ttnn::SimpleShape(shape);
+
+    return TensorSpec(
+        SimpleShape(std::move(shape)),
+        TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), attributes.output_mem_config));
 }
 
 PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(
@@ -66,14 +74,8 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
     }
-    auto output_shape = compute_output_shapes(operation_attributes, tensor_args);
-    const auto& input_tensor = tensor_args.input_tensor;
     return create_device_tensor(
-        output_shape,
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        input_tensor.device(),
-        operation_attributes.output_mem_config);
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 std::tuple<PermuteDeviceOperation::operation_attributes_t, PermuteDeviceOperation::tensor_args_t>

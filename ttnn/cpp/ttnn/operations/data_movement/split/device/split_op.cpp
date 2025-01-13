@@ -38,21 +38,16 @@ void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) co
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
 
-std::vector<tt::tt_metal::LegacyShape> SplitDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto input_shape_array = input_tensor.get_legacy_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[this->dim] /= this->num_splits;
-    tt::tt_metal::LegacyShape output_shape(output_shape_array);
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vector(this->num_splits, output_shape);
-    return output_shape_vector;
-}
-
-std::vector<Tensor> SplitDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    TensorSpec spec(
+        SimpleShape(output_shape_array),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+    return std::vector<ttnn::TensorSpec>(this->num_splits, spec);
 }
 
 operation::ProgramWithCallbacks SplitDeviceOperation::create_program(
