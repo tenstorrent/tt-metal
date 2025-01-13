@@ -109,7 +109,7 @@ jobs:
       - name: Pull docker image
         run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
       - name: Build tt-metal and libs
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |

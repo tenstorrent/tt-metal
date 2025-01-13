@@ -91,32 +91,19 @@ void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tens
         "Transformation matrix must be sharded to single tile of shape (32, 32)");
 }
 
-std::vector<ttnn::SimpleShape> RotaryEmbeddingLlamaFusedQK::compute_output_shapes(
+std::vector<ttnn::TensorSpec> RotaryEmbeddingLlamaFusedQK::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& k_input_tensor = input_tensors.at(1);
     auto q_shape = q_input_tensor.get_logical_shape();
     auto k_shape = k_input_tensor.get_logical_shape();
-    return {q_shape, k_shape};
-}
-
-std::vector<Tensor> RotaryEmbeddingLlamaFusedQK::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& q_input_tensor = input_tensors.at(0);
-    const auto& k_input_tensor = input_tensors.at(1);
-    auto output_shapes = this->compute_output_shapes(input_tensors);
     return {
-        create_device_tensor(
-            output_shapes[0],
-            q_input_tensor.get_dtype(),
-            q_input_tensor.get_layout(),
-            q_input_tensor.device(),
-            this->q_output_mem_config),
-        create_device_tensor(
-            output_shapes[1],
-            k_input_tensor.get_dtype(),
-            k_input_tensor.get_layout(),
-            k_input_tensor.device(),
-            this->k_output_mem_config)};
+        TensorSpec(
+            q_shape,
+            TensorLayout(q_input_tensor.get_dtype(), PageConfig(q_input_tensor.get_layout()), q_output_mem_config)),
+        TensorSpec(
+            k_shape,
+            TensorLayout(k_input_tensor.get_dtype(), PageConfig(k_input_tensor.get_layout()), k_output_mem_config))};
 }
 
 operation::ProgramWithCallbacks RotaryEmbeddingLlamaFusedQK::create_program(

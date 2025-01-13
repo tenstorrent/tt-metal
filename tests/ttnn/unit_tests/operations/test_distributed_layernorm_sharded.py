@@ -124,17 +124,7 @@ def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps):
         )
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
-@pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize("core_grid", ((4, 8),))
-@pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
-@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
-def test_pre_allgather_layernorm(
+def run_pre_allgather_layernorm(
     device,
     use_program_cache,
     input_width,
@@ -187,6 +177,94 @@ def test_pre_allgather_layernorm(
             ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
     logger.info("Pre-allgather layernorm test passed for all devices")
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("input_width", [2048])
+@pytest.mark.parametrize("num_devices", [4, 8])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize("core_grid", ((4, 8),))
+@pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
+@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
+def test_pre_allgather_layernorm(
+    device,
+    use_program_cache,
+    input_width,
+    num_devices,
+    is_rmsnorm,
+    input_df,
+    seed,
+    mean,
+    std,
+    core_grid,
+    min_pcc_ex,
+    max_atol_ex,
+    min_pcc_ex2,
+    max_atol_ex2,
+):
+    run_pre_allgather_layernorm(
+        device,
+        use_program_cache,
+        input_width,
+        num_devices,
+        is_rmsnorm,
+        input_df,
+        seed,
+        mean,
+        std,
+        core_grid,
+        min_pcc_ex,
+        max_atol_ex,
+        min_pcc_ex2,
+        max_atol_ex2,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("input_width", [1024])
+@pytest.mark.parametrize("num_devices", [4, 8])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize(("mean", "std"), ([0, 1],))
+@pytest.mark.parametrize("core_grid", ((4, 1),))
+@pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
+@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
+def test_pre_allgather_layernorm_1d_reduce(
+    device,
+    use_program_cache,
+    input_width,
+    num_devices,
+    is_rmsnorm,
+    input_df,
+    seed,
+    mean,
+    std,
+    core_grid,
+    min_pcc_ex,
+    max_atol_ex,
+    min_pcc_ex2,
+    max_atol_ex2,
+):
+    run_pre_allgather_layernorm(
+        device,
+        use_program_cache,
+        input_width,
+        num_devices,
+        is_rmsnorm,
+        input_df,
+        seed,
+        mean,
+        std,
+        core_grid,
+        min_pcc_ex,
+        max_atol_ex,
+        min_pcc_ex2,
+        max_atol_ex2,
+    )
 
 
 @skip_for_grayskull()

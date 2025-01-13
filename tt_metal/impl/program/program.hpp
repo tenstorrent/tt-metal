@@ -192,6 +192,7 @@ class Program {
     HWCommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+    uint32_t get_cb_memory_size() const;
    private:
     std::unique_ptr<detail::Program_> pimpl_;
 

@@ -134,6 +134,10 @@ def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
+def get_memory_view(device, buffer_type):
+    return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
+
+
 def is_wormhole_b0(device=None):
     if device is not None:
         return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
