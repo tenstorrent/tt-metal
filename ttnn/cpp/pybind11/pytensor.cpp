@@ -78,7 +78,7 @@ Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
     auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
     // See implementation for documentation
-    auto physical_data = tensor_impl::encode_tensor_data(logical_data, tensor_spec);
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
 
     auto buffer = owned_buffer::create(std::move(physical_data));
     auto storage = OwnedStorage{std::move(buffer)};
@@ -94,8 +94,7 @@ Tensor create_tt_tensor_from_py_data(
     const std::function<void()>& on_destruction_callback) {
     auto layout = tensor_spec.layout();
 
-    const bool requires_padding = tensor_spec.logical_shape().volume() !=
-                                  tensor_spec.physical_shape().height() * tensor_spec.physical_shape().width();
+    const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
     const bool requires_tilization = layout != Layout::ROW_MAJOR;
     const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
 
@@ -418,7 +417,7 @@ Tensor convert_python_tensors_to_tt_tensors(
 
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
-    owned_buffer::Buffer<T> owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool legacy_output) {
+    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool legacy_output) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
@@ -435,7 +434,7 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
     auto physical_data = owned_buffer.get();
 
     // See implementation for documentation
-    auto logical_data = tensor_impl::decode_tensor_data(physical_data, tensor_spec);
+    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
     return owned_buffer::create(std::move(logical_data));
 }
@@ -453,27 +452,27 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
                 switch (tt_dtype) {
                     case DataType::UINT8: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<uint8_t>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::UINT16: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<uint16_t>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::INT32: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<int32_t>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::UINT32: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<uint32_t>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::FLOAT32: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<float>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::BFLOAT16: {
                         return create_row_major_owned_buffer(
-                            owned_buffer::get_as<::bfloat16>(storage.buffer), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, legacy_output);
                     }
                     case DataType::BFLOAT8_B:
                     case DataType::BFLOAT4_B: {
@@ -486,7 +485,7 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
                                 : unpack_bfp4_tiles_into_float_vec(
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
                         auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                        return create_row_major_owned_buffer(input_float_buffer, tensor_spec, legacy_output);
+                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
                     }
                     default: {
                         TT_THROW("Unsupported DataType: {}", tt_dtype);
