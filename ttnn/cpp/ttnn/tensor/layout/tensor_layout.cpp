@@ -260,6 +260,18 @@ Shape2D TensorLayout::get_physical_shard_shape() const {
     }
 }
 
+Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::SimpleShape& shape) const {
+    if (shape.rank() < 2) {
+        return Shape2D{1, shape[-1]};
+    }
+    size_t width = shape[-1];
+    size_t height = shape[-2];
+    for (int i = -3; i >= -shape.rank(); --i) {
+        height *= shape[i];
+    }
+    return Shape2D{height, width};
+}
+
 Shape2D TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());

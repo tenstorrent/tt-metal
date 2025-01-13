@@ -718,7 +718,7 @@ std::vector<float> Tensor::to_vector<float>() const {
                     : unpack_bfp4_tiles_into_float_vec(
                           packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
-            return tensor_impl::decode_tensor_data(unpacked_data, cpu_tensor.tensor_spec());
+            return tensor_impl::decode_tensor_data(std::move(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
             TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());

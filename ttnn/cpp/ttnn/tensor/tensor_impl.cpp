@@ -721,6 +721,7 @@ Tensor to_device<bfloat8_b>(
 // ======================================================================================
 //     Helpers for converting between logical <-> physical data with full tensor spec
 // ======================================================================================
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 // TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
@@ -746,14 +747,14 @@ std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& t
 using LogicalPhysicalIdxPairs = std::vector<std::pair<size_t, size_t>>;
 using LogicalPhysicalMapping = std::pair<LogicalPhysicalIdxPairs, size_t>;
 std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
-    const Shape2D& logical_2D_shape,
+    const Shape2D& logical_2d_shape,
     const Shape2D& logical_shard_shape,
     const Shape2D& physical_shard_shape,
     const size_t physical_stride) {
-    const auto logical_stride = logical_2D_shape.width();
+    const auto logical_stride = logical_2d_shape.width();
 
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
-        tt::tt_metal::compute_shard_division_spec(logical_2D_shape, logical_shard_shape);
+        tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
     std::vector<LogicalPhysicalMapping> logical_physical_mapping(num_shards_height * num_shards_width);
 
@@ -779,9 +780,10 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     return logical_physical_mapping;
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const TensorSpec& tensor_spec) {
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
@@ -790,94 +792,104 @@ std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const Tens
         logical_shape);
 
     const auto& physical_shape = tensor_spec.physical_shape();
-    auto [logical_shard_shape, physical_shard_shape] =
-        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-    std::vector<T> physical_data(physical_shape.height() * physical_shape.width(), 0);
+    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& logical_data) {
+        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
 
-    auto logical_2D_shape = tt::tt_metal::get_2d_shape(logical_shape);
-    size_t physical_stride = physical_shape.width();
+        if (logical_2d_shape != physical_shape) {
+            auto [logical_shard_shape, physical_shard_shape] =
+                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), 0);
 
-    for (const auto& [indices, cols] : logical_physical_mapping) {
-        for (const auto [logical_idx_start, physical_idx_start] : indices) {
-            for (size_t col = 0; col < cols; col++) {
-                physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+            size_t physical_stride = physical_shape.width();
+
+            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+            for (const auto& [indices, cols] : logical_physical_mapping) {
+                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                    for (size_t col = 0; col < cols; col++) {
+                        row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+                    }
+                }
             }
+            return row_major_physical_data;
+        } else {
+            return logical_data;
         }
-    }
+    }(std::move(logical_data));
 
     TT_FATAL(
-        physical_data.size() == physical_shape.height() * physical_shape.width(),
+        row_major_physical_data.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
-        physical_data.size(),
+        row_major_physical_data.size(),
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
         return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), row_major_physical_data);
     }
-    return physical_data;
+    return row_major_physical_data;
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    const std::vector<bfloat16>& logical_data, const TensorSpec& tensor_spec);
-template std::vector<float> encode_tensor_data<float>(
-    const std::vector<float>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec);
+template std::vector<float> encode_tensor_data<float>(std::vector<float>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    const std::vector<int32_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    const std::vector<uint32_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    const std::vector<uint16_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    const std::vector<uint8_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec);
 
 template <typename T>
-std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const TensorSpec& tensor_spec) {
-    auto physical_shape = tensor_spec.physical_shape();
+std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+    const auto& physical_shape = tensor_spec.physical_shape();
     TT_FATAL(
         physical_data.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
         physical_data.size(),
         physical_shape);
 
-    tt::stl::Span<const T> row_major_physical_data;
-    std::vector<T> converted_physical_data;
-    if (tensor_spec.layout() == Layout::TILE) {
-        // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
-        converted_physical_data = tensor_impl::convert_layout_tile_to_row_major(
-            physical_shape,
-            tensor_spec.tile(),
-            owned_buffer::Buffer<T>{std::make_shared<std::vector<T>>(physical_data)});
-        row_major_physical_data = tt::stl::Span<const T>(converted_physical_data);
-    } else {
-        row_major_physical_data = tt::stl::Span<const T>(physical_data);
-    }
+    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& physical_data) {
+        if (tensor_spec.layout() == Layout::TILE) {
+            return tensor_impl::convert_layout_tile_to_row_major(physical_shape, tensor_spec.tile(), physical_data);
+        } else {
+            return physical_data;
+        }
+    }(std::move(physical_data));
+
+    auto logical_data = [&tensor_spec, &physical_shape](auto&& row_major_physical_data) {
+        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
+
+        if (logical_2d_shape != physical_shape) {
+            auto [logical_shard_shape, physical_shard_shape] =
+                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+            auto logical_data = std::vector<T>(logical_2d_shape.height() * logical_2d_shape.width(), 0);
+
+            size_t physical_stride = physical_shape.width();
+
+            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+            for (const auto& [indices, cols] : logical_physical_mapping) {
+                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                    for (size_t col = 0; col < cols; col++) {
+                        logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
+                    }
+                }
+            }
+            return logical_data;
+        } else {
+            return row_major_physical_data;
+        }
+    }(std::move(row_major_physical_data));
 
     const auto& logical_shape = tensor_spec.logical_shape();
-    auto [logical_shard_shape, physical_shard_shape] =
-        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-    auto logical_2D_shape = tt::tt_metal::get_2d_shape(logical_shape);
-    std::vector<T> logical_data(logical_2D_shape.height() * logical_2D_shape.width(), 0);
-
-    size_t physical_stride = physical_shape.width();
-
-    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-    for (const auto& [indices, cols] : logical_physical_mapping) {
-        for (const auto [logical_idx_start, physical_idx_start] : indices) {
-            for (size_t col = 0; col < cols; col++) {
-                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
-            }
-        }
-    }
-
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
@@ -888,17 +900,17 @@ std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const Ten
 }
 
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
-    const std::vector<bfloat16>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<bfloat16>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<float> decode_tensor_data<float>(
-    const std::vector<float>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<float>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> decode_tensor_data<int32_t>(
-    const std::vector<int32_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<int32_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> decode_tensor_data<uint32_t>(
-    const std::vector<uint32_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint32_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> decode_tensor_data<uint16_t>(
-    const std::vector<uint16_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint16_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
-    const std::vector<uint8_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint8_t>&& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()
