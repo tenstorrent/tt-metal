@@ -1436,7 +1436,7 @@ void Matmul::validate(
             "Unsupported bias shape: padded last dimension of bias, {}, not equal to second input's padded last "
             "dimension, {}.",
             bias_shape_aligned[-1],
-            b_shape.with_tile_padding()[-1]);
+            b_shape_aligned[-1]);
         TT_FATAL(
             bias_shape[-1] >= b_shape[-1],
             "Unsupported bias shape: last dimension of bias, {}, not equal to or greater than second input's last "
