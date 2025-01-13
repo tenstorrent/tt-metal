@@ -406,7 +406,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
-    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();    
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();
     ttnn::SimpleShape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         original_conv_weight_tensor_shape[1] * num_groups,
