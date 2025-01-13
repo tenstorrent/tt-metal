@@ -26,7 +26,6 @@ class IMeshHandle {
 public:
     virtual ~IMeshHandle() = default;
     virtual const std::vector<IDevice*>& get_devices() const = 0;
-    virtual void close() = 0;
 };
 
 // Resource management class / RAII wrapper for *physical devices* of the mesh
@@ -49,7 +48,6 @@ public:
     MeshHandle& operator=(const MeshHandle&) = delete;
 
     const std::vector<IDevice*>& get_devices() const override;
-    void close() override;
 };
 }  // namespace distributed
 

@@ -228,7 +228,6 @@ bool MeshDevice::close() {
     }
     submeshes_.clear();
     if (mesh_handle_) {
-        mesh_handle_->close();
         mesh_handle_.reset();
     }
     parent_mesh_.reset();

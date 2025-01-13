@@ -26,13 +26,10 @@ MeshHandle::MeshHandle(
     }
 }
 
-MeshHandle::~MeshHandle() { close(); }
-void MeshHandle::close() {
-    if (opened_devices_.size() > 0) {
-        tt::tt_metal::detail::CloseDevices(opened_devices_);
-        opened_devices_.clear();
-        devices_.clear();
-    }
+MeshHandle::~MeshHandle() {
+    tt::tt_metal::detail::CloseDevices(opened_devices_);
+    opened_devices_.clear();
+    devices_.clear();
 }
 
 const std::vector<IDevice*>& MeshHandle::get_devices() const { return devices_; }
