@@ -54,6 +54,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     input_layout = test_vector["input_spec"]["input_layout"]
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
+    if input_layout == "ROW_MAJOR_LAYOUT":
+        return True, "Row major layout is not supported"
     if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "Input_tensor_a doesn't support bfloat8_b"
     if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
