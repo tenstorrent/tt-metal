@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Martin Chang
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"  // #include "compile_time_args.h"
+#include "compute_kernel_api/tile_move_copy.h"
 #include <cstdint>
 
 namespace NAMESPACE {
