@@ -20,7 +20,9 @@ from models.utility_functions import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.ttnn_resnet.tt.custom_preprocessing import create_custom_mesh_preprocessor
-from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+
+# from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_new_conv_api import resnet50
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50 import resnet50
 
 
 def load_resnet50_model(model_location_generator):
