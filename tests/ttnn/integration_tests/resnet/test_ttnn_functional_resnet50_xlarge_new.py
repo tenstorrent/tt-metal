@@ -22,6 +22,7 @@ from models.utility_functions import (
     skip_for_grayskull,
     is_wormhole_b0,
     is_blackhole,
+    is_grayskull,
 )
 
 # from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_xlarge_new_conv_api import resnet50
