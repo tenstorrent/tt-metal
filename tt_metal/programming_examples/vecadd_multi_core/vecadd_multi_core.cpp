@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_size, bool sram) {
+std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
     InterleavedBufferConfig config{
         .device = device,
         .size = size,
@@ -37,7 +37,7 @@ std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_
 // @param n_tiles: The number of tiles to allocate.
 // @param sram: If true, allocate the buffer on SRAM, otherwise allocate it on
 // DRAM.
-std::shared_ptr<Buffer> MakeBufferBFP16(Device* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    Device* device = CreateDevice(device_id);
+    IDevice* device = CreateDevice(device_id);
 
     Program program = CreateProgram();
     // Define 4 cores.
