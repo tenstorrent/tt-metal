@@ -76,11 +76,8 @@ on:
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
           - eltwise.unary.elu.elu_sharded
-          - eltwise.unary.erf.erf
-          - eltwise.unary.erf.erf_sharded
           - eltwise.unary.erfc.erfc
           - eltwise.unary.erfc.erfc_sharded
-          - eltwise.unary.erfinv.erfinv
           - eltwise.unary.eqz.eqz
           - eltwise.unary.eqz.eqz_sharded
           - eltwise.unary.exp.exp
@@ -140,6 +137,7 @@ on:
           - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.erf.erf
+          - eltwise.unary.erf.erf_sharded
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.erfinv.erfinv_sharded
           - eltwise.unary.i0.i0
