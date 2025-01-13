@@ -354,9 +354,7 @@ public:
         if constexpr (network_type == DispatchRemoteNetworkType::NONE || cb_mode == true || network_type == DispatchRemoteNetworkType::DISABLE_QUEUE) {
             return;
         } else if constexpr (network_type == DispatchRemoteNetworkType::ETH) {
-            delay(600);
             eth_write_remote_reg(reg_addr, val);
-            delay(600);
         } else {
             const auto dest_addr = get_noc_addr(this->remote_x, this->remote_y, reg_addr);
             noc_inline_dw_write(dest_addr, val);
@@ -987,7 +985,7 @@ public:
     template<DispatchRemoteNetworkType output_network_type, bool output_cb_mode, DispatchRemoteNetworkType input_network_type, bool input_cb_mode>
     inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint16_t end_of_cmd) {
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
-        uint32_t num_words_to_forward = this->get_num_words_to_send<output_cb_mode>(input_queue_index);
+        uint32_t num_words_to_forward = this->get_num_words_to_send<input_cb_mode>(input_queue_index);
         full_packet_sent = (num_words_to_forward == input_queue_ptr->get_curr_packet_words_remaining());
         if (num_words_to_forward == 0) {
             return 0;
