@@ -677,7 +677,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
     bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
-
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor, device, std::nullopt);
 
     // Convert weight tensor to 0 padded shape if groups > 1
@@ -715,6 +714,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
             {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
         out_channels_padded = tt::round_up(out_channels, 32);
+        in_channels_padded = round_up(in_channels, input_channels_alignment);
     }
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
@@ -728,8 +728,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
-    weight_tensor_ =
-        ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
     // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -739,13 +737,31 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             in_channels_padded,
             input_num_cores_channels);
         auto in_channels_per_core = in_channels_padded / input_num_cores_channels;
+
         weight_tensor_ = ttnn::reshape(
             weight_tensor_,
             ttnn::Shape({out_channels_padded, input_num_cores_channels, in_channels_per_core, window_h, window_w}));
+
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({1, 3, 4, 2, 0}));
+        // Shape is now {input_num_cores_channels, window_h, window_w, in_channels_padded, out_channels_padded}
+        auto rounded_weight_block_height =
+            tt::round_up(window_h * window_w * in_channels_per_core, constants::TILE_HEIGHT);
         weight_tensor_ = ttnn::reshape(
-            weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+            weight_tensor_,
+            ttnn::Shape(
+                {1, input_num_cores_channels, in_channels_per_core * window_h * window_w, out_channels_padded}));
+        weight_tensor_ = ttnn::pad(
+            weight_tensor_,
+            tt::tt_metal::Array4D({1, input_num_cores_channels, rounded_weight_block_height, out_channels_padded}),
+            tt::tt_metal::Array4D({0, 0, 0, 0}),
+            0);
+        weight_tensor_ = ttnn::reshape(
+            weight_tensor_,
+            ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, out_channels_padded}));
     } else {
+        weight_tensor_ = ttnn::pad(
+            weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+
         // Reshape the weights to 5D, and permute in 5D.
         weight_tensor_ = ttnn::reshape(
             weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
@@ -778,14 +794,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
 
-    // auto target_shape = ttnn::Shape(std::array<uint32_t,4>{1, 1, weight_matrix_height, out_channels},
-    //     std::array<std::array<uint32_t, 2>, 4>{
-    //         std::array<uint32_t, 2>{0, 0},
-    //         std::array<uint32_t, 2>{0, 0},
-    //         std::array<uint32_t, 2>{0, weight_matrix_height_padding},
-    //         std::array<uint32_t, 2>{0, out_channel_padding}
-    // });
-    // weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
+    auto target_shape = ttnn::Shape(
+        std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels},
+        std::array<std::array<uint32_t, 2>, 4>{
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, 0},
+            std::array<uint32_t, 2>{0, weight_matrix_height_padding},
+            std::array<uint32_t, 2>{0, out_channel_padding}});
+    log_debug(
+        "Weight Matrix Logical shape {}, Padded shape {}", target_shape.logical_shape(), target_shape.padded_shape());
+    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
 
     // if(parameters_on_device)
     //     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
