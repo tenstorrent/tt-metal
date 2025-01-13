@@ -1069,7 +1069,9 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
+    def prepare_residual_tensor_decode(
+        self, x, input_mem_cfg, force_replicated=False, on_host=False, prefetcher_setup=None
+    ):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
@@ -1111,6 +1113,7 @@ class TtModelArgs:
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
                 memory_config=input_mem_cfg if not on_host else None,
+                sub_device_ids=[prefetcher_setup.worker_sub_device_id] if prefetcher_setup else [],
             )
         else:  # Convert the row major layout from embedding back to tile layout
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)

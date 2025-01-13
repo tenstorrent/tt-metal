@@ -181,11 +181,18 @@ def test_llama_decoder_inference(
             tt_decode_input,
             # ttnn.DRAM_MEMORY_CONFIG,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            prefetcher_setup=prefetcher_setup,
         )
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
+        ttnn.dram_prefetcher(
+            prefetcher_setup.tensors,
+            num_layers=1,
+            global_cb=None,
+            multi_global_cb=prefetcher_setup.global_circular_buffer,
+        )
         # Run TT model
         tt_out = tt_model(
             decode_input,

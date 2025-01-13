@@ -15,6 +15,7 @@ from models.utility_functions import (
 )
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
+from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
 
 
 @torch.no_grad()
@@ -63,6 +64,13 @@ def test_llama_rms_norm_inference(
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
+    # prefetcher_setup = TtLlamaPrefetcherSetup(
+    #     mesh_device,
+    #     n_tensors=5,
+    #     n_layers=1,
+    # )
+    prefetcher_setup = None
+
     # Create the inner RMSNormxw
     tt_inner_norm = TtRMSNorm(
         device=mesh_device,
@@ -74,10 +82,11 @@ def test_llama_rms_norm_inference(
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        prefetcher_setup=prefetcher_setup,
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy, prefetcher_setup=prefetcher_setup)
 
     # Create reference model (unchanged)
     partial_state_dict = {
@@ -97,6 +106,7 @@ def test_llama_rms_norm_inference(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id] if prefetcher_setup else [],
     )
 
     tt_output = tt_model(tt_input, mode=mode)
@@ -107,6 +117,7 @@ def test_llama_rms_norm_inference(
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
         ),
+        sub_device_ids=[prefetcher_setup.worker_sub_device_id] if prefetcher_setup else [],
     )[:1, :, :, :]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
