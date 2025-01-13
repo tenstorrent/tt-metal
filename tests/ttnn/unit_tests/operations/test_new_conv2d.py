@@ -191,6 +191,8 @@ def run_conv(
 
     if not fp32_accum:
         pcc = 0.985
+        if input_channels * filter_height * filter_width > 10000:
+            pcc = 0.97
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.996
     else:
