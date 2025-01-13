@@ -3,22 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/device.hpp"
+#include "tt_metal/include/tt_metal/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
-using std::vector;
 using namespace tt;
 
-
 int main(int argc, char **argv) {
-
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 64*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
+
+    constexpr uint32_t default_input_scratch_buffer_base_addr = 0x60000;
+    constexpr uint32_t default_output_scratch_buffer_base_addr = 0x70000;
 
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
@@ -57,6 +55,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --test_results_size: test results buffer size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+        log_info(LogTest, "  --input_scratch_buffer_base_addr: Scratch buffer for input queues base address, default = {:#x}", default_input_scratch_buffer_base_addr);
+        log_info(LogTest, "  --output_scratch_buffer_base_addr: Scratch buffer for output queues base address, default = {:#x}", default_output_scratch_buffer_base_addr);
         return 0;
     }
 
@@ -75,6 +75,8 @@ int main(int argc, char **argv) {
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
+    uint32_t input_scratch_buffer_base_addr = test_args::get_command_option_uint32(input_args, "--input_scratch_buffer_base_addr", default_input_scratch_buffer_base_addr);
+    uint32_t output_scratch_buffer_base_addr = test_args::get_command_option_uint32(input_args, "--output_scratch_buffer_base_addr", default_output_scratch_buffer_base_addr);
 
     constexpr uint32_t num_src_endpoints = 16;
     constexpr uint32_t num_dest_endpoints = 16;
@@ -92,9 +94,29 @@ int main(int argc, char **argv) {
         {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
     };
 
+    const auto input_scratch_buffers = make_buffer_addresses_for_test(input_scratch_buffer_base_addr, packet_queue_ptr_buffer_size, {
+        { "traffic_gen_tx", num_src_endpoints },
+        { "mux_l1", num_src_endpoints },
+        { "mux_l2", num_mux_l1 },
+        { "demux_l1", num_demux_l1 },
+        { "demux_l2", num_demux_l2 },
+        { "traffic_gen_rx", num_dest_endpoints},
+    });
+
+    const auto output_scratch_buffers = make_buffer_addresses_for_test(output_scratch_buffer_base_addr, packet_queue_ptr_buffer_size, {
+        { "traffic_gen_tx", num_src_endpoints },
+        { "traffic_gen_tx_mock", num_src_endpoints },
+        { "mux_l1", num_mux_l1 },
+        { "mux_l2", num_mux_l2 },
+        { "demux_l1", num_demux_l2 },
+        { "demux_l2", num_dest_endpoints },
+        { "demux", num_dest_endpoints },
+        // RX Gen has no output
+    });
+
     try {
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice *device = tt_metal::CreateDevice(device_id);
         tt_metal::Program program = tt_metal::CreateProgram();
 
         constexpr uint32_t tx_x = 0;
@@ -173,7 +195,11 @@ int main(int argc, char **argv) {
                     0, // 18: skip_pkt_content_gen
                     0, // 19: pkt_dest_size_choice
                     0, // 20: data_sent_per_iter_low
-                    0 // 21: data_sent_per_iter_high
+                    0, // 21: data_sent_per_iter_high
+                    input_scratch_buffers.at("traffic_gen_tx")[i], // 22: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx_mock")[i], // 23: traffic_gen_input_mock_remote_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx")[i], // 24: traffic_gen_output_ptrs_addr
+                    input_scratch_buffers.at("mux_l1")[i], // 25: traffic_gen_output_remote_ptrs_addr
                 };
             log_info(LogTest, "run TX {} at x={},y={} (phys x={},y={})",
                             i, tx_core[i].x, tx_core[i].y, tx_phys_core[i].x, tx_phys_core[i].y);
@@ -213,7 +239,9 @@ int main(int argc, char **argv) {
                     src_endpoint_start_id, // 15: src_endpoint_start_id
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
-                    0 // 18: disable_header_check
+                    0, // 18: disable_header_check
+                    input_scratch_buffers.at("traffic_gen_rx")[i], // 19: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("demux_l2")[i], // 20: traffic_gen_input_remote_ptrs_addr
                 };
             log_info(LogTest, "run RX {} at x={},y={} (phys x={},y={})",
                     i, rx_core[i].x, rx_core[i].y, rx_phys_core[i].x, rx_phys_core[i].y);
@@ -264,7 +292,19 @@ int main(int argc, char **argv) {
                     test_results_addr, // 14: test_results_addr
                     test_results_size, // 15: test_results_size
                     timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
-                    0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
+                    0, 0, 0, 0, 0, 0, 0, 0, // 17-24: packetize/depacketize settings
+                    input_scratch_buffers.at("mux_l1")[i * MAX_SWITCH_FAN_IN], // 25: mux_input_ptr_buffers[0]
+                    input_scratch_buffers.at("mux_l1")[i * MAX_SWITCH_FAN_IN + 1], // 26: mux_input_ptr_buffers[1]
+                    input_scratch_buffers.at("mux_l1")[i * MAX_SWITCH_FAN_IN + 2], // 27: mux_input_ptr_buffers[2]
+                    input_scratch_buffers.at("mux_l1")[i * MAX_SWITCH_FAN_IN + 3], // 28: mux_input_ptr_buffers[3]
+
+                    output_scratch_buffers.at("traffic_gen_tx")[i * MAX_SWITCH_FAN_IN], // 29: mux_input_remote_ptr_buffers[0]
+                    output_scratch_buffers.at("traffic_gen_tx")[i * MAX_SWITCH_FAN_IN + 1], // 30: mux_input_remote_ptr_buffers[1]
+                    output_scratch_buffers.at("traffic_gen_tx")[i * MAX_SWITCH_FAN_IN + 2], // 31: mux_input_remote_ptr_buffers[2]
+                    output_scratch_buffers.at("traffic_gen_tx")[i * MAX_SWITCH_FAN_IN + 3], // 32: mux_input_remote_ptr_buffers[3]
+
+                    output_scratch_buffers.at("mux_l1")[i], // 33: mux_output_ptr_buffer
+                    input_scratch_buffers.at("mux_l2")[mux_l2_port_index], // 34: mux_output_remote_ptr_buffer
                 };
             log_info(LogTest, "run L1 MUX {} at x={},y={} (phys x={},y={})",
                             i, mux_l1_core[i].x, mux_l1_core[i].y, mux_l1_phys_core[i].x, mux_l1_phys_core[i].y);
@@ -312,7 +352,19 @@ int main(int argc, char **argv) {
                 test_results_addr, // 14: test_results_addr
                 test_results_size, // 15: test_results_size
                 timeout_mcycles * 1000 * 1000, // 16: timeout_cycles
-                0, 0, 0, 0, 0, 0, 0, 0 // 17-24: packetize/depacketize settings
+                0, 0, 0, 0, 0, 0, 0, 0, // 17-24: packetize/depacketize settings
+                input_scratch_buffers.at("mux_l2")[0], // 25: mux_input_ptr_buffers[0]
+                input_scratch_buffers.at("mux_l2")[1], // 26: mux_input_ptr_buffers[1]
+                input_scratch_buffers.at("mux_l2")[2], // 27: mux_input_ptr_buffers[2]
+                input_scratch_buffers.at("mux_l2")[3], // 28: mux_input_ptr_buffers[3]
+
+                output_scratch_buffers.at("mux_l1")[0], // 29: mux_input_remote_ptr_buffers[0]
+                output_scratch_buffers.at("mux_l1")[1], // 30: mux_input_remote_ptr_buffers[1]
+                output_scratch_buffers.at("mux_l1")[2], // 31: mux_input_remote_ptr_buffers[2]
+                output_scratch_buffers.at("mux_l1")[3], // 32: mux_input_remote_ptr_buffers[3]
+
+                output_scratch_buffers.at("mux_l2")[0], // 33: mux_output_ptr_buffer
+                input_scratch_buffers.at("demux_l1")[0], // 34: mux_output_remote_ptr_buffer
             };
         log_info(LogTest, "run L2 MUX at x={},y={} (phys x={},y={})",
                  mux_l2_core.x, mux_l2_core.y, mux_l2_phys_core.x, mux_l2_phys_core.y);
@@ -372,7 +424,18 @@ int main(int argc, char **argv) {
                 test_results_addr, // 22: test_results_addr
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
-                0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
+                0, 0, 0, 0, 0, // 25-29: packetize/depacketize settings
+                input_scratch_buffers.at("demux_l1")[0], // 30: demux_input_ptr_buffer
+                output_scratch_buffers.at("mux_l2")[0], // 31: demux_input_remote_ptr_buffer
+                output_scratch_buffers.at("demux_l1")[0], // 32: demux_output_ptr_buffers[0]
+                output_scratch_buffers.at("demux_l1")[1], // 33: demux_output_ptr_buffers[1]
+                output_scratch_buffers.at("demux_l1")[2], // 34: demux_output_ptr_buffers[2]
+                output_scratch_buffers.at("demux_l1")[3], // 35: demux_output_ptr_buffers[3]
+
+                input_scratch_buffers.at("demux_l2")[0], // 36: demux_output_remote_ptr_buffers[0]
+                input_scratch_buffers.at("demux_l2")[1], // 37: demux_output_remote_ptr_buffers[1]
+                input_scratch_buffers.at("demux_l2")[2], // 38: demux_output_remote_ptr_buffers[2]
+                input_scratch_buffers.at("demux_l2")[3], // 39: demux_output_remote_ptr_buffers[3]
             };
 
         log_info(LogTest, "run L1 DEMUX at x={},y={} (phys x={},y={})",
@@ -437,11 +500,22 @@ int main(int argc, char **argv) {
                     test_results_addr, // 22: test_results_addr
                     test_results_size, // 23: test_results_size
                     timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
-                    0, 0, 0, 0, 0 // 25-29: packetize/depacketize settings
+                    0, 0, 0, 0, 0, // 25-29: packetize/depacketize settings
+                    input_scratch_buffers.at("demux_l2")[i], // 30: demux_input_ptr_buffer
+                    output_scratch_buffers.at("demux_l1")[i], // 31: demux_input_remote_ptr_buffer
+                    output_scratch_buffers.at("demux_l2")[i * num_demux_l2], // 32: demux_output_ptr_buffers[0]
+                    output_scratch_buffers.at("demux_l2")[i * num_demux_l2 + 1], // 33: demux_output_ptr_buffers[1]
+                    output_scratch_buffers.at("demux_l2")[i * num_demux_l2 + 2], // 34: demux_output_ptr_buffers[2]
+                    output_scratch_buffers.at("demux_l2")[i * num_demux_l2 + 3], // 35: demux_output_ptr_buffers[3]
+
+                    input_scratch_buffers.at("traffic_gen_rx")[i * num_demux_l2], // 36: demux_output_remote_ptr_buffers[0]
+                    input_scratch_buffers.at("traffic_gen_rx")[i * num_demux_l2 + 1], // 37: demux_output_remote_ptr_buffers[1]
+                    input_scratch_buffers.at("traffic_gen_rx")[i * num_demux_l2 + 2], // 38: demux_output_remote_ptr_buffers[2]
+                    input_scratch_buffers.at("traffic_gen_rx")[i * num_demux_l2 + 3], // 39: demux_output_remote_ptr_buffers[3]
                 };
 
-            log_info(LogTest, "run L2 DEMUX at x={},y={} (phys x={},y={})",
-                            demux_l2_core[i].x, demux_l2_core[i].y, demux_l2_phys_core[i].x, demux_l2_phys_core[i].y);
+            log_info(LogTest, "run L2 DEMUX {} at x={},y={} (phys x={},y={})",
+                            i, demux_l2_core[i].x, demux_l2_core[i].y, demux_l2_phys_core[i].x, demux_l2_phys_core[i].y);
             auto demux_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/impl/dispatch/kernels/packet_demux.cpp",
@@ -465,12 +539,12 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        vector<vector<uint32_t>> tx_results;
-        vector<vector<uint32_t>> rx_results;
-        vector<vector<uint32_t>> mux_l1_results;
-        vector<uint32_t> mux_l2_results;
-        vector<vector<uint32_t>> demux_l2_results;
-        vector<uint32_t> demux_l1_results;
+        std::vector<std::vector<uint32_t>> tx_results;
+        std::vector<std::vector<uint32_t>> rx_results;
+        std::vector<std::vector<uint32_t>> mux_l1_results;
+        std::vector<uint32_t> mux_l2_results;
+        std::vector<std::vector<uint32_t>> demux_l2_results;
+        std::vector<uint32_t> demux_l1_results;
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(

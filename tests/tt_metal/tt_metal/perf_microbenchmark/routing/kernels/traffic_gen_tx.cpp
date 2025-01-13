@@ -57,6 +57,14 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice = static_cast<pkt_dest_si
 constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(20);
 constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(21);
 
+// Inputs
+constexpr uint32_t traffic_gen_input_ptrs_addr = get_compile_time_arg_val(22);
+constexpr uint32_t traffic_gen_input_mock_remote_ptrs_addr = get_compile_time_arg_val(23);
+
+// Outputs - Update remote wptr
+constexpr uint32_t traffic_gen_output_ptrs_addr = get_compile_time_arg_val(24);
+constexpr uint32_t traffic_gen_output_remote_ptrs_addr = get_compile_time_arg_val(25);
+
 constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
 
@@ -154,7 +162,9 @@ void kernel_main() {
         0,
         0,
         0,
-        DispatchRemoteNetworkType::NONE);
+        DispatchRemoteNetworkType::NONE,
+        traffic_gen_input_ptrs_addr,
+        traffic_gen_output_ptrs_addr);
 
     output_queue_ptr->init(
         output_queue_id,
@@ -165,7 +175,9 @@ void kernel_main() {
         remote_rx_queue_id,
         tx_network_type,
         input_queue_ptr,
-        1);
+        1,
+        traffic_gen_output_ptrs_addr,
+        traffic_gen_output_remote_ptrs_addr);
 
     if (!wait_all_input_output_ready<NoNetworkTypeSequence, NoCBModeTypeSequence, output_queue_network_sequence, output_queue_cb_mode_sequence>(NULL, &output_queue, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;

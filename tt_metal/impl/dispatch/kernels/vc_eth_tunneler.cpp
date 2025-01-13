@@ -175,6 +175,58 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
 
+constexpr uint32_t vc_eth_tunneler_input_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(48),
+    get_compile_time_arg_val(49),
+    get_compile_time_arg_val(50),
+    get_compile_time_arg_val(51),
+    get_compile_time_arg_val(52),
+    get_compile_time_arg_val(53),
+    get_compile_time_arg_val(54),
+    get_compile_time_arg_val(55),
+    get_compile_time_arg_val(56),
+    get_compile_time_arg_val(57),
+};
+
+constexpr uint32_t vc_eth_tunneler_input_remote_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(58),
+    get_compile_time_arg_val(59),
+    get_compile_time_arg_val(60),
+    get_compile_time_arg_val(61),
+    get_compile_time_arg_val(62),
+    get_compile_time_arg_val(63),
+    get_compile_time_arg_val(64),
+    get_compile_time_arg_val(65),
+    get_compile_time_arg_val(66),
+    get_compile_time_arg_val(67),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(68),
+    get_compile_time_arg_val(69),
+    get_compile_time_arg_val(70),
+    get_compile_time_arg_val(71),
+    get_compile_time_arg_val(72),
+    get_compile_time_arg_val(73),
+    get_compile_time_arg_val(74),
+    get_compile_time_arg_val(75),
+    get_compile_time_arg_val(76),
+    get_compile_time_arg_val(77),
+};
+
+constexpr uint32_t vc_eth_tunneler_output_remote_ptr_buffers[MAX_TUNNEL_LANES] = {
+    get_compile_time_arg_val(78),
+    get_compile_time_arg_val(79),
+    get_compile_time_arg_val(80),
+    get_compile_time_arg_val(81),
+    get_compile_time_arg_val(82),
+    get_compile_time_arg_val(83),
+    get_compile_time_arg_val(84),
+    get_compile_time_arg_val(85),
+    get_compile_time_arg_val(86),
+    get_compile_time_arg_val(87),
+};
+
 packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
 using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],
                                                          remote_sender_network_type[1],
@@ -238,7 +290,10 @@ void kernel_main() {
             remote_sender_x[i],
             remote_sender_y[i],
             remote_sender_queue_id[i],
-            remote_sender_network_type[i]);
+            remote_sender_network_type[i],
+            vc_eth_tunneler_input_ptr_buffers[i],
+            vc_eth_tunneler_input_remote_ptr_buffers[i]
+            );
     }
 
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
@@ -251,7 +306,9 @@ void kernel_main() {
             remote_receiver_queue_id[i],
             remote_receiver_network_type[i],
             &input_queues[i],
-            1);
+            1,
+            vc_eth_tunneler_output_ptr_buffers[i],
+            vc_eth_tunneler_output_remote_ptr_buffers[i]);
     }
 
     if (!wait_all_input_output_ready<input_queue_network_sequence,
@@ -286,30 +343,37 @@ void kernel_main() {
             using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
             using remote_input_cb_modes = CBModeTypeSequence<false>;
 
-            if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
-                bool full_packet_sent;
-                uint32_t words_sent = output_queues[sequence_i].template forward_data_from_input<remote_receiver_network_type[sequence_i], false, remote_sender_network_type[sequence_i], false>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
-                data_words_sent += words_sent;
-                if (words_sent > 0) {
-                    switch_counter = 0;
-                    all_outputs_finished = false;
-                }
-            }
-            output_queues[sequence_i].template prev_words_in_flight_check_flush<false, remote_input_networks, remote_input_cb_modes>();
-            if (switch_counter >= SWITCH_THRESHOLD) {
-                bool output_finished = output_queues[sequence_i].is_remote_finished();
-                if (output_finished) {
-                    uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
-                    if ((sequence_i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
-                        input_queues[sequence_i].set_end_remote_queue(
-                            (inner_stop_mux_d_bypass >> 16) & 0xFF, // remote_queue_id
-                            inner_stop_mux_d_bypass & 0xFF, // remote_x
-                            (inner_stop_mux_d_bypass >> 8) & 0xFF // remote_y
-                        );
+            input_queues[sequence_i].template handle_recv<remote_sender_network_type[sequence_i]>();
+            output_queues[sequence_i].template handle_recv<remote_receiver_network_type[sequence_i]>();
+
+            if (input_queues[sequence_i].template busy<remote_sender_network_type[sequence_i]>() || output_queues[sequence_i].template busy<remote_receiver_network_type[sequence_i]>()) {
+                all_outputs_finished = false;
+            } else {
+                if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
+                    bool full_packet_sent;
+                    uint32_t words_sent = output_queues[sequence_i].template forward_data_from_input<remote_receiver_network_type[sequence_i], false, remote_sender_network_type[sequence_i], false>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
+                    data_words_sent += words_sent;
+                    if (words_sent > 0) {
+                        switch_counter = 0;
+                        all_outputs_finished = false;
                     }
-                    input_queues[sequence_i].template send_remote_finished_notification<input_network_type, input_cb_mode>();
                 }
-                all_outputs_finished &= output_finished;
+                output_queues[sequence_i].template prev_words_in_flight_check_flush<false, remote_input_networks, remote_input_cb_modes>();
+                if (switch_counter >= SWITCH_THRESHOLD) {
+                    bool output_finished = output_queues[sequence_i].is_remote_finished();
+                    if (output_finished) {
+                        uint32_t return_vc = (inner_stop_mux_d_bypass >> 24) & 0xFF;
+                        if ((sequence_i == return_vc) && (inner_stop_mux_d_bypass != 0)) {
+                            input_queues[sequence_i].set_end_remote_queue(
+                                (inner_stop_mux_d_bypass >> 16) & 0xFF, // remote_queue_id
+                                inner_stop_mux_d_bypass & 0xFF, // remote_x
+                                (inner_stop_mux_d_bypass >> 8) & 0xFF // remote_y
+                            );
+                        }
+                        input_queues[sequence_i].template send_remote_finished_notification<input_network_type, input_cb_mode>();
+                    }
+                    all_outputs_finished &= output_finished;
+                }
             }
 
             return true;

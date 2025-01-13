@@ -202,6 +202,48 @@ constexpr uint8_t input_packetize_dest_endpoint[MAX_SWITCH_FAN_IN] =
         (get_compile_time_arg_val(35) >> 24) & 0xFF
     };
 
+constexpr uint32_t vc_packet_router_input_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(36),
+        get_compile_time_arg_val(37),
+        get_compile_time_arg_val(38),
+        get_compile_time_arg_val(39),
+    };
+
+constexpr uint32_t vc_packet_router_input_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(40),
+        get_compile_time_arg_val(41),
+        get_compile_time_arg_val(42),
+        get_compile_time_arg_val(43),
+    };
+
+constexpr uint32_t vc_packet_router_output_ptr_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(44),
+        get_compile_time_arg_val(45),
+        get_compile_time_arg_val(46),
+        get_compile_time_arg_val(47),
+    };
+
+constexpr uint32_t vc_packet_router_output_remote_ptr_buffers[MAX_SWITCH_FAN_OUT] =
+    {
+        get_compile_time_arg_val(48),
+        get_compile_time_arg_val(49),
+        get_compile_time_arg_val(50),
+        get_compile_time_arg_val(51),
+    };
+
+// VC Packet router is not a tunneler
+static_assert(remote_rx_network_type[0] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_rx_network_type[1] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_rx_network_type[2] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_rx_network_type[3] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[0] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[1] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[2] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[3] != DispatchRemoteNetworkType::ETH);
+
 packet_input_queue_state_t input_queues[MAX_SWITCH_FAN_IN];
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type[0], remote_rx_network_type[1], remote_rx_network_type[2], remote_rx_network_type[3]>;
 using input_queue_cb_mode_sequence = CBModeTypeSequence<input_packetize[0], input_packetize[1], input_packetize[2], input_packetize[3]>;
@@ -218,6 +260,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < router_lanes; i++) {
         input_queues[i].init(i, rx_queue_start_addr_words + i*rx_queue_size_words, rx_queue_size_words,
                         remote_rx_x[i], remote_rx_y[i], remote_rx_queue_id[i], remote_rx_network_type[i],
+                        vc_packet_router_input_ptr_buffers[i], vc_packet_router_input_remote_ptr_buffers[i],
                         input_packetize[i], input_packetize_log_page_size[i],
                         input_packetize_local_sem[i], input_packetize_upstream_sem[i],
                         input_packetize_src_endpoint[i], input_packetize_dest_endpoint[i]);
@@ -225,6 +268,7 @@ void kernel_main() {
         output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
                               &input_queues[i], 1,
+                              vc_packet_router_output_ptr_buffers[i], vc_packet_router_output_remote_ptr_buffers[i],
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);

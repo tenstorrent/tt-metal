@@ -176,6 +176,30 @@ constexpr uint32_t output_depacketize_remove_header[MAX_SWITCH_FAN_OUT] =
         (get_compile_time_arg_val(29) >> 24) & 0x1
     };
 
+constexpr uint32_t demux_input_ptr_buffer = get_compile_time_arg_val(30);
+constexpr uint32_t demux_input_remote_ptr_buffer = get_compile_time_arg_val(31);
+
+constexpr uint32_t demux_output_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(32),
+        get_compile_time_arg_val(33),
+        get_compile_time_arg_val(34),
+        get_compile_time_arg_val(35)
+    };
+constexpr uint32_t demux_output_remote_ptr_buffers[MAX_SWITCH_FAN_IN] =
+    {
+        get_compile_time_arg_val(36),
+        get_compile_time_arg_val(37),
+        get_compile_time_arg_val(38),
+        get_compile_time_arg_val(39)
+    };
+
+// Packet demux is not a tunneler
+static_assert(remote_tx_network_type[0] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[1] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[2] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_tx_network_type[3] != DispatchRemoteNetworkType::ETH);
+static_assert(remote_rx_network_type != DispatchRemoteNetworkType::ETH);
 
 packet_input_queue_state_t input_queue;
 using input_queue_network_sequence = NetworkTypeSequence<remote_rx_network_type>;
@@ -203,12 +227,15 @@ void kernel_main() {
         output_queues[i].init(i + 1, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
                               &input_queue, 1,
+                              demux_output_ptr_buffers[i], demux_output_remote_ptr_buffers[i],
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
     }
     input_queue.init(0, rx_queue_start_addr_words, rx_queue_size_words,
-                     remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type);
+                     remote_rx_x, remote_rx_y, remote_rx_queue_id, remote_rx_network_type,
+                     demux_input_ptr_buffer,
+                     demux_input_remote_ptr_buffer);
 
     if (!wait_all_input_output_ready<input_queue_network_sequence,
                                      input_queue_cb_mode_sequence,
