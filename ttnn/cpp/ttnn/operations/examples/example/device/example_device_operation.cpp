@@ -21,9 +21,9 @@ void ExampleDeviceOperation::validate_on_program_cache_miss(
 void ExampleDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
 
-ExampleDeviceOperation::shape_return_value_t ExampleDeviceOperation::compute_output_shapes(
+ExampleDeviceOperation::spec_return_value_t ExampleDeviceOperation::compute_output_spec(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return tensor_args.input_tensor.shape();
+    return tensor_args.input_tensor.get_tensor_spec();
 }
 
 ExampleDeviceOperation::tensor_return_value_t ExampleDeviceOperation::create_output_tensors(

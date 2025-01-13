@@ -50,16 +50,16 @@ struct ExampleDeviceOperation {
         // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
     };
 
-    // Define the return types for the shape(s) of the operation
-    // Can be a single ttnn::Shape, std::optional<ttnn::Shape>, std::vector<ttnn::Shape>, std::tuple<ttnn::Shape> etc.
-    using shape_return_value_t = ttnn::Shape;
+    // Define the TensorSpec for the output Tensor(s)
+    // Can be a single TensorSpec, std::optional<TensorSpec>, std::vector<TensorSpec>, std::tuple<TensorSpec> etc.    
+    using spec_return_value_t = TensorSpec;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
-    // Note shape_return_value_t and tensor_return_value_t should follow the same pattern
-    // i.e. if shape_return_value_t is a std::vector<std::optional<ttnn::Shape>> then tensor_return_value_t should be
+    // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
+    // i.e. if spec_return_value_t is a std::vector<std::optional<TensorSpec>> then tensor_return_value_t should be
     // std::vector<std::optional<Tensor>>
 
     struct SingleCore {
