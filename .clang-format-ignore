@@ -1,3 +1,11 @@
+tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h
+tt_metal/impl/dispatch/kernels/eth_tunneler.cpp
+tt_metal/impl/dispatch/kernels/packet_demux.cpp
+tt_metal/impl/dispatch/kernels/packet_mux.cpp
+tt_metal/impl/dispatch/kernels/packet_queue.hpp
+tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp
+tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp
+tt_metal/impl/dispatch/kernels/vc_packet_router.cpp
 ttnn/cpp/pybind11/tensor.cpp
 ttnn/cpp/ttnn/device_operation.hpp
 ttnn/cpp/ttnn/graph/graph_processor.cpp
