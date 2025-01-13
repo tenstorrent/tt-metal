@@ -830,31 +830,31 @@ class resnet50:
         height_shard = False
 
         ## 98
-        core_range_set = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(12, 6),
-                ),
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 7),
-                    ttnn.CoreCoord(6, 7),
-                ),
-            }
-        )
-        ## 112
         # core_range_set = ttnn.CoreRangeSet(
         #     {
         #         ttnn.CoreRange(
         #             ttnn.CoreCoord(0, 0),
-        #             ttnn.CoreCoord(12, 7),
+        #             ttnn.CoreCoord(12, 6),
         #         ),
         #         ttnn.CoreRange(
-        #             ttnn.CoreCoord(0, 8),
-        #             ttnn.CoreCoord(7, 8),
+        #             ttnn.CoreCoord(0, 7),
+        #             ttnn.CoreCoord(6, 7),
         #         ),
         #     }
         # )
+        ## 112
+        core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(12, 7),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 8),
+                    ttnn.CoreCoord(7, 8),
+                ),
+            }
+        )
         ## 128
         # core_range_set = ttnn.CoreRangeSet(
         #     {
