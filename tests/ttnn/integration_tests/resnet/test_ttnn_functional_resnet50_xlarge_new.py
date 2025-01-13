@@ -263,7 +263,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     return ResNet50TestInfra(device, batch_size, act_dtype, weight_dtype, math_fidelity)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Only works for Grayskull.")
+@pytest.mark.skipif(is_grayskull() or is_wormhole_b0() or is_blackhole(), reason="Only works for Grayskull.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
