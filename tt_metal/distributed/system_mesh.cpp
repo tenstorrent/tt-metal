@@ -20,25 +20,21 @@ std::string get_config_path(const std::string& filename) {
 
 CoordinateTranslationMap load_translation_map(const std::string& filename, const std::string& key) {
     std::ifstream file(filename);
-    if (!file.is_open()) {
-        throw std::runtime_error("Unable to open file: " + filename);
-    }
+    TT_FATAL(!file.is_open(), "Unable to open file: {}", filename);
 
     nlohmann::json j;
     try {
         file >> j;
     } catch (const nlohmann::json::parse_error& e) {
-        throw std::runtime_error("JSON parsing error in file " + filename + ": " + e.what());
+        TT_THROW("JSON parsing error in file {}: {}", filename, e.what());
     }
 
-    if (!j.contains(key)) {
-        throw std::runtime_error("Key '" + key + "' not found in JSON file: " + filename);
-    }
+    TT_FATAL(!j.contains(key), "Key '{}' not found in JSON file: {}", key, filename);
 
     CoordinateTranslationMap result;
     for (const auto& mapping : j[key]) {
         if (mapping.size() != 2 || mapping[0].size() != 2 || mapping[1].size() != 5) {
-            throw std::runtime_error("Invalid coordinate format in JSON file: " + filename);
+            TT_THROW("Invalid coordinate format in JSON file: {}", filename);
         }
         result.emplace(
             LogicalCoordinate{mapping[0][0], mapping[0][1]},

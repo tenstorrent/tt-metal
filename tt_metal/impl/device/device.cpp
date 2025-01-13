@@ -23,6 +23,7 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
@@ -1934,6 +1935,12 @@ tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
     IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
     return device->bank_ids_from_logical_core(buffer_type, logical_core);
 }
+
+float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }
+
+float v1::GetSfpuNan(IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); }
+
+float v1::GetSfpuInf(IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); }
 
 std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
 
