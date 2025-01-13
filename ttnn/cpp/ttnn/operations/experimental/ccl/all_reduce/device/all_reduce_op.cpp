@@ -171,7 +171,6 @@ static Tensor reduce_scatter_all_gather(
     const ttnn::ccl::Topology& topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
-    auto ccl_input_tensor = input_tensor;
 
     uint32_t all_reduce_dim = -1;
     for (uint32_t i = 0; i < rank; ++i) {
@@ -180,29 +179,9 @@ static Tensor reduce_scatter_all_gather(
         }
     }
 
-    ttnn::SmallVector<uint32_t> unpad_elements = {
-        ccl_input_tensor.get_logical_shape()[-4],
-        ccl_input_tensor.get_logical_shape()[-3],
-        ccl_input_tensor.get_logical_shape()[-2],
-        ccl_input_tensor.get_logical_shape()[-1]};
-    bool needs_padding = ccl_input_tensor.get_layout() == Layout::TILE &&
-                         (ccl_input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
-                          ccl_input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
-    if (needs_padding) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
-        DataType original_dtype = ccl_input_tensor.get_dtype();
-        if (ccl_input_tensor.get_dtype() != DataType::BFLOAT16 && ccl_input_tensor.get_dtype() != DataType::FLOAT32) {
-            ccl_input_tensor = ttnn::typecast(ccl_input_tensor, DataType::BFLOAT16);
-        }
-        ccl_input_tensor = ttnn::pad(0, ccl_input_tensor, padding, 0, false, std::nullopt);
-        if (original_dtype != ccl_input_tensor.get_dtype()) {
-            ccl_input_tensor = ttnn::typecast(ccl_input_tensor, original_dtype);
-        }
-    }
-
     const auto& reduced_tensor = operation::run(
         ttnn::ccl::reduce_scatter_detail::create_reduce_scatter_struct(
-            ccl_input_tensor,
+            input_tensor,
             binary_op_type,
             all_reduce_dim,
             num_links,
@@ -211,7 +190,7 @@ static Tensor reduce_scatter_all_gather(
             user_defined_num_buffers_per_channel,
             devices,
             topology),
-        {ccl_input_tensor});
+        {input_tensor});
 
     const auto& gathered_tensor = operation::run(
         ttnn::ccl::all_gather_detail::create_all_gather_struct(
@@ -225,11 +204,7 @@ static Tensor reduce_scatter_all_gather(
             topology),
         {reduced_tensor.at(0)});
 
-    if (needs_padding) {
-        return ttnn::ccl::unpad_output_tensor(gathered_tensor, num_devices, unpad_elements, all_reduce_dim).at(0);
-    } else {
-        return gathered_tensor.at(0);
-    }
+    return gathered_tensor.at(0);
 }
 
 Tensor run_all_reduce(
@@ -308,7 +283,27 @@ Tensor all_reduce(
             TT_FATAL(input_tensors.size() >= 1, "All reduce op expects an input tensor but it received none");
             bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
-            const auto& input_tensor = input_tensors.at(0);
+            auto input_tensor = input_tensors.at(0);
+
+            ttnn::SmallVector<uint32_t> unpad_elements = {
+                input_tensor.get_logical_shape()[-4],
+                input_tensor.get_logical_shape()[-3],
+                input_tensor.get_logical_shape()[-2],
+                input_tensor.get_logical_shape()[-1]};
+            bool needs_padding = input_tensor.get_layout() == Layout::TILE &&
+                                 (input_tensor.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT != 0 ||
+                                  input_tensor.get_logical_shape()[-1] % tt::constants::TILE_WIDTH != 0);
+            if (needs_padding) {
+                ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
+                DataType original_dtype = input_tensor.get_dtype();
+                if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
+                    input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+                }
+                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                if (original_dtype != input_tensor.get_dtype()) {
+                    input_tensor = ttnn::typecast(input_tensor, original_dtype);
+                }
+            }
 
             // Choose the appropriate strategy
             AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
@@ -326,7 +321,11 @@ Tensor all_reduce(
                 devices,
                 topology);
 
-            return {result};
+            if (needs_padding) {
+                return ttnn::ccl::unpad_all_reduce_output_tensor({result}, unpad_elements);
+            } else {
+                return {result};
+            }
         },
         {input_tensor},
         output_tensors);
