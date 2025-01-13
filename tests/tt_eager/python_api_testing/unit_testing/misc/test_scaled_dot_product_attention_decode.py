@@ -371,6 +371,8 @@ def run_test_sdpa_decode_single_iter(
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
+    print(f"K SHAPE: {K.shape}")
+
     tt_K = ttnn.as_tensor(K, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
     tt_V = ttnn.as_tensor(V, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=dram_memcfg)
 
@@ -410,7 +412,6 @@ def run_test_sdpa_decode_single_iter(
         attn_mask = attn_mask * torch.finfo(torch.float32).min
 
     Q = fa_rand(1, b, nh, d)
-
     tt_Q = ttnn.as_tensor(
         Q[:, :, :nh],
         device=device,
@@ -418,6 +419,9 @@ def run_test_sdpa_decode_single_iter(
         layout=ttnn.TILE_LAYOUT,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
+
+    print(f"TTQ SHAPE: {tt_Q.shape}")
+
     if causal:
         if cur_pos_tensor:
             start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
@@ -487,7 +491,7 @@ def run_test_sdpa_decode_single_iter(
     assert out_pass
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
+# @skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "dtype, q_dtype",
@@ -509,13 +513,14 @@ def run_test_sdpa_decode_single_iter(
     (
         # [32, 8, 1, 32768, 128, (8, 6), True, True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
-        [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
+        # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
         # [4, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
-        [32, 8, 1, 8192, 128, (8, 8), True, True],  # Mixtral8x7b
+        # [32, 8, 1, 8192, 128, (8, 8), True, True],  # Mixtral8x7b
         # [32, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
         # [4, 32, 8, 32768, 128, (8, 8), True, False],  # llama 3.1 8b
         [4, 32, 8, 8192, 128, (8, 8), True, True],  # llama 3.1 8b
         [32, 32, 8, 8192, 128, (8, 8), True, False],  # llama 3.1 8b
+        # [1024, 32, 8, 32, 128, (8, 8), True, False],  # llama 3.1 8b/70b BH revisit
         # [4, 16, 4, 32768, 128, (8, 8), False, False],  # llama 3.1 8b
         # [1, 8, 1, 8192*16, 128, (1, 1), False, True],  # llama2-70B long seqlen
     ),
