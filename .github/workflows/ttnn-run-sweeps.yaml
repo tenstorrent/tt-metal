@@ -219,6 +219,7 @@ on:
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
           - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
           - eltwise.unary_backward.trunc_bw.trunc_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_backward.clamp_bw.clamp_bw
