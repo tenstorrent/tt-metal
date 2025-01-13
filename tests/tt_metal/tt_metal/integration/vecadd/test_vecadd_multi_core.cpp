@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
 
-std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_size, bool sram) {
+std::shared_ptr<Buffer> MakeBuffer(IDevice* device, uint32_t size, uint32_t page_size, bool sram) {
     InterleavedBufferConfig config{
         .device = device,
         .size = size,
@@ -26,7 +26,7 @@ std::shared_ptr<Buffer> MakeBuffer(Device* device, uint32_t size, uint32_t page_
     return CreateBuffer(config);
 }
 
-std::shared_ptr<Buffer> MakeBufferBFP16(Device* device, uint32_t n_tiles, bool sram) {
+std::shared_ptr<Buffer> MakeBufferBFP16(IDevice* device, uint32_t n_tiles, bool sram) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     // For simplicity, all DRAM buffers have page size = tile size.
     const uint32_t page_tiles = sram ? n_tiles : 1;
@@ -46,7 +46,7 @@ CBHandle MakeCircularBufferBFP16(Program& program, const CoreSpec& core, tt::CBI
 
 namespace unit_tests_common::vecadd::test_vecadd_multi_core {
 
-bool vecadd_multi_core(DispatchFixture* fixture, Device* device, uint32_t n_tiles) {
+bool vecadd_multi_core(DispatchFixture* fixture, IDevice* device, uint32_t n_tiles) {
     const uint32_t num_core = 4;
     TT_FATAL(n_tiles >= num_core, "Parameter mismatch {} {}", n_tiles, num_core);
 
