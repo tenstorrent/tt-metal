@@ -33,10 +33,10 @@ ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::
 
 ttnn::Tensor ExpandOperation::invoke(
     const ttnn::Tensor& tensor,
-    tt::stl::Span<const int32_t> shape_vector,
-    std::optional<MemoryConfig>& memory_config,
-    std::optional<uint32_t>& queue_id) {
-    uint32_t queue_id_value = queue_id.value_or(0);
+    const tt::stl::Span<const int32_t> shape_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<uint32_t>& queue_id) {
+    const uint32_t queue_id_value = queue_id.value_or(0);
     return ttnn::repeat(queue_id_value, tensor, create_repetition_vector(tensor, shape_vector), memory_config);
 }
 
