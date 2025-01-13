@@ -199,7 +199,10 @@ def run_prefetcher_mm(
     pt_tensors = []
     for l in range(num_layers):
         for t in range(num_tensors):
-            pt_tensors.append(torch.randn(input_shapes[t]))
+            if t == 2:
+                pt_tensors.append(torch.randn(input_shapes[t]))
+            else:
+                pt_tensors.append(torch.randn(input_shapes[t]))
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):

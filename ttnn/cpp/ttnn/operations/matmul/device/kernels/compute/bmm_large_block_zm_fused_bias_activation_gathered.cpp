@@ -222,8 +222,7 @@ void MAIN {
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
 
-        // DPRINT_UNPACK({ DPRINT  << "out_subblock_w " << out_subblock_w << ENDL(); });
-
+        // DPRINT_UNPACK({ DPRINT  << "num_blocks " << num_blocks << ENDL(); });
         // DPRINT_UNPACK({ DPRINT  << "in1_block_num_tiles " << in1_block_num_tiles << ENDL(); });
         // for (uint32_t i=0; i<in1_block_num_tiles; ++i) {
         //     DPRINT_UNPACK({ DPRINT  << "i " << i << ENDL(); });

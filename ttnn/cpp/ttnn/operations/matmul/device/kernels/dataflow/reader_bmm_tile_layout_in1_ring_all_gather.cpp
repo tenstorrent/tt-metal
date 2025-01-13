@@ -47,8 +47,10 @@ void kernel_main() {
         //         DPRINT  << TSLICE(tt::CBIndex::c_5, i, SliceRange{.h0 = uint8_t(j), .h1 = uint8_t(j+1), .hs = 1, .w0
         //         = 0, .w1 = 32, .ws = 1}, true, true) << ENDL();
         // }
-
-        // DPRINT  << "cb_id_in1_addr after : " << (uint)(remote_cb.fifo_rd_ptr / 16) << ENDL();
+        uint32_t aligned_pages_acked_addr = remote_cb.aligned_pages_acked_ptr;
+        volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
+        DPRINT << "pages acked : " << (uint)(*pages_acked_ptr) << ENDL();
 #endif
     }
 

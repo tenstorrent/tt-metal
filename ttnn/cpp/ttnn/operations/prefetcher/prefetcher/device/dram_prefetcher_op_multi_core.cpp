@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/experimental/hal.hpp>
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -138,10 +139,11 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t remote_cb_size = global_cb.size();
     uint32_t remote_cb_single_tile_size = max_tile_size;
 
+    auto L1_ALIGNMENT = tt::tt_metal::experimental::hal::get_l1_alignment();
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)
-        .set_page_size(remote_cb_single_tile_size)
+        .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location
         .set_data_format(max_tile_size_df);
     auto remote_cb =
         tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
