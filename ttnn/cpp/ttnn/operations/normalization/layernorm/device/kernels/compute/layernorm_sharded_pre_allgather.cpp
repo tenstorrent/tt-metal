@@ -59,7 +59,7 @@ void MAIN {
 
     constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials recieved from other cores
-    const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex2;
+    const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
     binary_op_init_common(cb_in0, cb_in0, cb_x2);
 
@@ -76,8 +76,8 @@ void MAIN {
     num_tiles_per_partial_result = 1;
 #endif
 
-    cb_wait_front(cb_scaler, 1);
 #ifndef RMSNORM
+    cb_wait_front(cb_scaler, 1);
     reconfig_data_format_srcb(cb_in0, cb_scaler);
     // E[x],
     index_h_offset = 0;
@@ -129,6 +129,9 @@ void MAIN {
     reconfig_data_format_srcb(cb_in0, cb_scaler);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
+#ifdef RMSNORM
+    cb_wait_front(cb_scaler, 1);
+#endif  // RMSNORM
 
     cb_reserve_back(cb_ex_partial2, block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
