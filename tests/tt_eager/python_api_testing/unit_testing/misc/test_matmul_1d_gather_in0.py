@@ -453,7 +453,6 @@ def test_multi_core_matmul_1d_wh(
     "num_iters",
     [1, 3],
 )
-# @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,

@@ -2188,6 +2188,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         Kt = (Kt + num_cores - 1) / num_cores;  // ceil division
         Kt *= num_cores;
 
+        TT_FATAL(
+            Kt == (bshape[-2] / in1_tile_shape[0]),
+            "Padded in0 Kt: {} does not equal unpadded in1 Kt: {}",
+            Kt,
+            (bshape[-2] / in1_tile_shape[0]));
+
         Nt = (Nt + num_cores - 1) / num_cores;  // ceil division
         Nt *= num_cores;
     }

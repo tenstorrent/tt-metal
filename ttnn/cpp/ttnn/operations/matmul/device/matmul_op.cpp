@@ -1408,19 +1408,20 @@ void Matmul::validate(
 
     MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
 
-    bool k_n_pad = false;
+    bool gather_in0 = false;
     std::visit(
-        [&k_n_pad](const auto& program_config) {
+        [&gather_in0](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 if (program_config.gather_in0) {
-                    k_n_pad = true;
+                    gather_in0 = true;
                 }
             }
         },
         chosen_program_config);
 
-    if (!k_n_pad) {
+    // Gather in0 supports unpadded input shapes, where in0 K differs from in1 K
+    if (!gather_in0) {
         TT_FATAL(
             a_shape[-1] == b_shape[-2],
             "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} "
@@ -1470,7 +1471,7 @@ void Matmul::validate(
     }
 
     std::visit(
-        [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, k_n_pad, this](
+        [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, gather_in0, this](
             const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
@@ -1508,6 +1509,13 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
+
+                    auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
+                    TT_FATAL(
+                        (in0_shard_shape[1] * input_tensor_a.shard_spec().value().grid.num_cores()) ==
+                            input_tensor_b.get_legacy_shape()[-2],
+                        "Padded Kt derived from in0 must equal unpadded Kt derived from in1.");
+
                     if (!this->global_cb.has_value()) {
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
@@ -1846,10 +1854,14 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                if (!k_n_pad) {
+                if (!gather_in0) {
                     TT_FATAL(
                         (input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
                         "Kt must be divisible by in0_block_w");
+                } else {
+                    TT_FATAL(
+                        (input_tensor_b.get_legacy_shape()[-2] / in1_tile_shape[0]) % program_config.in0_block_w == 0,
+                        "Kt (derived from in1) must be divisible by in0_block_w");
                 }
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_subblock_h == 0,
