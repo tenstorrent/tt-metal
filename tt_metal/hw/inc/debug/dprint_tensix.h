@@ -44,6 +44,29 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, ui
            << ENDL();
 }
 
+// Make it that it returns string not dprints it
+inline void dprint_data_format(uint8_t data_format) {
+    switch (data_format) {
+        case (uint8_t)DataFormat::Float32: DPRINT << "Float32"; break;
+        case (uint8_t)DataFormat::Float16: DPRINT << "Float16"; break;
+        case (uint8_t)DataFormat::Bfp8: DPRINT << "Bfp8"; break;
+        case (uint8_t)DataFormat::Bfp4: DPRINT << "Bfp4"; break;
+        case (uint8_t)DataFormat::Bfp2: DPRINT << "Bfp2"; break;
+        case (uint8_t)DataFormat::Float16_b: DPRINT << "Float16_b"; break;
+        case (uint8_t)DataFormat::Bfp8_b: DPRINT << "Bfp8_b"; break;
+        case (uint8_t)DataFormat::Bfp4_b: DPRINT << "Bfp4_b"; break;
+        case (uint8_t)DataFormat::Bfp2_b: DPRINT << "Bfp2_b"; break;
+        case (uint8_t)DataFormat::Lf8: DPRINT << "Lf8"; break;
+        case (uint8_t)DataFormat::Int8: DPRINT << "Int8"; break;
+        case (uint8_t)DataFormat::UInt8: DPRINT << "UInt8"; break;
+        case (uint8_t)DataFormat::UInt16: DPRINT << "UInt16"; break;
+        case (uint8_t)DataFormat::Int32: DPRINT << "Int32"; break;
+        case (uint8_t)DataFormat::UInt32: DPRINT << "UInt32"; break;
+        case (uint8_t)DataFormat::Tf32: DPRINT << "Tf32"; break;
+        default: DPRINT << "INVALID DATA FORMAT"; break;
+    }
+}
+
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
 // destination register row identifiers are remmaped
 // bits 5:3 are rotated 543 -> 354
@@ -291,7 +314,9 @@ inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatil
 inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
 
-    DPRINT << "in_data_format: " << HEX() << tile_descriptor.in_data_format << "; ";
+    DPRINT << "in_data_format: ";
+    dprint_data_format(tile_descriptor.in_data_format);
+    DPRINT << "; ";
     DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << "; ";
     DPRINT << "reserved_0: " << HEX() << tile_descriptor.reserved_0 << "; ";
     DPRINT << "blobs_per_xy_plane: " << tile_descriptor.blobs_per_xy_plane << "; ";
@@ -494,6 +519,8 @@ inline void dprint_tensix_pack_relu_config() {
 // Printing dest control bits
 inline void dprint_tensix_dest_rd_ctrl() {
     ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
+
+    DPRINT << "Hey! " << (DataFormat)24 << " Hey! ";
 
     DPRINT << "read_32b_data: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << "; ";
     DPRINT << "read_unsigned: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << "; ";
