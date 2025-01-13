@@ -233,7 +233,7 @@ class TtBloomAttention(torch.nn.Module):
 
     def get_alpha(self, q_length):
         if self.alpha is not None:
-            if self.alpha.get_legacy_shape()[3] == q_length:
+            if self.alpha.shape.with_tile_padding()[3] == q_length:
                 return self.alpha
 
         alpha_beta_shape = [1, self.num_heads, q_length, q_length]
@@ -284,7 +284,7 @@ class TtBloomAttention(torch.nn.Module):
             value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
-        _, _, _, kv_length = reshaped_key_layer.get_legacy_shape()
+        _, _, _, kv_length = reshaped_key_layer.shape.with_tile_padding()
 
         matmul_result = baddbmm.tt_baddbmm(
             device=device,

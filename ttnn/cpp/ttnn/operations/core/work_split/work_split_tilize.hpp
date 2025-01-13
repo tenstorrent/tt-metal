@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 
 namespace ttnn {
 
@@ -25,11 +25,12 @@ struct BlockSplit {
 };
 
 inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks) {
-    const uint32_t nblocks_per_core = std::ceil(static_cast<float>(nblocks) / (grid_size.x * grid_size.y));
-    const uint32_t ncores = std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
-    const uint32_t nblocks_per_core_cliff = nblocks % nblocks_per_core;
+    size_t grid_area = grid_size.x * grid_size.y;
+    const uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : std::ceil(static_cast<float>(nblocks) / nblocks_per_core);
+    const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
+    const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
     const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
 
     std::set<CoreRange> core_range, cliff_core_range;
@@ -151,11 +152,17 @@ struct FullRep {
     BlockRep pad;
     uint32_t times_total;
 
-    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
-        rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
+    FullRep(
+        uint32_t n_rows,
+        uint32_t n_pads,
+        uint32_t times,
+        uint32_t pads_mul,
+        uint32_t times_total,
+        uint32_t tile_height) :
+        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
+        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {
@@ -176,17 +183,28 @@ struct FullRep {
 };
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const tt::tt_metal::LegacyShape& unpadded, const Padding& padding, uint32_t num_cores, uint32_t blocks_per_core, bool has_cliff, uint32_t nblocks_per_core_cliff) {
-    auto input_w = unpadded.rank() >= 4 ? unpadded[-4] : 1;
-    auto input_z = unpadded.rank() >= 3 ? unpadded[-3] : 1;
-    auto input_y = unpadded.rank() >= 2 ? unpadded[-2] : 1;
+    const ttnn::SimpleShape& logical_shape,
+    const tt::tt_metal::Padding& padding,
+    uint32_t num_cores,
+    uint32_t blocks_per_core,
+    bool has_cliff,
+    uint32_t nblocks_per_core_cliff,
+    uint32_t tile_height) {
+    TT_FATAL(
+        logical_shape.rank() >= 2,
+        "Only tensors >=2D, tensors are supported. Shape: {}",
+        logical_shape);
 
-    auto padding_w = unpadded.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
-    auto padding_z = unpadded.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
-    auto padding_y = unpadded.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
+    auto input_w = logical_shape[-4];
+    auto input_z = logical_shape[-3];
+    auto input_y = logical_shape[-2];
+
+    auto padding_w = padding.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
+    auto padding_z = padding.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
+    auto padding_y = padding.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
 
     // total work is a full rep followed by a padding.
-    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
+    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();
     std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
     total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
 
@@ -230,7 +248,7 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     return core_assignments;
 }
 
-} // namespace operations::core::work_split
+}  // namespace operations::core::work_split
 
 using namespace operations::core::work_split;
 

@@ -4,10 +4,27 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <map>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+#include "tt_metal/common/core_coord.hpp"
+#include "tt_metal/device.hpp"
+#include "umd/device/tt_soc_descriptor.h"
+#include "llrt/hal.hpp"
+
+// FIXME: ARCH_NAME specific, needed for several pointer types here
+#include "dev_msgs.h"
+
 namespace tt::watcher {
 
-#define GET_WATCHER_DEV_ADDR_FOR_CORE(dev, core, sub_type)              \
-    (dev->get_dev_addr(core, HalMemAddrType::WATCHER) + offsetof(watcher_msg_t, sub_type))
+#define GET_WATCHER_DEV_ADDR_FOR_CORE(dev, core, sub_type) \
+    (dev->get_dev_addr(core, HalL1MemAddrType::WATCHER) + offsetof(watcher_msg_t, sub_type))
 
 constexpr uint64_t DEBUG_SANITIZE_NOC_SENTINEL_OK_64 = 0xbadabadabadabada;
 constexpr uint32_t DEBUG_SANITIZE_NOC_SENTINEL_OK_32 = 0xbadabada;
@@ -22,35 +39,39 @@ typedef struct {
 } stack_usage_info_t;
 
 class WatcherDeviceReader {
-    public:
-     WatcherDeviceReader(
-         FILE *f, Device *device, vector<string> &kernel_names, void (*set_watcher_exception_message)(const string &));
-     ~WatcherDeviceReader();
-     void Dump(FILE *file = nullptr);
+public:
+    WatcherDeviceReader(
+        FILE* f,
+        tt_metal::IDevice* device,
+        std::vector<std::string>& kernel_names,
+        void (*set_watcher_exception_message)(const std::string&));
+    ~WatcherDeviceReader();
+    void Dump(FILE* file = nullptr);
 
-    private:
+private:
     // Functions for dumping each watcher feature to the log
-    void DumpCore(CoreDescriptor &logical_core, bool is_active_eth_core);
-    void DumpL1Status(CoreDescriptor &core, const launch_msg_t *launch_msg);
-    void DumpNocSanitizeStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data, int noc);
-    void DumpAssertStatus(CoreDescriptor &core, const string &core_str, const mailboxes_t *mbox_data);
-    void DumpPauseStatus(CoreDescriptor &core, const string &core_str,const mailboxes_t *mbox_data);
-    void DumpRingBuffer(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout);
-    void DumpRunState(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t state);
-    void DumpLaunchMessage(CoreDescriptor &core, const mailboxes_t *mbox_data);
-    void DumpWaypoints(CoreDescriptor &core, const mailboxes_t *mbox_data, bool to_stdout);
-    void DumpSyncRegs(CoreDescriptor &core);
-    void DumpStackUsage(CoreDescriptor &core, const mailboxes_t *mbox_data);
-    void ValidateKernelIDs(CoreDescriptor &core, const launch_msg_t *launch);
+    void DumpCore(CoreDescriptor& logical_core, bool is_active_eth_core);
+    void DumpL1Status(CoreDescriptor& core, const launch_msg_t* launch_msg);
+    void DumpNocSanitizeStatus(
+        CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data, int noc);
+    void DumpAssertStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
+    void DumpPauseStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
+    void DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
+    void DumpRunState(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t state);
+    void DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data);
+    void DumpWaypoints(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
+    void DumpSyncRegs(CoreDescriptor& core);
+    void DumpStackUsage(CoreDescriptor& core, const mailboxes_t* mbox_data);
+    void ValidateKernelIDs(CoreDescriptor& core, const launch_msg_t* launch);
 
     // Helper functions
-    void LogRunningKernels(CoreDescriptor &core, const launch_msg_t *launch_msg);
-    string GetKernelName(CoreDescriptor &core, const launch_msg_t *launch_msg, uint32_t type);
+    void LogRunningKernels(CoreDescriptor& core, const launch_msg_t* launch_msg);
+    std::string GetKernelName(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t type);
 
-    FILE *f;
-    Device *device;
-    vector<string> &kernel_names;
-    void (* set_watcher_exception_message)(const string &);
+    FILE* f;
+    tt_metal::IDevice* device;
+    std::vector<std::string>& kernel_names;
+    void (*set_watcher_exception_message)(const std::string&);
 
     // Information that needs to be kept around on a per-dump basis
     std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;

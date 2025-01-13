@@ -18,9 +18,71 @@ namespace operations {
 
 namespace binary {
 
+/**
+ * @brief Performs element-wise power operation on the input with the exponent.
+ * When exponent is Tensor, the supported dtypes are float32 and bfloat16.
+ * The tested range for the input is (-30,30) and for the exponent is (-20, 20).
+ *
+ * @param input The input tensor, i.e the base.
+ * @param exponent The exponent
+ * @return The result tensor
+ */
+struct ExecutePower {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        uint32_t exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        uint32_t exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        float input_a,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        float input_a,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const Tensor& exponent,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOps
-{
+struct ExecuteBinaryCompositeOps {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -30,8 +92,7 @@ struct ExecuteBinaryCompositeOps
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsFloat
-{
+struct ExecuteBinaryCompositeOpsFloat {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -42,8 +103,7 @@ struct ExecuteBinaryCompositeOpsFloat
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsIsClose
-{
+struct ExecuteBinaryCompositeOpsIsClose {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -51,13 +111,13 @@ struct ExecuteBinaryCompositeOpsIsClose
         float atol,
         const bool equal_nan,
         const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+        return OpHandler<binary_comp_op_type>::handle(
+            input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
     }
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteDivLikeOps
-{
+struct ExecuteDivLikeOps {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -65,92 +125,127 @@ struct ExecuteDivLikeOps
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
     }
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        float value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
         return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, memory_config);
     }
 };
 
-template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsDiv
-{
+struct ExecuteDiv {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         bool accurate_mode = false,
-        const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, accurate_mode, round_mode, memory_config);
-    }
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
     static Tensor invoke(
-        const Tensor& input_tensor_a,
+        const Tensor& input_tensor,
         float value,
         bool accurate_mode = false,
-        const std::string& round_mode = "None",
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, accurate_mode, round_mode, memory_config);
-    }
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        bool accurate_mode = false,
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float value,
+        bool accurate_mode = false,
+        const std::optional<std::string>& round_mode = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>
 struct ExecuteBiasGelu {
     static Tensor invoke(
         uint8_t queue_id,
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<const DataType> &output_dtype = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-
-            return BinaryOperation<binary_op_type>::invoke(
-                queue_id, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+        return BinaryOperation<binary_op_type>::invoke(
+            queue_id,
+            input_tensor_a_arg,
+            input_tensor_b_arg,
+            output_dtype,
+            memory_config,
+            optional_output_tensor,
+            activations,
+            input_tensor_a_activation);
     }
 
     static Tensor invoke(
-        const Tensor &input_tensor_a_arg,
-        const Tensor &input_tensor_b_arg,
-        const std::optional<const DataType> &output_dtype = std::nullopt,
-        const std::optional<MemoryConfig> &memory_config = std::nullopt,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-
-            return BinaryOperation<binary_op_type>::invoke(
-                DefaultQueueId, input_tensor_a_arg, input_tensor_b_arg, output_dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+        return BinaryOperation<binary_op_type>::invoke(
+            DefaultQueueId,
+            input_tensor_a_arg,
+            input_tensor_b_arg,
+            output_dtype,
+            memory_config,
+            optional_output_tensor,
+            activations,
+            input_tensor_a_activation);
     }
 
     static Tensor invoke(
         uint8_t queue_id,
-        const ttnn::Tensor &input_tensor_a,
+        const ttnn::Tensor& input_tensor_a,
         const float bias,
-        const std::optional<const DataType> &dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-
-            return ttnn::gelu(queue_id, ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor), true, memory_config, optional_output_tensor);
+        return ttnn::gelu(
+            queue_id,
+            ttnn::add(queue_id, input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+            true,
+            memory_config,
+            optional_output_tensor);
     }
 
     static Tensor invoke(
-        const ttnn::Tensor &input_tensor_a,
+        const ttnn::Tensor& input_tensor_a,
         const float bias,
-        const std::optional<const DataType> &dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig> &memory_config = std::nullopt,
-        const std::optional<Tensor> &optional_output_tensor = std::nullopt,
+        const std::optional<const DataType>& dtype = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         std::optional<unary::FusedActivations> activations = std::nullopt,
         std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-
-            return invoke(DefaultQueueId, input_tensor_a, bias, dtype, memory_config, optional_output_tensor, activations, input_tensor_a_activation);
+        return invoke(
+            DefaultQueueId,
+            input_tensor_a,
+            bias,
+            dtype,
+            memory_config,
+            optional_output_tensor,
+            activations,
+            input_tensor_a_activation);
     }
 };
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsPolyval
-{
+struct ExecuteBinaryCompositeOpsPolyval {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const std::vector<float>& coeffs,
@@ -159,21 +254,61 @@ struct ExecuteBinaryCompositeOpsPolyval
     }
 };
 
-struct ExecuteBinaryFmod
-{
+struct ExecuteBinaryFmod {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor,
-        float scalar,
+        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteBinaryRemainder {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteLCM {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-struct ExecuteBinaryRemainder
-{
+struct ExecuteGCD {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteMaximum {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteMinimum {
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecutePrelu {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -181,8 +316,185 @@ struct ExecuteBinaryRemainder
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        float scalar,
+        const std::array<float, 1>& weight,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor, float scalar, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+};
+
+struct ExecuteRsub {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<unary::FusedActivations>& activations = std::nullopt,
+        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        float input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseAnd {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseOr {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseXor {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseLeftShift {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct ExecuteBitwiseRightShift {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor_a_arg,
+        const Tensor& input_tensor_b_arg,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        int32_t input_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace binary
@@ -194,18 +506,13 @@ constexpr auto hypot = ttnn::register_operation_with_auto_launch_op<
 constexpr auto xlogy = ttnn::register_operation_with_auto_launch_op<
     "ttnn::xlogy",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::XLOGY>>();
-constexpr auto minimum = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::minimum",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MINIMUM>>();
-constexpr auto maximum = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::maximum",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::MAXIMUM>>();
+constexpr auto minimum =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::minimum", operations::binary::ExecuteMinimum>();
+constexpr auto maximum =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::maximum", operations::binary::ExecuteMaximum>();
 constexpr auto atan2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::atan2",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>>();
-constexpr auto logical_xor = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_xor",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR>>();
 constexpr auto nextafter = ttnn::register_operation_with_auto_launch_op<
     "ttnn::nextafter",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>>();
@@ -218,24 +525,17 @@ constexpr auto subalpha = ttnn::register_operation_with_auto_launch_op<
 constexpr auto isclose = ttnn::register_operation_with_auto_launch_op<
     "ttnn::isclose",
     operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>>();
-constexpr auto remainder = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::remainder",
-    operations::binary::ExecuteBinaryRemainder>();
-constexpr auto fmod = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::fmod",
-    operations::binary::ExecuteBinaryFmod>();
-constexpr auto div = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::div",
-    operations::binary::ExecuteBinaryCompositeOpsDiv<operations::binary::BinaryCompositeOpType::DIV>>();
+constexpr auto remainder =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::remainder", operations::binary::ExecuteBinaryRemainder>();
+constexpr auto fmod =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::fmod", operations::binary::ExecuteBinaryFmod>();
+constexpr auto div = ttnn::register_operation_with_auto_launch_op<"ttnn::div", operations::binary::ExecuteDiv>();
 constexpr auto div_no_nan = ttnn::register_operation_with_auto_launch_op<
     "ttnn::div_no_nan",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>>();
 constexpr auto floor_div = ttnn::register_operation_with_auto_launch_op<
     "ttnn::floor_div",
     operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>>();
-constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::logical_xor_",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::LOGICAL_XOR_>>();
 constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>>();
@@ -248,5 +548,17 @@ constexpr auto outer = ttnn::register_operation_with_auto_launch_op<
 constexpr auto polyval = ttnn::register_operation_with_auto_launch_op<
     "ttnn::polyval",
     operations::binary::ExecuteBinaryCompositeOpsPolyval<operations::binary::BinaryCompositeOpType::POLYVAL>>();
+constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<"ttnn::gcd", operations::binary::ExecuteGCD>();
+constexpr auto lcm = ttnn::register_operation_with_auto_launch_op<"ttnn::lcm", operations::binary::ExecuteLCM>();
+constexpr auto prelu = ttnn::register_operation_with_auto_launch_op<"ttnn::prelu", operations::binary::ExecutePrelu>();
+constexpr auto rsub = ttnn::register_operation_with_auto_launch_op<"ttnn::rsub", operations::binary::ExecuteRsub>();
+constexpr auto bitwise_and = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_and", operations::binary::ExecuteBitwiseAnd>();
+constexpr auto bitwise_or = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_or", operations::binary::ExecuteBitwiseOr>();
+constexpr auto bitwise_xor = ttnn::register_operation_with_auto_launch_op<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
+constexpr auto bitwise_left_shift = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
+constexpr auto bitwise_right_shift = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::bitwise_right_shift", operations::binary::ExecuteBitwiseRightShift>();
+constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", operations::binary::ExecutePower>();
 
 }  // namespace ttnn

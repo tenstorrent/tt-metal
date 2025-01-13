@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 45
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -34,6 +38,10 @@ on:
         required: false
         type: number
         default: 45
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   fd-tests:
@@ -42,7 +50,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ["${{ inputs.os }}"]
         test-group: [
           {name: eager unit tests 1, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 },
           {name: eager unit tests 2, cmd: pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 2 },
@@ -57,14 +65,12 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       LOGURU_LEVEL: INFO
-      # may not need this
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
       - in-service
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
@@ -72,21 +78,22 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_username: ${{ github.actor }}
+          docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
+          install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_image_arch: ${{ inputs.arch }}
           run_args: |
-            WHEEL_FILENAME=$(ls -1 *.whl)
-            pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U0593J2RQRZ # Bill Teng
+          owner: U06CXU895AP # Michael Chiou
       - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         with:
           path: |
             generated/test_reports/
           prefix: "test_reports_"
+      - name: Generate system logs on failure
+        uses: ./.github/actions/generate-system-logs
+        if: ${{ failure() }}

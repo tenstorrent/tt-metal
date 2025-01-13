@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "prod_nc_op.hpp"
 
 #include "tt_metal/common/constants.hpp"
@@ -25,8 +25,8 @@ void Prod::validate(const std::vector<Tensor>& inputs) const {
     auto input_shape = input.get_legacy_shape();
     TT_FATAL((input_shape.rank() == 4), "rank should be 4");
     const auto& output_shape = output.get_legacy_shape();
-    auto input_shape_wo_padding = input.get_legacy_shape().without_padding();
-    const auto& output_shape_wo_padding = output.get_legacy_shape().without_padding();
+    auto input_shape_wo_padding = input.get_logical_shape();
+    const auto& output_shape_wo_padding = output.get_logical_shape();
 
     if (dim == 0 || dim == 1) {
         input_shape[dim] = 1;
@@ -44,10 +44,9 @@ std::vector<Tensor> Prod::create_output_tensors(const std::vector<Tensor>& input
     return {};
 }
 
-std::vector<tt::tt_metal::LegacyShape> Prod::compute_output_shapes(const std::vector<Tensor>& inputs) const {
+std::vector<TensorSpec> Prod::compute_output_specs(const std::vector<Tensor>&) const {
     // Inplace
     return {};
-
 }
 
 operation::ProgramWithCallbacks Prod::create_program(
@@ -63,8 +62,7 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
     auto padding = output_shape.padding();
     switch (dim) {
         case 0:
-        case 1: output_shape[dim] = 1;
-        break;
+        case 1: output_shape[dim] = 1; break;
     }
 
     return {tt::tt_metal::LegacyShape(output_shape, padding)};
@@ -73,7 +71,8 @@ tt::tt_metal::LegacyShape compute_output_shape(const tt::tt_metal::LegacyShape& 
 inline Tensor create_output_tensor(
     const Tensor& input_tensor, const tt::tt_metal::LegacyShape& output_shape, const MemoryConfig& mem_config) {
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE);
-    return create_device_tensor(output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
+    return create_device_tensor(
+        output_shape, input_tensor.get_dtype(), Layout::TILE, input_tensor.device(), mem_config);
 }
 
 // output as arg
@@ -96,14 +95,14 @@ Tensor prod_(const Tensor& input, const int64_t& dim, const MemoryConfig& mem_co
 Tensor prod_nc(
     const Tensor& input,
     const Tensor& output,
-    std::vector<int64_t>& dims,
+    ttnn::SmallVector<int64_t>& dims,
     const MemoryConfig& output_mem_config) {
     // reduce for all dims
     if (dims.empty()) {
         dims = {0, 1, 2, 3};
     }
 
-    std::vector<int64_t> sorted_dims = dims;
+    ttnn::SmallVector<int64_t> sorted_dims = dims;
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
     auto temp_input = input;

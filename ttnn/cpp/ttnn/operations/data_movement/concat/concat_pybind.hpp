@@ -16,26 +16,27 @@ namespace py = pybind11;
 
 void bind_concat(py::module& module) {
     const auto doc = R"doc(
-Concats :attr:`tensors` in the given :attr:`dim`.
 
 Args:
-    * :attr:`tensors`: the tensors to be concatenated.
-    * :attr:`dim`: the concatenating dimension.
+    input_tensor (List of ttnn.Tensor): the input tensors.
+    dim (number): the concatenating dimension.
 
 Keyword Args:
-    * :attr:`memory_config`: the memory configuration to use for the operation
-    * :attr:`queue_id` (Optional[uint8]): command queue id
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
+    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+    queue_id (int, optional): command queue id. Defaults to `0`.
+    output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+    groups (int, optional): When `groups` is set to a value greater than 1, the inputs are split into N `groups` partitions, and elements are interleaved from each group into the output tensor. Each group is processed independently, and elements from each group are concatenated in an alternating pattern based on the number of groups. This is useful for recombining grouped convolution outputs during residual concatenation. Defaults to `1`. Currently, groups > `1` is only supported for two height sharded input tensors.
+
+Returns:
+    ttnn.Tensor: the output tensor.
 
 Example:
 
-    >>> tensor = ttnn.concat(ttnn.from_torch(torch.zeros((1, 1, 64, 32), ttnn.from_torch(torch.zeros((1, 1, 64, 32), dim=3)), device)
-
     >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
     >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> output = ttnn.concat([tensor1, tensor2], dim=4)
+    >>> output = ttnn.concat([tensor1, tensor2], dim=3)
     >>> print(output.shape)
-    [1, 1, 32, 64]
+    [1, 1, 64, 64]
 
     )doc";
 
@@ -45,22 +46,23 @@ Example:
         ttnn::concat,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const std::vector<ttnn::Tensor>& tensors,
-                const int dim,
-                std::optional<ttnn::Tensor> &optional_output_tensor,
-                std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, tensors, dim, memory_config, optional_output_tensor);
-                },
-                py::arg("tensors"),
-                py::arg("dim") = 0,
-                py::kw_only(),
-                py::arg("output_tensor").noconvert() = std::nullopt,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0,
-                });
+            [](const OperationType& self,
+               const std::vector<ttnn::Tensor>& tensors,
+               const int dim,
+               std::optional<ttnn::Tensor>& optional_output_tensor,
+               std::optional<ttnn::MemoryConfig>& memory_config,
+               const int groups,
+               uint8_t queue_id) {
+                return self(queue_id, tensors, dim, memory_config, optional_output_tensor, groups);
+            },
+            py::arg("tensors"),
+            py::arg("dim") = 0,
+            py::kw_only(),
+            py::arg("output_tensor").noconvert() = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("groups") = 1,
+            py::arg("queue_id") = 0,
+        });
 }
-
 
 }  // namespace ttnn::operations::data_movement::detail

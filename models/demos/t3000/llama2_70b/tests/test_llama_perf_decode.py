@@ -28,43 +28,7 @@ from models.utility_functions import (
 )
 from models.perf.perf_utils import prep_perf_report
 
-
-def load_prompts_file(tokenizer, prefill_length, generation_length, gap=64):
-    with open("models/demos/t3000/llama2_70b/demo/data/a_tale_of_two_cities.txt", encoding="utf-8-sig") as f:
-        tokenized = tokenizer.encode(f.read(), bos=True, eos=False)
-
-    token_windows = []
-    ground_truth_texts = []
-    for i in range(0, len(tokenized) - prefill_length + 1, prefill_length + gap):
-        token_windows.append(tokenized[i : i + prefill_length])
-        ground_truth_text = tokenizer.decode(tokenized[i : i + generation_length + 1])
-        ground_truth_texts.append(ground_truth_text)
-        if len(token_windows) == 32:
-            return token_windows, ground_truth_texts
-
-    return token_windows, ground_truth_texts
-
-
-def prepare_next_input(tokenizer, tokens, input_text_mask, cur_pos, next_token):
-    # only replace token if prompt has already been generated
-    next_token = torch.where(input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token)
-    tokens[:, cur_pos] = next_token
-
-    eos_reached = (~input_text_mask[:, cur_pos]) & (next_token == tokenizer.eos_id)
-    prev_pos = cur_pos
-
-    return tokens, eos_reached, prev_pos
-
-
-def intialize_inputs(tokenizer, prompt_tokens, bsz, total_len):
-    # pad the model to maximum length
-    pad_id = tokenizer.pad_id
-    tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cpu")
-    for k, t in enumerate(prompt_tokens):
-        tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cpu")
-
-    input_text_mask = tokens != pad_id  # use prefill token if that token is not masked
-    return tokens, input_text_mask
+from collections import defaultdict
 
 
 def get_decode_time(profiler, start_token, end_token):
@@ -103,6 +67,7 @@ def run_test_LlamaModel_end_to_end(
     llama_version,
     batch,
     seq_len,
+    max_context_len,
     model_config,
     n_layers,
     n_devices,
@@ -121,7 +86,7 @@ def run_test_LlamaModel_end_to_end(
     generator = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN,
+        max_seq_len=max_context_len,
         max_batch_size=batch,
         n_layers=1,
         skip_model_load=skip_model_load,
@@ -134,11 +99,9 @@ def run_test_LlamaModel_end_to_end(
 
     # Prepare input -----------------------------------------------------------------------
     torch.manual_seed(0)
-    total_len = min(MAX_SEQ_LEN, generation_length + 1)
-    prefill_ids, ground_truth_texts = load_prompts_file(
-        tokenizer, prefill_length=32 if generation_length > 32 else 20, generation_length=generation_length
-    )
-    tokens, input_text_mask = intialize_inputs(tokenizer, prefill_ids, batch, total_len)
+    total_len = min(max_context_len, generation_length + 1)
+    n_iters = 100  # Number of iterations to run in order to get a perf estimate
+    tokens = torch.randint(0, 10000, (batch, 1), dtype=torch.long)
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -166,13 +129,7 @@ def run_test_LlamaModel_end_to_end(
 
     ##### Prepare Inputs #####
     prev_pos = total_len - 1
-    tt_inp_emb, prev_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tokens[:, prev_pos:total_len], prev_pos)
-    tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
-    tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, tt_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-
-    rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=tt_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-    cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(tokens, prev_pos)
 
     ##### Compile Model #####
     logger.info("Compiling model")
@@ -199,7 +156,7 @@ def run_test_LlamaModel_end_to_end(
     ##### Execute Trace #####
     logger.info("Executing trace")
     profiler.start(f"end_to_end_inference")
-    for i in range(total_len):
+    for i in range(n_iters):
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         logits = ttnn.to_torch(logits_rm)
     profiler.end(f"end_to_end_inference")
@@ -207,7 +164,7 @@ def run_test_LlamaModel_end_to_end(
 
     profiler.print()
     loop_time = profiler.get("end_to_end_inference")
-    iter_time = loop_time / total_len
+    iter_time = loop_time / n_iters
     logger.info(f"decode cached, single iter latency: {iter_time}")
 
     comment = f"num_layers={n_layers}L_n_devices={n_devices}"
@@ -238,49 +195,42 @@ def run_test_LlamaModel_end_to_end(
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize(
     "llama_version",
-    (
-        # ("llama2"),
-        ("llama3"),
-    ),
+    (("llama3"),),
 )
 @pytest.mark.parametrize(
-    "generation_length, expected_compile_time, expected_inference_time",
+    "generation_length, expected_compile_time, expected_inference_time, batch, seq_len, max_context_len",
     (
-        (32, 10000, 0.139 + 0.02 + 0.1),  # TODO: decrease expected compile time once as_tensor gets speedup
-        (128, 10000, 0.138 + 0.02 + 0.1),  # Fudge delta
-        (
-            2048,
-            10000,
-            0.153 + 0.02 + 0.1,
-        ),  # NOTE: Added extra buffer due to perf regression. More details in issue #9479
+        (32, 10000, 0.0653 + 0.01, 32, 1, 4096),
+        (128, 10000, 0.0655 + 0.01, 32, 1, 4096),
+        (2048, 10000, 0.0771 + 0.01, 32, 1, 4096),
+        (8192, 10000, 0.0825 + 0.01, 16, 1, 8192),
+        (128 * 1024, 10000, 0.0918 + 0.01, 1, 1, 128 * 1024),
     ),
-    ids=["gen32", "gen128", "gen2048"],
+    ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14227456}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
 def test_Llama_perf_host(
     generation_length,
     expected_compile_time,
     expected_inference_time,
+    batch,
+    seq_len,
+    max_context_len,
     t3k_mesh_device,
     llama_version,
     use_program_cache,
     n_layers=80,
     n_devices=8,
 ):
-    if generation_length == 2048:
-        pytest.skip("Skipping 2048 test for now. segfault issue #8637")
-
-    batch, seq_len = 32, 1
-
     model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
         llama_version=llama_version,
+        max_batch_size=batch,
+        max_context_len=max_context_len,
     )
 
     check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
-        device.enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     disable_compilation_reports()
 
@@ -289,6 +239,219 @@ def test_Llama_perf_host(
         llama_version,
         batch,
         seq_len,
+        max_context_len,
+        model_config,
+        n_layers,
+        n_devices,
+        generation_length,
+        expected_compile_time,
+        expected_inference_time,
+        ckpt_dir,
+        tokenizer_path,
+        cache_path,
+    )
+
+
+def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
+    mesh_device,
+    llama_version,
+    batch,
+    seq_len,
+    max_context_len,
+    model_config,
+    n_layers,
+    n_devices,
+    generation_length,
+    expected_compile_time,
+    expected_inference_time,
+    ckpt_dir,
+    tokenizer_path,
+    cache_path,
+):
+    # Prepare paths and devices
+    skip_model_load = should_skip_model_load()
+
+    logger.info(f"Running num_layer: {n_layers}")
+
+    generator = Llama.build(
+        ckpt_dir,
+        tokenizer_path,
+        max_seq_len=max_context_len,
+        max_batch_size=batch,
+        n_layers=1,
+        skip_model_load=skip_model_load,
+    )
+    hugging_face_reference_model, tokenizer = generator.model, generator.tokenizer
+    hugging_face_reference_model.eval()
+    # state_dict = hugging_face_reference_model.state_dict()
+    state_dict = load_llama_state_dict(ckpt_dir, n_layers=n_layers)
+    configuration = hugging_face_reference_model.params
+
+    # Prepare input -----------------------------------------------------------------------
+    torch.manual_seed(0)
+    total_len = min(max_context_len, generation_length + 1)
+    n_iters = 100  # Number of iterations to run in order to get a perf estimate
+    tokens = torch.randint(0, 10000, (batch, 1), dtype=torch.long)
+    # Clear global profiler state before starting measurements
+    profiler.clear()
+
+    submesh_to_metadata = defaultdict(dict)
+    submeshes = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    for submesh in submeshes:
+        # Set up model -----------------------------------------------------------------------
+        logger.info("Moving weights to devices; might take some time...")
+        profiler.start("TT_llama_model_setup")
+        tt_model = TtLlamaModel_optimized(
+            submesh,
+            state_dict,
+            BASE_URL,
+            n_layers,
+            model_config,
+            configuration,
+            cache_path=cache_path,
+            read_cache=True,
+        )
+
+        for i in submesh.get_device_ids():
+            device = submesh.get_device(i)
+            ttnn.synchronize_device(device)
+
+        profiler.end("TT_llama_model_setup")
+
+        ##### Prepare Inputs #####
+        prev_pos = total_len - 1
+        tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
+            tokens, prev_pos, mode="decode"
+        )
+
+        ##### Compile Model #####
+        logger.info("Compiling model")
+        profiler.start(f"compile_time")
+        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+        logits = ttnn.to_torch(logits_rm)
+        profiler.end(f"compile_time")
+        profiler.print()
+        compile_iter_time = profiler.get("compile_time")
+        logger.info(f"decode with compile time, single iter latency: {compile_iter_time}")
+
+        submesh_to_metadata[submesh.get_mesh_id()] = {
+            "submesh": submesh,
+            "logits_rm": logits_rm,
+            "tt_model": tt_model,
+            "prev_pos": prev_pos,
+            "tt_inp_emb": tt_inp_emb,
+            "rot_mat": rot_mat,
+            "cache_idxs": cache_idxs,
+        }
+
+    ##### Capture Trace #####
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+    for submesh in submeshes:
+        mesh_id = submesh.get_mesh_id()
+        tt_model = submesh_to_metadata[mesh_id]["tt_model"]
+        tt_inp_emb = submesh_to_metadata[mesh_id]["tt_inp_emb"]
+        rot_mat = submesh_to_metadata[mesh_id]["rot_mat"]
+        cache_idxs = submesh_to_metadata[mesh_id]["cache_idxs"]
+        prev_pos = submesh_to_metadata[mesh_id]["prev_pos"]
+
+        tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs, mode="decode")
+        tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_logits_tensors = ttnn.get_device_tensors(tt_logits)
+        logits_rm = ttnn.to_layout(tt_logits_tensors[0], ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    ##### Execute Trace #####
+    logger.info("Executing trace")
+    profiler.start(f"end_to_end_inference")
+    for i in range(n_iters):
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+        logits = ttnn.to_torch(logits_rm)
+    profiler.end(f"end_to_end_inference")
+    ttnn.release_trace(mesh_device, trace_id)
+
+    profiler.print()
+    loop_time = profiler.get("end_to_end_inference")
+    iter_time = loop_time / n_iters
+    logger.info(f"decode cached, single iter latency: {iter_time}")
+
+    comment = f"num_layers={n_layers}L_n_devices={n_devices}"
+
+    prep_perf_report(
+        model_name=f"{llama_version}_70b_{comment}",
+        batch_size=batch,
+        inference_and_compile_time=compile_iter_time,
+        inference_time=iter_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments=comment,
+    )
+
+    tokens_per_s_per_user = 1 / iter_time
+    tokens_per_s_overall = tokens_per_s_per_user * batch * len(submeshes)
+
+    logger.info(f"Time per iteration: {iter_time}")
+    logger.info(f"Tokens per s per user: {tokens_per_s_per_user}")
+    logger.info(f"Tokens per s overall: {tokens_per_s_overall}")
+
+    # assert compile_time <= expected_compile_time
+    assert iter_time <= expected_inference_time
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(4500)
+@pytest.mark.model_perf_tg
+@pytest.mark.parametrize(
+    "llama_version",
+    (("llama3"),),
+)
+@pytest.mark.parametrize(
+    "generation_length, expected_compile_time, expected_inference_time, batch, seq_len, max_context_len",
+    (
+        (32, 10000, 0.0653 + 0.01, 32, 1, 4096),
+        (128, 10000, 0.0655 + 0.01, 32, 1, 4096),
+        (2048, 10000, 0.0771 + 0.01, 32, 1, 4096),
+        (8192, 10000, 0.0825 + 0.01, 16, 1, 8192),
+        (128 * 1024, 10000, 0.0918 + 0.01, 1, 1, 128 * 1024),
+    ),
+    ids=["gen32", "gen128", "gen2k", "gen8k", "gen128k"],
+)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 20000000}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_Llama_perf_hybrid_data_tensor_parallel(
+    mesh_device,
+    generation_length,
+    expected_compile_time,
+    expected_inference_time,
+    batch,
+    seq_len,
+    max_context_len,
+    llama_version,
+    use_program_cache,
+    n_layers=80,
+    n_devices=8,
+):
+    model_config, ckpt_dir, tokenizer_path, cache_path = setup_llama_env(
+        llama_version=llama_version,
+        max_batch_size=batch,
+        max_context_len=max_context_len,
+    )
+
+    check_mesh_device(mesh_device, model_config)
+    mesh_device.enable_async(True)
+
+    disable_compilation_reports()
+
+    run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
+        mesh_device,
+        llama_version,
+        batch,
+        seq_len,
+        max_context_len,
         model_config,
         n_layers,
         n_devices,

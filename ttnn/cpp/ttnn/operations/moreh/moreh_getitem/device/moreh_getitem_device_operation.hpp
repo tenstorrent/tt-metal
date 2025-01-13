@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <optional>
 #include <variant>
@@ -14,9 +16,9 @@
 namespace ttnn::operations::moreh::moreh_getitem {
 struct MorehGetItemOperation {
     struct operation_attributes_t {
-        const std::vector<uint32_t> index_dims;
+        const ttnn::SmallVector<uint32_t> index_dims;
         // const CoreRange core_range;
-        const MemoryConfig output_memory_config;
+        const MemoryConfig memory_config;
     };
 
     struct tensor_args_t {
@@ -25,7 +27,7 @@ struct MorehGetItemOperation {
         const std::optional<Tensor>& output;
     };
 
-    using shape_return_value_t = ttnn::Shape;
+    using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MorehGetItemRmFactory {
@@ -34,7 +36,7 @@ struct MorehGetItemOperation {
             KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             uint32_t core_h;
-            std::vector<uint32_t> index_dims;
+            ttnn::SmallVector<uint32_t> index_dims;
             uint32_t input_dim_offset;
         };
 
@@ -58,7 +60,7 @@ struct MorehGetItemOperation {
             KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             uint32_t core_h;
-            std::vector<uint32_t> index_dims;
+            ttnn::SmallVector<uint32_t> index_dims;
             uint32_t input_dim_offset;
         };
 
@@ -82,15 +84,15 @@ struct MorehGetItemOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input,
         const std::vector<Tensor>& index_tensors,
-        const std::vector<uint32_t> index_dims,
+        const ttnn::SmallVector<uint32_t>& index_dims,
         const std::optional<Tensor>& output,
         // const CoreRange core_range,
-        const std::optional<MemoryConfig> output_memory_config);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_getitem
 

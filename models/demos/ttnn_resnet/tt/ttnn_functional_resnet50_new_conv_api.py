@@ -4,11 +4,11 @@
 
 import ttnn
 import torch
+from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get_conv_input_memory_config
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
     _nearest_y,
-    pad_and_fold_conv_activation_for_unity_stride,
 )
 from typing import List
 from loguru import logger
@@ -67,10 +67,8 @@ def ResnetLinear(
     """
 
     matmul_config = hardcoded_matmul_config_linear[batch_size]
-    weight_shape = weight.get_legacy_shape()
-    weight = weight.reshape(1, 1, weight_shape[-2], weight_shape[-1])
-    bias_shape = bias.get_legacy_shape()
-    bias = bias.reshape(1, 1, bias_shape[-2], bias_shape[-1])
+    weight = weight.reshape(weight.shape.to_rank(4))
+    bias = bias.reshape(bias.shape.to_rank(4))
 
     def linear_(act):
         output = ttnn.linear(
@@ -162,7 +160,7 @@ class resnet50Bottleneck:
     ):
         if self.downsample:
             logger.debug(f"Running downsample")
-            ds_out, _, _, self.ds_conv_weight_tensor, self.ds_conv_bias_tensor = ttnn.conv2d(
+            ds_out, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
                 in_channels=self.ds_conv_input_channels,
@@ -178,7 +176,6 @@ class resnet50Bottleneck:
                 conv_config=ttnn.Conv2dConfig(
                     dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                    math_fidelity=self.model_config["MATH_FIDELITY"],
                     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                     if height_sharding
                     else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -186,12 +183,23 @@ class resnet50Bottleneck:
                     reallocate_halo_output=not (is_wormhole_b0() and batch_size == 16),
                     reshard_if_not_optimal=reshard_if_not_optimal,
                     transpose_shards=transpose_shards,
-                    packer_l1_accum_enabled=packer_l1_accum_enabled,
-                    enable_act_double_buffer=enable_act_double_buffer,
+                    enable_act_double_buffer=enable_act_double_buffer
+                    if height_sharding
+                    else True
+                    if input_width < 56
+                    else False,
+                    enable_weights_double_buffer=True if input_width < 56 else False,
                     enable_split_reader=enable_split_reader,
                     enable_subblock_padding=enable_subblock_padding,
                 ),
+                compute_config=ttnn.init_device_compute_kernel_config(
+                    device.arch(),
+                    math_fidelity=self.model_config["MATH_FIDELITY"],
+                    packer_l1_acc=packer_l1_accum_enabled,
+                ),
                 conv_op_cache=conv_op_cache,
+                return_output_dim=False,
+                return_weights_and_bias=True,
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -223,7 +231,7 @@ class resnet50Bottleneck:
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
         module_input_height = input_height
-        out, input_height, input_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -239,16 +247,21 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
-                packer_l1_accum_enabled=packer_l1_acc,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=self.model_config["MATH_FIDELITY"],
+                packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         act_block_h_override = 0
@@ -304,7 +317,7 @@ class resnet50Bottleneck:
 
         reallocate_halo_output = batch_size == 20
         logger.debug(f"Running conv2")
-        out, input_height, input_width, self.conv2_weight_tensor, self.conv2_bias_tensor = ttnn.conv2d(
+        out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             in_channels=self.conv2_input_channels,
@@ -320,7 +333,6 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 activation="relu",
                 deallocate_activation=True,
                 reallocate_halo_output=reallocate_halo_output,
@@ -330,12 +342,19 @@ class resnet50Bottleneck:
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
-                packer_l1_accum_enabled=packer_l1_acc,
                 enable_act_double_buffer=enable_act_double_buffer,
+                enable_weights_double_buffer=True,
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
             ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=self.model_config["MATH_FIDELITY"],
+                packer_l1_acc=packer_l1_acc,
+            ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
 
         logger.debug(
@@ -354,7 +373,7 @@ class resnet50Bottleneck:
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
-        out, _, _, self.conv3_weight_tensor, self.conv3_bias_tensor = ttnn.conv2d(
+        out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             in_channels=self.conv3_input_channels,
@@ -370,15 +389,20 @@ class resnet50Bottleneck:
             conv_config=ttnn.Conv2dConfig(
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-                math_fidelity=self.model_config["MATH_FIDELITY"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
                 else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 transpose_shards=transpose_shards,
-                packer_l1_accum_enabled=packer_l1_acc,
+            ),
+            compute_config=ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=self.model_config["MATH_FIDELITY"],
+                packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=False,
+            return_weights_and_bias=True,
         )
 
         if not run_downsample_before_conv2:
@@ -446,7 +470,6 @@ class resnet50:
         stride,
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
-        mesh_mapper=None,
     ) -> None:
         super().__init__()
         layers = [3, 4, 6, 3]
@@ -459,7 +482,6 @@ class resnet50:
         self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
-        self.mesh_mapper = mesh_mapper
         if is_grayskull():
             compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -567,21 +589,28 @@ class resnet50:
         self.conv1_config = ttnn.Conv2dConfig(
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
-            math_fidelity=self.model_config["MATH_FIDELITY"],
             activation="relu",
             deallocate_activation=dealloc_input,
             input_channels_alignment=input_channels_alignment,
             act_block_h_override=act_block_h_override,
             transpose_shards=self.transpose_shards,
-            packer_l1_accum_enabled=True if whb0_and_b16 else False,
             enable_act_double_buffer=True if whb0_and_b16 else False,
-            enable_split_reader=True if whb0_and_b16 else False,
+            enable_split_reader=True if whb0_and_b16 or not is_wormhole_b0() else False,
             enable_subblock_padding=False,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
         )
+        self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=self.model_config["MATH_FIDELITY"],
+            packer_l1_acc=True if whb0_and_b16 else False,
+        )
         if whb0_and_b16:
-            self.conv1_config.act_block_h_override = 64
+            # Issue #13145: Temp workaround for Galaxy to avoid hangs
+            if type(device) == ttnn.MeshDevice and device.get_num_devices() > 8:
+                self.conv1_config.act_block_h_override = 64
+            else:
+                self.conv1_config.act_block_h_override = 49 * 32
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -626,15 +655,18 @@ class resnet50:
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        _, self.override_fold_mem_config, _ = ttnn.get_conv_padded_input_shape_and_mem_config(
-            device=device,
-            input_tensor=conv_dummy_tensor,
-            conv_config=self.conv1_config,
-            batch_size=self.batch_size,
-            height=self.conv1_output_height,
-            width=self.conv1_output_width,
-            in_channels=self.conv1_input_channels,
-            out_channels=self.conv1_output_channels,
+
+        self.override_fold_mem_config = get_conv_input_memory_config(
+            self.batch_size,
+            self.conv1_input_channels,
+            self.conv1_input_height,
+            self.conv1_input_width,
+            self.conv1_output_channels,
+            self.conv1_output_height,
+            self.conv1_output_width,
+            device.compute_with_storage_grid_size(),
+            self.conv1_config.input_channels_alignment,
+            is_grayskull(),
         )
 
     def __del__(self):
@@ -710,7 +742,7 @@ class resnet50:
         logger.debug(f"==== first conv")
 
         # first conv
-        x, x_height, x_width, self.conv1_weight_tensor, self.conv1_bias_tensor = ttnn.conv2d(
+        x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
             in_channels=self.conv1_input_channels,
@@ -724,7 +756,10 @@ class resnet50:
             input_height=self.conv1_input_height,
             input_width=self.conv1_input_width,
             conv_config=self.conv1_config,
+            compute_config=self.conv1_compute_config,
             conv_op_cache=conv_op_cache,
+            return_output_dim=True,
+            return_weights_and_bias=True,
         )
         # Relu is fused with conv1
         if self.batch_size == 20:
@@ -740,7 +775,6 @@ class resnet50:
             stride=[2, 2],
             padding=[1, 1],
             dilation=[1, 1],
-            device=device,
         )
 
         x_height = 56
@@ -763,7 +797,7 @@ class resnet50:
             x = ttnn.reallocate(x)
 
         logger.debug(f"==== Running layer 1 module 1")
-        layer1_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
+        layer1_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
 
         reshard = False
         height_shard = False
@@ -832,10 +866,11 @@ class resnet50:
         if self.batch_size == 20 and is_wormhole_b0():
             x = ttnn.reallocate(x)
 
-        layer2_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
+        layer2_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
 
         reshard = False
         height_shard = False
+        is_gs = is_grayskull()
         if is_wormhole_b0() and self.batch_size == 20:
             if is_first_run:
                 reshard = True if not is_wormhole_b0() else False
@@ -854,7 +889,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -878,7 +913,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -892,7 +927,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -906,12 +941,12 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
 
-        layer3_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
+        layer3_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
 
         reshard = False
         height_shard = False
@@ -932,7 +967,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -956,7 +991,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -970,7 +1005,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -984,7 +1019,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -998,7 +1033,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1013,16 +1048,18 @@ class resnet50:
             conv_op_cache,
             eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
 
         if is_wormhole_b0() and self.batch_size == 16:
-            xshape = x.shape_without_padding()
-            x = ttnn.slice(x, [0, 0, 0, 0], [xshape[0] - 1, xshape[1] - 1, xshape[2] - 1, xshape[3] - 1])
+            xshape = x.shape
+            x = ttnn.slice(
+                x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1)
+            )
 
-        layer4_module1_input_shape = ttnn.Shape(x.get_legacy_shape())
+        layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
 
         if is_wormhole_b0():
             shard_config = ttnn.create_sharded_memory_config_(
@@ -1053,7 +1090,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1077,7 +1114,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1091,7 +1128,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1106,16 +1143,16 @@ class resnet50:
             }
         )
         shard_shape = [
-            x.volume() // x.get_legacy_shape()[-1],
-            x.get_legacy_shape()[-1] // (grid_size[0] * grid_size[1]),
+            x.volume() // x.shape.with_tile_padding()[-1],
+            x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
         x = ttnn.to_memory_config(x, width_sharded_mem_config)
 
-        unpadded_shape = x.shape_without_padding()
+        unpadded_shape = x.shape
         x = ttnn.untilize_with_unpadding(
             x,
             output_tensor_end=(
@@ -1131,13 +1168,13 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.get_legacy_shape()[1],
-                x.get_legacy_shape()[2] // self.batch_size,
-                x.get_legacy_shape()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 
-        unpadded_shape = x.get_legacy_shape()
+        unpadded_shape = x.shape.with_tile_padding()
         padded_shape = [
             unpadded_shape[0],
             unpadded_shape[1],
@@ -1147,7 +1184,7 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
@@ -1155,20 +1192,26 @@ class resnet50:
         x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
-            x.get_legacy_shape()[0] - 1,
-            x.get_legacy_shape()[1] - 1,
+            x.shape.with_tile_padding()[0] - 1,
+            x.shape.with_tile_padding()[1] - 1,
             1 - 1,
-            x.get_legacy_shape()[3] - 1,
+            x.shape.with_tile_padding()[3] - 1,
         ]
         x = ttnn.untilize_with_unpadding(
             x, output_tensor_end=unpadded_shape_end, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         )
 
         x = ttnn.reshape(
-            x, (1, x.get_legacy_shape()[1], self.batch_size * x.get_legacy_shape()[2], x.get_legacy_shape()[3])
+            x,
+            (
+                1,
+                x.shape.with_tile_padding()[1],
+                self.batch_size * x.shape.with_tile_padding()[2],
+                x.shape.with_tile_padding()[3],
+            ),
         )
 
-        unpadded_shape = x.get_legacy_shape()
+        unpadded_shape = x.shape.with_tile_padding()
         padded_shape = [
             unpadded_shape[0],
             unpadded_shape[1],
@@ -1179,13 +1222,13 @@ class resnet50:
         x = ttnn.tilize_with_val_padding(
             x,
             padded_shape,
-            0,
+            0.0,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         x = self.fc(x)
-        desired_shape = list(x.shape_without_padding())
+        desired_shape = list(x.shape)
         desired_shape[-1] = 1000
         x = ttnn.untilize_with_unpadding(
             x,
@@ -1196,9 +1239,9 @@ class resnet50:
             x,
             (
                 self.batch_size,
-                x.get_legacy_shape()[1],
-                (int)(x.get_legacy_shape()[2] / self.batch_size),
-                x.get_legacy_shape()[3],
+                x.shape[1],
+                x.shape[2] // self.batch_size,
+                x.shape[3],
             ),
         )
 

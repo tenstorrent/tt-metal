@@ -27,7 +27,7 @@ shape1 = [
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.bfloat8_b))
 def test_run_bcast_h_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
@@ -60,7 +60,7 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.bfloat8_b))
 def test_run_bcast_w_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(
@@ -93,7 +93,7 @@ if is_wormhole_b0():
 @pytest.mark.parametrize("dtype", (ttnn.bfloat16, ttnn.bfloat8_b))
 def test_run_bcast_hw_test(input_shapes, bcast_op_type, dtype, device, function_level_defaults):
     datagen_func = [
-        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
+        generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ] * 2
     comparison_func = partial(comparison_funcs.comp_pcc)
     run_single_pytorch_test(

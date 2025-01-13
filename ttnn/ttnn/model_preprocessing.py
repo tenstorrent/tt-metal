@@ -355,6 +355,14 @@ class Conv2dArgs(ModuleArgs):
         return super().__repr__()
 
 
+class ConvTranspose2dArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
 class MaxPool2dArgs(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
@@ -388,6 +396,28 @@ def infer_ttnn_module_args(*, model, run_model, device):
                         kernel_size=operation.module.kernel_size,
                         stride=operation.module.stride,
                         padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        groups=operation.module.groups,
+                        padding_mode=operation.module.padding_mode,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
+                        device=device,
+                    )
+                elif isinstance(operation.module, torch.nn.ConvTranspose2d):
+                    ttnn_module_args[module_name] = ConvTranspose2dArgs(
+                        in_channels=operation.module.in_channels,
+                        out_channels=operation.module.out_channels,
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        output_padding=operation.module.output_padding,
                         dilation=operation.module.dilation,
                         groups=operation.module.groups,
                         padding_mode=operation.module.padding_mode,
@@ -634,15 +664,15 @@ def preprocess_model(
     Preprocess modules and parameters of a given model.
 
     Args:
-        * :attr:`model_name`: Name of the model to be used by the cache. If not provided, the cache will be disabled.
-        * :attr:`version`: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
-        * :attr:`initialize_model`: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
-        * :attr:`convert_to_ttnn`: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
-        * :attr:`custom_preprocessor`: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
-        * :attr:`device`: Device on which to put ttnn.Tensor parameters
-        * :attr:`prefix`: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
-        * :attr:`run_model`: Function for running the model. It's required for populating ttnn_module_args. If run_model is provided, the graph of the model will be dumped to /tmp/ttnn/model_graph.svg
-        * :attr:`reader_patterns_cache`: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
+        model_name: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        version: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        initialize_model: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        convert_to_ttnn: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        custom_preprocessor: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        device: Device on which to put ttnn.Tensor parameters
+        prefix: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        run_model: Function for running the model. It's required for populating ttnn_module_args. If run_model is provided, the graph of the model will be dumped to /tmp/ttnn/model_graph.svg
+        reader_patterns_cache: Cache for reader patterns. It's useful for avoiding recomputation of reader patterns when the same model is used multiple times.
     """
 
     with ttnn.manage_config("enable_logging", False), ttnn.manage_config("enable_comparison_mode", False):
@@ -676,13 +706,13 @@ def preprocess_model_parameters(
     Preprocess parameters of a given model.
 
     Args:
-        * :attr:`model_name`: Name of the model to be used by the cache. If not provided, the cache will be disabled.
-        * :attr:`version`: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
-        * :attr:`initialize_model`: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
-        * :attr:`convert_to_ttnn`: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
-        * :attr:`custom_preprocessor`: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
-        * :attr:`device`: Device on which to put ttnn.Tensor parameters
-        * :attr:`prefix`: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
+        model_name: Name of the model to be used by the cache. If not provided, the cache will be disabled.
+        version: Version of the model to be used by the cache. If not provided, the current git hash will be used. If the version doesn't match the cached version, the cache will be invalidated.
+        initialize_model: Function for initializing the model. It's not required if the model has already been cached and the cache is valid.
+        convert_to_ttnn: Function for determining whether to convert the parameters of a given module to ttnn.Tensor. If not provided, all modules will be converted.
+        custom_preprocessor: Function for preprocessing the parameters of a given module using user-specified logic. If not provided, the default preprocessor will be used.
+        device: Device on which to put ttnn.Tensor parameters
+        prefix: Prefix string to attach to the names of the modules/parameters. It's useful for making the names of submodules appear in the same way as in the original model.
     """
 
     return preprocess_model(

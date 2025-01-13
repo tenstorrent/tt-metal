@@ -15,7 +15,23 @@ template <typename reduction_operation_t>
 void bind_reduction_operation(py::module& module, const reduction_operation_t& operation) {
     namespace py = pybind11;
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim: bool = True, memory_config: Optional[ttnn.MemoryConfig, scalar: float = 1.0f] = None) -> ttnn.Tensor)doc",
+        R"doc(
+
+            Args:
+                input_a (ttnn.Tensor): the input tensor.
+                dim (number): dimension value .
+
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+            Returns:
+                ttnn.Tensor: the output tensor.
+
+            Example:
+
+                >>> input_a = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+                >>> output = ttnn.{0}(input_a, dim, memory_config)
+        )doc",
         operation.base_name());
 
     bind_registered_operation(

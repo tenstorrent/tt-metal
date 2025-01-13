@@ -102,6 +102,17 @@ from ttnn._ttnn.multi_device import (
 
 from ttnn._ttnn.events import create_event, record_event, wait_for_event
 
+from ttnn._ttnn.global_circular_buffer import (
+    create_global_circular_buffer,
+)
+
+from ttnn._ttnn.global_semaphore import (
+    create_global_semaphore,
+    get_global_semaphore_address,
+    reset_global_semaphore_value,
+    create_global_semaphore_with_same_address,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -124,10 +135,12 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
+    ShardMode,
     ShardSpec,
     CoreRangeSet,
     CoreRange,
     CoreCoord,
+    Tile,
     Layout,
     ROW_MAJOR_LAYOUT,
     TILE_LAYOUT,
@@ -141,6 +154,7 @@ from ttnn.types import (
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
     MeshShape,
+    MeshOffset,
     UnaryWithParam,
     UnaryOpType,
     BinaryOpType,
@@ -151,6 +165,8 @@ from ttnn.types import (
 from ttnn.device import (
     Device,
     DispatchCoreType,
+    DispatchCoreAxis,
+    DispatchCoreConfig,
     open_device,
     close_device,
     enable_program_cache,
@@ -158,6 +174,7 @@ from ttnn.device import (
     manage_device,
     synchronize_device,
     dump_device_memory_state,
+    get_memory_view,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -171,32 +188,17 @@ from ttnn.device import (
     format_input_tensor,
     format_output_tensor,
     pad_to_tile_shape,
+    SubDevice,
+    SubDeviceId,
+    SubDeviceManagerId,
+    DefaultQueueId,
+    init_device_compute_kernel_config,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
 
-from ttnn.multi_device import (
-    MeshDevice,
-    DispatchCoreType,
-    open_mesh_device,
-    close_mesh_device,
-    get_num_pcie_devices,
-    get_num_devices,
-    get_pcie_device_ids,
-    get_device_ids,
-    create_mesh_device,
-    synchronize_devices,
-    TensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
-    ReplicateTensorToMesh,
-    MeshToTensor,
-    ConcatMeshToTensor,
-    ListMeshToTensor,
-    visualize_mesh_device,
-    ConcatMesh2dToTensor,
-    distribute,
-)
+# TODO: remove this after the distributed module is fully integrated
+from ttnn.distributed import *
 
 from ttnn.core import (
     set_printoptions,
@@ -210,7 +212,8 @@ from ttnn.core import (
     dump_memory_config,
     load_memory_config,
     dump_stack_trace_on_segfault,
-    num_cores_to_corerange_set,
+    num_cores_to_corerangeset,
+    num_cores_to_corerangeset_in_subcoregrids,
 )
 
 import ttnn.reflection
@@ -262,10 +265,6 @@ mul = ttnn.multiply
 mul_ = ttnn.multiply_
 
 
-def prelu(*args, **kwargs):  # Alias for leaky_relu. TODO(#8544): implement PReLU properly
-    return ttnn.leaky_relu(*args, **kwargs)
-
-
 # TODO: pybind the overloaded operators below
 ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
@@ -310,8 +309,18 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.conv2d import Conv2dConfig, get_conv_output_dim, get_conv_padded_input_shape_and_mem_config
-from ttnn.operations.pool import avg_pool2d
+from ttnn.operations.ccl import (
+    Topology,
+    teardown_edm_fabric,
+    initialize_edm_fabric,
+)
+
+from ttnn.operations.conv2d import (
+    Conv2dConfig,
+    get_conv_output_dim,
+    prepare_conv_weights,
+    prepare_conv_bias,
+)
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

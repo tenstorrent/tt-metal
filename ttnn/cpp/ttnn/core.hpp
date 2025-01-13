@@ -6,7 +6,7 @@
 #include <csignal>
 #include <optional>
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <magic_enum/magic_enum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"  // TTNN_TENSOR_PRINT_PROFILE
 #include "ttnn/tensor/types.hpp"
@@ -20,18 +20,16 @@ using tt::tt_metal::operation::OptionalConstTensors;
 using tt::tt_metal::operation::OptionalTensors;
 using tt::tt_metal::operation::Tensors;
 
-using tt::tt_metal::any_tensor_on_multi_device;
 using tt::tt_metal::is_tensor_on_device;
 using tt::tt_metal::is_tensor_on_device_or_multidevice;
-using tt::tt_metal::is_tensor_on_multi_device;
 }  // namespace ttnn
 
 namespace ttnn {
 
 namespace core {
 
-inline std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value) {
-    return (value + (ttnn::TILE_SIZE - 1)) / ttnn::TILE_SIZE * ttnn::TILE_SIZE;
+inline std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value, std::uint32_t tile_size) {
+    return (value + (tile_size - 1)) / tile_size * tile_size;
 }
 
 inline bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
@@ -71,32 +69,31 @@ using core::has_storage_type_of;
 using core::pad_to_multiple_of_tile_size;
 using core::set_printoptions;
 
-class CoreIDs{
-    public:
-        static CoreIDs& instance() {
-            static CoreIDs instance;
-            return instance;
-        }
+class CoreIDs {
+public:
+    static CoreIDs& instance() {
+        static CoreIDs instance;
+        return instance;
+    }
 
-        std::int64_t get_python_operation_id();
-        void set_python_operation_id(std::int64_t operation_id);
-        std::int64_t fetch_and_increment_python_operation_id();
+    std::int64_t get_python_operation_id();
+    void set_python_operation_id(std::int64_t operation_id);
+    std::int64_t fetch_and_increment_python_operation_id();
 
-        std::int64_t get_tensor_id();
-        void set_tensor_id(std::int64_t tensor_id);
-        std::int64_t fetch_and_increment_tensor_id();
+    std::int64_t get_tensor_id();
+    void set_tensor_id(std::int64_t tensor_id);
+    std::int64_t fetch_and_increment_tensor_id();
 
-        std::int64_t get_device_operation_id();
-        void set_device_operation_id(std::int64_t device_operation_id);
-        std::int64_t fetch_and_increment_device_operation_id();
+    std::int64_t get_device_operation_id();
+    void set_device_operation_id(std::int64_t device_operation_id);
+    std::int64_t fetch_and_increment_device_operation_id();
 
-    private:
-        CoreIDs() = default;
-        ~CoreIDs() = default;
-        std::atomic<std::int64_t> tensor_id;
-        std::atomic<std::int64_t> python_operation_id;
-        std::atomic<std::int64_t> device_operation_id;
+private:
+    CoreIDs() = default;
+    ~CoreIDs() = default;
+    std::atomic<std::int64_t> tensor_id;
+    std::atomic<std::int64_t> python_operation_id;
+    std::atomic<std::int64_t> device_operation_id;
 };
-
 
 }  // namespace ttnn

@@ -111,13 +111,13 @@ Recall in our data reuse example, we created our L1 circular buffers for all the
 
 .. code-block:: cpp
 
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    auto cb_output = tt_metal::v0::CreateCircularBuffer(program, all_cores, cb_output_config);
 
 METALIUM also allows us to pass all of our CoreRanges defined above through a ``CoreRangeSet(...)`` function call as the 2nd argument.  Let's do so with the following:
 
 .. code-block:: cpp
 
-    auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
+    auto cb_output = tt_metal::v0::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_output_config);
 
 In fact, you can instantiate circular buffers on any one of these three options: ``const std::variant<CoreCoord, CoreRange, CoreRangeSet>``.  Please refer to the CircularBuffers page for further details.
 

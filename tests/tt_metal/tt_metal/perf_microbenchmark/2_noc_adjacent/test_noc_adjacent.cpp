@@ -119,7 +119,7 @@ int main(int argc, char** argv) {
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+            "profiler option using ./build_metal.sh --enable-profiler");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(
@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
         uint32_t single_tile_size = 2 * 1024;
 
         uint32_t cb_src0_index = 0;
-        uint32_t cb_src0_addr = L1_UNRESERVED_BASE;
+        uint32_t cb_src0_addr = device->get_base_allocator_addr(HalMemType::L1);
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);
@@ -200,7 +200,7 @@ int main(int argc, char** argv) {
 
                 CoreCoord adjacent_core_noc = device->worker_core_from_logical_core(adjacent_core_logical);
 
-                vector<uint32_t> noc_runtime_args = {
+                const std::array noc_runtime_args = {
                     (uint32_t)adjacent_core_noc.x,
                     (uint32_t)adjacent_core_noc.y,
                     cb_src1_addr,

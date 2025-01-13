@@ -1,23 +1,25 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023, 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NULL kernel is not 0, subtract off overhead
-#if KERNEL_BYTES > 30
-uint8_t data1[KERNEL_BYTES-30] __attribute__ ((section ("l1_data"))) __attribute__((used));
+// An empty kernel is 16 bytes, so only pad above that to fake a
+// bigger kernel.
+#define EMPTY_KERNEL_BYTES 16
+#if KERNEL_BYTES > EMPTY_KERNEL_BYTES
+[[gnu::section(".text"), gnu::used]]
+static uint8_t lorem_ipsum[KERNEL_BYTES - EMPTY_KERNEL_BYTES];
 #endif
 
 #ifdef KERNEL_GLOBAL
-volatile uint32_t global = 4;
+[[gnu::section(".data"), gnu::used]]
+static uint32_t global;
 #endif
 
 #ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/common.h"
 namespace NAMESPACE {
-void MAIN {
-}
-}
+void MAIN {}
+}  // namespace NAMESPACE
 #else
-void kernel_main() {
-}
+void kernel_main() {}
 #endif

@@ -13,11 +13,9 @@
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
-void bind_untilize(py::module &module) {
+void bind_untilize(py::module& module) {
     auto doc =
         R"doc(
-            untilize(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, use_multicore: bool = True, use_pack_untilize: bool = True, queue_id: int = 0) -> ttnn.Tensor
-
             Changes data layout of input tensor to ROW_MAJOR.
 
             Input tensor must be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
@@ -25,13 +23,19 @@ void bind_untilize(py::module &module) {
             Output tensor will be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
+                input_tensor (ttnn.Tensor): the input tensor.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor.
-                * :attr:`use_multicore`: Whether to use multicore.
-                * :attr:`use_pack_untilize`: Whether to use pack untilize.
-                * :attr:`queue_id`: command queue id.
+
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+                use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::untilize);
@@ -40,17 +44,21 @@ void bind_untilize(py::module &module) {
         ttnn::untilize,
         doc,
         ttnn::pybind_overload_t{
-            [](const OperationType &self,
-               const ttnn::Tensor &input_tensor,
-               const std::optional<MemoryConfig> &memory_config,
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize); },
+               const std::optional<CoreRangeSet>&& sub_core_grids,
+               uint8_t queue_id) {
+                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
+            },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
+            py::arg("sub_core_grids") = std::nullopt,
             py::arg("queue_id") = 0,
         });
 }

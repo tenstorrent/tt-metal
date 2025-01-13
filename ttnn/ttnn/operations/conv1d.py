@@ -8,7 +8,7 @@ import warnings
 import math
 import ttnn
 
-Conv1dConfig = ttnn._ttnn.operations.conv2d.Conv2dConfig
+Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 
 @ttnn.register_python_operation(name="ttnn.Conv1d")
@@ -28,8 +28,11 @@ def Conv1d(
     groups: int = 1,
     bias_tensor: ttnn.Tensor = None,
     conv_config: Conv1dConfig = None,  # config overrides by user
+    compute_config: ttnn.DeviceComputeKernelConfig = None,
     conv_op_cache={},  # basic conv object caching in python needed for intermediate refactoring. Not needed after full op refactoring in C++.
     debug=False,
+    return_output_dim=False,
+    return_weights_and_bias=False,
 ) -> Tuple[ttnn.Tensor, int, int, ttnn.Tensor, ttnn.Tensor]:
     # Reshape the input and weight tensors to 4D for conv2d operation
     # Should be no-op as input_tensor is in RM layout
@@ -44,7 +47,7 @@ def Conv1d(
         _,
         weight_tensor_on_dev_new,
         bias_tensor_on_dev_new,
-    ) = ttnn._ttnn.operations.conv2d.conv2d(
+    ) = ttnn._ttnn.operations.conv.conv2d(
         input_tensor=input_tensor,
         weight_tensor=weight_tensor,
         device=device,
@@ -60,14 +63,17 @@ def Conv1d(
         groups=groups,
         bias_tensor=bias_tensor,
         conv_config=conv_config,
+        compute_config=compute_config,
     )
 
-    return (
-        output_tensor_new,
-        output_length_new,
-        weight_tensor_on_dev_new,
-        bias_tensor_on_dev_new,
-    )
+    if return_output_dim and return_weights_and_bias:
+        return output_tensor_new, output_length_new, [weight_tensor_on_dev_new, bias_tensor_on_dev_new]
+    elif return_weights_and_bias:
+        return output_tensor_new, [weight_tensor_on_dev_new, bias_tensor_on_dev_new]
+    elif return_output_dim:
+        return output_tensor_new, output_length_new
+    else:
+        return output_tensor_new
 
 
 __all__ = []

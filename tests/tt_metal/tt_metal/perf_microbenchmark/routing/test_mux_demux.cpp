@@ -6,13 +6,15 @@
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
+using std::vector;
 using namespace tt;
-
+using json = nlohmann::json;
 
 int main(int argc, char **argv) {
 
@@ -44,11 +46,22 @@ int main(int argc, char **argv) {
 
     constexpr uint32_t default_timeout_mcycles = 1000;
     constexpr uint32_t default_rx_disable_data_check = 0;
+    constexpr uint32_t default_rx_disable_header_check = 0;
+    constexpr uint32_t default_tx_skip_pkt_content_gen = 0;
+    constexpr uint32_t default_check_txrx_timeout = 1;
 
     constexpr uint32_t src_endpoint_start_id = 0xaa;
     constexpr uint32_t dest_endpoint_start_id = 0xbb;
 
     constexpr uint32_t default_num_endpoints = 4;
+
+    constexpr uint8_t default_tx_pkt_dest_size_choice = 0; // pkt_dest_size_choices_t
+
+    constexpr uint32_t default_tx_data_sent_per_iter_low = 20;
+    constexpr uint32_t default_tx_data_sent_per_iter_high = 240;
+
+    constexpr uint32_t default_dump_stat_json = 0;
+    constexpr const char* default_output_dir = "/tmp";
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -76,8 +89,16 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --test_results_addr: test results buf address, default = 0x{:x}", default_test_results_addr);
         log_info(LogTest, "  --test_results_size: test results buf size, default = 0x{:x}", default_test_results_size);
         log_info(LogTest, "  --timeout_mcycles: Timeout in MCycles, default = {}", default_timeout_mcycles);
+        log_info(LogTest, "  --check_txrx_timeout: Check if timeout happens during tx & rx (if enabled, timeout_mcycles will also be used), default = {}", default_check_txrx_timeout);
         log_info(LogTest, "  --rx_disable_data_check: Disable data check on RX, default = {}", default_rx_disable_data_check);
+        log_info(LogTest, "  --rx_disable_header_check: Disable header check on RX, default = {}", default_rx_disable_header_check);
+        log_info(LogTest, "  --tx_skip_pkt_content_gen: Skip packet content generation during tx, default = {}", default_tx_skip_pkt_content_gen);
         log_info(LogTest, "  --num_endpoints: Number of endpoints, default = {}", default_num_endpoints);
+        log_info(LogTest, "  --tx_pkt_dest_size_choice: choice for how packet destination and packet size are generated, default = {}", default_tx_pkt_dest_size_choice); // pkt_dest_size_choices_t
+        log_info(LogTest, "  --tx_data_sent_per_iter_low: the criteria to determine the amount of tx data sent per iter is low (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_low);
+        log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
+        log_info(LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
+        log_info(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
         return 0;
     }
 
@@ -89,6 +110,7 @@ int main(int argc, char **argv) {
     uint32_t mux_y = test_args::get_command_option_uint32(input_args, "--mux_y", default_mux_y);
     uint32_t demux_x = test_args::get_command_option_uint32(input_args, "--demux_x", default_demux_x);
     uint32_t demux_y = test_args::get_command_option_uint32(input_args, "--demux_y", default_demux_y);
+    uint32_t num_endpoints = test_args::get_command_option_uint32(input_args, "--num_endpoints", default_num_endpoints);
     uint32_t prng_seed = test_args::get_command_option_uint32(input_args, "--prng_seed", default_prng_seed);
     uint32_t data_kb_per_tx = test_args::get_command_option_uint32(input_args, "--data_kb_per_tx", default_data_kb_per_tx);
     uint32_t max_packet_size_words = test_args::get_command_option_uint32(input_args, "--max_packet_size_words", default_max_packet_size_words);
@@ -104,7 +126,16 @@ int main(int argc, char **argv) {
     uint32_t test_results_size = test_args::get_command_option_uint32(input_args, "--test_results_size", default_test_results_size);
     uint32_t timeout_mcycles = test_args::get_command_option_uint32(input_args, "--timeout_mcycles", default_timeout_mcycles);
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
-    uint32_t num_endpoints = test_args::get_command_option_uint32(input_args, "--num_endpoints", default_num_endpoints);
+    uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
+    uint32_t tx_skip_pkt_content_gen = test_args::get_command_option_uint32(input_args, "--tx_skip_pkt_content_gen", default_tx_skip_pkt_content_gen);
+    uint32_t dump_stat_json = test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
+    std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
+    uint32_t check_txrx_timeout = test_args::get_command_option_uint32(input_args, "--check_txrx_timeout", default_check_txrx_timeout);
+    uint8_t tx_pkt_dest_size_choice = (uint8_t) test_args::get_command_option_uint32(input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
+    uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
+    uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
+
+    assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
     uint32_t num_src_endpoints = num_endpoints;
     uint32_t num_dest_endpoints = num_endpoints;
@@ -117,7 +148,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -126,6 +157,10 @@ int main(int argc, char **argv) {
 
         CoreCoord demux_core = {demux_x, demux_y};
         CoreCoord demux_phys_core = device->worker_core_from_logical_core(demux_core);
+
+        if (check_txrx_timeout) {
+            defines["CHECK_TIMEOUT"] = "";
+        }
 
         std::vector<CoreCoord> tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
@@ -151,6 +186,10 @@ int main(int argc, char **argv) {
                     src_endpoint_start_id, // 15: src_endpoint_start_id
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                    tx_skip_pkt_content_gen, // 18: skip_pkt_content_gen
+                    tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
+                    tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
+                    tx_data_sent_per_iter_high // 21: data_sent_per_iter_high
                 };
 
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
@@ -165,6 +204,51 @@ int main(int argc, char **argv) {
                     .defines = defines,
                 }
             );
+        }
+
+        std::vector<CoreCoord> rx_phys_core;
+        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+            CoreCoord core = {rx_x+i, rx_y};
+            rx_phys_core.push_back(device->worker_core_from_logical_core(core));
+            std::vector<uint32_t> compile_args =
+                {
+                    dest_endpoint_start_id + i, // 0: dest_endpoint_id
+                    num_src_endpoints, // 1: num_src_endpoints
+                    num_dest_endpoints, // 2: num_dest_endpoints
+                    (rx_queue_start_addr >> 4), // 3: queue_start_addr_words
+                    (rx_queue_size_bytes >> 4), // 4: queue_size_words
+                    (uint32_t)demux_phys_core.x, // 5: remote_tx_x
+                    (uint32_t)demux_phys_core.y, // 6: remote_tx_y
+                    i+1, // 7: remote_tx_queue_id
+                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
+                    test_results_addr, // 9: test_results_addr
+                    test_results_size, // 10: test_results_size
+                    prng_seed, // 11: prng_seed
+                    0, // 12: reserved
+                    max_packet_size_words, // 13: max_packet_size_words
+                    rx_disable_data_check, // 14: disable data check
+                    src_endpoint_start_id, // 15: src_endpoint_start_id
+                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
+                    timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                    rx_disable_header_check // 18: disable_header_check
+                };
+
+            log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
+            auto kernel = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
+                {core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_args,
+                    .defines = defines,
+                }
+            );
+        }
+
+        if (check_txrx_timeout) {
+            defines.erase("CHECK_TIMEOUT");
         }
 
         // Mux
@@ -214,46 +298,6 @@ int main(int argc, char **argv) {
                 .defines = defines,
             }
         );
-
-        std::vector<CoreCoord> rx_phys_core;
-        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
-            CoreCoord core = {rx_x+i, rx_y};
-            rx_phys_core.push_back(device->worker_core_from_logical_core(core));
-            std::vector<uint32_t> compile_args =
-                {
-                    dest_endpoint_start_id + i, // 0: dest_endpoint_id
-                    num_src_endpoints, // 1: num_src_endpoints
-                    num_dest_endpoints, // 2: num_dest_endpoints
-                    (rx_queue_start_addr >> 4), // 3: queue_start_addr_words
-                    (rx_queue_size_bytes >> 4), // 4: queue_size_words
-                    (uint32_t)demux_phys_core.x, // 5: remote_tx_x
-                    (uint32_t)demux_phys_core.y, // 6: remote_tx_y
-                    i + 1, // 7: remote_tx_queue_id. +1 since demux input is qid 0. qid 1 - 4 are demux outputs
-                    (uint32_t)DispatchRemoteNetworkType::NOC0, // 8: rx_rptr_update_network_type
-                    test_results_addr, // 9: test_results_addr
-                    test_results_size, // 10: test_results_size
-                    prng_seed, // 11: prng_seed
-                    0, // 12: reserved
-                    max_packet_size_words, // 13: max_packet_size_words
-                    rx_disable_data_check, // 14: disable data check
-                    src_endpoint_start_id, // 15: src_endpoint_start_id
-                    dest_endpoint_start_id, // 16: dest_endpoint_start_id
-                    timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
-                };
-
-            log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
-            auto kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
-                {core},
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_args,
-                    .defines = defines,
-                }
-            );
-        }
 
         // Demux
         uint32_t dest_map_array[4] = {0, 1, 2, 3};
@@ -356,6 +400,35 @@ int main(int argc, char **argv) {
         pass &= tt_metal::CloseDevice(device);
 
         if (pass) {
+            json summary, config, stat;
+            config["tx_x"] = tx_x;
+            config["tx_y"] = tx_y;
+            config["rx_x"] = rx_x;
+            config["rx_y"] = rx_y;
+            config["mux_x"] = mux_x;
+            config["mux_y"] = mux_y;
+            config["demux_x"] = demux_x;
+            config["demux_y"] = demux_y;
+            config["num_endpoints"] = num_endpoints;
+            config["prng_seed"] = prng_seed;
+            config["data_kb_per_tx"] = data_kb_per_tx;
+            config["max_packet_size_words"] = max_packet_size_words;
+            config["tx_queue_start_addr"] = tx_queue_start_addr;
+            config["tx_queue_size_bytes"] = tx_queue_size_bytes;
+            config["rx_queue_start_addr"] = rx_queue_start_addr;
+            config["rx_queue_size_bytes"] = rx_queue_size_bytes;
+            config["mux_queue_start_addr"] = mux_queue_start_addr;
+            config["mux_queue_size_bytes"] = mux_queue_size_bytes;
+            config["demux_queue_start_addr"] = demux_queue_start_addr;
+            config["demux_queue_size_bytes"] = demux_queue_size_bytes;
+            config["rx_disable_data_check"] = rx_disable_data_check;
+            config["rx_disable_header_check"] = rx_disable_header_check;
+            config["tx_skip_pkt_content_gen"] = tx_skip_pkt_content_gen;
+            config["check_txrx_timeout"] = check_txrx_timeout;
+            config["tx_pkt_dest_size_choice"] = to_string(static_cast<pkt_dest_size_choices_t>(tx_pkt_dest_size_choice));
+            config["tx_data_sent_per_iter_low"] = tx_data_sent_per_iter_low;
+            config["tx_data_sent_per_iter_high"] = tx_data_sent_per_iter_high;
+
             double total_tx_bw = 0.0;
             uint64_t total_tx_words_sent = 0;
             uint64_t total_rx_words_checked = 0;
@@ -364,41 +437,69 @@ int main(int argc, char **argv) {
                 total_tx_words_sent += tx_words_sent;
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
                 double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
+                total_tx_bw += tx_bw;
+                uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+                uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
+                uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
+                uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
+                uint64_t num_packets = get_64b_result(tx_results[i], TX_TEST_IDX_NPKT);
+                double bytes_per_pkt = static_cast<double>(tx_words_sent) * PACKET_WORD_SIZE_BYTES / static_cast<double>(num_packets);
+
                 log_info(LogTest,
                          "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                          i, tx_words_sent, tx_elapsed_cycles, tx_bw);
-                total_tx_bw += tx_bw;
+                log_info(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data sent iter = {}, few data sent iter = {}, many data sent iter = {}", i, num_packets, bytes_per_pkt, iter, zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
+                stat[fmt::format("tx_words_sent_{}", i)] = tx_words_sent;
+                stat[fmt::format("tx_elapsed_cycles_{}", i)] = tx_elapsed_cycles;
+                stat[fmt::format("tx_bw_{}", i)] = tx_bw;
+                stat[fmt::format("tx_bytes_per_pkt_{}", i)] = bytes_per_pkt;
+                stat[fmt::format("tx_total_iter_{}", i)] = iter;
+                stat[fmt::format("tx_zero_data_sent_iter_{}", i)] = zero_data_sent_iter;
+                stat[fmt::format("tx_few_data_sent_iter_{}", i)] = few_data_sent_iter;
+                stat[fmt::format("tx_many_data_sent_iter_{}", i)] = many_data_sent_iter;
             }
             log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
+            stat["total_tx_bw (B/cycle)"] = total_tx_bw;
+
             double total_rx_bw = 0.0;
             for (uint32_t i = 0; i < num_dest_endpoints; i++) {
                 uint64_t rx_words_checked = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
                 total_rx_words_checked += rx_words_checked;
                 uint64_t rx_elapsed_cycles = get_64b_result(rx_results[i], PQ_TEST_CYCLES_INDEX);
                 double rx_bw = ((double)rx_words_checked) * PACKET_WORD_SIZE_BYTES / rx_elapsed_cycles;
+                total_rx_bw += rx_bw;
+
                 log_info(LogTest,
                          "RX {} words checked = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                          i, rx_words_checked, rx_elapsed_cycles, rx_bw);
-                total_rx_bw += rx_bw;
+                stat[fmt::format("rx_words_checked_{}", i)] = rx_words_checked;
+                stat[fmt::format("rx_elapsed_cycles_{}", i)] = rx_elapsed_cycles;
+                stat[fmt::format("rx_bw_{}", i)] = rx_bw;
             }
             log_info(LogTest, "Total RX BW = {:.2f} B/cycle", total_rx_bw);
+            stat["total_rx_bw (B/cycle)"] = total_rx_bw;
             if (total_tx_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "Total TX words sent = {} != Total RX words checked = {}", total_tx_words_sent, total_rx_words_checked);
                 pass = false;
             } else {
                 log_info(LogTest, "Total TX words sent = {} == Total RX words checked = {} -> OK", total_tx_words_sent, total_rx_words_checked);
             }
+
             uint64_t mux_words_sent = get_64b_result(mux_results, PQ_TEST_WORD_CNT_INDEX);
             uint64_t mux_elapsed_cycles = get_64b_result(mux_results, PQ_TEST_CYCLES_INDEX);
             uint64_t mux_iter = get_64b_result(mux_results, PQ_TEST_ITER_INDEX);
             double mux_bw = ((double)mux_words_sent) * PACKET_WORD_SIZE_BYTES / mux_elapsed_cycles;
             double mux_cycles_per_iter = ((double)mux_elapsed_cycles) / mux_iter;
+
             log_info(LogTest,
                      "MUX words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                      mux_words_sent, mux_elapsed_cycles, mux_bw);
             log_info(LogTest,
                         "MUX iters = {} -> cycles/iter = {:.1f}",
                         mux_iter, mux_cycles_per_iter);
+            stat["mux_words_sent"] = mux_words_sent;
+            stat["mux_elapsed_cycles"] = mux_elapsed_cycles;
+            stat["mux_bw (B/cycle)"] = mux_bw;
             if (mux_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "MUX words sent = {} != Total RX words checked = {}", mux_words_sent, total_rx_words_checked);
                 pass = false;
@@ -411,17 +512,65 @@ int main(int argc, char **argv) {
             double demux_bw = ((double)demux_words_sent) * PACKET_WORD_SIZE_BYTES / demux_elapsed_cycles;
             uint64_t demux_iter = get_64b_result(demux_results, PQ_TEST_ITER_INDEX);
             double demux_cycles_per_iter = ((double)demux_elapsed_cycles) / demux_iter;
+
             log_info(LogTest,
                      "DEMUX words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
                      demux_words_sent, demux_elapsed_cycles, demux_bw);
             log_info(LogTest,
                      "DEMUX iters = {} -> cycles/iter = {:.1f}",
                      demux_iter, demux_cycles_per_iter);
+            stat["demux_words_sent"] = demux_words_sent;
+            stat["demux_elapsed_cycles"] = demux_elapsed_cycles;
+            stat["demux_bw (B/cycle)"] = demux_bw;
             if (demux_words_sent != total_rx_words_checked) {
                 log_error(LogTest, "DEMUX words sent = {} != Total RX words checked = {}", demux_words_sent, total_rx_words_checked);
                 pass = false;
             } else {
                 log_info(LogTest, "DEMUX words sent = {} == Total RX words checked = {} -> OK", demux_words_sent, total_rx_words_checked);
+            }
+
+            if (pass) {
+                if (dump_stat_json) {
+                    summary["config"] = config;
+                    summary["stat"] = stat;
+                    std::ofstream out(output_dir + fmt::format("/tx{}-{}_rx{}-{}_m{}-{}_dm{}-{}_n{}_rdc{}_rdhc{}_tsg{}_cto{}_tpdsc{}_pw{}.json", tx_x, tx_y, rx_x, rx_y, mux_x, mux_y, demux_x, demux_y, num_endpoints, rx_disable_data_check, rx_disable_header_check, tx_skip_pkt_content_gen, check_txrx_timeout, tx_pkt_dest_size_choice, max_packet_size_words));
+                    if (out.fail()) {
+                        throw std::runtime_error("output file open failure");
+                    }
+                    std::string summaries = summary.dump(2);
+                    out << summaries << std::endl;
+                    out.close();
+                }
+                // Determine if it passes performance goal
+                if ((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE
+                && tx_skip_pkt_content_gen
+                && !check_txrx_timeout
+                && rx_disable_data_check
+                && rx_disable_header_check
+                && (data_kb_per_tx >= 1024*1024)
+                && (tx_queue_size_bytes >= 0x10000)
+                && (rx_queue_size_bytes >= 0x20000)
+                && (mux_queue_size_bytes >= 0x10000)
+                && (demux_queue_size_bytes >= 0x20000)) {
+                    double target_bandwidth = 0;
+                    if (max_packet_size_words >= 1024) {
+                        target_bandwidth = 10;
+                        log_info(LogTest, "Perf check for pkt size >= 1024 words");
+                    } else if (max_packet_size_words >= 256) {
+                        target_bandwidth = 3;
+                        log_info(LogTest, "Perf check for pkt size >= 256 words");
+                    }
+                    if (mux_bw < target_bandwidth) {
+                        pass = false;
+                        log_error(
+                            LogTest,
+                            "The bandwidth does not meet the criteria. "
+                            "Current: {:.3f}B/cc, goal: >={:.3f}B/cc",
+                            mux_bw,
+                            target_bandwidth
+                        );
+                    }
+                }
             }
         }
 
@@ -430,7 +579,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

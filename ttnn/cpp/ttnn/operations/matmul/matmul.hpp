@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/common/core_coord.h"
+#include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
@@ -22,7 +22,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::Shape& shape);
+bool is_input_batched(const ttnn::SimpleShape& logical_shape);
 
 }  // namespace detail
 
@@ -33,7 +33,8 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id);
+    const uint8_t& queue_id,
+    std::optional<ttnn::Tensor>& optional_output_tensor);
 
 struct MatmulOperation {
     static Tensor invoke(
@@ -41,12 +42,15 @@ struct MatmulOperation {
         const Tensor& input_tensor_b,
         const bool transpose_a = false,
         const bool transpose_b = false,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+        const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreGrid> core_grid = std::nullopt);
+        const std::optional<const CoreGrid> core_grid = std::nullopt,
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 struct LinearOperation {
@@ -56,12 +60,15 @@ struct LinearOperation {
         const std::optional<const Tensor>& bias = std::nullopt,
         const bool transpose_a = false,
         const bool transpose_b = false,
-        const std::optional<const MemoryConfig> memory_config = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         const std::optional<const DataType> dtype = std::nullopt,
-        const std::optional<const MatmulProgramConfig> program_config = std::nullopt,
+        const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
         const std::optional<const std::string>& activation = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreGrid> core_grid = std::nullopt);
+        const std::optional<const CoreGrid> core_grid = std::nullopt,
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb = std::nullopt);
 };
 
 }  // namespace matmul

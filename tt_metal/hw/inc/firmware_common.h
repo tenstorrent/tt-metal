@@ -13,75 +13,62 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "dev_msgs.h"
+#include "noc/noc_parameters.h"
+#include "debug/dprint.h"
 
-extern uint32_t __ldm_bss_start[];
-extern uint32_t __ldm_bss_end[];
-extern uint32_t __ldm_data_start[];
-extern uint32_t __ldm_data_end[];
-extern void (* __init_array_start[])();
-extern void (* __init_array_end[])();
+extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
+extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
+extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
+extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern void kernel_init();
-extern void kernel_launch();
+extern void kernel_init(uint32_t kernel_init);
+extern void kernel_launch(uint32_t kernel_base_addr);
+void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
-inline void l1_to_local_mem_copy(uint32_t *local_mem_addr, uint32_t tt_l1_ptr *l1_addr, int32_t len) {
-    // Cover L1 load latency of 6 cycles for the bulk of the copy
-    int32_t n = 0;
-    while (n < len - 5) {
-        uint32_t v0 = l1_addr[n + 0];
-        uint32_t v1 = l1_addr[n + 1];
-        uint32_t v2 = l1_addr[n + 2];
-        uint32_t v3 = l1_addr[n + 3];
-        uint32_t v4 = l1_addr[n + 4];
-        uint32_t v5 = l1_addr[n + 5];
-        local_mem_addr[n + 0] = v0;
-        local_mem_addr[n + 1] = v1;
-        local_mem_addr[n + 2] = v2;
-        local_mem_addr[n + 3] = v3;
-        local_mem_addr[n + 4] = v4;
-        local_mem_addr[n + 5] = v5;
-        n += 6;
-    }
-    // Could optimize this further (eg, loop of 2 or 4), probably not worth it
-    while (n < len) {
-        local_mem_addr[n] = l1_addr[n];
-        n++;
-    }
-}
-
-inline void firmware_kernel_common_init(void *init_local_l1_base) {
-
-    // Handle stuff typically done in crt0 in asm.  Easier to do in C
+inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
+    // Clear bss.
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
 
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    uint32_t offset = (uint32_t)__ldm_data_start - MEM_LOCAL_BASE;
-    l1_to_local_mem_copy((uint32_t *)__ldm_data_start, (uint32_t *)((uint8_t *)init_local_l1_base + offset), num_words);
-
-    for (void (** fptr)() = __init_array_start; fptr < __init_array_end; fptr++) {
-        (**fptr)();
-    }
+    // Copy initialized data.
+    extern uint32_t __ldm_data_start[];
+    extern uint32_t __ldm_data_end[];
+    l1_to_local_mem_copy(__ldm_data_start, data_image, __ldm_data_end - __ldm_data_start);
 }
-FORCE_INLINE
-uint32_t firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
 
-    extern uint32_t tt_l1_ptr *rta_l1_base;
-    extern uint32_t tt_l1_ptr *crta_l1_base;
-    extern uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT];
+inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
+    int32_t dram_to_noc_size_bytes = sizeof(dram_bank_to_noc_xy);
+    l1_to_local_mem_copy((uint*)dram_bank_to_noc_xy, (uint tt_l1_ptr*)mem_bank_to_noc_addr, dram_to_noc_size_bytes >> 2);
+    int32_t l1_to_noc_size_bytes = sizeof(l1_bank_to_noc_xy);
+    l1_to_local_mem_copy((uint*)l1_bank_to_noc_xy, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes), l1_to_noc_size_bytes >> 2);
+
+    int32_t dram_offsets_size_bytes = sizeof(bank_to_dram_offset);
+    l1_to_local_mem_copy((uint*)bank_to_dram_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes), dram_offsets_size_bytes >> 2);
+    int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
+    l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
+}
+
+FORCE_INLINE
+uint32_t firmware_config_init(
+    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+    extern uint32_t tt_l1_ptr* rta_l1_base;
+    extern uint32_t tt_l1_ptr* crta_l1_base;
+    extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
     uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
+    launch_msg_t* launch_msg_address = &(mailboxes->launch[mailboxes->launch_msg_rd_ptr]);
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
-        kernel_config_base[index] =
-            mailboxes->launch.kernel_config.kernel_config_base[index];
-        sem_l1_base[index] = (uint32_t tt_l1_ptr *)(kernel_config_base[index] +
-            mailboxes->launch.kernel_config.sem_offset[index]);
+        kernel_config_base[index] = launch_msg_address->kernel_config.kernel_config_base[index];
+        sem_l1_base[index] =
+            (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
-    rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch.kernel_config.mem_map[dispatch_class].rta_offset);
-    crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base[core_type_index] +
-        mailboxes->launch.kernel_config.mem_map[dispatch_class].crta_offset);
+    rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
+                                        launch_msg_address->kernel_config.rta_offset[dispatch_class].rta_offset);
+    crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
+                                         launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
 }

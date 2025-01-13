@@ -129,7 +129,7 @@ def hypot(x, y, *args, **kwargs):
 
 
 def scatter(x, y, *args, **kwargs):
-    y[:, :, : x.shape[-2], : x.shape[-1]] = x
+    y[0:, 0:, : x.shape[-2], : x.shape[-1]] = x
     return y
 
 
@@ -757,9 +757,7 @@ def silu(x, *args, **kwargs):
     return torch.nn.functional.silu(x)
 
 
-def div(x, y, *args, accurate_mode, round_mode, **kwargs):
-    if round_mode == "None":
-        return torch.div(x, y)
+def div(x, y, *args, accurate_mode, round_mode=None, **kwargs):
     return torch.div(x, y, rounding_mode=round_mode)
 
 
@@ -799,9 +797,7 @@ def div_unary(x, *args, scalar, **kwargs):
     return result
 
 
-def unary_div(x, *args, scalar, accurate_mode, round_mode, **kwargs):
-    if round_mode == "None":
-        return torch.div(x, scalar)
+def unary_div(x, *args, scalar, accurate_mode, round_mode=None, **kwargs):
     return torch.div(x, scalar, rounding_mode=round_mode)
 
 
@@ -986,7 +982,7 @@ def prod(x, *args, all_dimensions, dim, **kwargs):
     if all_dimensions:
         result = torch.prod(x)
         return result.view(1, 1, 1, 1)
-    return torch.prod(x, dim, keepdim=True)
+    return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
 def ldexp(x, y, *args, **kwargs):
@@ -1338,10 +1334,10 @@ def pad(x, *args, output_tensor_shape, input_tensor_start, pad_value, **kwargs):
 
 def unpad(x, *args, output_tensor_start, output_tensor_end, **kwargs):
     out = x[
-        output_tensor_start[0] : output_tensor_end[0] + 1,
-        output_tensor_start[1] : output_tensor_end[1] + 1,
-        output_tensor_start[2] : output_tensor_end[2] + 1,
-        output_tensor_start[3] : output_tensor_end[3] + 1,
+        output_tensor_start[0] : output_tensor_end[0],
+        output_tensor_start[1] : output_tensor_end[1],
+        output_tensor_start[2] : output_tensor_end[2],
+        output_tensor_start[3] : output_tensor_end[3],
     ]
 
     return out
@@ -1486,6 +1482,38 @@ def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
         return x.to(torch.bfloat16)
     elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.uint32:
         return torch.clamp(x.to(torch.int32), min=0, max=65535)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint16:
+        return torch.clamp(x.to(torch.bfloat16).to(torch.int32), min=0, max=65535)  # due to no uint16 support
+    elif tt_input_dtype[0] == ttnn.uint16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.int32:
+        return x.to(torch.bfloat16).to(torch.int32)
+    elif tt_input_dtype[0] == ttnn.int32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.uint32:
+        return torch.relu(x.to(torch.int32))  # due to no uint32 support
+    elif tt_input_dtype[0] == ttnn.uint32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat16:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat16 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.float32:
+        return x.to(torch.bfloat16).to(torch.float32)
+    elif tt_input_dtype[0] == ttnn.float32 and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat4_b and tt_output_dtype[0] == ttnn.bfloat8_b:
+        return x.to(torch.bfloat16)
+    elif tt_input_dtype[0] == ttnn.bfloat8_b and tt_output_dtype[0] == ttnn.bfloat4_b:
+        return x.to(torch.bfloat16)
     else:
         return x
 
@@ -1841,36 +1869,6 @@ def log_bw(x, y, *args, **kwargs):
     pyt_y.backward(gradient=grad_data)
 
     return in_data.grad
-
-
-def gt_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
-
-
-def lt_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
-
-
-def ne_bw(x, *args, **kwargs):
-    grad_data = x
-
-    pyt_y = torch.zeros_like(grad_data)
-
-    golden_tensor = pyt_y
-
-    return golden_tensor
 
 
 def rsub_bw(x, y, z, *args, **kwargs):

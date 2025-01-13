@@ -426,7 +426,7 @@ def test_sharded_nlp_create_qkv_heads_test(
     torch.manual_seed(1234)
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_kv_heads
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     q_shape = [seq_len, 1, batch, num_cores, num_q_heads // num_cores * head_dim]
     kv_shape = [seq_len, 1, batch, num_cores, num_kv_heads // num_cores * head_dim]
     Q = torch.randn(q_shape)
@@ -445,7 +445,6 @@ def test_sharded_nlp_create_qkv_heads_test(
                 A_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in1_shard_spec = ttnn.ShardSpec(
             shard_grid,
@@ -454,7 +453,6 @@ def test_sharded_nlp_create_qkv_heads_test(
                 B_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in0_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -478,7 +476,6 @@ def test_sharded_nlp_create_qkv_heads_test(
                 A_interleaved.shape[-1] // num_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         in0_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -502,9 +499,9 @@ def test_sharded_nlp_create_qkv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.get_legacy_shape()) == [seq_len, num_q_heads, batch, head_dim]
-    assert list(k.get_legacy_shape()) == [seq_len, num_kv_heads, batch, head_dim]
-    assert list(v.get_legacy_shape()) == [seq_len, num_kv_heads, batch, head_dim]
+    assert list(q.shape.with_tile_padding()) == [seq_len, num_q_heads, batch, head_dim]
+    assert list(k.shape.with_tile_padding()) == [seq_len, num_kv_heads, batch, head_dim]
+    assert list(v.shape.with_tile_padding()) == [seq_len, num_kv_heads, batch, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

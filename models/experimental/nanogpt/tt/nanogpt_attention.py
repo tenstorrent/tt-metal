@@ -67,7 +67,7 @@ class TtCausalSelfAttention(nn.Module):
             B,
             T,
             C,
-        ) = x.get_legacy_shape()  # batch size, sequence length, embedding dimensionality (n_embd)
+        ) = x.shape.with_tile_padding()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         x1 = self.c_attn(x)
 
@@ -94,7 +94,7 @@ class TtCausalSelfAttention(nn.Module):
         key_layer_transposed = ttnn.transpose(k, -2, -1)
         att = ttnn.matmul(q, key_layer_transposed)
 
-        const_att = self.const_tensor(att.get_legacy_shape(), 1.0 / math.sqrt(k.get_legacy_shape()[-1]))
+        const_att = self.const_tensor(att.shape.with_tile_padding(), 1.0 / math.sqrt(k.shape.with_tile_padding()[-1]))
 
         att = ttnn.mul(att, const_att)
 

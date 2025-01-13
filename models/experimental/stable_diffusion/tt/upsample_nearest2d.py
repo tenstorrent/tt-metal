@@ -19,8 +19,8 @@ class TtUpsampleNearest2d(nn.Module):
         self.scale_factor = int(scale_factor)
 
     def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        input_shape = input.get_legacy_shape()
-        output_shape = list(input.get_legacy_shape())
+        input_shape = input.shape.with_tile_padding()
+        output_shape = list(input.shape.with_tile_padding())
         output_shape[-1] *= self.scale_factor
         output_shape[-2] *= self.scale_factor
         input = ttnn.repeat_interleave(input, self.scale_factor, dim=3)

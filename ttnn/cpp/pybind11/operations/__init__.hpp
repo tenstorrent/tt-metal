@@ -10,12 +10,12 @@
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/line_all_gather/line_all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d_pybind.hpp"
+#include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_pybind.hpp"
+#include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
+#include "ttnn/operations/eltwise/binary_ng/binary_ng_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
@@ -27,22 +27,24 @@
 #include "ttnn/operations/embedding/embedding_pybind.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
-#include "ttnn/operations/matmul/matmul_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
-#include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
+#include "ttnn/operations/full/full_pybind.hpp"
+#include "ttnn/operations/full_like/full_like_pybind.hpp"
+#include "ttnn/operations/index_fill/index_fill_pybind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_pybind.hpp"
 #include "ttnn/operations/loss/loss_pybind.hpp"
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
-#include "ttnn/operations/pool/avgpool/avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
-#include "ttnn/operations/pool/maxpool/max_pool2d_pybind.hpp"
+#include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
+#include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
+#include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
-#include "ttnn/operations/moreh/moreh_pybind.hpp"
+#include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
+#include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;
 
@@ -58,25 +60,27 @@ void py_module(py::module& module) {
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
 
+    //  Eltwise operations: unary, binary, ternary, backward, complex
     auto m_unary = module.def_submodule("unary", "unary operations");
     unary::py_module(m_unary);
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
 
+    auto m_binary_ng = module.def_submodule("binary_ng", "binary_ng operations");
+    binary_ng::py_module(m_binary_ng);
+
+    auto m_ternary = module.def_submodule("ternary", "ternary operations");
+    ternary::py_module(m_ternary);
+
+    auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
+    unary_backward::py_module(m_unary_backward);
+
     auto m_binary_backward = module.def_submodule("binary_backward", "binary_backward operations");
     binary_backward::py_module(m_binary_backward);
 
     auto m_ternary_backward = module.def_submodule("ternary_backward", "ternary_backward operations");
     ternary_backward::py_module(m_ternary_backward);
-
-    auto m_unary_backward = module.def_submodule("unary_backward", "unary_backward operations");
-    unary_backward::py_module(m_unary_backward);
-
-    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_line_all_gather(m_ccl);
-    ccl::py_bind_reduce_scatter(m_ccl);
 
     auto m_complex = module.def_submodule("complex", "complex tensor creation");
     complex::py_module(m_complex);
@@ -87,8 +91,8 @@ void py_module(py::module& module) {
     auto m_complex_unary_backward = module.def_submodule("complex_unary_backward", "complex_unary_backward operations");
     complex_unary_backward::py_module(m_complex_unary_backward);
 
-    auto m_ternary = module.def_submodule("ternary", "ternary operations");
-    ternary::py_module(m_ternary);
+    auto m_ccl = module.def_submodule("ccl", "collective communication operations");
+    ccl::py_module(m_ccl);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
@@ -99,6 +103,9 @@ void py_module(py::module& module) {
     auto m_embedding_backward = module.def_submodule("embedding_backward", "embedding backward operations");
     embedding_backward::py_bind_embedding_backward(m_embedding_backward);
 
+    auto m_full = module.def_submodule("full", "full operation");
+    full::bind_full_operation(m_full);
+
     auto m_loss = module.def_submodule("loss", "loss operations");
     loss::py_bind_loss_functions(m_loss);
 
@@ -108,8 +115,11 @@ void py_module(py::module& module) {
     auto m_data_movement = module.def_submodule("data_movement", "data_movement operations");
     data_movement::py_module(m_data_movement);
 
-    auto m_conv2d = module.def_submodule("conv2d", "conv2d operation");
-    conv::conv2d::py_bind_conv2d(m_conv2d);
+    auto m_sliding_window = module.def_submodule("sliding_window", "sliding_window operations");
+    sliding_window::py_bind_sliding_window(m_sliding_window);
+
+    auto m_conv2d = module.def_submodule("conv", "Convolution operations");
+    conv::py_module(m_conv2d);
 
     auto m_pool = module.def_submodule("pool", "pooling  operations");
     pool::py_module(m_pool);
@@ -122,6 +132,9 @@ void py_module(py::module& module) {
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
+
+    auto m_prefetcher = module.def_submodule("prefetcher", "prefetcher operations");
+    prefetcher::py_module(m_prefetcher);
 
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);
@@ -137,8 +150,19 @@ void py_module(py::module& module) {
 
     auto m_moreh = module.def_submodule("moreh", "moreh operations");
     moreh::bind_moreh_operations(m_moreh);
-}
 
+    auto m_full_like = module.def_submodule("full_like", "full_like operation");
+    full_like::bind_full_like_operation(m_full_like);
+
+    auto m_uniform = module.def_submodule("uniform", "uniform operations");
+    uniform::bind_uniform_operation(m_uniform);
+
+    auto m_index_fill = module.def_submodule("index_fill", "index_fill operation");
+    index_fill::bind_index_fill_operation(m_index_fill);
+
+    auto m_bernoulli = module.def_submodule("bernoulli", "bernoulli operations");
+    bernoulli::bind_bernoulli_operation(m_bernoulli);
+}
 }  // namespace operations
 
 }  // namespace ttnn

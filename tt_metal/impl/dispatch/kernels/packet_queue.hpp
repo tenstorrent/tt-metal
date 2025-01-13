@@ -5,11 +5,12 @@
 #pragma once
 
 #include "risc_attribs.h"
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "debug/dprint.h"
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
@@ -161,31 +162,33 @@ public:
                 STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
         } else {
             this->local_wptr_val = &this->local_wptr;
+            uint32_t adjusted_queue_id = queue_id > 15 ? queue_id - 11 : queue_id;
             this->local_rptr_sent_val = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
             this->local_rptr_cleared_val = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
 
             this->local_rptr_sent_update = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
             this->local_rptr_cleared_update = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
 
             // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
             this->local_rptr_sent_reset = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
             this->local_rptr_cleared_reset = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
         }
 
         this->remote_wptr_update_addr =
             STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*remote_queue_id,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+        uint32_t adjusted_remote_queue_id = remote_queue_id > 15 ? remote_queue_id - 11 : remote_queue_id;
         this->remote_rptr_sent_update_addr =
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*remote_queue_id,
+            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_remote_queue_id,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
         this->remote_rptr_cleared_update_addr =
-            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*remote_queue_id+1,
+            STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_remote_queue_id+1,
                             STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
 
         this->remote_ready_status_addr = STREAM_REG_ADDR(remote_queue_id, STREAM_REMOTE_SRC_REG_INDEX);
@@ -844,6 +847,7 @@ public:
             (num_words == 0)) {
             return;
         } else if (this->remote_update_network_type == DispatchRemoteNetworkType::ETH) {
+            // while(eth_txq_is_busy());
             internal_::eth_send_packet(0, src_addr/PACKET_WORD_SIZE_BYTES, dest_addr/PACKET_WORD_SIZE_BYTES, num_words);
         } else {
             uint64_t noc_dest_addr = NOC_XY_ADDR(this->remote_x, this->remote_y, dest_addr);

@@ -10,6 +10,9 @@ fi
 PROFILER_SCRIPTS_ROOT=$TT_METAL_HOME/tt_metal/tools/profiler
 PROFILER_TEST_SCRIPTS_ROOT=$TT_METAL_HOME/tests/tt_metal/tools/profiler
 PROFILER_ARTIFACTS_DIR=$TT_METAL_HOME/generated/profiler
+if [[ "$TT_METAL_PROFILER_DIR" ]]; then
+    PROFILER_ARTIFACTS_DIR=$TT_METAL_PROFILER_DIR
+fi
 PROFILER_OUTPUT_DIR=$PROFILER_ARTIFACTS_DIR/reports
 
 remove_default_log_locations(){
@@ -39,8 +42,9 @@ verify_perf_line_count_floor(){
 verify_perf_line_count(){
     csvLog=$1
     LINE_COUNT=$2
+    FILTER=$3
 
-    lineCount=$(cat $csvLog | wc | awk  'NR == 1 { print $1 }')
+    lineCount=$(cat $csvLog | grep $FILTER | wc | awk  'NR == 1 { print $1 }')
 
     if [[ ! $lineCount =~ ^[0-9]+$ ]]; then
         echo "Value for line count was $lineCount, not a number !" 1>&2

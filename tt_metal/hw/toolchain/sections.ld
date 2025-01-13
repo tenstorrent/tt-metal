@@ -8,41 +8,56 @@
   any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
-/*
-   Firmware text/ldm start at the start of the section
-   Kernel text/ldm start where firmware left off
-*/
-__firmware_start = DEFINED(__fw_export_end_text) ? __fw_export_end_text : ORIGIN(REGION_CODE);
-__ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION_DATA);
-
-/*
-  Need a 32B separation between FW end and Kernel start on eriscs to
-    ensure kernel does not get cached into i$ because we cannot flush the i$.
-  FW must align to 32 byte boundary so Kernel begins aligned to meet noc
-    alignment constraints
-*/
-#if LD_TARGET == IERISC
-__padding = 31;
-__alignment = 32;
+#if defined(TYPE_FIRMWARE)
+/* Start of the appropriate region. */
+#define TEXT_START ORIGIN(REGION_CODE)
+#define DATA_START ORIGIN(REGION_DATA)
+#elif defined(TYPE_KERNEL)
+/* Where firmware ended. */
+#define TEXT_START __fw_export_end_text
+#define DATA_START __fw_export_ldm_end
+#else
+#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
 #endif
-__padding = 0;
-__alignment = 16;
+
+#if defined(TYPE_FIRMWARE)
+/* Need separation beteen end of firmware and start of kernel, so that
+   they don't share unflushable i$ cache lines.  */
+#if defined(TARGET_IERISC) || defined(TARGET_SLAVE_IERISC)
+#define MEM_PAD MEM_IERISC_KERNEL_PAD
+#else
+#define MEM_PAD 0
+#endif
+/* FW must align to 16 byte boundary so kernel begins aligned to meet noc alignment constraints */
+#define MEM_ALIGN 16
+#else
+#define MEM_PAD 0
+#define MEM_ALIGN 4
+#endif
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
-SEARCH_DIR("/opt/riscv32i/riscv32-unknown-elf/lib");
+
+PHDRS {
+  attributes 0x70000003;
+  text PT_LOAD;
+  data PT_LOAD;
+#if defined(TYPE_FIRMWARE)
+  stack PT_GNU_STACK;
+#endif
+}
+
 SECTIONS
 {
-  /* Read-only sections, merged into text segment: */
-  PROVIDE (__executable_start = __firmware_start);
-  .init __firmware_start :
+  .text TEXT_START : ALIGN(4)
   {
-    KEEP (*(SORT_NONE(.init)))
-  } > REGION_CODE
-  .text           :
-  {
+    /* Because TEXT_START might not be the start of a region, we
+       need to force this section to be emitted so that following sections
+       do not restart the region, if this one is empty.  */
+    . = .;
+    *(.start)
     *(.text.unlikely .text.*_unlikely .text.unlikely.*)
     *(.text.exit .text.exit.*)
     *(.text.startup .text.startup.*)
@@ -50,108 +65,103 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_CODE
-  .fini           :
-  {
-    KEEP (*(SORT_NONE(.fini)))
-  } > REGION_CODE
-
-  l1_data :
-  {
-    *(l1_data)
-  } > REGION_CODE
-  l1_data_noinit (NOLOAD) :
-  {
-    *(l1_data_noinit)
-  } > REGION_CODE
-
-  . += __padding;
-  . = ALIGN(__alignment);
-
-  PROVIDE (__etext = .);
-  PROVIDE (_etext = .);
-  PROVIDE (etext = .);
-  __fw_export_end_text = DEFINED(__fw_export_end_text) ? __fw_export_end_text : .;
-
-  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
-  .ldm_data __ldm_start :
-  {
-    /* ldm is copied in 4 byte chunks */
     . = ALIGN(4);
+  } > REGION_CODE :text
+  .init.fini :
+  {
+    /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.init .fini))
+    ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections have contents");
+  } > REGION_CODE :text
+
+#if defined(TYPE_KERNEL)
+   __kernel_data_lma = .;
+#endif
+  . = ALIGN(ABSOLUTE(.) + MEM_PAD, MEM_ALIGN);
+
+#if defined(TYPE_FIRMWARE)
+  __fw_export_end_text = ABSOLUTE(.);
+#if defined(TARGET_NCRISC)
+  PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
+#endif
+#endif
+
+#if defined(TYPE_KERNEL)
+  __kernel_init_local_l1_base = ABSOLUTE(.);
+#endif
+
+#if defined(TYPE_FIRMWARE)
+  PROVIDE(__global_pointer$ = ORIGIN(REGION_DATA) + 0x7f0);
+#endif
+  .data DATA_START :
+#if defined (TYPE_KERNEL)
+        AT(__kernel_data_lma)
+#endif
+	ALIGN(4)
+  {
+     . = .; /* Force section emission.  */
      __ldm_data_start = .;
      *(.rodata .rodata.* .gnu.linkonce.r.*)
      *(.rodata1)
-    PROVIDE_HIDDEN (__preinit_array_start = .);
-    KEEP (*(.preinit_array))
-    PROVIDE_HIDDEN (__preinit_array_end = .);
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
-    KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
-    PROVIDE_HIDDEN (__init_array_end = .);
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
-    KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
-    PROVIDE_HIDDEN (__fini_array_end = .);
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*crtbegin?.o(.ctors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
-    KEEP (*(SORT(.ctors.*)))
-    KEEP (*(.ctors))
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*crtbegin?.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
-    KEEP (*(SORT(.dtors.*)))
-    KEEP (*(.dtors))
+
     *(.dynamic)
     *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+
     *(.srodata.cst16) *(.srodata.cst8) *(.srodata.cst4) *(.srodata.cst2) *(.srodata .srodata.*)
     *(.sdata .sdata.* .gnu.linkonce.s.*)
     *(.sdata2 .sdata2.* .gnu.linkonce.s2.*)
-    *(.data .data.* .gnu.linkonce.d.*)
-    SORT(CONSTRUCTORS)
-    *(.data1)
-    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
 
-    /* bss is initialized with 4 byte writes */
+    *(.data .data.* .gnu.linkonce.d.*)
+    *(.data1)
+
+    *(.got.plt) *(.igot.plt) *(.got) *(.igot)
     . = ALIGN(4);
     __ldm_data_end = .;
+  } > REGION_DATA :data
+  .ctors.dtors :
+  {
+    /* We don't use .ctors/.dtors either (this still isn't the '90s), make sure there aren't any.  */
+    KEEP (*(.ctors .ctors.* .dtors .dtors.*))
+    ASSERT(SIZEOF(.ctors.dtors) == 0, ".ctors/.dtors sections have contents");
+  } > REGION_DATA :data
+  .init_array.fini_array :
+  {
+    /* We don't support global static constructors or destructors. make sure there aren't any.  */
+    KEEP (*(.preinit_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+    KEEP (*(.init_array))
+    KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
+    KEEP (*(.fini_array))
+    ASSERT(SIZEOF(.init_array.fini_array) == 0, ".{preinit,init,fini}_array sections have contents");
+  } > REGION_DATA :data
+  .bss : ALIGN(4)
+  {
     __ldm_bss_start = .;
     *(.sbss2 .sbss2.* .gnu.linkonce.sb2.*)
     *(.dynsbss)
     *(.sbss .sbss.* .gnu.linkonce.sb.*)
     *(.scommon)
-    . = ALIGN(4);
     *(.dynbss)
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
     __ldm_bss_end = .;
-  } > REGION_DATA
+  } > REGION_DATA :data
 
-  /* Use __ldm_bss_end to pick up where the last REGION_DATA ended
-     This is needed because of the way kernel REGION_DATA picks up where firmware
-     ended.  If the section above is empty (highly unlikely) we don't want to
-     re-start at the origion of REGION_DATA
-  */
-  local_data_noinit __ldm_bss_end (NOLOAD) :
-  {
-    *(local_data_noinit)
-  } > REGION_DATA
+#ifdef TYPE_FIRMWARE
+  . = ALIGN(ABSOLUTE(.), MEM_ALIGN);
+  __fw_export_ldm_end = ABSOLUTE(.);
+#endif
 
-  /* FW must align to 16 byte boundary so Kernel begins aligned to meet noc
-     alignment constraints */
-  . = ALIGN(16);
-  _edata = .; PROVIDE (edata = .);
-  _end = .; PROVIDE (end = .);
-  __fw_export_ldm_end = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : _end;
-
-  /* Move to end of local memory for stack */
+#ifdef TYPE_FIRMWARE
   .stack :
   {
-    __stack_bottom = .;
-   . += __firmware_stack_size;
+   . += FIRMWARE_STACK_SIZE;
     __stack_top = .;
-  } > REGION_STACK
+  } > REGION_STACK :stack
+#endif
+
+  .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */
   .stab          0 : { *(.stab) }

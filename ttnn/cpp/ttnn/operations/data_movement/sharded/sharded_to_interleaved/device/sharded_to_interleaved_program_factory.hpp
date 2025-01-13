@@ -8,7 +8,10 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-
-operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(const Tensor &a, const Tensor &output, uint32_t num_slices = 1, uint32_t slice_index = 0);
-
+tt::tt_metal::operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
+    const Tensor& a,
+    const Tensor& output,
+    bool is_l1_aligned = false,
+    uint32_t num_slices = 1,
+    uint32_t slice_index = 0);
 }

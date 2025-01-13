@@ -6,10 +6,8 @@ import torch
 import pytest
 from functools import partial
 import ttnn
-from models.utility_functions import skip_for_blackhole
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "shape_dim",
     (

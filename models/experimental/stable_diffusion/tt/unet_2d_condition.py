@@ -457,7 +457,7 @@ class UNet2DConditionModel(nn.Module):
         forward_upsample_size = False
         upsample_size = None
 
-        if any(s % default_overall_up_factor != 0 for s in sample.get_legacy_shape()[-2:]):
+        if any(s % default_overall_up_factor != 0 for s in sample.shape.with_tile_padding()[-2:]):
             logger.info("Forward upsample size to force interpolation output size.")
             forward_upsample_size = True
 

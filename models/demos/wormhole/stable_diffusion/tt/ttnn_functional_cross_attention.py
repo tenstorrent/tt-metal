@@ -367,7 +367,7 @@ class cross_attention:
                 k_slice = ttnn.slice(
                     t_key,
                     (j, i, 0, 0),
-                    (j, i, self.key_len - 1, self.seq_len - 1),
+                    (j + 1, i + 1, self.key_len, self.seq_len),
                     memory_config=self.l1_interleaved_memory_config,
                 )
 
@@ -407,7 +407,7 @@ class cross_attention:
                 v_slice = ttnn.slice(
                     value,
                     (j, i, 0, 0),
-                    (j, i, self.seq_len - 1, self.key_len - 1),
+                    (j + 1, i + 1, self.seq_len, self.key_len),
                     memory_config=self.l1_interleaved_memory_config,
                 )
                 mm_slice = ttnn.matmul(
@@ -499,7 +499,6 @@ class cross_attention:
             output_shard_grid,
             [height_per_core, key_len],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -737,7 +736,6 @@ class cross_attention:
                 output_shard_grid,
                 [self.seq_len, self.q_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -754,7 +752,6 @@ class cross_attention:
                 output_shard_grid,
                 [96, self.kv_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,

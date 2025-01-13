@@ -21,28 +21,43 @@ namespace complex_unary_backward {
 namespace detail {
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
+void bind_complex_unary_backward(
+    py::module& module,
+    const complex_unary_backward_operation_t& operation,
+    const std::string& description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ComplexTensor, input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<ComplexTensor>
+        R"doc(
+        {2}
 
-{2}
 
-Args:
-    * :attr:`grad_tensor`: Complex tensor type
-    * :attr:`input_tensor`: Complex tensor type
+        Args:
+            grad_tensor (ComplexTensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Example:
+        Keyword args:
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, tensor)
-)doc",
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            {3}
+
+        Example:
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(grad_tensor, tensor)
+
+
+        )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -62,28 +77,43 @@ Example:
 }
 
 template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward_tensor(py::module& module, const complex_unary_backward_operation_t& operation, const std::string& description) {
+void bind_complex_unary_backward_tensor(
+    py::module& module,
+    const complex_unary_backward_operation_t& operation,
+    const std::string& description,
+    const std::string_view supported_dtype = "") {
     auto doc = fmt::format(
-R"doc({0}(grad_tensor: ttnn.Tensor, input_tensor: ComplexTensor, *, memory_config: ttnn.MemoryConfig) -> std::vector<ComplexTensor>
+        R"doc(
+        {2}
 
-{2}
 
-Args:
-    * :attr:`grad_tensor`:
-    * :attr:`input_tensor`: Complex tensor type
+        Args:
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
 
-Keyword args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
 
-Example:
+        Keyword args:
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
-    >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device)
-    >>> output = {1}(grad_tensor, tensor)
-)doc",
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            {3}
+
+        Example:
+            >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
+            >>> output = {1}(grad_tensor, tensor)
+
+
+        )doc",
+
         operation.base_name(),
         operation.python_fully_qualified_name(),
-        description);
+        description,
+        supported_dtype);
 
     bind_registered_operation(
         module,
@@ -104,12 +134,20 @@ Example:
 
 }  // namespace detail
 
-
 void py_module(py::module& module) {
     detail::bind_complex_unary_backward(
         module,
         ttnn::polar_bw,
-        R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
+
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 
     detail::bind_complex_unary_backward(
         module,
@@ -129,8 +167,16 @@ void py_module(py::module& module) {
     detail::bind_complex_unary_backward_tensor(
         module,
         ttnn::angle_bw,
-        R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Supported dtypes, layouts, and ranks:
 
+           +----------------------------+---------------------------------+-------------------+
+           |     Dtypes                 |         Layouts                 |     Ranks         |
+           +----------------------------+---------------------------------+-------------------+
+           |    BFLOAT16                |       TILE                      |      2, 3, 4      |
+           +----------------------------+---------------------------------+-------------------+
+
+        )doc");
 }
 
 }  // namespace complex_unary_backward

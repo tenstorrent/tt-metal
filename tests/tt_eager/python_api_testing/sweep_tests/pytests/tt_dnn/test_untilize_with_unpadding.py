@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
 import ttnn
-from models.utility_functions import skip_for_blackhole
+from models.utility_functions import is_blackhole
 
 
 def create_grid(x, y):
@@ -42,10 +42,11 @@ params += [
     )
 ]
 
+input_x = 64 if is_blackhole() else 32
 
 params += [
     pytest.param(
-        [[1, 1, 128, 32]],
+        [[1, 1, 128, input_x]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.TILE_LAYOUT],
@@ -53,22 +54,22 @@ params += [
                 ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
-                    ttnn.ShardSpec(create_grid(1, 2), [64, 32], ttnn.ShardOrientation.ROW_MAJOR, False),
+                    ttnn.ShardSpec(create_grid(1, 2), [64, input_x], ttnn.ShardOrientation.ROW_MAJOR),
                 )
             ],
             "output_mem_config": ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(create_grid(1, 2), [64, 16], ttnn.ShardOrientation.ROW_MAJOR, False),
+                ttnn.ShardSpec(create_grid(1, 2), [64, input_x // 2], ttnn.ShardOrientation.ROW_MAJOR),
             ),
             "output_tensor_start": [0, 0, 0, 0],
-            "output_tensor_end": [0, 0, 127, 15],
+            "output_tensor_end": [0, 0, 127, (input_x // 2) - 1],
         },
     )
 ]
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
+# @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes, untilize_with_unpadding_args", params)
 def test_run_untilize_with_unpadding_test(input_shapes, untilize_with_unpadding_args, device):
     datagen_func = [

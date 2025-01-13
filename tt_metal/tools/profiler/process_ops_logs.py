@@ -13,6 +13,7 @@ from pathlib import Path
 import json
 import yaml
 from datetime import datetime
+import copy
 
 import click
 from loguru import logger
@@ -20,14 +21,15 @@ from loguru import logger
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tt_metal.tools.profiler.common import (
-    PROFILER_LOGS_DIR,
-    PROFILER_OPS_LOGS_DIR,
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_SIDE_LOG,
+    PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
     TRACY_OPS_DATA_FILE_NAME,
+    generate_logs_folder,
+    generate_reports_folder,
 )
 
 yaml.SafeDumper.ignore_aliases = lambda *args: True
@@ -61,10 +63,18 @@ OPS_CSV_HEADER = [
     "DEVICE COMPUTE CB RESERVE BACK [ns]",
     "INPUTS",
     "OUTPUTS",
-    "COMPUTE KERNEL PATH",
+    "METAL TRACE ID",
+    "METAL TRACE REPLAY SESSION ID",
+    "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
-    "DATA MOVEMENT KERNEL PATH",
+    "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
+    "BRISC MAX KERNEL SIZE [B]",
+    "NCRISC MAX KERNEL SIZE [B]",
+    "TRISC 0 MAX KERNEL SIZE [B]",
+    "TRISC 1 MAX KERNEL SIZE [B]",
+    "TRISC 2 MAX KERNEL SIZE [B]",
+    "ERISC MAX KERNEL SIZE [B]",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -77,53 +87,88 @@ def csv_header_format(header):
     return header.replace("_", " ").upper()
 
 
-def import_tracy_op_logs():
+def import_tracy_op_logs(logFolder):
     logger.info(f"Importing ops logs")
     ops = {}
     signposts = {}
     signpostsCount = 0
     cached_ops = {}
 
-    tracyOpTimesLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_TIMES_FILE_NAME)
-    tracyOpDataLog = os.path.join(PROFILER_LOGS_DIR, TRACY_OPS_DATA_FILE_NAME)
+    tracyOpTimesLog = os.path.join(logFolder, TRACY_OPS_TIMES_FILE_NAME)
+    tracyOpDataLog = os.path.join(logFolder, TRACY_OPS_DATA_FILE_NAME)
 
     if not os.path.isfile(tracyOpTimesLog) or not os.path.isfile(tracyOpDataLog):
-        return ops, signposts
+        return ops, signposts, None
 
     with open(tracyOpDataLog, "r", newline="") as csvFile:
         opDataDicts = csv.DictReader(csvFile, delimiter=";", quotechar="`")
         opsData = []
+        traceIDs = {}
+        traceReplays = {}
         for opDataDict in opDataDicts:
             opDataStr = opDataDict["MessageName"]
             opDataTime = opDataDict["total_ns"]
-            if "TT_DNN" in opDataStr:
-                tmpStrs = opDataStr.split(" ->\n", 1)
-                opData = {}
-                if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
-                    jsonStr = tmpStrs[-1]
-                    opData = json.loads(jsonStr)
-                    if "op_hash" in opData.keys():
-                        assert "device_id" in opData.keys()
-                        deviceID = int(opData["device_id"])
-                        opHash = int(opData["op_hash"])
-                        if deviceID in cached_ops.keys():
-                            cached_ops[deviceID][opHash] = opData.copy()
+            if "TT_DNN" in opDataStr or "TT_METAL" in opDataStr:
+                if "OP" in opDataStr:
+                    tmpStrs = opDataStr.split(" ->\n", 1)
+                    opData = {}
+                    if len(tmpStrs) > 1:  # uncached device op, host op, or fallback op
+                        jsonStr = tmpStrs[-1]
+                        opData = json.loads(jsonStr)
+                        opData["metal_trace_id"] = None
+                        if "op_hash" in opData.keys():
+                            assert "device_id" in opData.keys()
+                            deviceID = int(opData["device_id"])
+                            opHash = int(opData["op_hash"])
+                            if deviceID in cached_ops.keys():
+                                cached_ops[deviceID][opHash] = opData.copy()
+                            else:
+                                cached_ops[deviceID] = {opHash: opData.copy()}
+                            del cached_ops[deviceID][opHash]["global_call_count"]
+                            if deviceID in traceIDs:
+                                opData["metal_trace_id"] = traceIDs[deviceID]
+                    else:  # cached device op
+                        opDataList = opDataStr.split(":", 1)[-1].split(",")
+                        assert len(opDataList) > 3, "Wrong cached op info format"
+                        opCode = opDataList[0].strip()
+                        opHash = int(opDataList[1])
+                        deviceID = int(opDataList[2])
+                        opID = int(opDataList[3])
+                        assert deviceID in cached_ops.keys(), "Expected hashed op info is not found"
+                        assert opHash in cached_ops[deviceID].keys(), "Expected hashed op info is not found"
+                        opData = cached_ops[deviceID][opHash].copy()
+                        opData["global_call_count"] = opID
+                        opData["metal_trace_id"] = None
+                        if deviceID in traceIDs:
+                            opData["metal_trace_id"] = traceIDs[deviceID]
+                    opData["tracy_time"] = opDataTime
+                    opsData.append(opData)
+                elif "TRACE" in opDataStr:
+                    IDs = opDataStr.split(":")[-1].strip().split(",")
+                    assert len(IDs) == 2, (
+                        "Wrong number of IDs is provided in trace message. "
+                        "Device and trace are the two IDs that should be provided. "
+                        f"But IDs {IDs} were provided"
+                    )
+                    deviceID = int(IDs[0].strip())
+                    traceID = int(IDs[1].strip())
+                    if "BEGIN" in opDataStr:
+                        traceIDs[deviceID] = traceID
+                    elif "END" in opDataStr:
+                        assert traceIDs[deviceID] == traceID, (
+                            f"Wrong trace ID, device {deviceID} should finish on trace ID "
+                            f"{traceIDs[deviceID]} but it is finishing on trace ID {traceID}"
+                        )
+                        traceIDs[deviceID] = None
+                    elif "REPLAY" in opDataStr:
+                        replayIDTime = opDataTime
+                        if deviceID in traceReplays:
+                            if traceID in traceReplays[deviceID]:
+                                traceReplays[deviceID][traceID].append(replayIDTime)
+                            else:
+                                traceReplays[deviceID][traceID] = [replayIDTime]
                         else:
-                            cached_ops[deviceID] = {opHash: opData.copy()}
-                        del cached_ops[deviceID][opHash]["global_call_count"]
-                else:  # cached device op
-                    opDataList = opDataStr.split(":", 1)[-1].split(",")
-                    assert len(opDataList) > 3, "Wrong cached op info format"
-                    opCode = opDataList[0].strip()
-                    opHash = int(opDataList[1])
-                    deviceID = int(opDataList[2])
-                    opID = int(opDataList[3])
-                    assert deviceID in cached_ops.keys(), "Expected hashed op info is not found"
-                    assert opHash in cached_ops[deviceID].keys(), "Expected hashed op info is not found"
-                    opData = cached_ops[deviceID][opHash].copy()
-                    opData["global_call_count"] = opID
-                opData["tracy_time"] = opDataTime
-                opsData.append(opData)
+                            traceReplays[deviceID] = {traceID: [replayIDTime]}
 
             if "TT_SIGNPOST" in opDataStr:
                 signpostsCount += 1
@@ -134,7 +179,7 @@ def import_tracy_op_logs():
     with open(tracyOpTimesLog, "r") as csvFile:
         csvReader = csv.DictReader(csvFile)
         for op in csvReader:
-            if "TT_DNN" in op["name"]:
+            if "TT_DNN" in op["name"] or "TT_METAL" in op["name"]:
                 opID = int(op["zone_text"].split(":")[-1])
                 assert opID in ops.keys(), f"Op time for op {opID} must present"
                 ops[opID]["host_time"] = op
@@ -153,13 +198,14 @@ def import_tracy_op_logs():
                 else:
                     ops[parentOpID]["child_calls"] = {op["name"]: int(op["exec_time_ns"])}
 
-    return ops, signposts
+    return ops, signposts, traceReplays
 
 
 # Generate a map of OP reference list per device.
 def get_device_op_data(ops):
     logger.info(f"Getting device ops")
     deviceOps = {}
+    hasTraceRuns = False
     for opID, opData in ops.items():
         if "device_id" in opData.keys():
             deviceID = opData["device_id"]
@@ -167,6 +213,8 @@ def get_device_op_data(ops):
                 deviceOps[deviceID] = [opData]
             else:
                 deviceOps[deviceID].append(opData)
+        if "metal_trace_id" in opData.keys() and opData["metal_trace_id"] is not None:
+            hasTraceRuns = True
 
     def device_ops_compare(op):
         return int(op["global_call_count"])
@@ -174,26 +222,82 @@ def get_device_op_data(ops):
     for deviceID in deviceOps:
         deviceOps[deviceID].sort(key=device_ops_compare)
 
-    return deviceOps
+    return deviceOps, hasTraceRuns
+
+
+def device_log_ops_compare(op):
+    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
+        return int(op["timeseries"][0][1])
+    else:
+        return 0
 
 
 # Append device data to device ops and return the list of mapped device op ref list
-def append_device_data(ops, deviceLogFolder):
-    deviceOps = get_device_op_data(ops)
+def append_device_data(ops, traceReplays, logFolder):
+    traceReplayCounts = {}
+    for deviceID in traceReplays:
+        traceReplayCounts[deviceID] = {}
+        for traceID in traceReplays[deviceID]:
+            traceReplayCounts[deviceID][traceID] = len(traceReplays[deviceID][traceID])
+    devicesOps, hasTraceRuns = get_device_op_data(ops)
     logger.info(f"Appending device data")
-    deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
+    deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
+    traceOps = {}
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
         setup.deviceInputLog = deviceTimesLog
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
-        for device in deviceOps:
+        for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            if len(deviceOps[device]) != len(deviceOpsTime):
+            deviceOpsTime.sort(key=device_log_ops_compare)
+            if hasTraceRuns:
+                generatedHostData = []
+                opIDHostDataDict = {}
+                for deviceOp in devicesOps[device]:
+                    opID = deviceOp["global_call_count"]
+                    assert (
+                        opID not in opIDHostDataDict
+                    ), f"Host op ID cannot be repeated: op ID {opID} was reported twice by the host"
+                    opIDHostDataDict[opID] = copy.deepcopy(deviceOp)
+
+                traceOps = {}
+                for deviceOpTime in deviceOpsTime:
+                    if len(deviceOpTime["timeseries"]) > 0:
+                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
+                        assert "run_host_id" in timeID.keys(), "Device op ID missing: Device data must provide op ID"
+                        deviceOpID = timeID["run_host_id"]
+                        assert (
+                            deviceOpID in opIDHostDataDict
+                        ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data"
+                        traceID = opIDHostDataDict[deviceOpID]["metal_trace_id"]
+                        if traceID is not None:
+                            if device in traceOps:
+                                if traceID in traceOps[device]:
+                                    if deviceOpID in traceOps[device][traceID]:
+                                        traceReplays[device][traceID].pop(0)
+                                        traceOps[device][traceID] = set([deviceOpID])
+                                    else:
+                                        traceOps[device][traceID].add(deviceOpID)
+                                else:
+                                    traceOps[device][traceID] = set([deviceOpID])
+                            else:
+                                traceOps[device] = {traceID: set([deviceOpID])}
+                            assert (
+                                len(traceReplays[device][traceID]) > 0
+                            ), "Wrong trace replay count: Device has more ops than trace replay issued commands"
+                            opIDHostDataDict[deviceOpID]["tracy_time"] = traceReplays[device][traceID][0]
+                            opIDHostDataDict[deviceOpID]["metal_trace_replay_session_id"] = (
+                                traceReplayCounts[device][traceID] - len(traceReplays[device][traceID]) + 1
+                            )
+                        generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
+                devicesOps[device] = generatedHostData
+
+            if len(devicesOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
-                for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
+                for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
                     if len(deviceOpTime["timeseries"]) > 0:
                         timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
                         if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
@@ -204,21 +308,23 @@ def append_device_data(ops, deviceLogFolder):
                                     break
 
                 if deviceOPId and hostOPId:
-                    assert (
-                        False
-                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}. Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
+                    assert False, (
+                        f"Device data mismatch: Expected {len(devicesOps[device])} "
+                        f"but received {len(deviceOpsTime)} ops on device {device}. "
+                        f"Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
+                    )
                 else:
                     assert (
-                        True
-                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
-            for deviceOp, deviceOpTime in zip(deviceOps[device], deviceOpsTime):
+                        False
+                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+            for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
                     if "zone_name" in timeID.keys() and "FW" in timeID["zone_name"]:
                         if "run_host_id" in timeID.keys():
                             assert (
                                 timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reproted by device is not matching assigned op id {deviceOp['global_call_count']}"
+                            ), f"op id {timeID['run_host_id']} reproted by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
@@ -228,13 +334,26 @@ def append_device_data(ops, deviceLogFolder):
                 for analysis, data in deviceOp["device_time"].items():
                     for sample in data:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
-    return deviceOps
+            traceOps = {}
+
+            # Tag trace ops with a UID
+            for device in devicesOps:
+                for deviceOp in devicesOps[device]:
+                    if "metal_trace_replay_session_id" in deviceOp.keys():
+                        deviceOp["global_call_count"] = (
+                            deviceOp["global_call_count"] | deviceOp["metal_trace_replay_session_id"] << 16
+                        )
+                        traceOps[deviceOp["global_call_count"]] = deviceOp
+                    else:
+                        # Update host reported device op with device populated version
+                        ops[deviceOp["global_call_count"]] = deviceOp
+    return devicesOps, traceOps
 
 
 def get_device_data_generate_report(
-    deviceLogFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
+    logFolder, outputFolder, date, nameAppend, export_csv=True, cleanup_device_log=False
 ):
-    deviceTimesLog = os.path.join(deviceLogFolder, PROFILER_DEVICE_SIDE_LOG)
+    deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     devicePreOpTime = {}
     deviceOps = {}
     i = 0
@@ -260,8 +379,8 @@ def get_device_data_generate_report(
         allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
         logger.info(f"Copying runtime artifacts")
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-        if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-            os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+        if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
+            os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -312,11 +431,15 @@ def get_device_data_generate_report(
                         devicePreOpTime[device] = analysisData[0]["end_cycle"]
                 rowDicts.append(rowDict)
 
+        rowDictHeaders = set()
+        for row in rowDicts:
+            for k in row.keys():
+                rowDictHeaders.add(k)
         if export_csv:
             with open(allOpsCSVPath, "w") as allOpsCSV:
                 allHeaders = []
                 for header in OPS_CSV_HEADER:
-                    if header in rowDicts[-1].keys():
+                    if header in rowDictHeaders:
                         allHeaders.append(header)
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
                 writer.writeheader()
@@ -333,7 +456,7 @@ def get_device_data_generate_report(
     return rowDicts
 
 
-def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
+def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolder, date, nameAppend):
     logger.info(f"OPs' perf analysis is finished! Generating reports ...")
     outFolder = PROFILER_OUTPUT_DIR
     if outputFolder:
@@ -354,22 +477,10 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
 
     logger.info(f"Copying runtime artifacts")
     os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / TRACY_FILE_NAME}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / TRACY_FILE_NAME} {outFolder}")
-    if os.path.isfile(f"{PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG}"):
-        os.system(f"cp {PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
-
-    # logger.info(f"Generating OPs yaml")
-    # allOpsYAMLPath = os.path.join(outFolder, f"{name}_all_ops.yaml")
-    # with open(allOpsYAMLPath, "w") as allOpsYAML:
-    # yaml.safe_dump(ops, allOpsYAML, default_flow_style=False)
-    # logger.info(f"OPs yaml generated at: {allOpsYAMLPath}")
-
-    # logger.info(f"Generating Device OPs yaml")
-    # deviceOpsYAMLPath = os.path.join(outFolder, f"{name}_devices_ops.yaml")
-    # with open(deviceOpsYAMLPath, "w") as deviceOpsYAML:
-    # yaml.safe_dump(deviceOps, deviceOpsYAML, default_flow_style=False)
-    # logger.info(f"Device OPs yaml generated at: {deviceOpsYAMLPath}")
+    if os.path.isfile(f"{logFolder / TRACY_FILE_NAME}"):
+        os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
+    if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
+        os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
@@ -439,19 +550,26 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
             if type(row) is str and "sp" in row:
                 ret = signposts[row]["tracy_time"]
             elif type(row) is int:
-                ret = ops[row]["tracy_time"]
+                if row > ((1 << 16) - 1):
+                    ret = traceOps[row]["tracy_time"]
+                else:
+                    ret = ops[row]["host_time"]["ns_since_start"]
             ret = int(ret)
             return ret
 
-        rowKeys = list(ops.keys()) + list(signposts.keys())
+        rowKeys = list(ops.keys()) + list(traceOps.keys()) + list(signposts.keys())
         rowKeys.sort(key=row_compare)
         childCallKeys = set()
         for row in rowKeys:
             if type(row) is int:
-                op = ops[row]
-                if "child_calls" in op.keys():
-                    for childCall in op["child_calls"]:
+                if row > ((1 << 16) - 1):
+                    opData = traceOps[row]
+                else:
+                    opData = ops[row]
+                if "child_calls" in opData.keys():
+                    for childCall in opData["child_calls"]:
                         childCallKeys.add(f"{childCall}_TT_HOST_FUNC [ns]")
+
         for row in rowKeys:
             rowDict = {}
             if type(row) is str and "sp" in row:
@@ -463,7 +581,15 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                 rowDict["HOST START TS"] = int(signposts[row]["tracy_time"])
             elif type(row) is int:
                 op = row
-                opData = ops[op]
+                if op > ((1 << 16) - 1):
+                    opData = traceOps[op]
+                    opData["global_call_count"] = ((1 << 16) - 1) & op
+                else:
+                    opData = ops[op]
+                    opData["metal_trace_replay_session_id"] = ""
+                    if "trac_id" not in opData.keys() or opData["metal_trace_id"] is None:
+                        opData["metal_trace_id"] = ""
+
                 for field, fieldData in opData.items():
                     headerField = csv_header_format(field)
                     if headerField in OPS_CSV_HEADER:
@@ -477,18 +603,21 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
                 rowDict["HOST DURATION [ns]"] = int(opData["host_time"]["exec_time_ns"])
 
                 if "kernel_info" in opData.keys():
-                    rowDict["COMPUTE KERNEL PATH"] = []
+                    rowDict["COMPUTE KERNEL SOURCE"] = []
                     rowDict["COMPUTE KERNEL HASH"] = []
-                    rowDict["DATA MOVEMENT KERNEL PATH"] = []
+                    rowDict["DATA MOVEMENT KERNEL SOURCE"] = []
                     rowDict["DATA MOVEMENT KERNEL HASH"] = []
                     for computeKernel in opData["kernel_info"]["compute_kernels"]:
                         rowDict["MATH FIDELITY"] = computeKernel["math_fidelity"]
-                        rowDict["COMPUTE KERNEL PATH"].append(computeKernel["path"])
+                        rowDict["COMPUTE KERNEL SOURCE"].append(computeKernel["source"])
                         rowDict["COMPUTE KERNEL HASH"].append(computeKernel["name"])
 
                     for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
-                        rowDict["DATA MOVEMENT KERNEL PATH"].append(dmKernel["path"])
+                        rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
                         rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
+
+                    for kernel, kernelSize in opData["kernel_info"]["kernel_sizes"].items():
+                        rowDict[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
 
                 if "core_usage" in opData.keys():
                     rowDict["CORE COUNT"] = opData["core_usage"]["count"]
@@ -552,23 +681,30 @@ def generate_reports(ops, deviceOps, signposts, outputFolder, date, nameAppend):
     logger.info(f"OPs csv generated at: {allOpsCSVPath}")
 
 
-def process_ops(output_folder, name_append, date):
-    ops, signposts = import_tracy_op_logs()
+def process_ops(output_folder, name_append, date, device_only=False):
+    if not output_folder:
+        output_folder = PROFILER_ARTIFACTS_DIR
+    logFolder = generate_logs_folder(output_folder)
+    reportFolder = generate_reports_folder(output_folder)
 
-    if ops:
-        deviceOps = append_device_data(ops, PROFILER_LOGS_DIR)
-        generate_reports(ops, deviceOps, signposts, output_folder, date, name_append)
+    ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
+    if ops and not device_only:
+        deviceOps, traceOps = append_device_data(ops, traceReplays, logFolder)
+        generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:
-        deviceOps = get_device_data_generate_report(PROFILER_LOGS_DIR, output_folder, date, name_append)
+        deviceOps = get_device_data_generate_report(logFolder, reportFolder, date, name_append)
 
 
 @click.command()
 @click.option("-o", "--output-folder", type=click.Path(), help="Output folder for artifacts")
 @click.option("-n", "--name-append", type=str, help="Name to be appended to default csv name")
 @click.option("--date", default=False, is_flag=True, help="Append date to output files")
-def main(output_folder, name_append, date):
-    process_ops(output_folder, name_append, date)
+@click.option("--device-only", default=False, is_flag=True, help="Only generate a device data report")
+def main(output_folder, name_append, date, device_only):
+    if output_folder:
+        output_folder = Path(output_folder)
+    process_ops(output_folder, name_append, date, device_only)
 
 
 if __name__ == "__main__":

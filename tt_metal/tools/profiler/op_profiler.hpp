@@ -10,14 +10,15 @@
 #include <type_traits>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "third_party/json/json.hpp"
-#include "third_party/magic_enum/magic_enum.hpp"
+#include <nlohmann/json.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include "tools/profiler/profiler.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "ttnn/operation.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/TracyC.h"
+#include "tt_metal/impl/device/device_pool.hpp"
+#include "tracy/Tracy.hpp"
+#include "tracy/TracyC.h"
 
 using json = nlohmann::json;
 
@@ -34,7 +35,7 @@ class thread_safe_cached_ops_map {
     using OP_INFO_MAP = std::unordered_map<tt::tt_metal::operation::Hash, std::string>;
     using DEVICE_OP_MAP = std::unordered_map<uint32_t, OP_INFO_MAP>;
 
-   public:
+public:
     DEVICE_OP_MAP::iterator find(uint32_t device_id) {
         std::scoped_lock<std::mutex> lock(map_mutex);
         return map.find(device_id);
@@ -52,13 +53,13 @@ class thread_safe_cached_ops_map {
         map.emplace(device_id, device_op_entry);
     }
 
-   private:
+private:
     std::mutex map_mutex;
     DEVICE_OP_MAP map;
 };
 
 class thread_safe_call_stack {
-   public:
+public:
     void push(const TracyCZoneCtx& ctx) {
         std::scoped_lock<std::mutex> lock(stack_mutex);
         call_stack.push(ctx);
@@ -76,7 +77,7 @@ class thread_safe_call_stack {
         return call_stack.top();
     }
 
-   private:
+private:
     std::mutex stack_mutex;
     std::stack<TracyCZoneCtx> call_stack;
 };
@@ -88,13 +89,13 @@ template <typename device_operation_t>
 inline auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
-    if constexpr (
-        requires(
-            const typename device_operation_t::operation_attributes_t& operation_attributes,
-            const typename device_operation_t::tensor_args_t& tensor_args) {
-            { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
-        }
-    ) {
+    if constexpr (requires(
+                      const typename device_operation_t::operation_attributes_t& operation_attributes,
+                      const typename device_operation_t::tensor_args_t& tensor_args) {
+                      {
+                          device_operation_t::compute_program_hash(operation_attributes, tensor_args)
+                      } -> std::convertible_to<tt::stl::hash::hash_t>;
+                  }) {
         ZoneScopedN("Op profiler Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
@@ -144,9 +145,22 @@ static void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 static void tracy_frame() { FrameMark; }
 
 #if defined(TRACY_ENABLE)
-static inline json get_kernels_json(const Program& program) {
+static inline json get_kernels_json(chip_id_t device_id, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
+
+    IDevice* device = nullptr;
+    if (tt::DevicePool::instance().is_device_active(device_id)) {
+        device = tt::DevicePool::instance().get_active_device(device_id);
+    }
+    json kernelSizes;
+    kernelSizes["brisc_max_kernel_size"] = 0;
+    kernelSizes["ncrisc_max_kernel_size"] = 0;
+    kernelSizes["erisc_max_kernel_size"] = 0;
+    kernelSizes["trisc_0_max_kernel_size"] = 0;
+    kernelSizes["trisc_1_max_kernel_size"] = 0;
+    kernelSizes["trisc_2_max_kernel_size"] = 0;
+
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
         if (kernel->processor() == RISCV::COMPUTE) {
@@ -154,19 +168,46 @@ static inline json get_kernels_json(const Program& program) {
             MathFidelity mathFidelity = std::get<ComputeConfig>(computeKernel->config()).math_fidelity;
             json computeKernelObj;
             computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
-            computeKernelObj["path"] = computeKernel->kernel_path_file_name();
+            computeKernelObj["source"] = computeKernel->kernel_source().source_;
             computeKernelObj["name"] = computeKernel->get_full_kernel_name();
             computeKernels.push_back(computeKernelObj);
+            if (device != nullptr) {
+                if (kernelSizes["trisc_0_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                    kernelSizes["trisc_0_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                }
+                if (kernelSizes["trisc_1_max_kernel_size"] < kernel->get_binary_packed_size(device, 1)) {
+                    kernelSizes["trisc_1_max_kernel_size"] = kernel->get_binary_packed_size(device, 1);
+                }
+                if (kernelSizes["trisc_2_max_kernel_size"] < kernel->get_binary_packed_size(device, 2)) {
+                    kernelSizes["trisc_2_max_kernel_size"] = kernel->get_binary_packed_size(device, 2);
+                }
+            }
         } else {
             json datamovementKernelObj;
-            datamovementKernelObj["path"] = kernel->kernel_path_file_name();
+            datamovementKernelObj["source"] = kernel->kernel_source().source_;
             datamovementKernelObj["name"] = kernel->get_full_kernel_name();
             datamovementKernels.push_back(datamovementKernelObj);
+            if (device != nullptr) {
+                if (kernel->processor() == RISCV::BRISC) {
+                    if (kernelSizes["brisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["brisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                } else if (kernel->processor() == RISCV::NCRISC) {
+                    if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                } else if (kernel->processor() == RISCV::ERISC) {
+                    if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
+                        kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
+                    }
+                }
+            }
         }
     }
     json ret;
     ret["compute_kernels"] = computeKernels;
     ret["datamovement_kernels"] = datamovementKernels;
+    ret["kernel_sizes"] = kernelSizes;
     return ret;
 }
 
@@ -195,7 +236,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
 
 static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         ret.push_back(get_tensor_json(tensor));
     }
@@ -204,7 +245,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<Tensor>& tens
 
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<const Tensor>>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
@@ -215,7 +256,7 @@ static inline std::vector<json> get_tensors_json(const std::vector<std::optional
 
 static inline std::vector<json> get_tensors_json(const std::vector<std::optional<Tensor>>& tensors) {
     ZoneScoped;
-    vector<json> ret;
+    std::vector<json> ret;
     for (auto& tensor : tensors) {
         if (tensor.has_value()) {
             ret.push_back(get_tensor_json(tensor.value()));
@@ -283,7 +324,7 @@ inline json get_base_json(
 
     auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
     std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
-    if constexpr ( requires { device_operation_t::get_type_name(operation_attributes); }) {
+    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
         // TODO: remove this if-statement when OldInfraDeviceOperation is removed
         opName = device_operation_t::get_type_name(operation_attributes);
     }
@@ -329,23 +370,24 @@ inline std::string op_meta_data_serialized_json(
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value) {
-
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
 
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
-        auto j = get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
+        auto j =
+            get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
         j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
-        j["kernel_info"] = get_kernels_json(program);
+        j["kernel_info"] = get_kernels_json(device_id, program);
 
         j["optional_input_tensors"] = std::vector<json>{};
 
         auto perfModel = [&]() {
             if constexpr (requires { device_operation_t::create_op_performance_model; }) {
-                return device_operation_t::create_op_performance_model(operation_attributes, tensor_args, tensor_return_value);
+                return device_operation_t::create_op_performance_model(
+                    operation_attributes, tensor_args, tensor_return_value);
             } else {
                 return operation::OpPerformanceModel{};
             }
@@ -356,7 +398,8 @@ inline std::string op_meta_data_serialized_json(
         j["performance_model"]["input_bws"] = perfModel.get_input_bws();
         j["performance_model"]["output_bws"] = perfModel.get_output_bws();
 
-        std::string short_str = fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
+        std::string short_str =
+            fmt::format("`TT_DNN_DEVICE_OP: {}, {}, {}, ", j["op_code"].dump(), program_hash, device_id);
         if (cached_ops.find(device_id) == cached_ops.end()) {
             cached_ops.emplace(
                 device_id, (std::unordered_map<tt::tt_metal::operation::Hash, std::string>){{program_hash, short_str}});
@@ -371,18 +414,12 @@ inline std::string op_meta_data_serialized_json(
     }
 }
 
-#define TracyOpTTNNDevice(                                                                                           \
-    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value) \
-    std::string op_message = op_profiler::op_meta_data_serialized_json(                                                \
-        operation,                                                                                                     \
-        operation_id,                                                                                                  \
-        device_id,                                                                                                     \
-        program,                                                                                                       \
-        operation_attributes,                                                                                          \
-        tensor_args,                                                                                                   \
-        tensor_return_value);                                                                                          \
-    std::string op_text = fmt::format("id:{}", operation_id);                                                          \
-    ZoneText(op_text.c_str(), op_text.size());                                                                         \
+#define TracyOpTTNNDevice(                                                                                    \
+    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)      \
+    std::string op_message = op_profiler::op_meta_data_serialized_json(                                       \
+        operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
+    std::string op_text = fmt::format("id:{}", operation_id);                                                 \
+    ZoneText(op_text.c_str(), op_text.size());                                                                \
     TracyMessage(op_message.c_str(), op_message.size());
 
 #define TracyOpTTNNExternal(op_id, op, input_tensors)                                             \

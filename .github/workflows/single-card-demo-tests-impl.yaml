@@ -1,4 +1,4 @@
-name: "(internal) Single-card Demo tests impl"
+name: "[internal] Single-card Demo tests impl"
 
 on:
   workflow_call:
@@ -36,24 +36,18 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Enable Performance mode
         if: ${{ matrix.test-group.name == 'N300_performance' }}
         run: |
           sudo cpupower frequency-set -g performance
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
+      - uses: ./.github/actions/prepare-metal-run
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+          arch: ${{ matrix.test-group.arch }}
       - uses: ./.github/actions/install-python-deps
       - name: Run demo regression tests
         timeout-minutes: 70

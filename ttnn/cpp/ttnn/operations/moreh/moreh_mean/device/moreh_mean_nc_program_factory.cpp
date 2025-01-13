@@ -7,7 +7,7 @@
 #include "common/bfloat16.hpp"
 #include "moreh_mean_device_operation.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -16,13 +16,11 @@ namespace ttnn::operations::moreh::moreh_mean {
 MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::MorehMeanNCFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
+    tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::operations::primary;
 
     auto input = tensor_args.input;
-    auto output = output_tensor;
     auto dim = operation_attributes.dim;
 
     auto compute_kernel_config =
@@ -68,10 +66,10 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
-        split_work_to_cores(core_range, units_to_divide);
+        split_work_to_cores_wt_core_range(core_range, units_to_divide);
 
     auto arch = input.device()->arch();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -85,11 +83,11 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         all_cores,
         cb_data_format,
         {
-            {CB::c_in0, 2},        // input
-            {CB::c_in1, 1},        // zero
-            {CB::c_in2, 1},        // scaler
-            {CB::c_intermed0, 1},  // accumulated mean
-            {CB::c_out0, 2},       // output
+            {CBIndex::c_0, 2},   // input
+            {CBIndex::c_1, 1},   // zero
+            {CBIndex::c_2, 1},   // scaler
+            {CBIndex::c_24, 1},  // accumulated mean
+            {CBIndex::c_16, 2},  // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -99,10 +97,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     std::vector<uint32_t> writer_compile_time_args;
     const auto reader_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_nc.cpp";
     const auto writer_kernel_file = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/writer_moreh_mean_nc.cpp";
-    const auto reader_kernel_id =
-        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id =
-        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -115,6 +111,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
@@ -124,10 +121,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         },
         ComputeKernelConfig{
             .math_fidelity = math_fidelity,
-            // TODO(hyungsuk): change preserve_fp32_precision from false to fp32_dest_acc_en after fix #10337
-            // .preserve_fp32_precision = fp32_dest_acc_en,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
 
@@ -138,10 +133,10 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
         CoreCoord core = {i / core_h, i % core_h};
 
         uint32_t units_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
             SetRuntimeArgs(program, compute_kernel_ids[0], core, {num_reduce_input_tile, units_per_core});
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             units_per_core = units_per_core_group_2;
             SetRuntimeArgs(program, compute_kernel_ids[1], core, {num_reduce_input_tile, units_per_core});
         } else {
@@ -165,10 +160,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
             program,
             writer_kernel_id,
             core,
-            {output.buffer()->address(),
-             units_per_core,
-             tile_offset,
-             static_cast<uint32_t>(is_dram(output))});
+            {output.buffer()->address(), units_per_core, tile_offset, static_cast<uint32_t>(is_dram(output))});
 
         tile_offset += units_per_core;
     }
@@ -186,20 +178,20 @@ void MorehMeanOperation::MorehMeanNCFactory::override_runtime_arguments(
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
 
-    auto src_buffer = tensor_args.input.buffer();
-    auto dst_buffer = tensor_return_value.buffer();
+    auto src_buffer_address = tensor_args.input.buffer()->address();
+    auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
+            runtime_args[0] = src_buffer_address;
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            runtime_args[0] = dst_buffer_address;
         }
     }
 }

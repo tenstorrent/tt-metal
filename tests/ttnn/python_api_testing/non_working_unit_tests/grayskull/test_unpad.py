@@ -14,10 +14,10 @@ from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 def ref_unpad(x, *args, output_tensor_start, output_tensor_end, **kwargs):
     out = x[
-        output_tensor_start[0] : output_tensor_end[0] + 1,
-        output_tensor_start[1] : output_tensor_end[1] + 1,
-        output_tensor_start[2] : output_tensor_end[2] + 1,
-        output_tensor_start[3] : output_tensor_end[3] + 1,
+        output_tensor_start[0] : output_tensor_end[0],
+        output_tensor_start[1] : output_tensor_end[1],
+        output_tensor_start[2] : output_tensor_end[2],
+        output_tensor_start[3] : output_tensor_end[3],
     ]
 
     return out

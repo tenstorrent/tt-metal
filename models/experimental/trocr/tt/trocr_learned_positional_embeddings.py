@@ -33,7 +33,7 @@ class TtTrOCRLearnedPositionalEmbedding(nn.Embedding):
 
     def forward(self, input_ids: ttnn.Tensor, past_key_values_length: int = 0):
         """`input_ids' shape is expected to be [bsz x seqlen]."""
-        bsz, seq_len = input_ids.get_legacy_shape()[2:]
+        bsz, seq_len = input_ids.shape.with_tile_padding()[2:]
         positions = torch.arange(
             past_key_values_length,
             past_key_values_length + seq_len,

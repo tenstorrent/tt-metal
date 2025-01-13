@@ -2,17 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+
+#include "tt_metal/common/assert.hpp"
+#include "tt_metal/common/logger.hpp"
+
 #include "llrt.hpp"
+#include "llrt/rtoptions.hpp"
 #include "hal.hpp"
-#include "hostdevcommon/common_runtime_address_map.h"
-#include "hostdevcommon/common_values.hpp"
 
 #include "jit_build/settings.hpp"
 
-#include "fmt/ranges.h"
+#include <fmt/base.h>
+#include <fmt/ranges.h>
 
-#include <unordered_set>
-#include <mutex>
 #include "dev_msgs.h"
 
 namespace tt {
@@ -20,152 +37,78 @@ namespace tt {
 // llrt = lower-level runtime
 namespace llrt {
 
-namespace fs = std::filesystem;
-
-using std::endl;
-using std::move;
-using std::string;
-using std::to_string;
+using std::uint16_t;
 using std::uint32_t;
-using std::unordered_map;
-using std::vector;
+using std::uint64_t;
 
-struct HexNameToMemVectorCache {
-    using lock = std::unique_lock<std::mutex>;
-    // maps from RisckCacheMapKey to hex file path
-    static HexNameToMemVectorCache &inst() {
-        static HexNameToMemVectorCache inst_;
-        return inst_;
-    }
+ll_api::memory const& get_risc_binary(
+    string const& path,
+    ll_api::memory::Loading loading) {
+    static struct {
+      std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
+      std::mutex mutex;
+      std::condition_variable cvar;
+    } cache;
 
-    bool exists(const string &path) {
-        lock l(mutex_);
-        return cache_.find(path) != cache_.end();
-    }
-    ll_api::memory &get(const string &path) {
-        lock l(mutex_);
-        return cache_[path];
-    }
-    void add(const string &path, ll_api::memory &mem) {
-        lock l(mutex_);
-        cache_[path] = mem;
-    }
+    std::unique_lock lock(cache.mutex);
+    auto [slot, inserted] = cache.map.try_emplace(path);
+    ll_api::memory const* ptr = nullptr;
+    if (inserted) {
+      // We're the first with PATH. Create and insert.
+      lock.unlock();
+      ptr = new ll_api::memory(path, loading);
 
-    unordered_map<string, ll_api::memory> cache_;
-    std::mutex mutex_;
-};
-
-ll_api::memory get_risc_binary(string path) {
-
-    if (HexNameToMemVectorCache::inst().exists(path)) {
-        return HexNameToMemVectorCache::inst().get(path);
-    }
-
-    fs::path bin_file(path);
-
-    std::ifstream hex_istream(path);
-    ll_api::memory mem(hex_istream);
-
-    // add this path to binary cache
-    HexNameToMemVectorCache::inst().add(path, mem);
-
-    return mem;
-}
-
-// Return the code size in 16 byte units
-// This matches what the fw needs for datamovement
-// and...squeezes more data into the launch message (2^20=1M)
-uint16_t get_binary_code_size16(const ll_api::memory& mem, int riscv_id) {
-
-    uint64_t range_min, range_max;
-    switch (riscv_id) {
-        case 0:
-            range_min = MEM_BRISC_FIRMWARE_BASE;
-            range_max = MEM_BRISC_FIRMWARE_BASE + MEM_BRISC_FIRMWARE_SIZE;
-            break;
-        case 1:
-            range_min = MEM_NCRISC_FIRMWARE_BASE;
-            range_max = MEM_NCRISC_FIRMWARE_BASE + MEM_NCRISC_FIRMWARE_SIZE;
-            break;
-        case 2:
-            range_min = MEM_TRISC0_FIRMWARE_BASE;
-            range_max = MEM_TRISC0_FIRMWARE_BASE + MEM_TRISC0_FIRMWARE_SIZE;
-            break;
-        case 3:
-            range_min = MEM_TRISC1_FIRMWARE_BASE;
-            range_max = MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC1_FIRMWARE_SIZE;
-            break;
-        case 4:
-            range_min = MEM_TRISC2_FIRMWARE_BASE;
-            range_max = MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE;
-            break;
-        case 5:
-            range_min = eth_l1_mem::address_map::FIRMWARE_BASE;
-            range_max = eth_l1_mem::address_map::COMMAND_Q_BASE;
-            break;
-        case 6:
-            range_min = MEM_IERISC_FIRMWARE_BASE;
-            range_max = MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE;
-            break;
-        default: TT_THROW("Bad riscv_id: {}", riscv_id);
-    }
-
-    uint64_t min = std::numeric_limits<decltype(min)>::max();
-    uint64_t max = 0;
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-
-        uint32_t len_bytes = len_words * sizeof(uint32_t);
-        // Only use the addresses within the firmware code range
-        if (addr >= range_min && addr + len_bytes <= range_max) {
-            if (addr < min) {
-                min = addr;
-            }
-            if (addr + len_bytes > max) {
-                max = addr + len_bytes;
-            }
+      lock.lock();
+      // maps have iterator stability, so SLOT is still valid.
+      slot->second = decltype(slot->second)(ptr);
+      // We can't wake just those waiting on this slot, so wake them
+      // all. Should be a rare event anyway.
+      cache.cvar.notify_all();
+    } else {
+        if (!slot->second) {
+            // Someone else is creating the initial entry, wait for them.
+            cache.cvar.wait(lock, [=] { return bool(slot->second); });
         }
-    });
+        ptr = slot->second.get();
+        TT_ASSERT(ptr->get_loading() == loading);
+    }
 
-    return (uint16_t)((max - min + 15) >> 4);
+    return *ptr;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
 // NOC coord is also synonymous to routing / physical coord
 // dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
 
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, const std::vector<uint32_t>& hex_vec, uint64_t addr, bool small_access) {
+void write_hex_vec_to_core(chip_id_t chip, const CoreCoord &core, tt::stl::Span<const uint8_t> hex_vec, uint64_t addr, bool small_access) {
     // the API is named "write_core", and its overloaded variant is taking (chip, core) pair, ie. it can write to
     // core's L1
-    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size() * sizeof(uint32_t), tt_cxy_pair(chip, core), addr, small_access);
+    tt::Cluster::instance().write_core(hex_vec.data(), hex_vec.size(), tt_cxy_pair(chip, core), addr, small_access);
 }
 
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
-    vector<std::uint32_t> read_hex_vec;
+std::vector<uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord &core, uint64_t addr, uint32_t sz_bytes) {
+    std::vector<uint32_t> read_hex_vec;
     tt::Cluster::instance().read_core(read_hex_vec, sz_bytes, tt_cxy_pair(chip, core), addr);
     return read_hex_vec;
 }
 
-CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &physical_core) {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
-    return soc_desc.get_logical_ethernet_core_from_physical(physical_core);
+CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, const CoreCoord &ethernet_core) {
+    return tt::Cluster::instance().get_logical_ethernet_core_from_virtual(chip_id, ethernet_core);
 }
 
-void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, uint64_t base_addr, bool send_go) {
+void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
 
     msg->kernel_config.mode = DISPATCH_MODE_HOST;
 
     uint64_t launch_addr = base_addr + offsetof(launch_msg_t, kernel_config);
-    uint64_t go_addr = base_addr + offsetof(launch_msg_t, go);
+    // TODO: Get this from the hal. Need to modify the write_launch_msg_to_core API to get the LM and Go signal addr from the hal.
+    uint64_t go_addr = base_addr + sizeof(launch_msg_t) * launch_msg_buffer_num_entries;
 
     tt::Cluster::instance().write_core((void *)&msg->kernel_config, sizeof(kernel_config_msg_t), tt_cxy_pair(chip, core), launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        tt::Cluster::instance().write_core((void *)&msg->go, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
+        tt::Cluster::instance().write_core(go_msg, sizeof(go_msg_t), tt_cxy_pair(chip, core), go_addr);
     }
-}
-
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, {0x1}, eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
 }
 
 void print_worker_cores(chip_id_t chip_id) {
@@ -180,62 +123,26 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
 
     ll_api::memory read_mem;
     read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
         tt::Cluster::instance().read_core(&*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
     });
     return read_mem;
 }
 
+bool test_load_write_read_risc_binary(
+    ll_api::memory const& mem,
+    chip_id_t chip_id,
+    const CoreCoord& core,
+    uint32_t core_type_idx,
+    uint32_t processor_class_idx,
+    uint32_t processor_type_idx) {
+    assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
-uint32_t generate_risc_startup_addr(bool is_eth_core) {
-    // Options for handling brisc fw not starting at mem[0]:
-    // 1) Program the register for the start address out of reset
-    // 2) Encode a jump in crt0 for mem[0]
-    // 3) Write the jump to mem[0] here
-    // This does #3.  #1 may be best, #2 gets messy (elf files
-    // drop any section before .init, crt0 needs ifdefs, etc)
-    constexpr uint32_t jal_opcode = 0x6f;
-    constexpr uint32_t jal_max_offset = 0x0007ffff;
-    uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
-    assert(firmware_base < jal_max_offset);
-    // See riscv spec for offset encoding below
-    uint32_t jal_offset_bit_20 = 0;
-    uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
-    uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
-    uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
-    uint32_t jal_offset =
-        jal_offset_bit_20 |
-        jal_offset_bits_10_to_1 |
-        jal_offset_bit_11 |
-        jal_offset_bits_19_to_12;
-
-    return jal_offset | opcode;
-}
-
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
-    vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(is_ethernet_core(core, chip_id)));
-    write_hex_vec_to_core(chip_id, core, jump_to_fw, 0);
-}
-
-bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int riscv_id) {
-    assert(is_worker_core(core, chip_id) or is_ethernet_core(core, chip_id));
-
-    uint64_t local_init_addr;
-    switch (riscv_id) {
-        case 0: local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE; break;
-        case 1: local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE; break;
-        case 2: local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE; break;
-        case 3: local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE; break;
-        case 4: local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE; break;
-        case 5: local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE; break;
-        case 6: local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE; break;
-    }
+    uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr = relocate_dev_addr(addr, local_init_addr);
+        uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
@@ -252,10 +159,11 @@ bool test_load_write_read_risc_binary(ll_api::memory &mem, chip_id_t chip_id, co
     return true;
 }
 
-bool test_load_write_read_trisc_binary(ll_api::memory &mem, chip_id_t chip_id, const CoreCoord &core, int triscv_id) {
-
-    assert(triscv_id >= 0 and triscv_id <= 2);
-    return test_load_write_read_risc_binary(mem, chip_id, core, triscv_id + 2);
+void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const CoreCoord& core, uint32_t address) {
+    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
+    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
+        tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
+    });
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
@@ -265,7 +173,7 @@ CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
 namespace internal_ {
 
 static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
-    bool is_eth_core = is_ethernet_core(core, chip_id);
+    bool is_eth_core = tt::Cluster::instance().is_ethernet_core(core, chip_id);
     bool is_active_eth_core = false;
     bool is_inactive_eth_core = false;
 
@@ -281,14 +189,14 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
 
     tt_metal::HalProgrammableCoreType dispatch_core_type =  is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH :
         is_inactive_eth_core ? tt_metal::HalProgrammableCoreType::IDLE_ETH : tt_metal::HalProgrammableCoreType::TENSIX;
-    uint64_t run_mailbox_addr = reinterpret_cast<uint64_t>(&tt_metal::hal.get_dev_addr<launch_msg_t *>(dispatch_core_type, tt_metal::HalMemAddrType::LAUNCH)->go.run);
+    uint64_t go_msg_addr = tt_metal::hal.get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    auto get_mailbox_is_done = [&](uint64_t run_mailbox_address) {
+    auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
         constexpr int RUN_MAILBOX_BOGUS = 3;
         std::vector<uint32_t> run_mailbox_read_val = {RUN_MAILBOX_BOGUS};
-        // read a single uint32_t even though launch.run is smaller than that
-        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, run_mailbox_address & ~0x3, sizeof(uint32_t));
-        uint8_t run = run_mailbox_read_val[0] >> (8 * (offsetof(launch_msg_t, go.run) & 3));
+        run_mailbox_read_val = read_hex_vec_from_core(chip_id, core, go_msg_addr & ~0x3, sizeof(uint32_t));
+        go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
+        uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
             fprintf(
                 stderr,
@@ -297,14 +205,13 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run_mailbox_read_val[0] == run_state || run_mailbox_read_val[0] == RUN_MSG_DONE,
+                run == run_state || run == RUN_MSG_DONE,
                 "Read unexpected run_mailbox value");
         }
 
         return run == RUN_MSG_DONE;
     };
-
-    return get_mailbox_is_done(run_mailbox_addr);
+    return get_mailbox_is_done(go_msg_addr);
 }
 
 void wait_until_cores_done(
@@ -312,6 +219,7 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
+    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -329,6 +237,7 @@ void wait_until_cores_done(
         // Print not-done cores
         if (loop_count % 1000 == 0) {
             log_debug(tt::LogMetal, "Not done phys cores: {}", fmt::join(not_done_phys_cores, " "));
+            usleep(100000);
         }
 
         for (auto it = not_done_phys_cores.begin(); it != not_done_phys_cores.end(); ) {
@@ -344,6 +253,12 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+        // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
+        // slow down for remote devices. So when debugging with these features, add a small delay to allow other
+        // host-driven transactions through.
+        if (llrt::RunTimeOptions::get_instance().get_watcher_enabled() ||
+            llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint))
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
 

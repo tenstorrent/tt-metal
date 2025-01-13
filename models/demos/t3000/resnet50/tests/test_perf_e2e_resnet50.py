@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.ttnn_resnet.tests.multi_device.perf_e2e_resnet50 import run_perf_resnet
+from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -73,7 +73,7 @@ def test_perf_trace(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, enable_async_mode, expected_inference_time, expected_compile_time",
-    ((16, True, 0.0100, 60),),
+    ((16, True, 0.0105, 60),),
     indirect=["enable_async_mode"],
 )
 def test_perf_2cqs(

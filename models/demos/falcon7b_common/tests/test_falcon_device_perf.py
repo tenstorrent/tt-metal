@@ -95,7 +95,7 @@ def test_device_perf_wh_bare_metal(
         ("prefill", 1, 2048, 0, "BFLOAT16-DRAM", 2680),
         ("decode", 32, 1, 128, "BFLOAT16-L1_SHARDED", 625),
         ("decode", 32, 1, 1024, "BFLOAT16-L1_SHARDED", 568),
-        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 511),
+        ("decode", 32, 1, 2047, "BFLOAT16-L1_SHARDED", 550),
     ),
 )
 @skip_for_grayskull()

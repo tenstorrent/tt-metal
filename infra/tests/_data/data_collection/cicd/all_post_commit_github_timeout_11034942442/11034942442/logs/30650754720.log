@@ -1,0 +1,1430 @@
+﻿2024-09-25T14:32:55.2310030Z Current runner version: '2.319.1'
+2024-09-25T14:32:55.2316654Z Runner name: 'tt-metal-ci-vm-34'
+2024-09-25T14:32:55.2317372Z Runner group name: 'Default'
+2024-09-25T14:32:55.2318317Z Machine name: 'tt-metal-ci-vm-34'
+2024-09-25T14:32:55.2334870Z Testing runner upgrade compatibility
+2024-09-25T14:32:55.2944306Z ##[group]GITHUB_TOKEN Permissions
+2024-09-25T14:32:55.2946427Z Actions: read
+2024-09-25T14:32:55.2946906Z Contents: read
+2024-09-25T14:32:55.2947395Z Metadata: read
+2024-09-25T14:32:55.2947810Z Packages: write
+2024-09-25T14:32:55.2948212Z Pages: write
+2024-09-25T14:32:55.2948702Z ##[endgroup]
+2024-09-25T14:32:55.2952033Z Secret source: Actions
+2024-09-25T14:32:55.2952729Z Prepare workflow directory
+2024-09-25T14:32:55.3928576Z Prepare all required actions
+2024-09-25T14:32:55.4117198Z Getting action download info
+2024-09-25T14:32:55.5990705Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-25T14:32:55.9662808Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2024-09-25T14:32:56.6409194Z Getting action download info
+2024-09-25T14:32:56.7852441Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-25T14:32:57.4144786Z Uses: tenstorrent/tt-metal/.github/workflows/fast-dispatch-build-and-unit-tests.yaml@refs/heads/npetrovic/new-sweeps-5 (3e1d154a7e9a4a41558eb2ee692b5ac91f974dc9)
+2024-09-25T14:32:57.4147763Z ##[group] Inputs
+2024-09-25T14:32:57.4148328Z   arch: wormhole_b0
+2024-09-25T14:32:57.4148823Z   runner-label: N300
+2024-09-25T14:32:57.4149953Z   timeout: 45
+2024-09-25T14:32:57.4150392Z ##[endgroup]
+2024-09-25T14:32:57.4151499Z Complete job name: fast-dispatch-unit-tests (wormhole_b0, N300) / eager trace tests wormhole_b0 N300
+2024-09-25T14:32:57.4847449Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-25T14:32:57.5008053Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/reset.sh'
+2024-09-25T14:32:57.5026425Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:32:57.5026992Z ##[endgroup]
+2024-09-25T14:32:57.5270323Z Current date / time is Wed Sep 25 14:32:57 UTC 2024
+2024-09-25T14:33:10.6211734Z tt-smi reset was successful
+2024-09-25T14:33:11.0232337Z 
+2024-09-25T14:33:11.0236165Z [95m Detected Chips: [93m1[0m
+2024-09-25T14:33:11.0246323Z [1A[J
+2024-09-25T14:33:11.0247580Z [95m Detected Chips: [93m1[0m
+2024-09-25T14:33:11.0248087Z 
+2024-09-25T14:33:11.0248914Z [94m Detecting ARC: [93m|[0m
+2024-09-25T14:33:11.0249253Z 
+2024-09-25T14:33:11.0249447Z [94m Detecting DRAM: [93m|[0m
+2024-09-25T14:33:11.0249715Z 
+2024-09-25T14:33:11.0249917Z  [95m[][94m [16/16] ETH: [93m|[0m
+2024-09-25T14:33:11.0253549Z [4A[J
+2024-09-25T14:33:11.0254302Z [95m Detected Chips: [93m2[0m
+2024-09-25T14:33:11.0356876Z [1A[J
+2024-09-25T14:33:11.0357526Z [95m Detected Chips: [93m2[0m
+2024-09-25T14:33:11.0358174Z 
+2024-09-25T14:33:11.0359634Z [94m Detecting ARC: [93m/[0m
+2024-09-25T14:33:11.0360075Z 
+2024-09-25T14:33:11.0360279Z [94m Detecting DRAM: [93m/[0m
+2024-09-25T14:33:11.0360543Z 
+2024-09-25T14:33:11.0360730Z  [95m[][94m [16/16] ETH: [93m/[0m
+2024-09-25T14:33:11.0406174Z [4A[J
+2024-09-25T14:33:11.0406538Z [95m Detected Chips: [93m3[0m
+2024-09-25T14:33:11.0491645Z [1A[J
+2024-09-25T14:33:11.0492267Z [95m Detected Chips: [93m3[0m
+2024-09-25T14:33:11.0492705Z 
+2024-09-25T14:33:11.0493011Z [94m Detecting ARC: [93m-[0m
+2024-09-25T14:33:11.0493312Z 
+2024-09-25T14:33:11.0493552Z [94m Detecting DRAM: [93m-[0m
+2024-09-25T14:33:11.0493826Z 
+2024-09-25T14:33:11.0494032Z  [95m[][94m [16/16] ETH: [93m-[0m
+2024-09-25T14:33:11.0518946Z [4A[J
+2024-09-25T14:33:11.0519396Z [95m Detected Chips: [93m2[0m
+2024-09-25T14:33:11.0612334Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2024-09-25T14:33:11.0622352Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2024-09-25T14:33:11.1060679Z {
+2024-09-25T14:33:11.1061751Z     "time": "2024-09-25T14:33:11.051844",
+2024-09-25T14:33:11.1063529Z     "host_info": {
+2024-09-25T14:33:11.1064109Z         "OS": "Linux",
+2024-09-25T14:33:11.1064678Z         "Distro": "Ubuntu 20.04.3 LTS",
+2024-09-25T14:33:11.1065482Z         "Kernel": "5.4.0-196-generic",
+2024-09-25T14:33:11.1066328Z         "Hostname": "tt-metal-ci-vm-34",
+2024-09-25T14:33:11.1067021Z         "Platform": "x86_64",
+2024-09-25T14:33:11.1067559Z         "Python": "3.8.10",
+2024-09-25T14:33:11.1068934Z         "Memory": "47.14 GB",
+2024-09-25T14:33:11.1069627Z         "Driver": "TTKMD 1.27.1"
+2024-09-25T14:33:11.1070147Z     },
+2024-09-25T14:33:11.1070752Z     "device_info": [
+2024-09-25T14:33:11.1071254Z         {
+2024-09-25T14:33:11.1071744Z             "smbus_telem": {
+2024-09-25T14:33:11.1072363Z                 "BOARD_ID": "0x10001451170c0e0",
+2024-09-25T14:33:11.1073071Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-25T14:33:11.1073800Z                 "SMBUS_TX_DEVICE_ID": "0x401e1e52",
+2024-09-25T14:33:11.1074456Z                 "SMBUS_TX_ASIC_RO": "0x2c6b5",
+2024-09-25T14:33:11.1075142Z                 "SMBUS_TX_ASIC_IDD": "0x872",
+2024-09-25T14:33:11.1075847Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000145",
+2024-09-25T14:33:11.1076806Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1170c0e0",
+2024-09-25T14:33:11.1077612Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1078489Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1079295Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-25T14:33:11.1079866Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1080429Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-25T14:33:11.1081017Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-25T14:33:11.1082475Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-25T14:33:11.1083085Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090000",
+2024-09-25T14:33:11.1083700Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-25T14:33:11.1084179Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-25T14:33:11.1084709Z                 "SMBUS_TX_ETH_STATUS0": "0x11111111",
+2024-09-25T14:33:11.1085209Z                 "SMBUS_TX_ETH_STATUS1": "0x11111133",
+2024-09-25T14:33:11.1085686Z                 "SMBUS_TX_PCIE_STATUS": "0x11040000",
+2024-09-25T14:33:11.1086120Z                 "SMBUS_TX_FAULTS": null,
+2024-09-25T14:33:11.1086543Z                 "SMBUS_TX_ARC0_HEALTH": "0xa63b",
+2024-09-25T14:33:11.1086996Z                 "SMBUS_TX_ARC1_HEALTH": "0x46ab",
+2024-09-25T14:33:11.1087435Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-25T14:33:11.1087862Z                 "SMBUS_TX_ARC3_HEALTH": "0x75",
+2024-09-25T14:33:11.1088324Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2024-09-25T14:33:11.1088783Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2024-09-25T14:33:11.1089216Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-25T14:33:11.1089631Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-25T14:33:11.1090068Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-25T14:33:11.1090488Z                 "SMBUS_TX_VCORE": "0x2d5",
+2024-09-25T14:33:11.1090949Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x3790372",
+2024-09-25T14:33:11.1091442Z                 "SMBUS_TX_VREG_TEMPERATURE": "0x350034",
+2024-09-25T14:33:11.1091938Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x2b2f2e",
+2024-09-25T14:33:11.1092402Z                 "SMBUS_TX_TDP": "0x55000e",
+2024-09-25T14:33:11.1095323Z                 "SMBUS_TX_TDC": "0xa00012",
+2024-09-25T14:33:11.1095764Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802d0",
+2024-09-25T14:33:11.1096220Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-25T14:33:11.1096675Z                 "SMBUS_TX_WH_FW_DATE": "0x4711141b",
+2024-09-25T14:33:11.1097135Z                 "SMBUS_TX_ASIC_TMON0": "0x3a39373a",
+2024-09-25T14:33:11.1097586Z                 "SMBUS_TX_ASIC_TMON1": "0x3830",
+2024-09-25T14:33:11.1098049Z                 "SMBUS_TX_MVDDQ_POWER": "0x19a884",
+2024-09-25T14:33:11.1098776Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2024-09-25T14:33:11.1099237Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2024-09-25T14:33:11.1099702Z                 "SMBUS_TX_BOOT_DATE": "0x49190e21",
+2024-09-25T14:33:11.1100151Z                 "SMBUS_TX_RT_SECONDS": "0xb",
+2024-09-25T14:33:11.1100583Z                 "SMBUS_TX_AUX_STATUS": null,
+2024-09-25T14:33:11.1101070Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccddddcc",
+2024-09-25T14:33:11.1101584Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xccdddd00",
+2024-09-25T14:33:11.1102082Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20100"
+2024-09-25T14:33:11.1102506Z             },
+2024-09-25T14:33:11.1102777Z             "board_info": {
+2024-09-25T14:33:11.1103123Z                 "bus_id": "0000:07:00.0",
+2024-09-25T14:33:11.1103539Z                 "board_type": "n300 L",
+2024-09-25T14:33:11.1103943Z                 "board_id": "010001451170c0e0",
+2024-09-25T14:33:11.1104364Z                 "coords": "(0, 0, 0, 0)",
+2024-09-25T14:33:11.1104760Z                 "dram_status": true,
+2024-09-25T14:33:11.1105138Z                 "dram_speed": "12G",
+2024-09-25T14:33:11.1105812Z                 "pcie_speed": 4,
+2024-09-25T14:33:11.1106177Z                 "pcie_width": 16
+2024-09-25T14:33:11.1106513Z             },
+2024-09-25T14:33:11.1106807Z             "telemetry": {
+2024-09-25T14:33:11.1107201Z                 "voltage": "0.72",
+2024-09-25T14:33:11.1107571Z                 "current": " 18.0",
+2024-09-25T14:33:11.1107969Z                 "power": " 14.0",
+2024-09-25T14:33:11.1108359Z                 "aiclk": " 500",
+2024-09-25T14:33:11.1108793Z                 "asic_temperature": "55.1"
+2024-09-25T14:33:11.1109209Z             },
+2024-09-25T14:33:11.1109646Z             "firmwares": {
+2024-09-25T14:33:11.1109988Z                 "arc_fw": "2.27.0.0",
+2024-09-25T14:33:11.1110550Z                 "arc_fw_date": "2024-07-17",
+2024-09-25T14:33:11.1111003Z                 "eth_fw": "6.9.0",
+2024-09-25T14:33:11.1111455Z                 "m3_bl_fw": "129.2.0.0",
+2024-09-25T14:33:11.1111908Z                 "m3_app_fw": "5.9.0.0",
+2024-09-25T14:33:11.1112380Z                 "tt_flash_version": "0.2.1.0"
+2024-09-25T14:33:11.1112799Z             },
+2024-09-25T14:33:11.1115090Z             "limits": {
+2024-09-25T14:33:11.1115473Z                 "vdd_min": "0.72",
+2024-09-25T14:33:11.1116101Z                 "vdd_max": "1.00",
+2024-09-25T14:33:11.1116476Z                 "tdp_limit": " 85",
+2024-09-25T14:33:11.1116862Z                 "tdc_limit": "160",
+2024-09-25T14:33:11.1117294Z                 "asic_fmax": "1000",
+2024-09-25T14:33:11.1117701Z                 "therm_trip_l1_limit": "83",
+2024-09-25T14:33:11.1118099Z                 "thm_limit": "75",
+2024-09-25T14:33:11.1118471Z                 "bus_peak_limit": null
+2024-09-25T14:33:11.1118843Z             }
+2024-09-25T14:33:11.1119159Z         },
+2024-09-25T14:33:11.1119454Z         {
+2024-09-25T14:33:11.1119783Z             "smbus_telem": {
+2024-09-25T14:33:11.1120216Z                 "BOARD_ID": "0x10001451170c0e0",
+2024-09-25T14:33:11.1120752Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-25T14:33:11.1121266Z                 "SMBUS_TX_DEVICE_ID": null,
+2024-09-25T14:33:11.1121765Z                 "SMBUS_TX_ASIC_RO": "0x2e327",
+2024-09-25T14:33:11.1122268Z                 "SMBUS_TX_ASIC_IDD": "0xaf7",
+2024-09-25T14:33:11.1122787Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000145",
+2024-09-25T14:33:11.1123284Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1170c0e0",
+2024-09-25T14:33:11.1125884Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1126374Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1126849Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-25T14:33:11.1127318Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x21b0000",
+2024-09-25T14:33:11.1127832Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": "0x30b0000",
+2024-09-25T14:33:11.1128471Z                 "SMBUS_TX_ETH_FW_VERSION": "0x69000",
+2024-09-25T14:33:11.1128961Z                 "SMBUS_TX_M3_BL_FW_VERSION": "0x81020000",
+2024-09-25T14:33:11.1129453Z                 "SMBUS_TX_M3_APP_FW_VERSION": "0x5090000",
+2024-09-25T14:33:11.1129921Z                 "SMBUS_TX_DDR_SPEED": null,
+2024-09-25T14:33:11.1130376Z                 "SMBUS_TX_DDR_STATUS": "0x2222222",
+2024-09-25T14:33:11.1130836Z                 "SMBUS_TX_ETH_STATUS0": "0x11111122",
+2024-09-25T14:33:11.1131350Z                 "SMBUS_TX_ETH_STATUS1": "0x11111111",
+2024-09-25T14:33:11.1131964Z                 "SMBUS_TX_PCIE_STATUS": null,
+2024-09-25T14:33:11.1132515Z                 "SMBUS_TX_FAULTS": null,
+2024-09-25T14:33:11.1133066Z                 "SMBUS_TX_ARC0_HEALTH": "0xa589",
+2024-09-25T14:33:11.1133672Z                 "SMBUS_TX_ARC1_HEALTH": "0x4664",
+2024-09-25T14:33:11.1134214Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-25T14:33:11.1134660Z                 "SMBUS_TX_ARC3_HEALTH": "0x74",
+2024-09-25T14:33:11.1135126Z                 "SMBUS_TX_FAN_SPEED": "0xffffffff",
+2024-09-25T14:33:11.1135580Z                 "SMBUS_TX_AICLK": "0x3e801f4",
+2024-09-25T14:33:11.1136010Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-25T14:33:11.1136439Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-25T14:33:11.1136856Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-25T14:33:11.1137275Z                 "SMBUS_TX_VCORE": "0x2da",
+2024-09-25T14:33:11.1137746Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x276026e",
+2024-09-25T14:33:11.1138297Z                 "SMBUS_TX_VREG_TEMPERATURE": "0x2a0029",
+2024-09-25T14:33:11.1138804Z                 "SMBUS_TX_BOARD_TEMPERATURE": "0x2b2f2e",
+2024-09-25T14:33:11.1139269Z                 "SMBUS_TX_TDP": "0x55000d",
+2024-09-25T14:33:11.1139830Z                 "SMBUS_TX_TDC": "0xa00010",
+2024-09-25T14:33:11.1140273Z                 "SMBUS_TX_VDD_LIMITS": "0x3e802d0",
+2024-09-25T14:33:11.1253124Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-25T14:33:11.1253778Z                 "SMBUS_TX_WH_FW_DATE": "0x4711141b",
+2024-09-25T14:33:11.1254283Z                 "SMBUS_TX_ASIC_TMON0": "0x292a2a24",
+2024-09-25T14:33:11.1254773Z                 "SMBUS_TX_ASIC_TMON1": "0x2226",
+2024-09-25T14:33:11.1255240Z                 "SMBUS_TX_MVDDQ_POWER": "0x193db6",
+2024-09-25T14:33:11.1255711Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2024-09-25T14:33:11.1256193Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2024-09-25T14:33:11.1256645Z                 "SMBUS_TX_BOOT_DATE": "0x49190e21",
+2024-09-25T14:33:11.1257097Z                 "SMBUS_TX_RT_SECONDS": "0xb",
+2024-09-25T14:33:11.1257539Z                 "SMBUS_TX_AUX_STATUS": null,
+2024-09-25T14:33:11.1258005Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": "0xccdddd00",
+2024-09-25T14:33:11.1258522Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": "0xdddddddd",
+2024-09-25T14:33:11.1259010Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20100"
+2024-09-25T14:33:11.1259440Z             },
+2024-09-25T14:33:11.1259724Z             "board_info": {
+2024-09-25T14:33:11.1260063Z                 "bus_id": "N/A",
+2024-09-25T14:33:11.1260439Z                 "board_type": "n300 R",
+2024-09-25T14:33:11.1260850Z                 "board_id": "010001451170c0e0",
+2024-09-25T14:33:11.1261269Z                 "coords": "(1, 0, 0, 0)",
+2024-09-25T14:33:11.1261660Z                 "dram_status": true,
+2024-09-25T14:33:11.1262029Z                 "dram_speed": "12G",
+2024-09-25T14:33:11.1262404Z                 "pcie_speed": "N/A",
+2024-09-25T14:33:11.1262785Z                 "pcie_width": "N/A"
+2024-09-25T14:33:11.1263134Z             },
+2024-09-25T14:33:11.1263412Z             "telemetry": {
+2024-09-25T14:33:11.1263750Z                 "voltage": "0.73",
+2024-09-25T14:33:11.1264117Z                 "current": " 16.0",
+2024-09-25T14:33:11.1264499Z                 "power": " 13.0",
+2024-09-25T14:33:11.1264868Z                 "aiclk": " 500",
+2024-09-25T14:33:11.1265273Z                 "asic_temperature": "38.9"
+2024-09-25T14:33:11.1265915Z             },
+2024-09-25T14:33:11.1266205Z             "firmwares": {
+2024-09-25T14:33:11.1266554Z                 "arc_fw": "2.27.0.0",
+2024-09-25T14:33:11.1267130Z                 "arc_fw_date": "2024-07-17",
+2024-09-25T14:33:11.1267526Z                 "eth_fw": "6.9.0",
+2024-09-25T14:33:11.1267896Z                 "m3_bl_fw": "129.2.0.0",
+2024-09-25T14:33:11.1268287Z                 "m3_app_fw": "5.9.0.0",
+2024-09-25T14:33:11.1268706Z                 "tt_flash_version": "0.2.1.0"
+2024-09-25T14:33:11.1269096Z             },
+2024-09-25T14:33:11.1269375Z             "limits": {
+2024-09-25T14:33:11.1269687Z                 "vdd_min": "0.72",
+2024-09-25T14:33:11.1270042Z                 "vdd_max": "1.00",
+2024-09-25T14:33:11.1270398Z                 "tdp_limit": " 85",
+2024-09-25T14:33:11.1270776Z                 "tdc_limit": "160",
+2024-09-25T14:33:11.1271147Z                 "asic_fmax": "1000",
+2024-09-25T14:33:11.1271552Z                 "therm_trip_l1_limit": "83",
+2024-09-25T14:33:11.1271952Z                 "thm_limit": "75",
+2024-09-25T14:33:11.1272338Z                 "bus_peak_limit": null
+2024-09-25T14:33:11.1272711Z             }
+2024-09-25T14:33:11.1272973Z         }
+2024-09-25T14:33:11.1273213Z     ]
+2024-09-25T14:33:11.1273493Z }Printing out cpu information...
+2024-09-25T14:33:11.1273905Z Architecture:                       x86_64
+2024-09-25T14:33:11.1274472Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-25T14:33:11.1274976Z Byte Order:                         Little Endian
+2024-09-25T14:33:11.1275529Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-25T14:33:11.1276200Z CPU(s):                             14
+2024-09-25T14:33:11.1276667Z On-line CPU(s) list:                0-13
+2024-09-25T14:33:11.1277088Z Thread(s) per core:                 1
+2024-09-25T14:33:11.1277587Z Core(s) per socket:                 1
+2024-09-25T14:33:11.1278017Z Socket(s):                          14
+2024-09-25T14:33:11.1278407Z NUMA node(s):                       2
+2024-09-25T14:33:11.1278842Z Vendor ID:                          AuthenticAMD
+2024-09-25T14:33:11.1279290Z CPU family:                         23
+2024-09-25T14:33:11.1279678Z Model:                              49
+2024-09-25T14:33:11.1280223Z Model name:                         AMD EPYC-Rome Processor
+2024-09-25T14:33:11.1280729Z Stepping:                           0
+2024-09-25T14:33:11.1281131Z CPU MHz:                            3000.000
+2024-09-25T14:33:11.1281564Z BogoMIPS:                           6000.00
+2024-09-25T14:33:11.1282011Z Virtualization:                     AMD-V
+2024-09-25T14:33:11.1282432Z Hypervisor vendor:                  KVM
+2024-09-25T14:33:11.1282847Z Virtualization type:                full
+2024-09-25T14:33:11.1283265Z L1d cache:                          448 KiB
+2024-09-25T14:33:11.1283756Z L1i cache:                          448 KiB
+2024-09-25T14:33:11.1284169Z L2 cache:                           7 MiB
+2024-09-25T14:33:11.1284581Z L3 cache:                           224 MiB
+2024-09-25T14:33:11.1285063Z NUMA node0 CPU(s):                  0-6
+2024-09-25T14:33:11.1285518Z NUMA node1 CPU(s):                  7-13
+2024-09-25T14:33:11.1285976Z Vulnerability Gather data sampling: Not affected
+2024-09-25T14:33:11.1286493Z Vulnerability Itlb multihit:        Not affected
+2024-09-25T14:33:11.1286993Z Vulnerability L1tf:                 Not affected
+2024-09-25T14:33:11.1287464Z Vulnerability Mds:                  Not affected
+2024-09-25T14:33:11.1287946Z Vulnerability Meltdown:             Not affected
+2024-09-25T14:33:11.1288457Z Vulnerability Mmio stale data:      Not affected
+2024-09-25T14:33:11.1288944Z Vulnerability Retbleed:             Vulnerable
+2024-09-25T14:33:11.1289710Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-25T14:33:11.1290819Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-25T14:33:11.1292262Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-25T14:33:11.1293376Z Vulnerability Srbds:                Not affected
+2024-09-25T14:33:11.1293880Z Vulnerability Tsx async abort:      Not affected
+2024-09-25T14:33:11.1297319Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-25T14:33:41.4741751Z /proc/cmdline is satisfactory, continuing with installation
+2024-09-25T14:33:41.4742434Z Huge pages is now set up
+2024-09-25T14:33:41.5316826Z Hugepage check passed!
+2024-09-25T14:33:41.5728958Z ##[group]Run tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+2024-09-25T14:33:41.5729736Z with:
+2024-09-25T14:33:41.5730150Z   token: ***
+2024-09-25T14:33:41.5730443Z   fetch-depth: 1
+2024-09-25T14:33:41.5730732Z env:
+2024-09-25T14:33:41.5730983Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:41.5731295Z ##[endgroup]
+2024-09-25T14:33:41.5967451Z ##[group]Run actions/checkout@v4
+2024-09-25T14:33:41.5967869Z with:
+2024-09-25T14:33:41.5968261Z   token: ***
+2024-09-25T14:33:41.5968558Z   fetch-depth: 1
+2024-09-25T14:33:41.5968869Z   lfs: true
+2024-09-25T14:33:41.5969138Z   submodules: recursive
+2024-09-25T14:33:41.5969464Z   clean: true
+2024-09-25T14:33:41.5969776Z   repository: tenstorrent/tt-metal
+2024-09-25T14:33:41.5970167Z   ssh-strict: true
+2024-09-25T14:33:41.5970454Z   ssh-user: git
+2024-09-25T14:33:41.5970755Z   persist-credentials: true
+2024-09-25T14:33:41.5971127Z   sparse-checkout-cone-mode: true
+2024-09-25T14:33:41.5971541Z   fetch-tags: false
+2024-09-25T14:33:41.5971895Z   show-progress: true
+2024-09-25T14:33:41.5972208Z   set-safe-directory: true
+2024-09-25T14:33:41.5972533Z env:
+2024-09-25T14:33:41.5972793Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:41.5973090Z ##[endgroup]
+2024-09-25T14:33:41.7125739Z Syncing repository: tenstorrent/tt-metal
+2024-09-25T14:33:41.7127774Z ##[group]Getting Git version info
+2024-09-25T14:33:41.7128682Z Working directory is '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal'
+2024-09-25T14:33:41.7129736Z [command]/usr/bin/git version
+2024-09-25T14:33:41.7130145Z git version 2.25.1
+2024-09-25T14:33:41.7131400Z [command]/usr/bin/git lfs version
+2024-09-25T14:33:41.7181374Z git-lfs/2.9.2 (GitHub; linux amd64; go 1.13.5)
+2024-09-25T14:33:41.7197431Z ##[endgroup]
+2024-09-25T14:33:41.7212732Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/090fb7cb-1c40-431f-b4c4-2d5ad2c47bed' before making global git config changes
+2024-09-25T14:33:41.7214165Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-25T14:33:41.7216135Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-25T14:33:41.7257093Z [command]/usr/bin/git config --local --get remote.origin.url
+2024-09-25T14:33:41.7281702Z https://github.com/tenstorrent/tt-metal
+2024-09-25T14:33:41.7296282Z ##[group]Removing previously created refs, to avoid conflicts
+2024-09-25T14:33:41.7299842Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2024-09-25T14:33:41.7324780Z refs/heads/bbradel-13058_bias
+2024-09-25T14:33:41.7333959Z [command]/usr/bin/git checkout --detach
+2024-09-25T14:33:41.8105319Z HEAD is now at aeab03d #13058: update matmul bias size validation
+2024-09-25T14:33:42.0383027Z [command]/usr/bin/git branch --delete --force bbradel-13058_bias
+2024-09-25T14:33:42.0410001Z Deleted branch bbradel-13058_bias (was aeab03d).
+2024-09-25T14:33:42.0471641Z ##[endgroup]
+2024-09-25T14:33:42.0473028Z [command]/usr/bin/git submodule status
+2024-09-25T14:33:42.0909783Z  7b11d073376b905b46edaa757f0bfde5c38a9636 models/demos/t3000/llama2_70b/reference/llama (heads/main)
+2024-09-25T14:33:42.0977184Z  2ba5a2973915aa1c5afbf6f1524e87e0c43bc058 tt_metal/third_party/lfs (heads/main)
+2024-09-25T14:33:42.1038843Z  b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84 tt_metal/third_party/pybind11 (b8f2855)
+2024-09-25T14:33:42.1103690Z  0719b7cd6867290736ebecaf4dbd2734224c691f tt_metal/third_party/sfpi (0719b7c)
+2024-09-25T14:33:42.1168535Z  7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85 tt_metal/third_party/taskflow (7d9e85b)
+2024-09-25T14:33:42.1231798Z  71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy (71d4c8d)
+2024-09-25T14:33:42.1296327Z  b3d5095528537db52e069b0daa54aaee2e609437 tt_metal/third_party/tt_llk_blackhole (b3d5095)
+2024-09-25T14:33:42.1355774Z  eda31ada422e8a7999d46823aa476e3487397093 tt_metal/third_party/tt_llk_grayskull (heads/main)
+2024-09-25T14:33:42.1418597Z  fefda7caec7452072fa84b1ce5046df7f9254246 tt_metal/third_party/tt_llk_wormhole_b0 (fefda7c)
+2024-09-25T14:33:42.1468972Z  f7b1ce0f6ed3101bdd4f1367145378a59996f07b tt_metal/third_party/umd (heads/main)
+2024-09-25T14:33:42.1482172Z ##[group]Cleaning the repository
+2024-09-25T14:33:42.1488373Z [command]/usr/bin/git clean -ffdx
+2024-09-25T14:33:43.7726972Z Removing .cache/
+2024-09-25T14:33:43.7727439Z Removing .local/
+2024-09-25T14:33:43.7728183Z Removing .pytest_cache/
+2024-09-25T14:33:43.7728921Z Removing .ttnn_runtime_artifacts/
+2024-09-25T14:33:43.7729476Z Removing __pycache__/
+2024-09-25T14:33:43.7730380Z Removing generated/
+2024-09-25T14:33:43.7731488Z Removing metal_libs-0.52.0rc33.dev7+wormhole.b0-cp38-cp38-linux_x86_64.whl
+2024-09-25T14:33:43.7732841Z Removing metal_libs-0.52.0rc33.dev7+wormhole.b0.tar.gz
+2024-09-25T14:33:43.7733607Z Removing models/__pycache__/
+2024-09-25T14:33:43.7734152Z Removing models/demos/bert/tt/__pycache__/
+2024-09-25T14:33:43.7734932Z Removing models/demos/metal_BERT_large_11/tt/__pycache__/
+2024-09-25T14:33:43.7735901Z Removing models/experimental/functional_common/__pycache__/
+2024-09-25T14:33:43.7736987Z Removing semicolon_delimited_script
+2024-09-25T14:33:43.7737566Z Removing tests/scripts/__pycache__/
+2024-09-25T14:33:43.7738306Z Removing tests/tt_eager/python_api_testing/sweep_tests/__pycache__/
+2024-09-25T14:33:43.7739339Z Removing tests/tt_eager/python_api_testing/unit_testing/misc/__pycache__/
+2024-09-25T14:33:43.7740186Z Removing tests/ttnn/__pycache__/
+2024-09-25T14:33:43.7741230Z Removing tests/ttnn/python_api_testing/sweep_tests/__pycache__/
+2024-09-25T14:33:43.7742056Z Removing tests/ttnn/unit_tests/__pycache__/
+2024-09-25T14:33:43.7742813Z Removing tests/ttnn/unit_tests/benchmarks/__pycache__/
+2024-09-25T14:33:43.7743840Z Removing tests/ttnn/unit_tests/operations/__pycache__/
+2024-09-25T14:33:43.7744712Z Removing tests/ttnn/unit_tests/operations/backward/__pycache__/
+2024-09-25T14:33:43.7745737Z Removing tests/ttnn/unit_tests/operations/backward/complex_ops/__pycache__/
+2024-09-25T14:33:43.7746754Z Removing tests/ttnn/unit_tests/operations/complex/__pycache__/
+2024-09-25T14:33:43.7760006Z [command]/usr/bin/git reset --hard HEAD
+2024-09-25T14:33:43.8104984Z HEAD is now at aeab03d #13058: update matmul bias size validation
+2024-09-25T14:33:43.8114174Z ##[endgroup]
+2024-09-25T14:33:43.8114810Z ##[group]Disabling automatic garbage collection
+2024-09-25T14:33:43.8118519Z [command]/usr/bin/git config --local gc.auto 0
+2024-09-25T14:33:43.8153950Z ##[endgroup]
+2024-09-25T14:33:43.8154698Z ##[group]Setting up auth
+2024-09-25T14:33:43.8158709Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-25T14:33:43.8196119Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-25T14:33:43.8437851Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:43.8478643Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:43.8518311Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:43.8556862Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:43.8594260Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:43.8637203Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:43.8673290Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:43.8707435Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:43.8743311Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:43.8782501Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:43.8823346Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:43.8878990Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-25T14:33:43.8899713Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-25T14:33:43.9093431Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:43.9130329Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:43.9166374Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:43.9203112Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:43.9243094Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:43.9285818Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:43.9325729Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:43.9363988Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:43.9402145Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:43.9438351Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:43.9472845Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:43.9524589Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-25T14:33:43.9553797Z ##[endgroup]
+2024-09-25T14:33:43.9556793Z [command]/usr/bin/git lfs install --local
+2024-09-25T14:33:43.9678720Z Updated git hooks.
+2024-09-25T14:33:43.9679140Z Git LFS initialized.
+2024-09-25T14:33:43.9691756Z ##[group]Fetching the repository
+2024-09-25T14:33:43.9700470Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +3e1d154a7e9a4a41558eb2ee692b5ac91f974dc9:refs/remotes/origin/npetrovic/new-sweeps-5
+2024-09-25T14:33:44.2969545Z ##[endgroup]
+2024-09-25T14:33:44.2970248Z ##[group]Determining the checkout info
+2024-09-25T14:33:44.2971179Z ##[endgroup]
+2024-09-25T14:33:44.2971774Z ##[group]Fetching LFS objects
+2024-09-25T14:33:44.2978725Z [command]/usr/bin/git lfs fetch origin refs/remotes/origin/npetrovic/new-sweeps-5
+2024-09-25T14:33:44.3106591Z fetch: Fetching reference refs/remotes/origin/npetrovic/new-sweeps-5
+2024-09-25T14:33:44.6825612Z ##[endgroup]
+2024-09-25T14:33:44.6826278Z ##[group]Checking out the ref
+2024-09-25T14:33:44.6831774Z [command]/usr/bin/git checkout --progress --force -B npetrovic/new-sweeps-5 refs/remotes/origin/npetrovic/new-sweeps-5
+2024-09-25T14:33:44.7058641Z Previous HEAD position was aeab03d #13058: update matmul bias size validation
+2024-09-25T14:33:44.7297923Z Switched to a new branch 'npetrovic/new-sweeps-5'
+2024-09-25T14:33:44.7298922Z Branch 'npetrovic/new-sweeps-5' set up to track remote branch 'npetrovic/new-sweeps-5' from 'origin'.
+2024-09-25T14:33:44.7758217Z ##[endgroup]
+2024-09-25T14:33:44.7758910Z ##[group]Setting up auth for fetching submodules
+2024-09-25T14:33:44.7763186Z [command]/usr/bin/git config --global http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2024-09-25T14:33:44.7793906Z [command]/usr/bin/git config --global --unset-all url.https://github.com/.insteadOf
+2024-09-25T14:33:44.7814034Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf git@github.com:
+2024-09-25T14:33:44.7840806Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf org-64161552@github.com:
+2024-09-25T14:33:44.7860651Z ##[endgroup]
+2024-09-25T14:33:44.7861743Z ##[group]Fetching submodules
+2024-09-25T14:33:44.7863964Z [command]/usr/bin/git submodule sync --recursive
+2024-09-25T14:33:44.8098797Z Synchronizing submodule url for 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:44.8115266Z Synchronizing submodule url for 'tt_metal/third_party/lfs'
+2024-09-25T14:33:44.8145271Z Synchronizing submodule url for 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:44.8174122Z Synchronizing submodule url for 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:44.8204741Z Synchronizing submodule url for 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:44.8238271Z Synchronizing submodule url for 'tt_metal/third_party/tracy'
+2024-09-25T14:33:44.8266399Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:44.8291695Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:44.8320451Z Synchronizing submodule url for 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:44.8349960Z Synchronizing submodule url for 'tt_metal/third_party/umd'
+2024-09-25T14:33:44.8376940Z Synchronizing submodule url for 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:44.8415044Z [command]/usr/bin/git -c protocol.version=2 submodule update --init --force --depth=1 --recursive
+2024-09-25T14:33:44.8849381Z Submodule path 'models/demos/t3000/llama2_70b/reference/llama': checked out '7b11d073376b905b46edaa757f0bfde5c38a9636'
+2024-09-25T14:33:44.9208106Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2024-09-25T14:33:44.9209358Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2024-09-25T14:33:44.9240909Z Submodule path 'tt_metal/third_party/lfs': checked out '2ba5a2973915aa1c5afbf6f1524e87e0c43bc058'
+2024-09-25T14:33:44.9492397Z Submodule path 'tt_metal/third_party/pybind11': checked out 'b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84'
+2024-09-25T14:33:44.9872074Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2024-09-25T14:33:44.9873189Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2024-09-25T14:33:44.9940323Z Submodule path 'tt_metal/third_party/sfpi': checked out '0719b7cd6867290736ebecaf4dbd2734224c691f'
+2024-09-25T14:33:45.0271013Z Submodule path 'tt_metal/third_party/taskflow': checked out '7d9e85b6b2e9bf501021f857f2f3cbe43bc37c85'
+2024-09-25T14:33:45.0558826Z Submodule path 'tt_metal/third_party/tracy': checked out '71d4c8d378b52af7da7012b9b595a61e9304f0bb'
+2024-09-25T14:33:45.0817522Z Submodule path 'tt_metal/third_party/tt_llk_blackhole': checked out 'b3d5095528537db52e069b0daa54aaee2e609437'
+2024-09-25T14:33:45.1034466Z Submodule path 'tt_metal/third_party/tt_llk_grayskull': checked out 'eda31ada422e8a7999d46823aa476e3487397093'
+2024-09-25T14:33:45.1274227Z Submodule path 'tt_metal/third_party/tt_llk_wormhole_b0': checked out 'fefda7caec7452072fa84b1ce5046df7f9254246'
+2024-09-25T14:33:45.1506569Z Submodule path 'tt_metal/third_party/umd': checked out 'f7b1ce0f6ed3101bdd4f1367145378a59996f07b'
+2024-09-25T14:33:45.1745031Z Submodule path 'tt_metal/third_party/umd/third_party/fmt': checked out 'b50e685db996c167e6c831dcef582aba6e14276a'
+2024-09-25T14:33:45.1805789Z [command]/usr/bin/git submodule foreach --recursive git config --local gc.auto 0
+2024-09-25T14:33:45.2015301Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.2051774Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.2090129Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.2127936Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.2166941Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.2211572Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.2248807Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.2286167Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.2323203Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.2360803Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.2398652Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:45.2440665Z ##[endgroup]
+2024-09-25T14:33:45.2441388Z ##[group]Persisting credentials for submodules
+2024-09-25T14:33:45.2445583Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'url\.https\:\/\/github\.com\/\.insteadOf' && git config --local --unset-all 'url.https://github.com/.insteadOf' || :"
+2024-09-25T14:33:45.2661869Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.2685855Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2686391Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2718832Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.2744155Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2744687Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2776809Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.2801231Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2801765Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2831383Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.2852865Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2853370Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2886582Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.2908879Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2909428Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2946512Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.2971699Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.2972246Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3003697Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.3026570Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3027086Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3056214Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.3080582Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3081142Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3112530Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.3132244Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3132779Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3165716Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.3190800Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3191303Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3220379Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:45.3241942Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3242466Z url.https://github.com/.insteadof
+2024-09-25T14:33:45.3288779Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local 'http.https://github.com/.extraheader' 'AUTHORIZATION: basic ***' && git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2024-09-25T14:33:45.3485238Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.3519808Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/models/demos/t3000/llama2_70b/reference/llama/config	remote.origin.url
+2024-09-25T14:33:45.3537371Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.3574271Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/third_party/lfs/config	remote.origin.url
+2024-09-25T14:33:45.3594263Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.3629199Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/third_party/pybind11/config	remote.origin.url
+2024-09-25T14:33:45.3649789Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.3688975Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/src/ckernels/sfpi/config	remote.origin.url
+2024-09-25T14:33:45.3707525Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.3743777Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/taskflow/config	remote.origin.url
+2024-09-25T14:33:45.3774082Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.3812448Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tracy/config	remote.origin.url
+2024-09-25T14:33:45.3835205Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.3871409Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_blackhole/config	remote.origin.url
+2024-09-25T14:33:45.3890810Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.3929597Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_grayskull/config	remote.origin.url
+2024-09-25T14:33:45.3948485Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.3979338Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_wormhole_b0/config	remote.origin.url
+2024-09-25T14:33:45.3996019Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.4028848Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/config	remote.origin.url
+2024-09-25T14:33:45.4048328Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:45.4085178Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/modules/third_party/fmt/config	remote.origin.url
+2024-09-25T14:33:45.4185519Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'git@github.com:'
+2024-09-25T14:33:45.4383862Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.4414810Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.4444896Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.4475020Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.4506775Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.4545113Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.4578560Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.4608254Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.4638433Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.4669582Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.4699771Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:45.4745906Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'org-64161552@github.com:'
+2024-09-25T14:33:45.4941942Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.4973180Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.5005584Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.5040089Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.5071790Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.5111066Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.5141950Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.5172319Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.5205026Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.5240857Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.5272786Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:33:45.5316444Z ##[endgroup]
+2024-09-25T14:33:45.5348379Z [command]/usr/bin/git log -1 --format='%H'
+2024-09-25T14:33:45.5371667Z '3e1d154a7e9a4a41558eb2ee692b5ac91f974dc9'
+2024-09-25T14:33:45.5529885Z ##[group]Run git clean -xffd
+2024-09-25T14:33:45.5530308Z [36;1mgit clean -xffd[0m
+2024-09-25T14:33:45.5546218Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:33:45.5546748Z env:
+2024-09-25T14:33:45.5547017Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:45.5547339Z ##[endgroup]
+2024-09-25T14:33:45.5777553Z ##[group]Run git submodule foreach 'git clean -xffd'
+2024-09-25T14:33:45.5778180Z [36;1mgit submodule foreach 'git clean -xffd'[0m
+2024-09-25T14:33:45.5799379Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:33:45.5800075Z env:
+2024-09-25T14:33:45.5800515Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:45.5801209Z ##[endgroup]
+2024-09-25T14:33:45.6049060Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.6067676Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.6095173Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.6119321Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.6161392Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.6238308Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:45.6266051Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:45.6289721Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:45.6312897Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:45.6333482Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:45.6400764Z ##[group]Run git submodule foreach 'git lfs fetch && git lfs pull'
+2024-09-25T14:33:45.6401565Z [36;1mgit submodule foreach 'git lfs fetch && git lfs pull'[0m
+2024-09-25T14:33:45.6420717Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:33:45.6421623Z env:
+2024-09-25T14:33:45.6421975Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:45.6422337Z ##[endgroup]
+2024-09-25T14:33:45.6660007Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:33:45.6758541Z fetch: Fetching reference HEAD
+2024-09-25T14:33:45.6954207Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:33:45.7039464Z fetch: Fetching reference HEAD
+2024-09-25T14:33:45.7243706Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:33:45.7344820Z fetch: Fetching reference HEAD
+2024-09-25T14:33:45.7633760Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:33:45.7727034Z fetch: Fetching reference HEAD
+2024-09-25T14:33:45.8247925Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:33:45.8339036Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.0924754Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:33:46.1017430Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.1493336Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:33:46.1582075Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.1797999Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:33:46.1879621Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.2088034Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:33:46.2176369Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.2559805Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:33:46.2649155Z fetch: Fetching reference HEAD
+2024-09-25T14:33:46.2985500Z ##[group]Run actions/download-artifact@v4
+2024-09-25T14:33:46.2986036Z with:
+2024-09-25T14:33:46.2986429Z   name: eager-dist-ubuntu-20.04-wormhole_b0
+2024-09-25T14:33:46.2986900Z   merge-multiple: false
+2024-09-25T14:33:46.2987308Z   repository: tenstorrent/tt-metal
+2024-09-25T14:33:46.2987741Z   run-id: 11034942442
+2024-09-25T14:33:46.2988091Z env:
+2024-09-25T14:33:46.2988394Z   LOGURU_LEVEL: INFO
+2024-09-25T14:33:46.2988741Z ##[endgroup]
+2024-09-25T14:33:46.5145940Z Downloading single artifact
+2024-09-25T14:33:46.7316706Z Preparing to download the following artifacts:
+2024-09-25T14:33:46.7317975Z - eager-dist-ubuntu-20.04-wormhole_b0 (ID: 1977385864, Size: 386958279)
+2024-09-25T14:33:46.8568685Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/101ea41c-5612-47ee-a28f-6f329a5ed1af/workflow-job-run-859c0d3c-fd64-581c-fe3c-861d137cb35a/artifacts/c779ac1f9e77fe53c03e8da7e3330fd4da5d41ee546476beea6fd41b88dd0784.zip
+2024-09-25T14:33:46.8571799Z Starting download of artifact to: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-25T14:33:47.1200469Z (node:1996522) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2024-09-25T14:33:47.1202740Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2024-09-25T14:34:00.7780877Z Artifact download completed successfully.
+2024-09-25T14:34:00.7781683Z Total of 1 artifact(s) downloaded
+2024-09-25T14:34:00.7791307Z Download artifact has finished successfully
+2024-09-25T14:34:00.8071466Z Prepare all required actions
+2024-09-25T14:34:00.8071975Z Getting action download info
+2024-09-25T14:34:00.9717138Z Download action repository 'docker/login-action@v3' (SHA:9780b0c442fbb1117ed29e0efdff1e18412f7567)
+2024-09-25T14:34:01.6990884Z Download action repository 'addnab/docker-run-action@v3' (SHA:4f65fabd2431ebc8d299f8e5a018d79a769ae185)
+2024-09-25T14:34:02.0402966Z ##[group]Run ./.github/actions/docker-run
+2024-09-25T14:34:02.0403411Z with:
+2024-09-25T14:34:02.0403708Z   install_wheel: true
+2024-09-25T14:34:02.0404243Z   docker_password: ***
+2024-09-25T14:34:02.0404766Z   run_args: pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
+
+2024-09-25T14:34:02.0405408Z   docker_os_arch: ubuntu-20.04-amd64
+2024-09-25T14:34:02.0405842Z   docker_username: npetrovic-tenstorrent
+2024-09-25T14:34:02.0406459Z   device: -v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+2024-09-25T14:34:02.0407068Z env:
+2024-09-25T14:34:02.0407353Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.0407719Z ##[endgroup]
+2024-09-25T14:34:02.0492430Z ##[group]Build container for action use: '/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile'.
+2024-09-25T14:34:02.0534921Z ##[command]/usr/bin/docker build -t a85e88:18a8b88117cf44eca8b51cf412284f49 -f "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3/Dockerfile" "/home/ubuntu/actions-runner/_work/_actions/addnab/docker-run-action/v3"
+2024-09-25T14:34:02.3618410Z #0 building with "default" instance using docker driver
+2024-09-25T14:34:02.3618906Z 
+2024-09-25T14:34:02.3619134Z #1 [internal] load build definition from Dockerfile
+2024-09-25T14:34:02.3619960Z #1 transferring dockerfile: 139B done
+2024-09-25T14:34:02.3620464Z #1 DONE 0.0s
+2024-09-25T14:34:02.3620664Z 
+2024-09-25T14:34:02.3620976Z #2 [internal] load metadata for docker.io/library/docker:20.10
+2024-09-25T14:34:02.5342607Z #2 DONE 0.3s
+2024-09-25T14:34:02.5702497Z 
+2024-09-25T14:34:02.5703169Z #3 [internal] load .dockerignore
+2024-09-25T14:34:02.5704375Z #3 transferring context: 2B done
+2024-09-25T14:34:02.5704810Z #3 DONE 0.0s
+2024-09-25T14:34:02.5705009Z 
+2024-09-25T14:34:02.5705603Z #4 [1/3] FROM docker.io/library/docker:20.10@sha256:2967f0819c84dd589ed0a023b9d25dcfe7a3c123d5bf784ffbb77edf55335f0c
+2024-09-25T14:34:02.5706500Z #4 DONE 0.0s
+2024-09-25T14:34:02.5706683Z 
+2024-09-25T14:34:02.5706829Z #5 [internal] load build context
+2024-09-25T14:34:02.5707284Z #5 transferring context: 35B done
+2024-09-25T14:34:02.5707712Z #5 DONE 0.0s
+2024-09-25T14:34:02.5707899Z 
+2024-09-25T14:34:02.5708064Z #6 [2/3] RUN apk add bash
+2024-09-25T14:34:02.5708412Z #6 CACHED
+2024-09-25T14:34:02.5708609Z 
+2024-09-25T14:34:02.5708781Z #7 [3/3] COPY entrypoint.sh /entrypoint.sh
+2024-09-25T14:34:02.5709497Z #7 CACHED
+2024-09-25T14:34:02.5709673Z 
+2024-09-25T14:34:02.5709839Z #8 exporting to image
+2024-09-25T14:34:02.5710199Z #8 exporting layers done
+2024-09-25T14:34:02.5710914Z #8 writing image sha256:1e9fc188bbcadf71c044d665bb0f632cb5647a790cea12e60686db892dbed659 done
+2024-09-25T14:34:02.5712150Z #8 naming to docker.io/library/a85e88:18a8b88117cf44eca8b51cf412284f49 done
+2024-09-25T14:34:02.5712804Z #8 DONE 0.0s
+2024-09-25T14:34:02.5780182Z ##[endgroup]
+2024-09-25T14:34:02.5817090Z Prepare all required actions
+2024-09-25T14:34:02.5895752Z ##[group]Run ./.github/actions/generate-docker-tag
+2024-09-25T14:34:02.5896223Z with:
+2024-09-25T14:34:02.5896518Z   image: ubuntu-20.04-amd64
+2024-09-25T14:34:02.5896871Z env:
+2024-09-25T14:34:02.5897144Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.5897457Z ##[endgroup]
+2024-09-25T14:34:02.5920773Z ##[group]Run if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+2024-09-25T14:34:02.5921396Z [36;1mif [[ "${GITHUB_REF_NAME}" == "main" ]]; then[0m
+2024-09-25T14:34:02.5921940Z [36;1m  echo "IMAGE_TAG=latest" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.5922413Z [36;1melse[0m
+2024-09-25T14:34:02.5922864Z [36;1m  echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.5923720Z [36;1mfi[0m
+2024-09-25T14:34:02.5941626Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:02.5942172Z env:
+2024-09-25T14:34:02.5942474Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.5942785Z ##[endgroup]
+2024-09-25T14:34:02.6028833Z ##[group]Run echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5" >> $GITHUB_ENV
+2024-09-25T14:34:02.6030578Z [36;1mecho "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.6032240Z [36;1mecho "TT_METAL_REF_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.6053710Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:02.6054276Z env:
+2024-09-25T14:34:02.6054644Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.6055053Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6055605Z ##[endgroup]
+2024-09-25T14:34:02.6132762Z ##[group]Run echo "IMAGE_TAG=dev-npetrovic-new-sweeps-5"
+2024-09-25T14:34:02.6133432Z [36;1mecho "IMAGE_TAG=dev-npetrovic-new-sweeps-5"[0m
+2024-09-25T14:34:02.6134500Z [36;1mecho "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5"[0m
+2024-09-25T14:34:02.6153256Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:02.6153755Z env:
+2024-09-25T14:34:02.6154037Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.6154401Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6155315Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6156654Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:02.6157327Z ##[endgroup]
+2024-09-25T14:34:02.6195994Z IMAGE_TAG=dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6197189Z TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6234293Z ##[group]Run echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+2024-09-25T14:34:02.6234901Z [36;1mecho "RUNNER_UID=$(id -u)" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.6235497Z [36;1mecho "RUNNER_GID=$(id -g)" >> $GITHUB_ENV[0m
+2024-09-25T14:34:02.6249268Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:02.6249795Z env:
+2024-09-25T14:34:02.6250147Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.6250587Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6251487Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6252644Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:02.6253601Z ##[endgroup]
+2024-09-25T14:34:02.6363345Z ##[group]Run docker/login-action@v3
+2024-09-25T14:34:02.6363732Z with:
+2024-09-25T14:34:02.6364016Z   registry: https://ghcr.io
+2024-09-25T14:34:02.6364558Z   username: npetrovic-tenstorrent
+2024-09-25T14:34:02.6365169Z   password: ***
+2024-09-25T14:34:02.6365453Z   ecr: auto
+2024-09-25T14:34:02.6365750Z   logout: true
+2024-09-25T14:34:02.6366056Z env:
+2024-09-25T14:34:02.6366318Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:02.6366653Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6367493Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:02.6368582Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:02.6369251Z   RUNNER_UID: 1000
+2024-09-25T14:34:02.6369547Z   RUNNER_GID: 1000
+2024-09-25T14:34:02.6369827Z ##[endgroup]
+2024-09-25T14:34:02.9358425Z Logging into https://ghcr.io...
+2024-09-25T14:34:03.3950401Z Login Succeeded!
+2024-09-25T14:34:03.4073833Z ##[group]Run docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.4075605Z [36;1mdocker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5[0m
+2024-09-25T14:34:03.4092176Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:03.4092708Z env:
+2024-09-25T14:34:03.4092993Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:03.4093373Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.4094222Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.4095308Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:03.4096005Z   RUNNER_UID: 1000
+2024-09-25T14:34:03.4096326Z   RUNNER_GID: 1000
+2024-09-25T14:34:03.4096651Z ##[endgroup]
+2024-09-25T14:34:03.9038072Z dev-npetrovic-new-sweeps-5: Pulling from tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64
+2024-09-25T14:34:03.9087473Z Digest: sha256:ae29090156ec646abe3e8e0cfa1280d8e80f5b11d1fb6b23d7667ee5ae312e35
+2024-09-25T14:34:03.9105694Z Status: Downloaded newer image for ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.9117728Z ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.9192556Z ##[group]Run addnab/docker-run-action@v3
+2024-09-25T14:34:03.9193019Z with:
+2024-09-25T14:34:03.9193313Z   shell: bash
+2024-09-25T14:34:03.9193652Z   username: npetrovic-tenstorrent
+2024-09-25T14:34:03.9194267Z   password: ***
+2024-09-25T14:34:03.9194616Z   registry: ghcr.io
+2024-09-25T14:34:03.9195262Z   image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.9198616Z   options: -u 1000:1000
+--rm
+-v /etc/passwd:/etc/passwd:ro
+-v /etc/shadow:/etc/shadow:ro
+-v /etc/bashrc:/etc/bashrc:ro
+-v /home/ubuntu/actions-runner/_work/tt-metal/tt-metal:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+--net=host
+
+-e LOGURU_LEVEL=INFO
+-e PYTHONPATH=/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+-e HOME=/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+-v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+-w /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+
+2024-09-25T14:34:03.9202179Z   run: if [ true ]; then
+  WHEEL_FILENAME=$(ls -1 *.whl)
+  pip3 install $WHEEL_FILENAME
+fi
+pytest tests/tt_eager/python_api_testing/trace_testing/ -xvvv
+
+
+2024-09-25T14:34:03.9203122Z env:
+2024-09-25T14:34:03.9203405Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:03.9203786Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.9204616Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:03.9205716Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:03.9206387Z   RUNNER_UID: 1000
+2024-09-25T14:34:03.9206787Z   RUNNER_GID: 1000
+2024-09-25T14:34:03.9207107Z ##[endgroup]
+2024-09-25T14:34:03.9470772Z ##[command]/usr/bin/docker run --name a85e8818a8b88117cf44eca8b51cf412284f49_af21c8 --label a85e88 --workdir /github/workspace --rm -e "LOGURU_LEVEL" -e "IMAGE_TAG" -e "TT_METAL_DOCKER_IMAGE_TAG" -e "TT_METAL_REF_IMAGE_TAG" -e "RUNNER_UID" -e "RUNNER_GID" -e "INPUT_SHELL" -e "INPUT_USERNAME" -e "INPUT_PASSWORD" -e "INPUT_REGISTRY" -e "INPUT_IMAGE" -e "INPUT_OPTIONS" -e "INPUT_RUN" -e "INPUT_DOCKER_NETWORK" -e "HOME" -e "GITHUB_JOB" -e "GITHUB_REF" -e "GITHUB_SHA" -e "GITHUB_REPOSITORY" -e "GITHUB_REPOSITORY_OWNER" -e "GITHUB_REPOSITORY_OWNER_ID" -e "GITHUB_RUN_ID" -e "GITHUB_RUN_NUMBER" -e "GITHUB_RETENTION_DAYS" -e "GITHUB_RUN_ATTEMPT" -e "GITHUB_REPOSITORY_ID" -e "GITHUB_ACTOR_ID" -e "GITHUB_ACTOR" -e "GITHUB_TRIGGERING_ACTOR" -e "GITHUB_WORKFLOW" -e "GITHUB_HEAD_REF" -e "GITHUB_BASE_REF" -e "GITHUB_EVENT_NAME" -e "GITHUB_SERVER_URL" -e "GITHUB_API_URL" -e "GITHUB_GRAPHQL_URL" -e "GITHUB_REF_NAME" -e "GITHUB_REF_PROTECTED" -e "GITHUB_REF_TYPE" -e "GITHUB_WORKFLOW_REF" -e "GITHUB_WORKFLOW_SHA" -e "GITHUB_WORKSPACE" -e "GITHUB_EVENT_PATH" -e "GITHUB_PATH" -e "GITHUB_ENV" -e "GITHUB_STEP_SUMMARY" -e "GITHUB_STATE" -e "GITHUB_OUTPUT" -e "GITHUB_ACTION" -e "GITHUB_ACTION_REPOSITORY" -e "GITHUB_ACTION_REF" -e "GITHUB_ACTION_PATH" -e "RUNNER_OS" -e "RUNNER_ARCH" -e "RUNNER_NAME" -e "RUNNER_ENVIRONMENT" -e "RUNNER_TOOL_CACHE" -e "RUNNER_TEMP" -e "RUNNER_WORKSPACE" -e "ACTIONS_RUNTIME_URL" -e "ACTIONS_RUNTIME_TOKEN" -e "ACTIONS_CACHE_URL" -e "ACTIONS_ID_TOKEN_REQUEST_URL" -e "ACTIONS_ID_TOKEN_REQUEST_TOKEN" -e "ACTIONS_RESULTS_URL" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/ubuntu/actions-runner/_work/_temp/_github_home":"/github/home" -v "/home/ubuntu/actions-runner/_work/_temp/_github_workflow":"/github/workflow" -v "/home/ubuntu/actions-runner/_work/_temp/_runner_file_commands":"/github/file_commands" -v "/home/ubuntu/actions-runner/_work/tt-metal/tt-metal":"/github/workspace" a85e88:18a8b88117cf44eca8b51cf412284f49
+2024-09-25T14:34:04.8975078Z WARNING! Your password will be stored unencrypted in /github/home/.docker/config.json.
+2024-09-25T14:34:04.8976016Z Configure a credential helper to remove this warning. See
+2024-09-25T14:34:04.8977269Z https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+2024-09-25T14:34:04.8977781Z 
+2024-09-25T14:34:04.8979542Z Login Succeeded
+2024-09-25T14:34:05.8518248Z Processing ./metal_libs-0.52.0rc33.dev9+wormhole.b0-cp38-cp38-linux_x86_64.whl
+2024-09-25T14:34:10.3713022Z Collecting Pillow==10.3.0
+2024-09-25T14:34:10.4049711Z   Downloading pillow-10.3.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.4 MB)
+2024-09-25T14:34:10.5750968Z Requirement already satisfied: torch==2.2.1+cpu in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.2.1+cpu)
+2024-09-25T14:34:10.6663390Z Collecting dash==2.15.0
+2024-09-25T14:34:10.6750699Z   Downloading dash-2.15.0-py3-none-any.whl (10.2 MB)
+2024-09-25T14:34:11.0414055Z Requirement already satisfied: pyyaml>=5.4 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (6.0.2)
+2024-09-25T14:34:11.0918203Z Collecting loguru==0.6.0
+2024-09-25T14:34:11.0985214Z   Downloading loguru-0.6.0-py3-none-any.whl (58 kB)
+2024-09-25T14:34:11.1403223Z Requirement already satisfied: pandas==2.0.3 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.0.3)
+2024-09-25T14:34:11.2240193Z Requirement already satisfied: numpy<2,>=1.24.4 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.24.4)
+2024-09-25T14:34:11.5163717Z Collecting jupyterlab==4.2.5
+2024-09-25T14:34:11.5243620Z   Downloading jupyterlab-4.2.5-py3-none-any.whl (11.6 MB)
+2024-09-25T14:34:12.0491369Z Collecting ipywidgets==8.1.1
+2024-09-25T14:34:12.0565598Z   Downloading ipywidgets-8.1.1-py3-none-any.whl (139 kB)
+2024-09-25T14:34:12.2287952Z Collecting plotly==5.18.0
+2024-09-25T14:34:12.2377170Z   Downloading plotly-5.18.0-py3-none-any.whl (15.6 MB)
+2024-09-25T14:34:14.0143473Z Requirement already satisfied: click==8.1.7 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (8.1.7)
+2024-09-25T14:34:14.0160971Z Requirement already satisfied: networkx==3.1 in /usr/local/lib/python3.8/dist-packages (from metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.1)
+2024-09-25T14:34:14.1581299Z Collecting bokeh==3.1.1
+2024-09-25T14:34:14.1705128Z   Downloading bokeh-3.1.1-py3-none-any.whl (8.3 MB)
+2024-09-25T14:34:14.5951089Z Collecting seaborn==0.13.2
+2024-09-25T14:34:14.6018107Z   Downloading seaborn-0.13.2-py3-none-any.whl (294 kB)
+2024-09-25T14:34:14.7172731Z Collecting toolz==0.12.0
+2024-09-25T14:34:14.7241165Z   Downloading toolz-0.12.0-py3-none-any.whl (55 kB)
+2024-09-25T14:34:14.8220328Z Collecting graphviz==0.20.3
+2024-09-25T14:34:14.8289661Z   Downloading graphviz-0.20.3-py3-none-any.whl (47 kB)
+2024-09-25T14:34:15.3412294Z Collecting matplotlib==3.7.1
+2024-09-25T14:34:15.3539677Z   Downloading matplotlib-3.7.1-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (9.2 MB)
+2024-09-25T14:34:15.6220494Z Requirement already satisfied: jinja2 in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.1.4)
+2024-09-25T14:34:15.6238756Z Requirement already satisfied: fsspec in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2023.9.2)
+2024-09-25T14:34:15.6559658Z Requirement already satisfied: sympy in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.13.3)
+2024-09-25T14:34:15.6589339Z Requirement already satisfied: filelock in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.16.1)
+2024-09-25T14:34:15.6685786Z Requirement already satisfied: typing-extensions>=4.8.0 in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (4.12.2)
+2024-09-25T14:34:15.7453999Z Collecting dash-core-components==2.0.0
+2024-09-25T14:34:15.7518567Z   Downloading dash_core_components-2.0.0-py3-none-any.whl (3.8 kB)
+2024-09-25T14:34:15.8012363Z Requirement already satisfied: importlib-metadata; python_version >= "3.7" in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (8.5.0)
+2024-09-25T14:34:15.8863425Z Collecting Flask<3.1,>=1.0.4
+2024-09-25T14:34:15.8934540Z   Downloading flask-3.0.3-py3-none-any.whl (101 kB)
+2024-09-25T14:34:15.9306864Z Requirement already satisfied: requests in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.32.3)
+2024-09-25T14:34:15.9980707Z Collecting nest-asyncio
+2024-09-25T14:34:16.0044636Z   Downloading nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
+2024-09-25T14:34:16.0309731Z Requirement already satisfied: setuptools in /usr/lib/python3/dist-packages (from dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (45.2.0)
+2024-09-25T14:34:16.0717122Z Collecting retrying
+2024-09-25T14:34:16.0781360Z   Downloading retrying-1.3.4-py3-none-any.whl (11 kB)
+2024-09-25T14:34:16.1963335Z Collecting Werkzeug<3.1
+2024-09-25T14:34:16.2027143Z   Downloading werkzeug-3.0.4-py3-none-any.whl (227 kB)
+2024-09-25T14:34:16.2877824Z Collecting dash-table==5.0.0
+2024-09-25T14:34:16.2942046Z   Downloading dash_table-5.0.0-py3-none-any.whl (3.9 kB)
+2024-09-25T14:34:16.3701566Z Collecting dash-html-components==2.0.0
+2024-09-25T14:34:16.3765301Z   Downloading dash_html_components-2.0.0-py3-none-any.whl (4.1 kB)
+2024-09-25T14:34:16.4035572Z Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2024.2)
+2024-09-25T14:34:16.4051969Z Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.9.0.post0)
+2024-09-25T14:34:16.4069582Z Requirement already satisfied: tzdata>=2022.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2024.2)
+2024-09-25T14:34:16.4077167Z Requirement already satisfied: packaging in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (24.1)
+2024-09-25T14:34:16.4809586Z Collecting httpx>=0.25.0
+2024-09-25T14:34:16.4876057Z   Downloading httpx-0.27.2-py3-none-any.whl (76 kB)
+2024-09-25T14:34:16.5702730Z Collecting async-lru>=1.0.0
+2024-09-25T14:34:16.5768202Z   Downloading async_lru-2.0.4-py3-none-any.whl (6.1 kB)
+2024-09-25T14:34:16.6057652Z Requirement already satisfied: importlib-resources>=1.4; python_version < "3.9" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (6.4.5)
+2024-09-25T14:34:16.6173941Z Requirement already satisfied: jupyter-core in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (5.7.2)
+2024-09-25T14:34:16.7476899Z Collecting jupyter-server<3,>=2.4.0
+2024-09-25T14:34:16.7547813Z   Downloading jupyter_server-2.14.2-py3-none-any.whl (383 kB)
+2024-09-25T14:34:16.8294744Z Requirement already satisfied: tomli>=1.2.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.0.1)
+2024-09-25T14:34:16.9307702Z Collecting jupyterlab-server<3,>=2.27.1
+2024-09-25T14:34:16.9367279Z   Downloading jupyterlab_server-2.27.3-py3-none-any.whl (59 kB)
+2024-09-25T14:34:16.9878575Z Requirement already satisfied: tornado>=6.2.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (6.4.1)
+2024-09-25T14:34:17.0326013Z Collecting notebook-shim>=0.2
+2024-09-25T14:34:17.0391956Z   Downloading notebook_shim-0.2.4-py3-none-any.whl (13 kB)
+2024-09-25T14:34:17.0701722Z Requirement already satisfied: traitlets in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (5.14.3)
+2024-09-25T14:34:17.2085428Z Collecting ipykernel>=6.5.0
+2024-09-25T14:34:17.2156302Z   Downloading ipykernel-6.29.5-py3-none-any.whl (117 kB)
+2024-09-25T14:34:17.3209178Z Collecting jupyter-lsp>=2.0.0
+2024-09-25T14:34:17.3277698Z   Downloading jupyter_lsp-2.2.5-py3-none-any.whl (69 kB)
+2024-09-25T14:34:17.4073831Z Collecting comm>=0.1.3
+2024-09-25T14:34:17.4144933Z   Downloading comm-0.2.2-py3-none-any.whl (7.2 kB)
+2024-09-25T14:34:17.5364576Z Collecting widgetsnbextension~=4.0.9
+2024-09-25T14:34:17.5447641Z   Downloading widgetsnbextension-4.0.13-py3-none-any.whl (2.3 MB)
+2024-09-25T14:34:17.6323730Z Requirement already satisfied: ipython>=6.1.0 in /usr/local/lib/python3.8/dist-packages (from ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (8.12.3)
+2024-09-25T14:34:17.7505343Z Collecting jupyterlab-widgets~=3.0.9
+2024-09-25T14:34:17.7575312Z   Downloading jupyterlab_widgets-3.0.13-py3-none-any.whl (214 kB)
+2024-09-25T14:34:17.8534159Z Collecting tenacity>=6.2.0
+2024-09-25T14:34:17.8600591Z   Downloading tenacity-9.0.0-py3-none-any.whl (28 kB)
+2024-09-25T14:34:17.9454270Z Collecting xyzservices>=2021.09.1
+2024-09-25T14:34:17.9519526Z   Downloading xyzservices-2024.9.0-py3-none-any.whl (85 kB)
+2024-09-25T14:34:17.9840601Z Requirement already satisfied: contourpy>=1 in /usr/local/lib/python3.8/dist-packages (from bokeh==3.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.1.1)
+2024-09-25T14:34:17.9965994Z Requirement already satisfied: kiwisolver>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.4.7)
+2024-09-25T14:34:17.9978775Z Requirement already satisfied: fonttools>=4.22.0 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (4.54.0)
+2024-09-25T14:34:18.0286783Z Requirement already satisfied: pyparsing>=2.3.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.1.4)
+2024-09-25T14:34:18.0310717Z Requirement already satisfied: cycler>=0.10 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.12.1)
+2024-09-25T14:34:18.0360812Z Requirement already satisfied: MarkupSafe>=2.0 in /usr/local/lib/python3.8/dist-packages (from jinja2->torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.1.5)
+2024-09-25T14:34:18.0375909Z Requirement already satisfied: mpmath<1.4,>=1.1.0 in /usr/local/lib/python3.8/dist-packages (from sympy->torch==2.2.1+cpu->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.3.0)
+2024-09-25T14:34:18.0442226Z Requirement already satisfied: zipp>=3.20 in /usr/local/lib/python3.8/dist-packages (from importlib-metadata; python_version >= "3.7"->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.20.2)
+2024-09-25T14:34:18.1047324Z Collecting itsdangerous>=2.1.2
+2024-09-25T14:34:18.1113647Z   Downloading itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+2024-09-25T14:34:18.1835601Z Collecting blinker>=1.6.2
+2024-09-25T14:34:18.1904625Z   Downloading blinker-1.8.2-py3-none-any.whl (9.5 kB)
+2024-09-25T14:34:18.2173233Z Requirement already satisfied: certifi>=2017.4.17 in /usr/lib/python3/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2019.11.28)
+2024-09-25T14:34:18.2184072Z Requirement already satisfied: idna<4,>=2.5 in /usr/lib/python3/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.8)
+2024-09-25T14:34:18.2200557Z Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.2.3)
+2024-09-25T14:34:18.2254526Z Requirement already satisfied: charset-normalizer<4,>=2 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.3.2)
+2024-09-25T14:34:18.2273706Z Requirement already satisfied: six>=1.7.0 in /usr/lib/python3/dist-packages (from retrying->dash==2.15.0->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.14.0)
+2024-09-25T14:34:18.2691059Z Collecting sniffio
+2024-09-25T14:34:18.2758586Z   Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
+2024-09-25T14:34:18.3738262Z Collecting anyio
+2024-09-25T14:34:18.3804670Z   Downloading anyio-4.5.0-py3-none-any.whl (89 kB)
+2024-09-25T14:34:18.4942147Z Collecting httpcore==1.*
+2024-09-25T14:34:18.5007608Z   Downloading httpcore-1.0.5-py3-none-any.whl (77 kB)
+2024-09-25T14:34:18.5365623Z Requirement already satisfied: platformdirs>=2.5 in /usr/local/lib/python3.8/dist-packages (from jupyter-core->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.11.0)
+2024-09-25T14:34:18.5442357Z Requirement already satisfied: jupyter-client>=7.4.4 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (8.6.3)
+2024-09-25T14:34:18.6411709Z Collecting argon2-cffi>=21.1
+2024-09-25T14:34:18.6480426Z   Downloading argon2_cffi-23.1.0-py3-none-any.whl (15 kB)
+2024-09-25T14:34:18.7482475Z Collecting jupyter-server-terminals>=0.4.4
+2024-09-25T14:34:18.7548718Z   Downloading jupyter_server_terminals-0.5.3-py3-none-any.whl (13 kB)
+2024-09-25T14:34:18.8371160Z Collecting send2trash>=1.8.2
+2024-09-25T14:34:18.8437224Z   Downloading Send2Trash-1.8.3-py3-none-any.whl (18 kB)
+2024-09-25T14:34:18.9346232Z Collecting terminado>=0.8.3
+2024-09-25T14:34:18.9411177Z   Downloading terminado-0.18.1-py3-none-any.whl (14 kB)
+2024-09-25T14:34:18.9758149Z Requirement already satisfied: pyzmq>=24 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (26.2.0)
+2024-09-25T14:34:18.9776748Z Requirement already satisfied: nbformat>=5.3.0 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (5.10.4)
+2024-09-25T14:34:19.0423316Z Collecting overrides>=5.0
+2024-09-25T14:34:19.0491517Z   Downloading overrides-7.7.0-py3-none-any.whl (17 kB)
+2024-09-25T14:34:19.0777323Z Requirement already satisfied: nbconvert>=6.4.4 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (7.16.4)
+2024-09-25T14:34:19.1498997Z Collecting jupyter-events>=0.9.0
+2024-09-25T14:34:19.1568601Z   Downloading jupyter_events-0.10.0-py3-none-any.whl (18 kB)
+2024-09-25T14:34:19.2527199Z Collecting prometheus-client>=0.9
+2024-09-25T14:34:19.2592976Z   Downloading prometheus_client-0.21.0-py3-none-any.whl (54 kB)
+2024-09-25T14:34:19.3571744Z Collecting websocket-client>=1.7
+2024-09-25T14:34:19.3638546Z   Downloading websocket_client-1.8.0-py3-none-any.whl (58 kB)
+2024-09-25T14:34:19.4584775Z Collecting json5>=0.9.0
+2024-09-25T14:34:19.4652128Z   Downloading json5-0.9.25-py3-none-any.whl (30 kB)
+2024-09-25T14:34:19.4944441Z Requirement already satisfied: babel>=2.10 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.16.0)
+2024-09-25T14:34:19.4986081Z Requirement already satisfied: jsonschema>=4.18.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (4.23.0)
+2024-09-25T14:34:19.5138119Z Requirement already satisfied: matplotlib-inline>=0.1 in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.1.7)
+2024-09-25T14:34:19.8729699Z Collecting debugpy>=1.6.5
+2024-09-25T14:34:19.8816833Z   Downloading debugpy-1.8.6-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.6 MB)
+2024-09-25T14:34:20.0664824Z Requirement already satisfied: psutil in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (6.0.0)
+2024-09-25T14:34:20.0731901Z Requirement already satisfied: decorator in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (5.1.1)
+2024-09-25T14:34:20.0745752Z Requirement already satisfied: jedi>=0.16 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.19.1)
+2024-09-25T14:34:20.0969191Z Requirement already satisfied: prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.0.47)
+2024-09-25T14:34:20.0985856Z Requirement already satisfied: stack-data in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.6.3)
+2024-09-25T14:34:20.1046313Z Requirement already satisfied: pexpect>4.3; sys_platform != "win32" in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (4.9.0)
+2024-09-25T14:34:20.1062714Z Requirement already satisfied: pickleshare in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.7.5)
+2024-09-25T14:34:20.1078653Z Requirement already satisfied: backcall in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.2.0)
+2024-09-25T14:34:20.1089396Z Requirement already satisfied: pygments>=2.4.0 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.18.0)
+2024-09-25T14:34:20.1112143Z Requirement already satisfied: exceptiongroup>=1.0.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from anyio->httpx>=0.25.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.2.2)
+2024-09-25T14:34:20.1577419Z Collecting h11<0.15,>=0.13
+2024-09-25T14:34:20.1646369Z   Downloading h11-0.14.0-py3-none-any.whl (58 kB)
+2024-09-25T14:34:20.2437537Z Collecting argon2-cffi-bindings
+2024-09-25T14:34:20.2508180Z   Downloading argon2_cffi_bindings-21.2.0-cp36-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (86 kB)
+2024-09-25T14:34:20.2832876Z Requirement already satisfied: ptyprocess; os_name != "nt" in /usr/local/lib/python3.8/dist-packages (from terminado>=0.8.3->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.7.0)
+2024-09-25T14:34:20.2843655Z Requirement already satisfied: fastjsonschema>=2.15 in /usr/local/lib/python3.8/dist-packages (from nbformat>=5.3.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.20.0)
+2024-09-25T14:34:20.2897011Z Requirement already satisfied: nbclient>=0.5.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.10.0)
+2024-09-25T14:34:20.3037412Z Requirement already satisfied: beautifulsoup4 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (4.12.3)
+2024-09-25T14:34:20.3084469Z Requirement already satisfied: bleach!=5.0.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (6.1.0)
+2024-09-25T14:34:20.3126144Z Requirement already satisfied: jupyterlab-pygments in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.3.0)
+2024-09-25T14:34:20.3136926Z Requirement already satisfied: tinycss2 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.3.0)
+2024-09-25T14:34:20.3175654Z Requirement already satisfied: defusedxml in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.7.1)
+2024-09-25T14:34:20.3198365Z Requirement already satisfied: pandocfilters>=1.4.1 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.5.1)
+2024-09-25T14:34:20.3214667Z Requirement already satisfied: mistune<4,>=2.0.3 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (3.0.2)
+2024-09-25T14:34:20.3226495Z Requirement already satisfied: referencing in /usr/local/lib/python3.8/dist-packages (from jupyter-events>=0.9.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.35.1)
+2024-09-25T14:34:20.3668243Z Collecting rfc3339-validator
+2024-09-25T14:34:20.3736445Z   Downloading rfc3339_validator-0.1.4-py2.py3-none-any.whl (3.5 kB)
+2024-09-25T14:34:20.4460365Z Collecting python-json-logger>=2.0.4
+2024-09-25T14:34:20.4527684Z   Downloading python_json_logger-2.0.7-py3-none-any.whl (8.1 kB)
+2024-09-25T14:34:20.5208818Z Collecting rfc3986-validator>=0.1.1
+2024-09-25T14:34:20.5275270Z   Downloading rfc3986_validator-0.1.1-py2.py3-none-any.whl (4.2 kB)
+2024-09-25T14:34:20.5544709Z Requirement already satisfied: attrs>=22.2.0 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (24.2.0)
+2024-09-25T14:34:20.5922689Z Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2023.12.1)
+2024-09-25T14:34:20.5959730Z Requirement already satisfied: pkgutil-resolve-name>=1.3.10; python_version < "3.9" in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.3.10)
+2024-09-25T14:34:20.5972309Z Requirement already satisfied: rpds-py>=0.7.1 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.20.0)
+2024-09-25T14:34:20.5985451Z Requirement already satisfied: parso<0.9.0,>=0.8.3 in /usr/local/lib/python3.8/dist-packages (from jedi>=0.16->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.8.4)
+2024-09-25T14:34:20.6027409Z Requirement already satisfied: wcwidth in /usr/local/lib/python3.8/dist-packages (from prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.2.13)
+2024-09-25T14:34:20.6050325Z Requirement already satisfied: asttokens>=2.1.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.4.1)
+2024-09-25T14:34:20.6127026Z Requirement already satisfied: pure-eval in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.2.3)
+2024-09-25T14:34:20.6146215Z Requirement already satisfied: executing>=1.2.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.1.0)
+2024-09-25T14:34:20.6202523Z Requirement already satisfied: cffi>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (1.17.1)
+2024-09-25T14:34:20.6217221Z Requirement already satisfied: soupsieve>1.2 in /usr/local/lib/python3.8/dist-packages (from beautifulsoup4->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.6)
+2024-09-25T14:34:20.6229762Z Requirement already satisfied: webencodings in /usr/local/lib/python3.8/dist-packages (from bleach!=5.0.0->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (0.5.1)
+2024-09-25T14:34:20.6239187Z Requirement already satisfied: pycparser in /usr/local/lib/python3.8/dist-packages (from cffi>=1.0.1->argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->metal-libs==0.52.0rc33.dev9+wormhole.b0) (2.22)
+2024-09-25T14:34:22.2555665Z Installing collected packages: Pillow, dash-core-components, tenacity, plotly, Werkzeug, itsdangerous, blinker, Flask, nest-asyncio, retrying, dash-table, dash-html-components, dash, loguru, sniffio, anyio, h11, httpcore, httpx, async-lru, argon2-cffi-bindings, argon2-cffi, terminado, jupyter-server-terminals, send2trash, overrides, rfc3339-validator, python-json-logger, rfc3986-validator, jupyter-events, prometheus-client, websocket-client, jupyter-server, json5, jupyterlab-server, notebook-shim, debugpy, comm, ipykernel, jupyter-lsp, jupyterlab, widgetsnbextension, jupyterlab-widgets, ipywidgets, xyzservices, bokeh, matplotlib, seaborn, toolz, graphviz, metal-libs
+2024-09-25T14:34:31.7133510Z   WARNING: The script flask is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:31.7135033Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.1279044Z   WARNING: The scripts dash-generate-components, dash-update-components and renderer are installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.1280955Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.3767428Z   WARNING: The script httpx is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.3768935Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.4304596Z   WARNING: The script send2trash is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.4306201Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.4660515Z   WARNING: The script jupyter-events is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.4662072Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.5361690Z   WARNING: The script wsdump is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.5363176Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.6670037Z   WARNING: The script jupyter-server is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.6671571Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:32.6885097Z   WARNING: The script pyjson5 is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:32.6887137Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:33.3587016Z   WARNING: The script debugpy is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:33.3588656Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:33.9860042Z   WARNING: The scripts jlpm, jupyter-lab, jupyter-labextension and jupyter-labhub are installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:33.9861765Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:34.9424000Z   WARNING: The script bokeh is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2024-09-25T14:34:34.9425554Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2024-09-25T14:34:43.8926944Z Successfully installed Flask-3.0.3 Pillow-10.3.0 Werkzeug-3.0.4 anyio-4.5.0 argon2-cffi-23.1.0 argon2-cffi-bindings-21.2.0 async-lru-2.0.4 blinker-1.8.2 bokeh-3.1.1 comm-0.2.2 dash-2.15.0 dash-core-components-2.0.0 dash-html-components-2.0.0 dash-table-5.0.0 debugpy-1.8.6 graphviz-0.20.3 h11-0.14.0 httpcore-1.0.5 httpx-0.27.2 ipykernel-6.29.5 ipywidgets-8.1.1 itsdangerous-2.2.0 json5-0.9.25 jupyter-events-0.10.0 jupyter-lsp-2.2.5 jupyter-server-2.14.2 jupyter-server-terminals-0.5.3 jupyterlab-4.2.5 jupyterlab-server-2.27.3 jupyterlab-widgets-3.0.13 loguru-0.6.0 matplotlib-3.7.1 metal-libs-0.52.0rc33.dev9+wormhole.b0 nest-asyncio-1.6.0 notebook-shim-0.2.4 overrides-7.7.0 plotly-5.18.0 prometheus-client-0.21.0 python-json-logger-2.0.7 retrying-1.3.4 rfc3339-validator-0.1.4 rfc3986-validator-0.1.1 seaborn-0.13.2 send2trash-1.8.3 sniffio-1.3.1 tenacity-9.0.0 terminado-0.18.1 toolz-0.12.0 websocket-client-1.8.0 widgetsnbextension-4.0.13 xyzservices-2024.9.0
+2024-09-25T14:34:47.1178268Z 2024-09-25 14:34:47.116 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-09-25T14:34:47.1181291Z 2024-09-25 14:34:47.117 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.Conv1d be migrated to C++?
+2024-09-25T14:34:47.1209974Z 2024-09-25 14:34:47.120 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.conv2d be migrated to C++?
+2024-09-25T14:34:47.1212820Z 2024-09-25 14:34:47.120 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.reshape be migrated to C++?
+2024-09-25T14:34:47.1214709Z 2024-09-25 14:34:47.120 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-09-25T14:34:47.1216823Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.from_torch be migrated to C++?
+2024-09-25T14:34:47.1219640Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.to_torch be migrated to C++?
+2024-09-25T14:34:47.1222036Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.to_device be migrated to C++?
+2024-09-25T14:34:47.1224270Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.from_device be migrated to C++?
+2024-09-25T14:34:47.1225787Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-09-25T14:34:47.1227335Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-09-25T14:34:47.1228785Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.deallocate be migrated to C++?
+2024-09-25T14:34:47.1230162Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.reallocate be migrated to C++?
+2024-09-25T14:34:47.1231979Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.load_tensor be migrated to C++?
+2024-09-25T14:34:47.1233490Z 2024-09-25 14:34:47.121 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.dump_tensor be migrated to C++?
+2024-09-25T14:34:47.1235054Z 2024-09-25 14:34:47.122 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.as_tensor be migrated to C++?
+2024-09-25T14:34:47.1239814Z 2024-09-25 14:34:47.123 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-25T14:34:47.1270924Z 2024-09-25 14:34:47.126 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.conv2d be migrated to C++?
+2024-09-25T14:34:47.1273409Z 2024-09-25 14:34:47.126 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.avg_pool2d be migrated to C++?
+2024-09-25T14:34:47.1275634Z 2024-09-25 14:34:47.127 | WARNING  | ttnn.decorators:operation_decorator:801 - Should ttnn.Conv1d be migrated to C++?
+2024-09-25T14:34:47.1585131Z ============================= test session starts ==============================
+2024-09-25T14:34:47.1586100Z platform linux -- Python 3.8.10, pytest-7.2.2, pluggy-1.5.0 -- /usr/bin/python3
+2024-09-25T14:34:47.1586716Z cachedir: .pytest_cache
+2024-09-25T14:34:47.1587391Z rootdir: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal, configfile: pytest.ini
+2024-09-25T14:34:47.1588316Z plugins: anyio-4.5.0, dash-2.15.0, split-0.8.2, timeout-2.2.0, xdist-3.6.1
+2024-09-25T14:34:47.1588880Z timeout: 300.0s
+2024-09-25T14:34:47.1589180Z timeout method: signal
+2024-09-25T14:34:47.1589496Z timeout func_only: False
+2024-09-25T14:34:47.1737532Z collecting ... collected 36 items
+2024-09-25T14:34:47.1738148Z 
+2024-09-25T14:34:47.1768207Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded] [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2024-09-25T14:34:47.2185126Z 
+2024-09-25T14:34:47.2500478Z [32m2024-09-25 14:34:47.249[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected 1 PCI device : [0]
+2024-09-25T14:34:47.2620332Z [32m2024-09-25 14:34:47.261[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-25T14:34:47.2622610Z [32m2024-09-25 14:34:47.261[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2024-09-25T14:34:47.2628828Z [32m2024-09-25 14:34:47.262[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-25T14:34:47.2631657Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-25T14:34:47.2658908Z [0m[32m2024-09-25 14:34:47.265[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-25T14:34:47.2661545Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-25T14:34:47.2772801Z [0m[32m2024-09-25 14:34:47.276[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+2024-09-25T14:34:47.2778249Z [32m2024-09-25 14:34:47.277[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 1)
+2024-09-25T14:34:47.2824627Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-25T14:34:47.2825889Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-25T14:34:48.6034157Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-25T14:34:48.6035505Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-25T14:34:48.6038512Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Enabling program cache on device 0
+2024-09-25T14:34:48.6423248Z 2024-09-25 14:34:48.641 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:72 - Start Trace capture
+2024-09-25T14:34:48.6426962Z 2024-09-25 14:34:48.642 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:76 - Trace captured
+2024-09-25T14:34:48.6481493Z 2024-09-25 14:34:48.647 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 0
+2024-09-25T14:34:49.9775986Z 2024-09-25 14:34:49.976 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 1
+2024-09-25T14:34:50.0172828Z 2024-09-25 14:34:50.016 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 2
+2024-09-25T14:34:50.0291363Z 2024-09-25 14:34:50.028 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 3
+2024-09-25T14:34:50.0372558Z 2024-09-25 14:34:50.036 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 4
+2024-09-25T14:34:50.0456525Z 2024-09-25 14:34:50.045 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 5
+2024-09-25T14:34:50.0537288Z 2024-09-25 14:34:50.053 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 6
+2024-09-25T14:34:50.0622466Z 2024-09-25 14:34:50.061 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 7
+2024-09-25T14:34:50.0708670Z 2024-09-25 14:34:50.070 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 8
+2024-09-25T14:34:50.0792496Z 2024-09-25 14:34:50.078 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 9
+2024-09-25T14:34:50.0902062Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:50.0904666Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-25T14:34:50.0915316Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:50.0936890Z 
+2024-09-25T14:34:50.0949618Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-25T14:34:50.0951552Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-25T14:34:50.1001553Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-25T14:34:50.1003310Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-25T14:34:50.1012163Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Enabling program cache on device 0
+2024-09-25T14:34:50.1163151Z 2024-09-25 14:34:50.115 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:72 - Start Trace capture
+2024-09-25T14:34:50.1168122Z 2024-09-25 14:34:50.115 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:76 - Trace captured
+2024-09-25T14:34:50.1179950Z 2024-09-25 14:34:50.117 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 0
+2024-09-25T14:34:50.9829952Z 2024-09-25 14:34:50.981 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 1
+2024-09-25T14:34:50.9840210Z 2024-09-25 14:34:50.983 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 2
+2024-09-25T14:34:50.9854667Z 2024-09-25 14:34:50.984 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 3
+2024-09-25T14:34:50.9868190Z 2024-09-25 14:34:50.986 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 4
+2024-09-25T14:34:50.9881265Z 2024-09-25 14:34:50.987 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 5
+2024-09-25T14:34:50.9895182Z 2024-09-25 14:34:50.988 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 6
+2024-09-25T14:34:50.9908469Z 2024-09-25 14:34:50.990 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 7
+2024-09-25T14:34:50.9921949Z 2024-09-25 14:34:50.991 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 8
+2024-09-25T14:34:50.9935745Z 2024-09-25 14:34:50.992 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 9
+2024-09-25T14:34:50.9954270Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:50.9958040Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-25T14:34:50.9963813Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:50.9972318Z 
+2024-09-25T14:34:50.9980883Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-25T14:34:50.9982957Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-25T14:34:51.0023106Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-25T14:34:51.0024436Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-25T14:34:51.0030151Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Enabling program cache on device 0
+2024-09-25T14:34:51.0321558Z 2024-09-25 14:34:51.031 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:72 - Start Trace capture
+2024-09-25T14:34:51.0324413Z 2024-09-25 14:34:51.031 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:76 - Trace captured
+2024-09-25T14:34:51.0372281Z 2024-09-25 14:34:51.036 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 0
+2024-09-25T14:34:51.0448221Z 2024-09-25 14:34:51.044 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 1
+2024-09-25T14:34:51.0522178Z 2024-09-25 14:34:51.051 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 2
+2024-09-25T14:34:51.0593289Z 2024-09-25 14:34:51.058 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 3
+2024-09-25T14:34:51.0660814Z 2024-09-25 14:34:51.065 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 4
+2024-09-25T14:34:51.0729664Z 2024-09-25 14:34:51.072 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 5
+2024-09-25T14:34:51.0805603Z 2024-09-25 14:34:51.080 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 6
+2024-09-25T14:34:51.0875811Z 2024-09-25 14:34:51.087 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 7
+2024-09-25T14:34:51.0948426Z 2024-09-25 14:34:51.094 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 8
+2024-09-25T14:34:51.1016070Z 2024-09-25 14:34:51.100 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 9
+2024-09-25T14:34:51.1043653Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:51.1046319Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-25T14:34:51.1051623Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:51.1064432Z 
+2024-09-25T14:34:51.1071819Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2024-09-25T14:34:51.1078296Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+2024-09-25T14:34:51.1127098Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 0
+2024-09-25T14:34:51.1128893Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | MMIO Device 0 : Tunnel 0 : Device 1
+2024-09-25T14:34:51.1131393Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Enabling program cache on device 0
+2024-09-25T14:34:51.1175589Z 2024-09-25 14:34:51.116 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:72 - Start Trace capture
+2024-09-25T14:34:51.1177664Z 2024-09-25 14:34:51.117 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:76 - Trace captured
+2024-09-25T14:34:51.1179352Z 2024-09-25 14:34:51.117 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 0
+2024-09-25T14:34:51.1197940Z 2024-09-25 14:34:51.119 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 1
+2024-09-25T14:34:51.1211192Z 2024-09-25 14:34:51.120 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 2
+2024-09-25T14:34:51.1224132Z 2024-09-25 14:34:51.121 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 3
+2024-09-25T14:34:51.1236731Z 2024-09-25 14:34:51.123 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 4
+2024-09-25T14:34:51.1249577Z 2024-09-25 14:34:51.124 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 5
+2024-09-25T14:34:51.1264217Z 2024-09-25 14:34:51.125 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 6
+2024-09-25T14:34:51.1278030Z 2024-09-25 14:34:51.127 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 7
+2024-09-25T14:34:51.1290482Z 2024-09-25 14:34:51.128 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 8
+2024-09-25T14:34:51.1303132Z 2024-09-25 14:34:51.129 | INFO     | tests.tt_eager.python_api_testing.trace_testing.misc.test_average_pool:test_run_average_pool:86 - Running iteration 9
+2024-09-25T14:34:51.1316760Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:51.1318242Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2024-09-25T14:34:51.1323438Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2024-09-25T14:34:51.1329527Z 
+2024-09-25T14:34:51.1338971Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1345125Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1351383Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1357379Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1363198Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1369413Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1377025Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1382359Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1388877Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1393803Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1399947Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1405960Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1411825Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1417301Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1423660Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1429127Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1437251Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1442187Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1447660Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1453445Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1459086Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1464745Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1470492Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1476658Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1482281Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1488006Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1493625Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1500795Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1506549Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1512129Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1518632Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-LoFi] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1543859Z tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-HiFi2] SKIPPED (Unsupported parallelizations for WH B0 and BH)
+2024-09-25T14:34:51.1545700Z 
+2024-09-25T14:34:51.1546293Z =============================== warnings summary ===============================
+2024-09-25T14:34:51.1548074Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1549840Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1552452Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1555626Z tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1561129Z   tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py:23: PytestWarning: record_property is incompatible with junit_family 'xunit2' (use 'legacy' or 'xunit1')
+2024-09-25T14:34:51.1562467Z     @pytest.mark.parametrize(
+2024-09-25T14:34:51.1562728Z 
+2024-09-25T14:34:51.1563150Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+2024-09-25T14:34:51.1563811Z ==================================== PASSES ====================================
+2024-09-25T14:34:51.1564951Z - generated xml file: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal/generated/test_reports/most_recent_tests.xml -
+2024-09-25T14:34:51.1566181Z ============================== slowest durations ===============================
+2024-09-25T14:34:51.1567565Z 1.48s call     tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1569414Z 1.43s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1571219Z 0.89s call     tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1573092Z 0.10s call     tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1574931Z 0.02s call     tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1576719Z 0.01s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1578509Z 0.01s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1580325Z 0.01s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1582158Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1584058Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1585900Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1587733Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1589868Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1592177Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1594576Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1597303Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1600004Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1602426Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1605414Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1607879Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1610504Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1612845Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1615137Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1617555Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1619937Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1622312Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1624734Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1627060Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1629392Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1631765Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1634100Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1637621Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1640025Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1642373Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1644783Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1647046Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1649377Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1651897Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1654368Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1656879Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1659260Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1661638Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1663998Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1666386Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1668777Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1671152Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1673598Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1676170Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1678585Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1680963Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1683344Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1685756Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1688091Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1690423Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1692790Z 0.00s teardown tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1695463Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1697812Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1700140Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-True-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1719651Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1722053Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1724448Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1726836Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1729296Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1731688Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1734004Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1736319Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1738667Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1740998Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_1cq_initialized[device_params0-False-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1743322Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1745670Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1748020Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-True-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1750356Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1752934Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-True-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1755443Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-True-False-4608-1024-3072-None-LoFi]
+2024-09-25T14:34:51.1758014Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-True-False-False-True-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1760370Z 0.00s setup    tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py::TestBertOpsTrace::test_bert_linear_2cqs_initialized[device_params0-0-False-False-False-False-4608-1024-3072-None-HiFi2]
+2024-09-25T14:34:51.1761757Z =========================== short test summary info ============================
+2024-09-25T14:34:51.1763031Z PASSED tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1764778Z PASSED tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-True-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1766532Z PASSED tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-resnet50_unpadded]
+2024-09-25T14:34:51.1768281Z PASSED tests/tt_eager/python_api_testing/trace_testing/misc/test_average_pool.py::test_run_average_pool[device_params0-False-BFLOAT16-tile_divisible]
+2024-09-25T14:34:51.1769785Z SKIPPED [16] tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py:197: Unsupported parallelizations for WH B0 and BH
+2024-09-25T14:34:51.1771201Z SKIPPED [16] tests/tt_eager/python_api_testing/trace_testing/misc/test_bert_ops.py:227: Unsupported parallelizations for WH B0 and BH
+2024-09-25T14:34:51.1772311Z ================== 4 passed, 32 skipped, 4 warnings in 4.00s ===================
+2024-09-25T14:34:51.3861878Z [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
+2024-09-25T14:34:52.6916514Z Prepare all required actions
+2024-09-25T14:34:52.6917024Z Getting action download info
+2024-09-25T14:34:52.8344637Z Download action repository 'actions/upload-artifact@v4' (SHA:50769540e7f4bd5e21e526ee35c689e35e0d6874)
+2024-09-25T14:34:53.5158598Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2024-09-25T14:34:53.5159133Z with:
+2024-09-25T14:34:53.5159432Z   path: generated/test_reports/
+
+2024-09-25T14:34:53.5159835Z   prefix: test_reports_
+2024-09-25T14:34:53.5160163Z env:
+2024-09-25T14:34:53.5160413Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:53.5160762Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5161622Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5162721Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:53.5163438Z   RUNNER_UID: 1000
+2024-09-25T14:34:53.5163736Z   RUNNER_GID: 1000
+2024-09-25T14:34:53.5164120Z ##[endgroup]
+2024-09-25T14:34:53.5188201Z ##[group]Run uuid=$(uuidgen)
+2024-09-25T14:34:53.5188589Z [36;1muuid=$(uuidgen)[0m
+2024-09-25T14:34:53.5188962Z [36;1martifact_name="test_reports_$uuid"[0m
+2024-09-25T14:34:53.5189556Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2024-09-25T14:34:53.5190186Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2024-09-25T14:34:53.5207224Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:53.5207726Z env:
+2024-09-25T14:34:53.5207989Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:53.5208357Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5209180Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5210295Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:53.5211284Z   RUNNER_UID: 1000
+2024-09-25T14:34:53.5211581Z   RUNNER_GID: 1000
+2024-09-25T14:34:53.5211893Z ##[endgroup]
+2024-09-25T14:34:53.5257206Z [UPLOAD-ARTIFACT-UUID] test_reports_ed722052-85b9-4b1d-93b1-d197d5d8f5fb
+2024-09-25T14:34:53.5326631Z ##[group]Run actions/upload-artifact@v4
+2024-09-25T14:34:53.5327073Z with:
+2024-09-25T14:34:53.5327425Z   name: test_reports_ed722052-85b9-4b1d-93b1-d197d5d8f5fb
+2024-09-25T14:34:53.5327923Z   path: generated/test_reports/
+
+2024-09-25T14:34:53.5328310Z   if-no-files-found: warn
+2024-09-25T14:34:53.5328644Z   compression-level: 6
+2024-09-25T14:34:53.5328961Z   overwrite: false
+2024-09-25T14:34:53.5329277Z   include-hidden-files: false
+2024-09-25T14:34:53.5329614Z env:
+2024-09-25T14:34:53.5329863Z   LOGURU_LEVEL: INFO
+2024-09-25T14:34:53.5330214Z   IMAGE_TAG: dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5331053Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:dev-npetrovic-new-sweeps-5
+2024-09-25T14:34:53.5332229Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2024-09-25T14:34:53.5332956Z   RUNNER_UID: 1000
+2024-09-25T14:34:53.5333242Z   RUNNER_GID: 1000
+2024-09-25T14:34:53.5333532Z ##[endgroup]
+2024-09-25T14:34:53.7584977Z With the provided path, there will be 1 file uploaded
+2024-09-25T14:34:53.7589762Z Artifact name is valid!
+2024-09-25T14:34:53.7590709Z Root directory input is valid!
+2024-09-25T14:34:53.9490856Z Beginning upload of artifact content to blob storage
+2024-09-25T14:34:54.1804628Z Uploaded bytes 878
+2024-09-25T14:34:54.2372657Z Finished uploading artifact content to blob storage!
+2024-09-25T14:34:54.2376202Z SHA256 hash of uploaded artifact zip is 17751965331ba4f10bf1e3f198e759814ad29e8b69303763c799a121a74a31ee
+2024-09-25T14:34:54.2377657Z Finalizing artifact upload
+2024-09-25T14:34:54.3522197Z Artifact test_reports_ed722052-85b9-4b1d-93b1-d197d5d8f5fb.zip successfully finalized. Artifact ID 1977399775
+2024-09-25T14:34:54.3525052Z Artifact test_reports_ed722052-85b9-4b1d-93b1-d197d5d8f5fb has been successfully uploaded! Final size is 878 bytes. Artifact ID is 1977399775
+2024-09-25T14:34:54.3527475Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/11034942442/artifacts/1977399775
+2024-09-25T14:34:54.3714769Z Post job cleanup.
+2024-09-25T14:34:54.3754626Z Post job cleanup.
+2024-09-25T14:34:54.6789962Z [command]/usr/bin/docker logout https://ghcr.io
+2024-09-25T14:34:54.6942232Z Removing login credentials for ghcr.io
+2024-09-25T14:34:54.6991124Z ##[group]Post cache
+2024-09-25T14:34:54.6991592Z State not set
+2024-09-25T14:34:54.6992206Z ##[endgroup]
+2024-09-25T14:34:54.7173065Z Post job cleanup.
+2024-09-25T14:34:54.7233867Z Post job cleanup.
+2024-09-25T14:34:54.8239005Z [command]/usr/bin/git version
+2024-09-25T14:34:54.8275793Z git version 2.25.1
+2024-09-25T14:34:54.8323679Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/f1b8e30c-7aca-472a-ba21-5d169d7d5e77' before making global git config changes
+2024-09-25T14:34:54.8325150Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-25T14:34:54.8328246Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-25T14:34:54.8364653Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-25T14:34:54.8401015Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-25T14:34:54.8666138Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:34:54.8704078Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:34:54.8739110Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:34:54.8773574Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:34:54.8809181Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:34:54.8851044Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:34:54.8886580Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:34:54.8921843Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:34:54.8955470Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:34:54.8986396Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:34:54.9020004Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:34:54.9071516Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-25T14:34:54.9097110Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9107715Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-25T14:34:54.9138721Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-25T14:34:54.9374988Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-25T14:34:54.9396346Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9422281Z Entering 'tt_metal/third_party/lfs'
+2024-09-25T14:34:54.9443003Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9467986Z Entering 'tt_metal/third_party/pybind11'
+2024-09-25T14:34:54.9485418Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9516736Z Entering 'tt_metal/third_party/sfpi'
+2024-09-25T14:34:54.9533917Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9560708Z Entering 'tt_metal/third_party/taskflow'
+2024-09-25T14:34:54.9577992Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9609102Z Entering 'tt_metal/third_party/tracy'
+2024-09-25T14:34:54.9627213Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9654765Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-25T14:34:54.9673322Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9701299Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-25T14:34:54.9718193Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9744273Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-25T14:34:54.9763925Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9790995Z Entering 'tt_metal/third_party/umd'
+2024-09-25T14:34:54.9809714Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9832619Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-25T14:34:54.9851231Z http.https://github.com/.extraheader
+2024-09-25T14:34:54.9983616Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-25T14:34:55.0014130Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/wormhole_b0/cleanup.sh'
+2024-09-25T14:34:55.0026988Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-25T14:34:55.0027567Z ##[endgroup]
+2024-09-25T14:34:55.0080821Z Current date / time is Wed Sep 25 14:34:55 UTC 2024
+2024-09-25T14:34:55.0081651Z Printing out cpu information...
+2024-09-25T14:34:55.0111278Z Architecture:                       x86_64
+2024-09-25T14:34:55.0112382Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-25T14:34:55.0113004Z Byte Order:                         Little Endian
+2024-09-25T14:34:55.0114024Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-25T14:34:55.0114651Z CPU(s):                             14
+2024-09-25T14:34:55.0115197Z On-line CPU(s) list:                0-13
+2024-09-25T14:34:55.0115689Z Thread(s) per core:                 1
+2024-09-25T14:34:55.0116668Z Core(s) per socket:                 1
+2024-09-25T14:34:55.0117139Z Socket(s):                          14
+2024-09-25T14:34:55.0117941Z NUMA node(s):                       2
+2024-09-25T14:34:55.0118489Z Vendor ID:                          AuthenticAMD
+2024-09-25T14:34:55.0119022Z CPU family:                         23
+2024-09-25T14:34:55.0119507Z Model:                              49
+2024-09-25T14:34:55.0120210Z Model name:                         AMD EPYC-Rome Processor
+2024-09-25T14:34:55.0120767Z Stepping:                           0
+2024-09-25T14:34:55.0121581Z CPU MHz:                            3000.000
+2024-09-25T14:34:55.0122101Z BogoMIPS:                           6000.00
+2024-09-25T14:34:55.0122632Z Virtualization:                     AMD-V
+2024-09-25T14:34:55.0123134Z Hypervisor vendor:                  KVM
+2024-09-25T14:34:55.0123597Z Virtualization type:                full
+2024-09-25T14:34:55.0124089Z L1d cache:                          448 KiB
+2024-09-25T14:34:55.0124601Z L1i cache:                          448 KiB
+2024-09-25T14:34:55.0125101Z L2 cache:                           7 MiB
+2024-09-25T14:34:55.0125586Z L3 cache:                           224 MiB
+2024-09-25T14:34:55.0126109Z NUMA node0 CPU(s):                  0-6
+2024-09-25T14:34:55.0126629Z NUMA node1 CPU(s):                  7-13
+2024-09-25T14:34:55.0127164Z Vulnerability Gather data sampling: Not affected
+2024-09-25T14:34:55.0127769Z Vulnerability Itlb multihit:        Not affected
+2024-09-25T14:34:55.0128334Z Vulnerability L1tf:                 Not affected
+2024-09-25T14:34:55.0128897Z Vulnerability Mds:                  Not affected
+2024-09-25T14:34:55.0129508Z Vulnerability Meltdown:             Not affected
+2024-09-25T14:34:55.0130076Z Vulnerability Mmio stale data:      Not affected
+2024-09-25T14:34:55.0130683Z Vulnerability Retbleed:             Vulnerable
+2024-09-25T14:34:55.0131571Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-25T14:34:55.0132761Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-25T14:34:55.0134277Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-25T14:34:55.0135531Z Vulnerability Srbds:                Not affected
+2024-09-25T14:34:55.0136147Z Vulnerability Tsx async abort:      Not affected
+2024-09-25T14:34:55.0139983Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-25T14:34:55.0346510Z Cleaning up orphan processes

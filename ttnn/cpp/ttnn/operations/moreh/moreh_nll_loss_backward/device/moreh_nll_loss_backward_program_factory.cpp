@@ -8,23 +8,23 @@
 #include "moreh_nll_loss_backward_device_operation.hpp"
 #include "tt_metal/common/math.hpp"
 #include "tt_metal/common/work_split.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_backward_impl_2d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -34,7 +34,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -43,10 +43,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -56,30 +54,29 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 1},                                                              // output_grad
-            {tt::CB::c_in1, 1, tt::DataFormat::Int32},                                       // target
-            {tt::CB::c_in2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
-            {tt::CB::c_in3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en_data_format},                          // tmp_weight
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en_data_format},                          // tmp1
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en_data_format},                          // tmp2
-            {tt::CB::c_out0, 1},                                                             // input_grad
+            {tt::CBIndex::c_0, 1},                                                              // output_grad
+            {tt::CBIndex::c_1, 1, tt::DataFormat::Int32},                                       // target
+            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
+            {tt::CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp1
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp2
+            {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -109,12 +106,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
@@ -138,9 +135,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t units_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             units_per_core = units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -167,9 +164,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         // compute
         const std::vector<uint32_t> compute_runtime_args{units_per_core, tile_offset};
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[0], core, compute_runtime_args);
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[1], core, compute_runtime_args);
         } else {
             TT_FATAL(false, "Core not in specified core ranges.");
@@ -188,17 +185,17 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_backward_impl_3d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -206,13 +203,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto target_shape = target.get_legacy_shape();
+    auto target_shape = target.get_shape().value;
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -221,10 +218,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -234,30 +229,29 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 1},                                                              // output_grad
-            {tt::CB::c_in1, 1, tt::DataFormat::Int32},                                       // target
-            {tt::CB::c_in2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
-            {tt::CB::c_in3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en_data_format},                          // tmp_weight
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en_data_format},                          // tmp1
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en_data_format},                          // tmp2
-            {tt::CB::c_out0, 1},                                                             // input_grad
+            {tt::CBIndex::c_0, 1},                                                              // output_grad
+            {tt::CBIndex::c_1, 1, tt::DataFormat::Int32},                                       // target
+            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
+            {tt::CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp1
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp2
+            {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -287,12 +281,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
@@ -316,9 +310,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t units_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             units_per_core = units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -346,9 +340,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         // compute
         const std::vector<uint32_t> compute_runtime_args{units_per_core, tile_offset};
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[0], core, compute_runtime_args);
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[1], core, compute_runtime_args);
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
@@ -367,15 +361,15 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
 MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_backward_impl_4d(
     const Tensor& target,
-    const std::optional<const Tensor> weight,
-    const std::optional<const Tensor> divisor,
+    const std::optional<Tensor>& weight,
+    const std::optional<Tensor>& divisor,
     const Tensor& output_grad,
     const Tensor& input_grad,
     const bool reduction_mean,
     const uint32_t ignore_index,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
+    const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.get_legacy_shape();
+    auto input_grad_shape = input_grad.get_shape().value;
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -388,7 +382,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -397,10 +391,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
         split_work_to_cores(grid, units_to_divide);
 
-    auto compute_kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config_val);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     Program program = Program();
 
@@ -410,30 +402,29 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
     uint32_t weight_num_tile = tt::div_up(channel_size, tt::constants::TILE_WIDTH);
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         data_format,
         {
-            {tt::CB::c_in0, 1},                                                              // output_grad
-            {tt::CB::c_in1, 1, tt::DataFormat::Int32},                                       // target
-            {tt::CB::c_in2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
-            {tt::CB::c_in3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
-            {tt::CB::c_intermed0, 1, fp32_dest_acc_en_data_format},                          // tmp_weight
-            {tt::CB::c_intermed1, 1, fp32_dest_acc_en_data_format},                          // tmp1
-            {tt::CB::c_intermed2, 1, fp32_dest_acc_en_data_format},                          // tmp2
-            {tt::CB::c_out0, 1},                                                             // input_grad
+            {tt::CBIndex::c_0, 1},                                                              // output_grad
+            {tt::CBIndex::c_1, 1, tt::DataFormat::Int32},                                       // target
+            {tt::CBIndex::c_2, static_cast<uint32_t>(weight_has_value ? weight_num_tile : 0)},  // weight
+            {tt::CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
+            {tt::CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight
+            {tt::CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp1
+            {tt::CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp2
+            {tt::CBIndex::c_16, 1},                                                             // input_grad
         });
 
     // create read/wrtie kernel
     const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(target)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(weight)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(divisor)),
-        static_cast<uint32_t>(tt::operations::primary::is_dram(output_grad))};
+        static_cast<uint32_t>(is_dram(target)),
+        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
+        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
+        static_cast<uint32_t>(is_dram(output_grad))};
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(tt::operations::primary::is_dram(input_grad))};
+    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
     std::map<string, string> reader_defines;
     std::map<string, string> writer_defines;
@@ -463,12 +454,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss_backward/device/kernels/"
         "moreh_nll_loss_backward_kernel.cpp";
 
-    auto reader_kernel_id = tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
-    auto writer_kernel_id = tt::operations::primary::CreateWriteKernel(
-        program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
+    auto reader_kernel_id =
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines);
+    auto writer_kernel_id =
+        CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args, writer_defines);
 
-    const auto compute_kernel_ids = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_ids = CreateComputeKernel(
         program,
         compute_kernel_file,
         {
@@ -492,9 +483,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
         uint32_t units_per_core;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             units_per_core = units_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -522,9 +513,9 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
         // compute
         const std::vector<uint32_t> compute_runtime_args{units_per_core, tile_offset};
 
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[0], core, compute_runtime_args);
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(program, compute_kernel_ids[1], core, compute_runtime_args);
         } else {
             TT_ASSERT(false, "Core not in specified core ranges.");
@@ -550,12 +541,12 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t MorehNllLossBackw
 
     const Tensor& target = tensor_args.target_tensor;
     const Tensor& output_grad = tensor_args.output_grad_tensor;
-    const std::optional<const Tensor> weight = tensor_args.weight_tensor;
-    const std::optional<const Tensor> divisor = tensor_args.divisor_tensor;
+    const std::optional<Tensor>& weight = tensor_args.weight_tensor;
+    const std::optional<Tensor>& divisor = tensor_args.divisor_tensor;
 
     const bool reduction_mean = operation_attributes.reduction_mean;
     const uint32_t ignore_index = operation_attributes.ignore_index;
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = operation_attributes.compute_kernel_config;
+    const DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
 
     const Tensor& input_grad = tensor_return_value;
 

@@ -15,21 +15,17 @@ namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_unary_ne(uint value)
-{
+inline void calculate_unary_ne(uint value) {
     // SFPU microcode
     Converter c_value;
     c_value.u = value;
     vFloat s = c_value.f;
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v_if (v == s) {
-            v = 0.0f;
-        }v_else {
-            v = 1.0f;
-        }
+        v_if(v == s) { v = 0.0f; }
+        v_else { v = 1.0f; }
         v_endif;
 
         dst_reg[0] = v;
@@ -39,21 +35,17 @@ inline void calculate_unary_ne(uint value)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_unary_gt(uint value)
-{
+inline void calculate_unary_gt(uint value) {
     // SFPU microcode
     Converter c_value;
     c_value.u = value;
     vFloat s = c_value.f;
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v_if (v > s) {
-            v = 1.0f;
-        }v_else {
-            v = 0.0f;
-        }
+        v_if(v > s) { v = 1.0f; }
+        v_else { v = 0.0f; }
         v_endif;
 
         dst_reg[0] = v;
@@ -63,21 +55,17 @@ inline void calculate_unary_gt(uint value)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 4>
-inline void calculate_unary_lt(uint value)
-{
+inline void calculate_unary_lt(uint value) {
     // SFPU microcode
     Converter c_value;
     c_value.u = value;
     vFloat s = c_value.f;
 
-    #pragma GCC unroll 0
+#pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        v_if (v < s) {
-            v = 1.0f;
-        }v_else {
-            v = 0.0f;
-        }
+        v_if(v < s) { v = 1.0f; }
+        v_else { v = 0.0f; }
         v_endif;
 
         dst_reg[0] = v;

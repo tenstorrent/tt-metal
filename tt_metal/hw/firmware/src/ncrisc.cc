@@ -11,8 +11,8 @@
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
+#include "circular_buffer_init.h"
 
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
@@ -22,7 +22,7 @@
 uint32_t halt_stack_ptr_save;
 
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.ncrisc;
+volatile tt_l1_ptr uint8_t *const ncrisc_run = &mailboxes->slave_sync.dm1;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -39,13 +39,19 @@ uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-    uint16_t core_flat_id __attribute__((used));
 }
 #endif
 
@@ -62,7 +68,9 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 #ifdef NCRISC_HAS_IRAM
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 #else
-    while (*ncrisc_run != RUN_SYNC_MSG_GO);
+    while (*ncrisc_run != RUN_SYNC_MSG_GO) {
+        invalidate_l1_cache();
+    }
 #endif
 }
 
@@ -73,12 +81,13 @@ inline __attribute__((always_inline)) void signal_ncrisc_completion() {
 }
 
 int main(int argc, char *argv[]) {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
-    int32_t num_words = ((uint)__ldm_data_end - (uint)__ldm_data_start) >> 2;
-    l1_to_local_mem_copy((uint *)__ldm_data_start, (uint tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE, num_words);
+    do_crt1((uint32_t tt_l1_ptr *)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
+
+    noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
 
@@ -92,13 +101,28 @@ int main(int argc, char *argv[]) {
         notify_brisc_and_wait();
         DeviceZoneScopedMainN("NCRISC-FW");
 
-        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
-        uint32_t tt_l1_ptr *cb_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            mailboxes->launch.kernel_config.cb_offset);
-        setup_cb_read_write_interfaces(cb_l1_base, 0, mailboxes->launch.kernel_config.max_cb_index, true, true, false);
+        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
+        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
+        uint32_t tt_l1_ptr* cb_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        uint32_t end_cb_index = launch_msg->kernel_config.max_local_cb_end_index;
+        setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, true, true, false);
+
+        cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
+        end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        experimental::setup_remote_cb_interfaces(cb_l1_base, end_cb_index);
         WAYPOINT("R");
-        kernel_init();
+
+        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
+        void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
+            (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
+#ifdef ARCH_BLACKHOLE
+        (*kernel_address)((uint32_t)kernel_address);
+#else
+        kernel_init((uint32_t)kernel_address);
+#endif
         RECORD_STACK_USAGE();
         WAYPOINT("D");
 

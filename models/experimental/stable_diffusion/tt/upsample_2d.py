@@ -46,7 +46,7 @@ class TtUpsample2D(nn.Module):
             )
 
     def forward(self, hidden_states: ttnn.Tensor, output_size=None) -> ttnn.Tensor:
-        assert hidden_states.get_legacy_shape()[1] == self.in_channels
+        assert hidden_states.shape.with_tile_padding()[1] == self.in_channels
 
         if output_size is None:
             upsampler_nearest2d = TtUpsampleNearest2d()

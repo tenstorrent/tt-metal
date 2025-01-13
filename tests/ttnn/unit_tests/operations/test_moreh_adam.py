@@ -8,32 +8,23 @@ import torch.optim as optim
 
 import ttnn
 import pytest
-from models.utility_functions import is_wormhole_b0, comp_allclose_and_pcc, comp_pcc, is_wormhole_b0
+from models.utility_functions import (
+    comp_allclose_and_pcc,
+)
 from loguru import logger
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    to_ttnn,
 )
 
 
-def create_tt_tensor(tensor: torch.Tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+def create_tt_tensor(tensor: torch.Tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
-@pytest.mark.parametrize(
-    "shape",
-    [[32, 32], [2, 2, 2, 2, 2, 2, 64, 64]],
-)
-@pytest.mark.parametrize("lr", [0.0, 1e-1])
-@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
-@pytest.mark.parametrize("eps", [1e-06, 1e-08])
-@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
-@pytest.mark.parametrize("amsgrad", [True, False])
-@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device):
-    torch.manual_seed(0)
-
+def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=ttnn.bfloat16, step=1):
     x_data = torch.rand(shape).to(torch.bfloat16)
     y_data = torch.rand(shape).to(torch.bfloat16)
 
@@ -51,15 +42,15 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     cpu_exp_avg_sq = torch.zeros_like(model.weight)
     cpu_max_exp_avg_sq = torch.zeros_like(model.weight)
 
-    dev_param = create_tt_tensor(model.weight, device)
-    dev_exp_avg = create_tt_tensor(cpu_exp_avg, device)
-    dev_exp_avg_sq = create_tt_tensor(cpu_exp_avg_sq, device)
-    dev_max_exp_avg_sq = create_tt_tensor(cpu_max_exp_avg_sq, device)
+    dev_param = create_tt_tensor(model.weight, device, dtype=dtype)
+    dev_exp_avg = create_tt_tensor(cpu_exp_avg, device, dtype=dtype)
+    dev_exp_avg_sq = create_tt_tensor(cpu_exp_avg_sq, device, dtype=dtype)
+    dev_max_exp_avg_sq = create_tt_tensor(cpu_max_exp_avg_sq, device, dtype=dtype)
 
-    dev_param_out = create_tt_tensor(model.weight, device)
-    dev_exp_avg_out = create_tt_tensor(cpu_exp_avg, device)
-    dev_exp_avg_sq_out = create_tt_tensor(cpu_exp_avg_sq, device)
-    dev_max_exp_avg_sq_out = create_tt_tensor(cpu_max_exp_avg_sq, device)
+    dev_param_out = create_tt_tensor(model.weight, device, dtype=dtype)
+    dev_exp_avg_out = create_tt_tensor(cpu_exp_avg, device, dtype=dtype)
+    dev_exp_avg_sq_out = create_tt_tensor(cpu_exp_avg_sq, device, dtype=dtype)
+    dev_max_exp_avg_sq_out = create_tt_tensor(cpu_max_exp_avg_sq, device, dtype=dtype)
 
     criterion = nn.L1Loss()
     optimizer = optim.Adam({model.weight}, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
@@ -70,9 +61,11 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
     loss.backward()
 
     cpu_grad = model.weight.grad.clone()
-    dev_grad = create_tt_tensor(cpu_grad, device)
+    dev_grad = create_tt_tensor(cpu_grad, device, dtype=dtype)
 
-    optimizer.step()
+    for _ in range(step):
+        optimizer.step()
+
     optimizer_state_dict = optimizer.state_dict()
 
     cpu_exp_avg_result = optimizer_state_dict["state"][0]["exp_avg"]
@@ -83,8 +76,6 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         cpu_max_exp_avg_sq_result = None
 
     compute_kernel_config = get_compute_kernel_options(fp32_dest_acc_en)
-
-    step = 1
 
     (
         dev_param_out,
@@ -111,7 +102,7 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         compute_kernel_config=compute_kernel_config,
     )
 
-    assert dev_param.get_legacy_shape() == list(model.weight.shape)
+    assert dev_param.shape.with_tile_padding() == ttnn.Shape(model.weight.shape)
 
     param_result = dev_param_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
     exp_avg_result = dev_exp_avg_out.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().to(torch.bfloat16)
@@ -141,3 +132,84 @@ def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_
         logger.debug(f"Out passing (max_exp_avg_sq)={passing}")
         logger.debug(f"Output pcc={out}")
     assert passing
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [[32, 32], [2, 2, 2, 2, 2, 2, 64, 64]],
+)
+@pytest.mark.parametrize("lr", [0.0, 1e-1])
+@pytest.mark.parametrize("betas", ((0.9, 0.999), (0.5, 0.555)))
+@pytest.mark.parametrize("eps", [1e-06, 1e-08])
+@pytest.mark.parametrize("weight_decay", [0.0, 0.3])
+@pytest.mark.parametrize("amsgrad", [True, False])
+@pytest.mark.parametrize("fp32_dest_acc_en", compute_kernel_options, ids=compute_kernel_ids)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype, step=1):
+    torch.manual_seed(0)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    return run_moreh_adam(
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, dtype=dtype, step=step
+    )
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en
+        ([32, 32], 0.0, (0.9, 0.999), 1e-06, 0.0, True, True),
+        ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
+    ),
+)
+def test_moreh_adam_callback(params, device, use_program_cache):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
+        run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize(
+    "params",
+    (
+        # shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en
+        ([32, 32], 0.0, (0.9, 0.999), 1e-06, 0.0, True, True),
+        ([2, 2, 2, 2, 2, 2, 64, 64], 0.0, (0.9, 0.999), 1e-06, 0.0, False, False),
+    ),
+)
+def test_moreh_adam_caching(params, device, use_program_cache):
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(1, 5):
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
+        run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device, step=i)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    for i in range(1, 4):
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]
+
+    num_program_cache_entries_list = []
+    for i in range(4):
+        shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en = params
+
+        # generate a random lr between (0, 1)
+        lr = torch.rand(1).item()
+
+        run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_en, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = to_ttnn(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    for i in range(1, 4):
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[i]

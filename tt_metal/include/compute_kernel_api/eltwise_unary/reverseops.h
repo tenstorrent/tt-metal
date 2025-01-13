@@ -4,7 +4,6 @@
 
 #pragma once
 
-
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_reverseops.h"
@@ -14,17 +13,15 @@
 #define MATH(x)
 #endif
 
-
-
 namespace ckernel {
 
-//rpow: implemented as a composite operator
-//rpow(a,k) = k**(a)
+// rpow: implemented as a composite operator
+// rpow(a,k) = k**(a)
 
-//RDIV : rdiv(x,y) = y/x
-//implemented as tied multiply operator
+// RDIV : rdiv(x,y) = y/x
+// implemented as tied multiply operator
 
-//RSUB : rsub(x,y) = y-x
+// RSUB : rsub(x,y) = y-x
 
 /**
  * Performs element-wise computation of rsub ( rsub(x,y) = y -x) on each element of a tile and y is a constant param
@@ -34,20 +31,18 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid
+ * Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
+ * less than the size of the DST register buffer | True     | | param0         | Constant value that is being subtracted
+ * from                               | uint32_t |                                                       | True     |
  */
-ALWI void rsub_tile(uint32_t idst,uint32_t param0) {
-    MATH(( llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst,param0) ));
-}
+ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() {
-    MATH(( llk_math_eltwise_unary_sfpu_rsub_init<APPROX>() ));
-}
+ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_rsub_init<APPROX>())); }
 
-} // namespace ckerne
+}  // namespace ckernel

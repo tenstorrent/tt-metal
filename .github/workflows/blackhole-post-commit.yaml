@@ -11,24 +11,34 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
+  pull-requests: write
   pages: write
   id-token: write
+  packages: write
 
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
+  build-docker-image:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-22.04-amd64"
   build-artifact:
+    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
+      os: "ubuntu-22.04-amd64"
       arch: '["blackhole"]'
+      build-docker: false
   build-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
-      os: "ubuntu-20.04"
+      os: "ubuntu-22.04"
       arch: "blackhole"
       from-precompiled: true
 #   build-artifact-profiler:
@@ -50,6 +60,7 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 30
+      os: "ubuntu-22.04"
   fd-unit-tests:
     needs: build-wheels
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
@@ -57,6 +68,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: BH
+      os: "ubuntu-22.04"
   # FD C++ Unit Tests
   cpp-unit-tests:
     needs: build-artifact
@@ -66,6 +78,7 @@ jobs:
       arch: blackhole
       runner-label: BH
       timeout: 60
+      os: "ubuntu-22.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler

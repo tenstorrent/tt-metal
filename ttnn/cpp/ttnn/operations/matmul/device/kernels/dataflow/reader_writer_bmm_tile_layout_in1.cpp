@@ -63,7 +63,8 @@ void kernel_main() {
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     const DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<in1_is_dram> s1 = {
+    constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
+    const InterleavedAddrGenFast<in1_is_dram, in1_tile_hw> s1 = {
         .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
     uint32_t l1_write_addr_in1;
 #endif
@@ -71,8 +72,9 @@ void kernel_main() {
 #ifndef OUT_SHARDED
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     const DataFormat output_data_format = get_dataformat(cb_id_out0);
+    constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
 
-    const InterleavedAddrGenFast<out_is_dram> s = {
+    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
         .bank_base_address = out_tensor_addr,
         .page_size = output_single_tile_size_bytes,
         .data_format = output_data_format};

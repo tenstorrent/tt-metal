@@ -51,26 +51,6 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.parametrize("m_size", [32])
-@pytest.mark.parametrize("k_size", [32])
-@pytest.mark.parametrize("n_size", [32])
-def test_ttnn_experimental_operations_primary_moreh_matmul(device, m_size, k_size, n_size):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch_random((1, 1, m_size, k_size), -1, 1, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch_random((1, 1, k_size, n_size), -1, 1, dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, device=device, layout=ttnn.TILE_LAYOUT)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, device=device, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.experimental.operations.primary.moreh_matmul(input_tensor_a, input_tensor_b)
-
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor)
-
-
 @pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("input_a_is_sharded", [True, False])
 @pytest.mark.parametrize("output_is_sharded", [True, False])
@@ -187,7 +167,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
     shard_shape = (32, 1024)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     input_tensor_in0 = ttnn.to_memory_config(input_tensor_in0, sharded_mem_config)
 
@@ -195,7 +175,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
     in1_shard_shape = (8192, 96)
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     input_tensor_in1 = ttnn.from_torch(
         torch_input_tensor_in1,

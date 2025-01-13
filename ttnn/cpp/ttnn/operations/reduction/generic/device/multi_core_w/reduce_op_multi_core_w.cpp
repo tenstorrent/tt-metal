@@ -16,10 +16,10 @@ namespace tt {
 namespace tt_metal {
 
 operation::ProgramWithCallbacks reduce_multi_core_w(
-    const Tensor &a,
-    Tensor &output,
+    const Tensor& a,
+    Tensor& output,
     ReduceOpMath reduce_op,
-    const ttnn::DeviceComputeKernelConfig &compute_kernel_config,
+    const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
     float scaler) {
     const auto shape = a.get_legacy_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
@@ -28,7 +28,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Device *device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -60,11 +60,12 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * scaler_single_tile_size, {{CB::c_in2, scaler_cb_data_format}})
-            .set_page_size(CB::c_in2, scaler_single_tile_size);
+        tt_metal::CircularBufferConfig(
+            num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
+            .set_page_size(CBIndex::c_2, scaler_single_tile_size);
     auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
@@ -73,10 +74,10 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
 
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    tt_metal::Buffer *src_buffer = a.buffer();
+    tt_metal::Buffer* src_buffer = a.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, packed_scaler_value};
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt_metal::Buffer* dst_buffer = output.buffer();
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
@@ -94,7 +95,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, reduce_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_rows_per_core_group_1,  // Ht
         Wt,                         // Wt
         1,                          // NC
@@ -111,7 +112,7 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_rows_per_core_group_2,  // Ht
             Wt,                         // Wt
             1,                          // NC
@@ -129,14 +130,14 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     }
 
     uint32_t out_dim_divider = Wt;
-    const auto &cores =
+    const auto& cores =
         grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
-        const CoreCoord &core = cores[i];
+        const CoreCoord& core = cores[i];
         uint32_t num_rows_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
@@ -165,23 +166,23 @@ operation::ProgramWithCallbacks reduce_multi_core_w(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, cores](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
         auto src_dram_buffer = input_buffers.at(0);
 
         auto dst_dram_buffer = output_buffers.at(0);
 
-        auto &reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        auto &writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-        for (const auto &core : cores) {
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_dram_buffer->address();
             }
 
             {
-                auto &runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_dram_buffer->address();
             }
         }

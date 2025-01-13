@@ -113,7 +113,7 @@ class TtViTSelfAttention(nn.Module):
         )
 
     def transpose_for_scores(self, x: tt_tensor) -> tt_tensor:
-        new_x_shape = (x.get_legacy_shape()[0], x.get_legacy_shape()[2]) + (
+        new_x_shape = (x.shape.with_tile_padding()[0], x.shape.with_tile_padding()[2]) + (
             self.num_attention_heads,
             self.attention_head_size,
         )
@@ -150,7 +150,7 @@ class TtViTSelfAttention(nn.Module):
         context_layer = ttnn.matmul(attention_probs, value_layer)
 
         context_layer = ttnn.permute(context_layer, (0, 2, 1, 3))
-        new_context_layer_shape = (1,) + tuple(context_layer.get_legacy_shape())[:-2] + (self.all_head_size,)
+        new_context_layer_shape = (1,) + tuple(context_layer.shape.with_tile_padding())[:-2] + (self.all_head_size,)
         context_layer = fallback_ops.reshape(context_layer, *new_context_layer_shape)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)

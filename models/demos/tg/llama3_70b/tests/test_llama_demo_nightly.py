@@ -12,10 +12,8 @@ from time import time
 import pytest
 from loguru import logger
 from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
-    check_mesh_device,
-)
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.tg.llama3_70b.demo.demo import run_demo, construct_arg
 
 
@@ -95,9 +93,7 @@ def test_llama3_tg_nightly_demo(
     check_mesh_device(mesh_device, model_config)
 
     # TODO: Renable when issue #11089 is resolved
-    for i in mesh_device.get_device_ids():
-        device = mesh_device.get_device(i)
-        device.enable_async(True)
+    mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

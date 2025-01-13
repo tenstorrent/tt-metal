@@ -10,7 +10,6 @@
 #include <cstdint>
 
 #include "eth_l1_address_map.h"
-#include "hostdevcommon/common_runtime_address_map.h"
 #include "limits.h"
 #include "mod_div_lib.h"
 #include "noc_overlay_parameters.h"
@@ -20,6 +19,10 @@
 
 #define NOC_X(x) NOC_0_X(noc_index, noc_size_x, (x))
 #define NOC_Y(y) NOC_0_Y(noc_index, noc_size_y, (y))
+#define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
+#define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
+#define NOC_X_PHYS_COORD(x) NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x)
+#define NOC_Y_PHYS_COORD(y) NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y)
 
 #define TILE_WORD_2_BIT ((256 + 64 + 32) >> 4)
 #define TILE_WORD_4_BIT ((512 + 64 + 32) >> 4)
@@ -59,8 +62,9 @@ inline __attribute__((always_inline)) uint32_t dram_io_empty(uint32_t rd_ptr, ui
 
 inline __attribute__((always_inline)) uint32_t
 dram_io_local_empty(uint32_t local_rd_ptr, uint32_t rd_ptr, uint32_t wr_ptr) {
-    if (rd_ptr == wr_ptr)
+    if (rd_ptr == wr_ptr) {
         return true;
+    }
 
     uint32_t case1 = rd_ptr < wr_ptr && (local_rd_ptr < rd_ptr || local_rd_ptr >= wr_ptr);
     uint32_t case2 = rd_ptr > wr_ptr && wr_ptr <= local_rd_ptr && local_rd_ptr < rd_ptr;
@@ -115,16 +119,17 @@ inline void deassert_all_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV
 inline void assert_just_ncrisc_reset() { WRITE_REG(RISCV_DEBUG_REG_SOFT_RESET_0, RISCV_SOFT_RESET_0_NCRISC); }
 
 inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
-    if (special_b == TILE_WORD_8_BIT)
+    if (special_b == TILE_WORD_8_BIT) {
         return a * TILE_WORD_8_BIT;
-    else if (special_b == TILE_WORD_16_BIT)
+    } else if (special_b == TILE_WORD_16_BIT) {
         return a * TILE_WORD_16_BIT;
-    else if (special_b == TILE_WORD_4_BIT)
+    } else if (special_b == TILE_WORD_4_BIT) {
         return a * TILE_WORD_4_BIT;
-    else if (special_b == TILE_WORD_2_BIT)
+    } else if (special_b == TILE_WORD_2_BIT) {
         return a * TILE_WORD_2_BIT;
-    else if (special_b == TILE_WORD_32_BIT)
+    } else if (special_b == TILE_WORD_32_BIT) {
         return a * TILE_WORD_32_BIT;
+    }
 
     while (true);
     return 0;
@@ -134,13 +139,9 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
 
-#if defined(COMPILE_FOR_ERISC)
-// ERISC needs to place this function in a specific section
-__attribute__((section("code_l1")))
-#endif  // defined(COMPILE_FOR_ERISC)
-void risc_init() {
+inline void risc_init() {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(n, 0, NOC_NODE_ID);
+        uint32_t noc_id_reg = MY_NOC_ENCODING(n);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
         my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     }
@@ -165,31 +166,50 @@ inline void riscv_wait(uint32_t cycles) {
 }
 
 // Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). If cache is enabled, the entire L1 is cached (no MMU).
-//  Writing an address on one core and reading it from another core only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
 #if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
     asm("fence");
 #endif
 }
 
-// Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
-// L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-// export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
-inline __attribute__((always_inline)) void conditionally_disable_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && defined(DISABLE_L1_DATA_CACHE)
-    // asm(R"ASM(
-    //         csrrsi zero, 0x7c0, 0x8
-    //       )ASM");
+inline __attribute__((always_inline)) void configure_l1_data_cache() {
+#if defined(ARCH_BLACKHOLE)
+#if defined(DISABLE_L1_DATA_CACHE)
+    // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
+    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
     asm(R"ASM(
-        .option push
-        li   t1, 0x1
-        slli t1, t1, 3
+        li t1, 0x8
         csrrs zero, 0x7c0, t1
-        .option pop
          )ASM" ::
             : "t1");
+#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions
+    // This is default enabled
+    asm(R"ASM(
+        lui  t1, 0x40
+        csrrs zero, 0x7c0, t1
+         )ASM" ::
+            : "t1");
+#endif
+#endif
+}
+
+// Flush i$ on ethernet riscs
+inline __attribute__((always_inline)) void flush_erisc_icache() {
+#ifdef ARCH_BLACKHOLE
+// Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
+//  between FW end and Kernel start.
+// This works because risc tries to prefetch 1 cache line.
+// The 32B still get cached but they are never executed
+#pragma GCC unroll 2048
+    for (int i = 0; i < 2048; i++) {
+        asm("nop");
+    }
 #endif
 }
 

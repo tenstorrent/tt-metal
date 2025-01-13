@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+#include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
@@ -17,12 +18,12 @@ void MAIN {
     uint32_t NC = get_compile_time_arg_val(2);
     constexpr uint32_t origin_W = get_compile_time_arg_val(3);
 
-    auto cb_input = tt::CB::c_in0;
-    constexpr auto cb_scaler = tt::CB::c_in2;
-    constexpr auto cb_mask_w = tt::CB::c_in3;
-    constexpr auto cb_accum_dst = tt::CB::c_intermed0;
-    constexpr auto cb_masked_input = tt::CB::c_intermed1;
-    constexpr auto cb_out = tt::CB::c_out0;
+    auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_mask_w = tt::CBIndex::c_3;
+    constexpr auto cb_accum_dst = tt::CBIndex::c_24;
+    constexpr auto cb_masked_input = tt::CBIndex::c_25;
+    constexpr auto cb_out = tt::CBIndex::c_16;
     constexpr bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
 
     binary_op_init_common(cb_input, cb_input);
@@ -42,18 +43,20 @@ void MAIN {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            cb_input = tt::CB::c_in0;
+            cb_input = tt::CBIndex::c_0;
             bool is_w_single_tile = (Wt == 1);
             if (!is_w_single_tile) {
                 tile_regs_acquire();
 
-                reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_accum_dst, cb_input, cb_scaler);
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
                     cb_wait_front(cb_input, onetile);
-                    reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
+#if defined FP32_DEST_ACC_EN
+                    reconfig_data_format(cb_input, cb_scaler);
+#endif
+                    mm_init_short(cb_input, cb_scaler, false);
+                    matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
                     cb_pop_front(cb_input, onetile);
                 }
-                reduce_revert_delta(cb_accum_dst);
                 tile_regs_commit();
 
                 cb_reserve_back(cb_accum_dst, onetile);
@@ -96,9 +99,11 @@ void MAIN {
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
-            reduce_init_delta_with_dt<false, REDUCE_OP, REDUCE_DIM>(cb_out, cb_input, cb_scaler);
-            reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-            reduce_revert_delta(cb_out);
+#if defined FP32_DEST_ACC_EN
+            reconfig_data_format(cb_input, cb_scaler);
+#endif
+            mm_init_short(cb_input, cb_scaler, false);
+            matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
             tile_regs_commit();
 
             cb_reserve_back(cb_out, onetile);

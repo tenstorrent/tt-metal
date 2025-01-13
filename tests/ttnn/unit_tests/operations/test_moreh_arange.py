@@ -8,226 +8,122 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.unit_tests.operations.test_utils import get_lib_dtype
 
 
-def get_tt_dtype(torch_dtype):
-    if torch_dtype == torch.int32:
-        return ttnn.int32
-    if torch_dtype == torch.bfloat16:
-        return ttnn.bfloat16
-    if torch_dtype == torch.float32:
-        return ttnn.float32
-    return None
-
-
-def create_tt_tensor(tensor: torch.Tensor, dtype, device):
-    return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-
-@pytest.mark.parametrize(
-    "start_end_step",
-    (
-        (-5, 27, 1),  # simple
-        (2.3, 15.3, 0.5),  # floating point
-        (10, 0, -0.3),  # minus step
-        (10, 32 * 3, 1),  # multiple cores
-    ),
-)
-def test_arange_row_major_simple(start_end_step, device):
-    # Prepare and compute by torch
+def run_moreh_arange(start_end_step, optional_output, dtype, tilized, device):
+    """Run a comparison of arange results between torch and ttnn."""
+    # Prepare inputs
     start, end, step = start_end_step
-    any_cpu = torch.ones((1024))
-    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
-    untilize_out = True
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
+    if (dtype == "int32") and (start != int(start) or end != int(end) or step != int(step)):
+        pytest.skip(f"start, end, and step must be integers when using int32 dtype")
+    if dtype == "bfloat8_b" and not tilized:
+        pytest.skip(f"bfloat8_b requires TILE_LAYOUT")
 
-    # Compute by ttnn
-    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
-    tt_dev = tt_npu.cpu().to_torch()
+    # TODO @mrshaw01: Support bfloat8_b in kernel
+    if dtype == "bfloat8_b":
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
 
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
-    assert passing
+    # Compute using torch
+    torch_dtype = get_lib_dtype(torch, dtype)
+    if torch_dtype is None:
+        torch_dtype = torch.bfloat16
+    expected_output = torch.arange(start=start, end=end, step=step).to(torch_dtype)
 
-
-@pytest.mark.parametrize(
-    "start_end_step",
-    ((0, 32 * 10, 1),),  # simple
-)
-@pytest.mark.parametrize(
-    "optional_output",
-    (
-        True,
-        False,
-    ),
-)
-def test_arange_row_major_optional_output(start_end_step, optional_output, device):
-    # Prepare and compute by torch
-    start, end, step = start_end_step
-    any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu, ttnn.bfloat16).to(device)
-    untilize_out = True
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-
-    # Compute by ttnn
-    if optional_output:
-        output_cpu = torch.empty_like(tt_cpu)
-        output = ttnn.from_torch(output_cpu, dtype=ttnn.bfloat16, device=device)
-        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, output_tensor=output, untilize_out=untilize_out)
-    else:
-        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
-
-    tt_dev = tt_npu.cpu().to_torch()
-
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "start_end_step",
-    ((-10, 22, 1),),  # simple
-)
-@pytest.mark.parametrize(
-    "output_dtype",
-    (
-        torch.bfloat16,
-        torch.int32,
-        torch.float32,
-    ),
-    ids=["bfloat16", "int32", "float32"],
-)
-def test_arange_row_major_dtype(start_end_step, output_dtype, device):
-    # Prepare and compute by torch
-    start, end, step = start_end_step
-    tt_dtype = get_tt_dtype(output_dtype)
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(output_dtype)
-    any_cpu = torch.ones((1024))
-    any = create_tt_tensor(any_cpu, tt_dtype, device)
-    untilize_out = True
-
-    # Compute by ttnn
-    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out, output_dtype=tt_dtype)
-    tt_dev = tt_npu.cpu().to_torch()
-
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "start_end_step",
-    (
-        (0, 32, 1),  # simple
-        (2.3, 15.7, 0.5),  # floating point
-        (10, 0, -0.3),  # minus step
-        (10, 32 * 3, 1),  # multiple cores
-    ),
-)
-def test_arange_tilized_simple(start_end_step, device):
-    # Prepare and compute by torch
-    start, end, step = start_end_step
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-    any_cpu = torch.ones((1024))
-    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
-
-    # Compute by ttnn
-    tt_npu = ttnn.operations.moreh.arange(start, end, step, any)
-    L = tt_cpu.shape[0]
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
-
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
-    assert passing
-
-
-@pytest.mark.parametrize(
-    "start_end_step",
-    ((0, 32 * 10, 1),),  # simple
-)
-@pytest.mark.parametrize(
-    "optional_output",
-    (
-        True,
-        False,
-    ),
-)
-def test_arange_tilized_major_optional_output(start_end_step, optional_output, device):
-    # Prepare and compute by torch
-    start, end, step = start_end_step
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(torch.bfloat16)
-    L = tt_cpu.shape[0]
-    any_cpu = torch.ones((1024))
-    any = create_tt_tensor(any_cpu, ttnn.bfloat16, device)
-    untilize_out = False
-
-    # Compute by ttnn
-    if optional_output:
-        output_cpu = torch.empty_like(tt_cpu)
-        output = (
-            ttnn.from_torch(output_cpu, ttnn.bfloat16)
-            .reshape([1, L])
-            .pad_to_tile(float("nan"))
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
+    # Compute using ttnn
+    ttnn_dtype = get_lib_dtype(ttnn, dtype)
+    if ttnn_dtype is None:
+        ttnn_dtype = ttnn.bfloat16
+    any_cpu = torch.randn([32, 32])
+    any_npu = ttnn.from_torch(
+        any_cpu,
+        device=device,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
+    )
+    L = expected_output.shape[0]
+    output_npu = (
+        ttnn.from_torch(
+            torch.empty([1, L]),
+            device=device,
+            dtype=ttnn_dtype,
+            layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
         )
-        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, output_tensor=output, untilize_out=untilize_out)
-    else:
-        tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out)
-    tt_dev = tt_npu.cpu().to_torch()
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(torch.bfloat16)
+        if optional_output
+        else None
+    )
 
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
+    output_npu = ttnn.operations.moreh.arange(
+        start,
+        end,
+        step,
+        any_npu,
+        output=output_npu,
+        untilize_out=not tilized,
+        dtype=get_lib_dtype(ttnn, dtype),
+    )
+    actual_output = ttnn.to_torch(output_npu).reshape([L])
+
+    # Assert shape and value comparison
+    assert actual_output.shape == expected_output.shape
+    passing, out = comp_allclose_and_pcc(expected_output, actual_output, rtol=0.1, atol=0.1)
     logger.info(out)
     assert passing
 
 
 @pytest.mark.parametrize(
     "start_end_step",
-    ((-10, 57, 1),),  # simple
+    [
+        [0, 32, 1],
+        [2.3, 15.3, 0.5],
+        [10.9, -13, -0.3],
+        [-100, 32 * 10, 1],
+        [0, 32000, 1],
+        [2300.3, 15300.3, 0.5392],
+        [10900.9, -13000, -0.3111],
+        [-10000, 32 * 10000, 1],
+    ],
 )
 @pytest.mark.parametrize(
-    "output_dtype",
-    (
-        torch.bfloat16,
-        torch.int32,
-        torch.float32,
-    ),
-    ids=["bfloat16", "int32", "float32"],
+    "optional_output",
+    [True, False],
 )
-def test_arange_tilized_dtype(start_end_step, output_dtype, device):
-    # Prepare and compute by torch
-    start, end, step = start_end_step
-    tt_dtype = get_tt_dtype(output_dtype)
-    tt_cpu = torch.arange(start=start, end=end, step=step).to(output_dtype)
-    any_cpu = torch.ones((1024))
-    any = ttnn.Tensor(any_cpu, tt_dtype).to(device)
-    untilize_out = False
+@pytest.mark.parametrize(
+    "dtype",
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
+)
+@pytest.mark.parametrize(
+    "tilized",
+    [True, False],
+)
+def test_arange(start_end_step, optional_output, dtype, tilized, device):
+    """Test arange functionality with different parameters."""
+    run_moreh_arange(start_end_step, optional_output, dtype, tilized, device)
 
-    # Compute by ttnn
-    tt_npu = ttnn.operations.moreh.arange(start, end, step, any, untilize_out=untilize_out, output_dtype=tt_dtype)
-    tt_dev = tt_npu.cpu().to_torch()
-    L = tt_cpu.shape[0]
-    tt_dev = tt_npu.cpu().to(ttnn.ROW_MAJOR_LAYOUT).unpad_from_tile((1, L)).to_torch().reshape((L)).to(output_dtype)
 
-    # Compare
-    assert tt_dev.shape == tt_cpu.shape
-    rtol = atol = 0.1
-    passing, out = comp_allclose_and_pcc(tt_cpu, tt_dev, rtol=rtol, atol=atol)
-    logger.info(out)
-    assert passing
+@pytest.mark.parametrize(
+    "start_end_step",
+    [
+        [10900.9, -13000, -0.3111],
+    ],
+)
+@pytest.mark.parametrize(
+    "optional_output",
+    [True, False],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [None, "bfloat8_b", "bfloat16", "int32", "float32"],
+)
+def test_arange_callback(start_end_step, optional_output, dtype, device, use_program_cache):
+    """Test arange functionality with callback and program cache validation."""
+    torch.manual_seed(2024)
+    num_program_cache_entries_list = []
+    for i in range(2):
+        run_moreh_arange(start_end_step, optional_output, dtype, True, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
+        num_program_cache_entries_list.append(device.num_program_cache_entries())
+    logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+    assert num_program_cache_entries_list[0] > 0
+    assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]

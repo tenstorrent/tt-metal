@@ -141,6 +141,7 @@ class TtMixtralAttention(LightweightModule):
         )
 
         self.compute_kernel = self.model_args.get_compute_kernel_config()
+        self.compute_kernel_reduce = self.model_args.get_compute_kernel_config_reduce()
         self.compute_kernel_attn = self.model_args.get_compute_kernel_attn_config()
 
         self.core_grid = self.model_args.max_grid_size
@@ -240,14 +241,11 @@ class TtMixtralAttention(LightweightModule):
         k_heads_1B1D.deallocate(True)
         v_heads_1B1D.deallocate(True)
 
-        keys_1BPD = ttnn.reshape(keys_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-        values_1BPD = ttnn.reshape(values_1BPD, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-
         attn_output_1B4D = ttnn.transformer.scaled_dot_product_attention_decode(
             q_heads_1B4D,
             keys_1BPD,
             values_1BPD,
-            start_pos_ids,
+            cur_pos=start_pos_ids,
             scale=self.scale,
             program_config=self.model_config["SDPA_DECODE_PROGCFG"],
             compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
@@ -277,7 +275,10 @@ class TtMixtralAttention(LightweightModule):
         dense_outputs_11BH = ttnn.all_gather(dense_out_11BH, dim=2, num_links=1)
 
         # return the sum of the outputs
-        dense_outputs_11BH = ttnn.matmul(self.reduce_mask, dense_outputs_11BH)
+
+        dense_outputs_11BH = ttnn.matmul(
+            self.reduce_mask, dense_outputs_11BH, compute_kernel_config=self.compute_kernel_reduce
+        )
         return dense_outputs_11BH
 
     def forward_prefill(self, xs_11SH, attn_masks, rot_mats, transformation_mats, user_id: int = 0):

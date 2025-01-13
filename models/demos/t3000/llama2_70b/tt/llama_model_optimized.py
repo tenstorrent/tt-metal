@@ -20,6 +20,8 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     gather_cos_sin,
     get_rot_transformation_mat,
 )
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config
+from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
 
 
 class TtLlamaModel_optimized:
@@ -58,7 +60,7 @@ class TtLlamaModel_optimized:
         self.cache_path = cache_path
         # Transformation matrix for rotary embeddings
         transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
-        transformation_mats = ttnn.as_tensor(
+        transformation_mats_prefill = ttnn.as_tensor(
             transformation_mat_torch,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -66,7 +68,15 @@ class TtLlamaModel_optimized:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
-        transformation_mats = ttnn.to_device(transformation_mats, mesh_device)
+        transformation_mats_prefill = ttnn.to_device(transformation_mats_prefill, mesh_device)
+
+        # Transformation matrix for rotary embeddings (decode)
+        self.rope_setup_decode = TtLlamaRotarySetup(
+            self.mesh_device, self.head_dim, self.max_seq_len, self.rope_theta, self.use_scaled_rope
+        )
+        transformation_mats_decode = self.rope_setup_decode.get_trans_mats()
+
+        transformation_mats = {"prefill": transformation_mats_prefill, "decode": transformation_mats_decode}
 
         logger.info("Creating Layers")
         self.layers = [
@@ -91,7 +101,6 @@ class TtLlamaModel_optimized:
         self.cos, self.sin = precompute_freqs(
             self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope
         )  # for prefill
-        self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
         # Embedding
         self.tt_embd = TtLlamaEmbedding(
             mesh_device,
@@ -157,7 +166,7 @@ class TtLlamaModel_optimized:
         )
         self.norm_sharded = ttnn.to_device(norm_sharded_ttnn, self.mesh_device)
 
-    def validate_input_shape(self, inp_ids):
+    def validate_input_shape(self, inp_ids, mode):
         assert inp_ids.dim() == 2
         batch, seq_len = inp_ids.shape
         assert (
@@ -167,7 +176,9 @@ class TtLlamaModel_optimized:
             seq_len <= self.model_config["MAX_CONTEXT_LEN"]
         ), f"Sequence length {seq_len} exceeds MAX_CONTEXT_LEN {self.model_config['MAX_CONTEXT_LEN']}"
 
-    def prepare_inputs(self, inp_ids, start_pos, valid_seq_len=None, mode="decode"):
+    def prepare_inputs(
+        self, inp_ids, start_pos, valid_seq_len=None, mode="decode", page_table=None, chunk_page_table=None
+    ):
         """
         Prepare inputs for decode mode. Assume that current token is at
         start_pos, and KV cache has valid data up to start_pos.
@@ -178,10 +189,12 @@ class TtLlamaModel_optimized:
         returns:
         xs: [(seq, batch, hidden_dim)] * num_devices
         start_pos: int
-        rot_mats: [(1, 1, head_dim, head_dim)] * num_devices  for decode
+        rot_mats: None  for decode
                   [(1, 1, seq, head_dim), (1, 1, seq, head_dim)] * num_devices  for prefill
+        rot_idx_tt: [(batch, 1, 1)] * num_devices  for decode
+                    None  for prefill
         """
-        self.validate_input_shape(inp_ids)
+        self.validate_input_shape(inp_ids, mode)
         batch, seq_len = inp_ids.shape
 
         cache_name = lambda name: self.cache_path / (f"{'llama3_' if self.llama3 else ''}{name}")
@@ -219,7 +232,7 @@ class TtLlamaModel_optimized:
                 cos_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"cos_gathered_prefill_{seq_len}"),
+                cache_file_name=cache_name(f"cos_gathered_prefill_{start_pos}_{start_pos+seq_len}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 device=self.mesh_device,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
@@ -228,7 +241,7 @@ class TtLlamaModel_optimized:
                 sin_gathered,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name(f"sin_gathered_prefill_{seq_len}"),
+                cache_file_name=cache_name(f"sin_gathered_prefill_{start_pos}_{start_pos+seq_len}"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 device=self.mesh_device,
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
@@ -237,7 +250,30 @@ class TtLlamaModel_optimized:
             sin_gathereds = ttnn.to_device(sin_gathereds, self.mesh_device)
             rot_mats = [cos_gathereds, sin_gathereds]
 
+            rot_idxs_tt = None  # unused in prefill mode
             cache_idxs_tt = None  # unused in prefill mode
+
+            if isinstance(page_table, torch.Tensor):
+                # Support vLLM tensor page_table input
+                page_table = ttnn.as_tensor(
+                    page_table,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                )
+            if chunk_page_table is not None:
+                chunk_page_table = ttnn.as_tensor(
+                    chunk_page_table,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            return (xs, start_pos, rot_mats, rot_idxs_tt, cache_idxs_tt, page_table, chunk_page_table)
 
         elif mode == "decode":
             assert seq_len == 1, "Decode mode only supports seq_len=1"
@@ -248,16 +284,6 @@ class TtLlamaModel_optimized:
             else:
                 cache_idxs = start_pos.to(dtype=torch.int64)
 
-            rot_mat = get_rotation_mat(self.rot_emb, cache_idxs, seq_len, batch=batch)
-            assert rot_mat.size() == (1, batch, self.head_dim, self.head_dim)
-
-            rot_mats = ttnn.as_tensor(
-                rot_mat,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
-            )
-
             cache_idxs_tt = ttnn.as_tensor(
                 cache_idxs,
                 dtype=ttnn.int32,
@@ -265,7 +291,54 @@ class TtLlamaModel_optimized:
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             )
 
-        return (xs, start_pos, rot_mats, cache_idxs_tt)
+            rot_mats = None  # Created in prepare_device_inputs
+            rot_cache_idxs = torch.maximum(
+                cache_idxs, torch.tensor(0, dtype=torch.int64)
+            )  # Ensure position indices are non-negative
+            rot_idxs_tt = self.rope_setup_decode.get_rot_idxs(rot_cache_idxs)
+
+            if isinstance(page_table, torch.Tensor):
+                # Support vLLM tensor page_table input
+                page_table = ttnn.as_tensor(
+                    page_table,
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
+                )
+            return (xs, start_pos, rot_mats, rot_idxs_tt, cache_idxs_tt, page_table)
+
+    def prepare_device_inputs_decode(
+        self,
+        tokens: torch.Tensor,
+        start_pos: int,
+        valid_seq_len=None,
+        mode="decode",
+        page_table=None,
+        return_tokens=False,  # if true, return tokens for decode mode
+        return_rot_idxs=False,  # if true, return rot_idxs for decode mode
+    ):
+        assert mode == "decode"
+        tt_inp, start_pos, rot_mat, rot_idxs_tt, cache_idxs_tt, tt_page_table = self.prepare_inputs(
+            tokens, start_pos, valid_seq_len=valid_seq_len, mode=mode, page_table=page_table
+        )
+
+        tt_inp = ttnn.to_device(tt_inp, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_inp_emb = self.tt_embd(tt_inp)
+        tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, self.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
+        cache_idxs_tt = ttnn.to_device(cache_idxs_tt, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        rot_mat, rot_idxs_tt = self.rope_setup_decode.get_rot_mats(
+            rot_idxs_tt, return_rot_idxs=True
+        )  # Sends rot_idxs to device internally
+        if tt_page_table is not None:
+            tt_page_table = ttnn.to_device(tt_page_table, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        return_out = [tt_inp_emb, start_pos, rot_mat, cache_idxs_tt, tt_page_table]
+
+        if return_tokens:
+            return_out.append(tt_inp)
+        if return_rot_idxs:
+            return_out.append(rot_idxs_tt)
+        return tuple(return_out)
 
     def __call__(
         self,
@@ -278,6 +351,8 @@ class TtLlamaModel_optimized:
         page_table=None,
         kv_cache=None,
         mode="decode",
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> ttnn.Tensor:
         if self.vllm:
             assert page_table is not None
@@ -291,6 +366,8 @@ class TtLlamaModel_optimized:
                 last_token_idx=last_token_idx,
                 page_table=page_table,
                 kv_cache=kv_cache,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
             )
         elif mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
@@ -382,11 +459,21 @@ class TtLlamaModel_optimized:
         last_token_idx=None,
         page_table=None,
         kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> ttnn.Tensor:
         ### Run all layers
         for layer in self.layers:
             xs = layer(
-                xs, rot_mats, start_pos, user_id, page_table=page_table, kv_cache=kv_cache, mode="prefill"
+                xs,
+                rot_mats,
+                start_pos,
+                user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                mode="prefill",
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
             )  # xs is sharded
 
         # Distributed rmsnorm
@@ -410,7 +497,7 @@ class TtLlamaModel_optimized:
             norm_out_replicated = ttnn.slice(
                 norm_out_replicated,
                 (0, 0, last_token_tile * 32, 0),
-                (0, 0, (last_token_tile + 1) * 32 - 1, dmodel - 1),
+                (1, 1, (last_token_tile + 1) * 32, dmodel),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             pc_lm_head = (
@@ -437,7 +524,16 @@ class TtLlamaModel_optimized:
                     else self.model_config["PREFILL_LM_HEAD_MM_PROGCFG_128"]
                 )
             else:
-                pc_lm_head = None
+                pc_lm_head = matmul_2d_config(
+                    m=norm_out_replicated.shape[2],
+                    k=norm_out_replicated.shape[3],
+                    n=self.lm_head.shape[3],
+                    overwrite_per_core_k=1,
+                    grid=ttnn.CoreGrid(y=min(8, norm_out_replicated.shape[2] // 32), x=8),
+                    is_fp32_accumulate=False,
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
 
         lm_head_out = ttnn.linear(
             norm_out_replicated,

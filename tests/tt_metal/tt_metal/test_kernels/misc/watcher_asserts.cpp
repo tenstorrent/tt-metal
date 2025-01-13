@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "debug/assert.h"
 #include "debug/ring_buffer.h"
-#include "tt_metal/impl/dispatch/dispatch_address_map.hpp"
 
 /*
  * A test for the assert feature.
@@ -40,9 +39,10 @@ void MAIN {
 #else
         tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 #endif
-        uint64_t dispatch_addr =
-            NOC_XY_ADDR(NOC_X(mailboxes->launch.kernel_config.dispatch_core_x),
-                        NOC_Y(mailboxes->launch.kernel_config.dispatch_core_y), DISPATCH_MESSAGE_ADDR);
+        uint64_t dispatch_addr = NOC_XY_ADDR(
+            NOC_X(mailboxes->go_message.master_x),
+            NOC_Y(mailboxes->go_message.master_y),
+            DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
         noc_fast_atomic_increment(noc_index, NCRISC_AT_CMD_BUF, dispatch_addr, NOC_UNICAST_WRITE_VC, 1, 31 /*wrap*/, false /*linked*/);
     }
 #else

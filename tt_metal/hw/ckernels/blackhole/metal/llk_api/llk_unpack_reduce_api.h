@@ -16,7 +16,7 @@ template <
     bool is_fp32_dest_acc_en = false,
     StochRndType stoch_rnd_mode = StochRndType::None>
 inline void llk_unpack_reduce_hw_configure(
-    const llk_unpack_reduce_params_t *unpack_reduce_params, const float const_mult) {
+    const llk_unpack_reduce_params_t* unpack_reduce_params, const float const_mult) {
     constexpr bool within_face_16x16_transpose = (ReduceDim::REDUCE_ROW == dim);
 
     const std::uint32_t unpA_operand_id = get_operand_id(unpack_reduce_params->unpA_operand);
@@ -41,15 +41,6 @@ inline void llk_unpack_reduce_hw_configure(
         within_face_16x16_transpose,
         unpA_num_faces,
         unpA_num_faces);
-
-    if constexpr (type != PoolType::MAX) {
-        union {
-            float f;
-            uint32_t u;
-        } f2u = {.f = const_mult};
-
-        for (uint i = 0; i < 16; i++) l1_buffer[i] = f2u.u;  // Load const into L1 buffer
-    }
 }
 
 template <
@@ -95,8 +86,8 @@ inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpo
 template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
-    std::uint32_t base_address = cb_interface[operand_id].fifo_rd_ptr - 1;
-    std::uint32_t offset_address = cb_interface[operand_id].fifo_page_size * tile_index;
+    std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
     std::uint32_t address = base_address + offset_address;
 
     WAYPOINT("UPRW");

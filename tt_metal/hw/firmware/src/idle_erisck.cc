@@ -21,16 +21,27 @@
 
 #include <kernel_includes.hpp>
 
-uint8_t noc_index = NOC_INDEX;
-//inline void RISC_POST_STATUS(uint32_t status) {
-//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-//  ptr[0] = status;
-//}
-void kernel_launch() {
-    DeviceZoneScopedMainChildN("ERISC-KERNEL");
-    firmware_kernel_common_init((void tt_l1_ptr *)MEM_IERISC_INIT_LOCAL_L1_BASE);
+void kernel_launch(uint32_t kernel_base_addr) {
+    extern uint32_t __kernel_init_local_l1_base[];
+    extern uint32_t __fw_export_end_text[];
+    do_crt1((uint32_t tt_l1_ptr
+                 *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
-    noc_local_state_init(noc_index);
+    noc_local_state_init(NOC_INDEX);
 
-    kernel_main();
+    {
+        DeviceZoneScopedMainChildN("IDLE-ERISC-KERNEL");
+        kernel_main();
+        if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+            WAYPOINT("NKFW");
+            // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC
+            // interface is in a known idle state for the next kernel.
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+            WAYPOINT("NKFD");
+        }
+    }
 }

@@ -28,8 +28,7 @@ def test_grok_decoder_inference(t3k_mesh_device, use_program_cache, reset_seeds)
     s: sequence length
     h: hidden size
     """
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
     pcc = 0.98
     dtype = ttnn.bfloat8_b
     model_args = TtModelArgs(t3k_mesh_device.get_device(0), dummy_weights=os.getenv("CI") == "true")

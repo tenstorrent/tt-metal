@@ -9,15 +9,15 @@ from functools import partial
 
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, generation_funcs
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull
 
 shape_wh = [
     [[1, 1, 32, 32]],  # Single core
     [[3, 1, 320, 384]],  # Multi core
+    [[1, 1024, 5, 1280]],  # Non page-aligned
 ]
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes", shape_wh)
 def test_run_transpose_wh_test(input_shapes, device, function_level_defaults):
     datagen_func = [
@@ -34,7 +34,6 @@ def test_run_transpose_wh_test(input_shapes, device, function_level_defaults):
     run_single_pytorch_test("transpose", input_shapes, datagen_func, comparison_func, device, test_args)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -63,7 +62,6 @@ shape_cn = [
 ]
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("input_shapes", shape_cn)
 def test_run_transpose_cn_test(input_shapes, device, function_level_defaults):
     datagen_func = [
@@ -80,7 +78,6 @@ def test_run_transpose_cn_test(input_shapes, device, function_level_defaults):
     run_single_pytorch_test("transpose", input_shapes, datagen_func, comparison_func, device, test_args)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -103,7 +100,6 @@ def test_run_transpose_nh_test(input_shapes, device, function_level_defaults):
     run_single_pytorch_test("transpose", input_shapes, datagen_func, comparison_func, device, test_args)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -126,7 +122,6 @@ def test_run_transpose_nw_test(input_shapes, device, function_level_defaults):
     run_single_pytorch_test("transpose", input_shapes, datagen_func, comparison_func, device, test_args)
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (

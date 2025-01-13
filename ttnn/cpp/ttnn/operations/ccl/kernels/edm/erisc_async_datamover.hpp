@@ -12,6 +12,7 @@
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
 
 using ttnn::ccl::EriscDataMoverBufferSharingMode;
 using ttnn::ccl::EriscDataMoverTerminationMode;
@@ -20,7 +21,10 @@ using ttnn::ccl::EriscDataMoverWorkerSignal;
 namespace erisc {
 namespace datamover {
 
-template <EriscDataMoverBufferSharingMode buffer_sharing_mode, EriscDataMoverTerminationMode termination_mode, uint8_t num_buffers_per_channel>
+template <
+    EriscDataMoverBufferSharingMode buffer_sharing_mode,
+    EriscDataMoverTerminationMode termination_mode,
+    uint8_t num_buffers_per_channel>
 struct EriscDatamoverConfig {
     static constexpr EriscDataMoverBufferSharingMode BUFFER_SHARING_MODE = buffer_sharing_mode;
     static constexpr EriscDataMoverTerminationMode TERMINATION_MODE = termination_mode;
@@ -53,7 +57,7 @@ class ChannelBuffer final {
             BUFFER_SHARING_MODE == EriscDataMoverBufferSharingMode::ROUND_ROBIN,
         "The only BufferSharding modes supported are NOT_SHARED and ROUND_ROBIN");
 
-   public:
+public:
     enum STATE : uint8_t {
         DONE = 0,
 
@@ -100,8 +104,8 @@ class ChannelBuffer final {
         uint32_t worker_semaphore_l1_address,
         uint32_t num_workers,
         uint32_t total_num_messages_to_move,
-        volatile tt_l1_ptr uint32_t *const local_semaphore_address,
-        tt_l1_ptr const WorkerXY *worker_coords,
+        volatile tt_l1_ptr uint32_t* const local_semaphore_address,
+        tt_l1_ptr const WorkerXY* worker_coords,
         bool is_sender_side) :
         eth_transaction_channel(eth_transaction_channel),
         local_semaphore_address(local_semaphore_address),
@@ -128,8 +132,10 @@ class ChannelBuffer final {
             this->addresses[i] = address + i * (this->size_in_bytes);
 
             uint32_t channel_sync_addr = this->addresses[i] + payload_size_in_bytes;
-            volatile uint32_t* bytes_sent_addr = &(reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr)->bytes_sent);
-            volatile uint32_t* bytes_acked_addr = &(reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr)->receiver_ack);
+            volatile uint32_t* bytes_sent_addr =
+                &(reinterpret_cast<eth_channel_sync_t*>(channel_sync_addr)->bytes_sent);
+            volatile uint32_t* bytes_acked_addr =
+                &(reinterpret_cast<eth_channel_sync_t*>(channel_sync_addr)->receiver_ack);
             channel_bytes_sent_addresses[i] = bytes_sent_addr;
             channel_bytes_acked_addresses[i] = bytes_acked_addr;
 
@@ -138,7 +144,8 @@ class ChannelBuffer final {
             *(channel_bytes_acked_addresses[i]) = 0;
         }
 
-        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED || total_num_messages_to_move != 0) {
+        if (TERMINATION_MODE != ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED ||
+            total_num_messages_to_move != 0) {
             if (is_sender_side) {
                 // Tell the sender side workers that we're ready to accept data on this channel
                 increment_worker_semaphores();
@@ -149,9 +156,7 @@ class ChannelBuffer final {
         }
     }
     // Resets the semaphore in local L1, which workers write to remotely.
-    FORCE_INLINE void clear_local_semaphore() {
-        noc_semaphore_set(local_semaphore_address, 0);
-    }
+    FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(local_semaphore_address, 0); }
 
     // Increment the semaphore in the remote L1s of every worker associated with this ChannelBuffer
     FORCE_INLINE void increment_worker_semaphores() {
@@ -209,14 +214,11 @@ class ChannelBuffer final {
     }
     [[nodiscard]] FORCE_INLINE bool is_done() const { return this->state == STATE::DONE; }
 
-    [[nodiscard]] FORCE_INLINE uint32_t get_eth_transaction_channel() const {
-        return this->eth_transaction_channel;
-    }
+    [[nodiscard]] FORCE_INLINE uint32_t get_eth_transaction_channel() const { return this->eth_transaction_channel; }
     [[nodiscard]] FORCE_INLINE std::size_t get_size_in_bytes() const { return this->size_in_bytes; }
     [[nodiscard]] FORCE_INLINE std::size_t get_current_payload_size() const { return this->get_size_in_bytes(); }
 
-    [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const {
-        return this->addresses[buffer_index]; }
+    [[nodiscard]] FORCE_INLINE std::size_t get_buffer_address() const { return this->addresses[buffer_index]; }
 
     [[nodiscard]] FORCE_INLINE std::size_t get_remote_eth_buffer_address() const { return this->get_buffer_address(); }
     FORCE_INLINE uint32_t get_messages_moved() { return this->num_messages_moved; }
@@ -231,13 +233,15 @@ class ChannelBuffer final {
 
     FORCE_INLINE bool eth_is_receiver_channel_send_done() const {
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
-        return *(this->channel_bytes_sent_addresses[buffer_index]) == 0; }
+        return *(this->channel_bytes_sent_addresses[buffer_index]) == 0;
+    }
     FORCE_INLINE bool eth_bytes_are_available_on_channel() const {
         ASSERT(buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
         return *(this->channel_bytes_sent_addresses[buffer_index]) != 0;
     }
     FORCE_INLINE bool eth_is_receiver_channel_send_acked() const {
-        return *(this->channel_bytes_acked_addresses[buffer_index]) != 0; }
+        return *(this->channel_bytes_acked_addresses[buffer_index]) != 0;
+    }
     FORCE_INLINE void eth_clear_sender_channel_ack() const { *(this->channel_bytes_acked_addresses[buffer_index]) = 0; }
 
     /*
@@ -288,21 +292,25 @@ class ChannelBuffer final {
         ASSERT(this->buffer_index < EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL);
     }
 
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_sent_address() { return this->channel_bytes_sent_addresses[buffer_index]; }
-    volatile tt_l1_ptr uint32_t *const get_channel_bytes_acked_address() { return this->channel_bytes_acked_addresses[buffer_index]; }
+    volatile tt_l1_ptr uint32_t* const get_channel_bytes_sent_address() {
+        return this->channel_bytes_sent_addresses[buffer_index];
+    }
+    volatile tt_l1_ptr uint32_t* const get_channel_bytes_acked_address() {
+        return this->channel_bytes_acked_addresses[buffer_index];
+    }
 
-   public:
+public:
     uint32_t eth_transaction_channel;  //
-    volatile tt_l1_ptr uint32_t *const local_semaphore_address;
-    WorkerXY const *const worker_coords;
+    volatile tt_l1_ptr uint32_t* const local_semaphore_address;
+    WorkerXY const* const worker_coords;
     std::array<std::size_t, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> addresses;
     std::size_t const size_in_bytes;
     // Even for multiple workers, this address will be the same
     std::size_t const worker_semaphore_l1_address;
     uint32_t const num_workers;
     uint32_t num_messages_moved;
-    std::array<volatile tt_l1_ptr uint32_t *, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_sent_addresses;
-    std::array<volatile tt_l1_ptr uint32_t *, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_acked_addresses;
+    std::array<volatile tt_l1_ptr uint32_t*, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_sent_addresses;
+    std::array<volatile tt_l1_ptr uint32_t*, EDM_CONFIG::NUM_BUFFERS_PER_CHANNEL> channel_bytes_acked_addresses;
     const uint32_t total_num_messages_to_move;
     STATE state;
     edm_worker_index<BUFFER_SHARING_MODE> worker_index;
@@ -313,7 +321,7 @@ class ChannelBuffer final {
 
 template <typename T = uint8_t>
 class QueueIndexPointer {
-   public:
+public:
     QueueIndexPointer(uint8_t queue_size) : ptr(0), size(queue_size), wrap_around(queue_size * 2) {
         // FWASSERT(queue_size < 128);
     }
@@ -347,10 +355,10 @@ class QueueIndexPointer {
         return QueueIndexPointer(this->next_pointer(), this->size);
     }
     // Compares indices since the raw index is not visible to the user
-    inline bool operator==(const QueueIndexPointer &other) const { return this->ptr == other.ptr; }
-    inline bool operator!=(const QueueIndexPointer &other) const { return this->ptr != other.ptr; }
+    inline bool operator==(const QueueIndexPointer& other) const { return this->ptr == other.ptr; }
+    inline bool operator!=(const QueueIndexPointer& other) const { return this->ptr != other.ptr; }
 
-   private:
+private:
     inline T next_pointer() {
         T next_ptr = (this->ptr + 1);
         next_ptr = next_ptr == wrap_around ? 0 : next_ptr;
@@ -362,111 +370,12 @@ class QueueIndexPointer {
     uint8_t wrap_around;
 };
 
-
-/*
- * Before any payload messages can be exchanged over the link, we must ensure that the other end
- * of the link is ready to start sending/receiving messages. We perform a handshake to ensure that's
- * case. Before handshaking, we make sure to clear any of the channel sync datastructures local
- * to our core.
- *
- * The handshaking process is split into two parts for the sender/master and two parts for the
- * the slave. The handshake is broken into 2 parts so that the master can initiate the handshake
- * as early as possible so the message can be "in flight" over the ethernet link while other EDM
- * initialization is taking place.
- *
- * Important note about handshaking: the sender/master canNOT complete the handshake until all receiver
- * channels are initialized. Otherwise we have a race between channel initialization on the receiver side
- * and real payload data (and signals) using those channels.
- *
- * Note that the master and slave concepts here only apply in the context of handshaking and initialization
- * of the EDM. They do not apply during the main EDM execution loop.
- *
- * The basic protocol for the handshake is to use the reserved space at erisc_info[0] where the master writes
- * and sends payload available information to that channel. The receive must acknowledge that message and upon
- * doing so, considers the handshake complete.
- */
-namespace handshake {
-
-static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
-
-/*
- * Initialize base datastructures and values which are common to master and slave EDM cores.
- * The main memory region initialized here is the channel ack region offset 16B from the
- * base handshake address.
- *
- * This memory region serves a special purpose for flow control between EDM cores. This
- * 16B region is initialized to a fixed set of values. This region is used by receiver
- * EDM channels when sending first level acks to its corresponding sender EDM channel.
- *
- * See ChannelBuffer::eth_receiver_channel_ack for more information
- */
-FORCE_INLINE void initialize_edm_common_datastructures(std::uint32_t handshake_register_address) {
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[4] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[5] = 1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[6] = 0x1c0ffee1;
-    reinterpret_cast<volatile tt_l1_ptr uint32_t *>(handshake_register_address)[7] = 0x1c0ffee2;
-
-    erisc_info->channels[0].receiver_ack = 0;
-    for (uint32_t i = 1; i < eth_l1_mem::address_map::MAX_NUM_CONCURRENT_TRANSACTIONS; i++) {
-        erisc_info->channels[i].bytes_sent = 0;
-        erisc_info->channels[i].receiver_ack = 0;
-    }
-    *(volatile tt_l1_ptr uint32_t *)handshake_register_address = 0;
-}
-
-/*
- * As the designated master EDM core, initiate a handshake by sending a packet to reserved
- * memory region.
- */
-FORCE_INLINE void sender_side_start(std::uint32_t handshake_register_address) {
-    initialize_edm_common_datastructures(handshake_register_address);
-    eth_wait_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
-    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
-        asm volatile("nop");
-    }
-    eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-}
-
-/*
- * As the designated master EDM core, wait for the acknowledgement from the slave EDM core
- */
-FORCE_INLINE void sender_side_finish(std::uint32_t handshake_register_address) {
-    eth_wait_for_receiver_done(A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
-}
-
-FORCE_INLINE void receiver_side_start(std::uint32_t handshake_register_address) {
-    initialize_edm_common_datastructures(handshake_register_address);
-}
-
-/*
- * Return: true if slave EDM handshake core is able to complete the handshake with
- * an ack.
- */
-FORCE_INLINE bool receiver_side_can_finish() {
-    return eth_bytes_are_available_on_channel(0);
-}
-
-/*
- * As the designated slave EDM core, send the acknowledgement to the master EDM core.
- * The slave EDM core shall only acknowledge after receiving the initial handshake packet
- * from the master EDM core.
- */
-FORCE_INLINE void receiver_side_finish(std::uint32_t handshake_register_address) {
-    eth_wait_for_bytes(16, A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH);
-    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
-        asm volatile("nop");
-    }
-    eth_receiver_channel_done(0);
-}
-} // namespace handshake
-
-
 template <uint32_t NUM_CHANNELS>
 FORCE_INLINE void initialize_transaction_buffer_addresses(
     uint32_t max_concurrent_transactions,
     uint32_t first_buffer_base_address,
     uint32_t num_bytes_per_send,
-    std::array<uint32_t, NUM_CHANNELS> &transaction_channel_buffer_addresses) {
+    std::array<uint32_t, NUM_CHANNELS>& transaction_channel_buffer_addresses) {
     uint32_t buffer_address = first_buffer_base_address;
     for (uint32_t i = 0; i < max_concurrent_transactions; i++) {
         transaction_channel_buffer_addresses[i] = buffer_address;
@@ -478,14 +387,16 @@ FORCE_INLINE void initialize_transaction_buffer_addresses(
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 template <typename EDM_CONFIG>
-FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sender_buffer_channel) {
+FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG>& sender_buffer_channel) {
     bool did_something = false;
     if (sender_buffer_channel.eth_is_receiver_channel_send_done()) {
         bool need_to_send_completion = sender_buffer_channel.is_send_completion_pending();
         if (!eth_txq_is_busy()) {
             static constexpr std::size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
-            ASSERT((uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
-                ((uint32_t)sender_buffer_channel.get_buffer_address() + (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
+            ASSERT(
+                (uint32_t)sender_buffer_channel.get_channel_bytes_sent_address() ==
+                ((uint32_t)sender_buffer_channel.get_buffer_address() +
+                 (uint32_t)sender_buffer_channel.get_current_payload_size() - (uint32_t)sizeof(eth_channel_sync_t)));
             *sender_buffer_channel.get_channel_bytes_sent_address() = sender_buffer_channel.get_current_payload_size();
             *sender_buffer_channel.get_channel_bytes_acked_address() = 0;
 
@@ -507,8 +418,7 @@ FORCE_INLINE bool sender_eth_send_data_sequence(ChannelBuffer<EDM_CONFIG> &sende
 
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
-
+    ChannelBuffer<EDM_CONFIG>& sender_buffer_channel, uint32_t& num_senders_complete) {
     bool channel_done = false;
     if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
         channel_done = sender_buffer_channel.all_messages_moved();
@@ -533,7 +443,7 @@ FORCE_INLINE bool sender_notify_workers_if_buffer_available_sequence(
 
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_buffer_channel, uint32_t &num_senders_complete) {
+    ChannelBuffer<EDM_CONFIG>& sender_buffer_channel, uint32_t& num_senders_complete) {
     bool did_something = false;
 
     bool transimission_acked_by_receiver = sender_buffer_channel.eth_is_receiver_channel_send_acked() ||
@@ -551,10 +461,9 @@ FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
     return did_something;
 }
 
-
 template <typename EDM_CONFIG>
 FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
-    ChannelBuffer<EDM_CONFIG> &sender_channel_buffer, uint32_t &num_senders_complete) {
+    ChannelBuffer<EDM_CONFIG>& sender_channel_buffer, uint32_t& num_senders_complete) {
     bool did_something = false;
 
     if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
@@ -575,7 +484,6 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
     }
 
     return did_something;
-
 }
 
 /////////////////////////////////////////////
@@ -586,7 +494,7 @@ FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
  *
  */
 template <typename EDM_CONFIG>
-FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<EDM_CONFIG> &buffer_channel) {
+FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(ChannelBuffer<EDM_CONFIG>& buffer_channel) {
     buffer_channel.clear_local_semaphore();
     uint32_t worker_semaphore_address = buffer_channel.worker_semaphore_l1_address;
     buffer_channel.increment_worker_semaphores();
@@ -601,8 +509,8 @@ FORCE_INLINE bool receiver_eth_notify_workers_payload_available_sequence(Channel
  */
 template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_eth_accept_payload_sequence(
-    ChannelBuffer<EDM_CONFIG> &buffer_channel,
-    uint32_t &num_receivers_complete,
+    ChannelBuffer<EDM_CONFIG>& buffer_channel,
+    uint32_t& num_receivers_complete,
     uint32_t eth_transaction_ack_word_addr) {
     bool did_something = false;
 
@@ -622,7 +530,6 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
     return did_something;
 }
 
-
 /*
  * Does something if we are waiting for workers to complete their read and the read is complete:
  * - increment messages moved (that transfer is done)
@@ -631,8 +538,7 @@ FORCE_INLINE bool receiver_eth_accept_payload_sequence(
  */
 template <typename EDM_CONFIG>
 FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
-    ChannelBuffer<EDM_CONFIG> &buffer_channel,
-    uint32_t &num_receivers_complete) {
+    ChannelBuffer<EDM_CONFIG>& buffer_channel, uint32_t& num_receivers_complete) {
     bool did_something = false;
 
     bool workers_are_finished_reading = buffer_channel.is_local_semaphore_full();
@@ -656,7 +562,8 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
             if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED) {
                 channel_done = buffer_channel.all_messages_moved();
             } else if constexpr (EDM_CONFIG::TERMINATION_MODE == EriscDataMoverTerminationMode::WORKER_INITIATED) {
-                channel_done = (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
+                channel_done =
+                    (*buffer_channel.local_semaphore_address == EriscDataMoverWorkerSignal::TERMINATE_IMMEDIATELY);
             } else {
                 ASSERT(false);
             }
@@ -673,207 +580,6 @@ FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
 
     return did_something;
 }
-
-
-////////////////////////////
-//  DEPRECATED
-////////////////////////////
-namespace deprecated {
-// This namespace exists to support non-decoupled mode microbenchmarks until those are available
-// in decoupled mode
-
-FORCE_INLINE bool sender_buffer_pool_full(
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr,
-    const QueueIndexPointer<uint8_t> eth_sender_rdptr,
-    const QueueIndexPointer<uint8_t> eth_sender_ackptr) {
-    return QueueIndexPointer<uint8_t>::full(noc_reader_buffer_wrptr, eth_sender_ackptr);
-}
-
-FORCE_INLINE bool sender_buffer_pool_empty(
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr,
-    const QueueIndexPointer<uint8_t> eth_sender_rdptr,
-    const QueueIndexPointer<uint8_t> eth_sender_ackptr) {
-    return QueueIndexPointer<uint8_t>::empty(eth_sender_rdptr, noc_reader_buffer_wrptr);
-}
-
-FORCE_INLINE bool sender_buffer_available_for_eth_send(
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr,
-    const QueueIndexPointer<uint8_t> eth_sender_rdptr,
-    const QueueIndexPointer<uint8_t> eth_sender_ackptr) {
-    return eth_sender_rdptr != noc_reader_buffer_ackptr;
-}
-
-template <uint32_t MAX_NUM_CHANNELS>
-FORCE_INLINE bool sender_eth_send_data_sequence(
-    std::array<uint32_t, MAX_NUM_CHANNELS> &transaction_channel_sender_buffer_addresses,
-    std::array<uint32_t, MAX_NUM_CHANNELS> &transaction_channel_receiver_buffer_addresses,
-    uint32_t local_eth_l1_src_addr,
-    uint32_t remote_eth_l1_dst_addr,
-    uint32_t num_bytes,
-    uint32_t num_bytes_per_send,
-    uint32_t num_bytes_per_send_word_size,
-    QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr,
-    QueueIndexPointer<uint8_t> &eth_sender_rdptr,
-    QueueIndexPointer<uint8_t> &eth_sender_ackptr) {
-    bool did_something = false;
-    bool data_ready_for_send = sender_buffer_available_for_eth_send(
-        noc_reader_buffer_wrptr, noc_reader_buffer_ackptr, eth_sender_rdptr, eth_sender_ackptr);
-    if (data_ready_for_send) {
-        bool consumer_ready_to_accept = eth_is_receiver_channel_send_done(eth_sender_rdptr.index());
-        if (consumer_ready_to_accept) {
-            // Queue up another send
-            uint32_t sender_buffer_address = transaction_channel_sender_buffer_addresses[eth_sender_rdptr.index()];
-            uint32_t receiver_buffer_address = transaction_channel_receiver_buffer_addresses[eth_sender_rdptr.index()];
-
-            eth_send_bytes_over_channel(
-                sender_buffer_address,
-                receiver_buffer_address,
-                num_bytes,
-                eth_sender_rdptr.index(),
-                num_bytes_per_send,
-                num_bytes_per_send_word_size);
-            eth_sender_rdptr.increment();
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-FORCE_INLINE bool sender_eth_check_receiver_ack_sequence(
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr,
-    QueueIndexPointer<uint8_t> &eth_sender_rdptr,
-    QueueIndexPointer<uint8_t> &eth_sender_ackptr,
-    uint32_t &num_eth_sends_acked) {
-    bool did_something = false;
-    bool eth_sends_unacknowledged = QueueIndexPointer<uint8_t>::distance(eth_sender_rdptr, eth_sender_ackptr) > 0;
-    if (eth_sends_unacknowledged) {
-        bool transimission_acked_by_receiver = eth_is_receiver_channel_send_acked(eth_sender_ackptr.index()) ||
-                                               eth_is_receiver_channel_send_done(eth_sender_ackptr.index());
-        if (transimission_acked_by_receiver) {
-            num_eth_sends_acked++;
-            eth_sender_ackptr.increment();
-
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-FORCE_INLINE bool sender_is_noc_read_in_progress(
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_reader_buffer_ackptr) {
-    return noc_reader_buffer_wrptr != noc_reader_buffer_ackptr;
-}
-
-FORCE_INLINE bool sender_noc_receive_payload_ack_check_sequence(
-    QueueIndexPointer<uint8_t> &noc_reader_buffer_wrptr,
-    QueueIndexPointer<uint8_t> &noc_reader_buffer_ackptr,
-    const uint8_t noc_index) {
-    bool did_something = false;
-
-    bool noc_read_is_in_progress = sender_is_noc_read_in_progress(noc_reader_buffer_wrptr, noc_reader_buffer_ackptr);
-    if (noc_read_is_in_progress) {
-#if EMULATE_DRAM_READ_CYCLES == 1
-        bool read_finished = emulated_dram_read_cycles_finished();
-#else
-        bool read_finished = ncrisc_noc_reads_flushed(noc_index);
-#endif
-        if (read_finished) {
-            noc_reader_buffer_ackptr.increment();
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-/////////////////////////////////////////////
-//   RECEIVER SIDE HELPERS
-/////////////////////////////////////////////
-
-FORCE_INLINE bool receiver_is_noc_write_in_progress(
-    const QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr) {
-    return noc_writer_buffer_wrptr != noc_writer_buffer_ackptr;
-}
-
-bool receiver_eth_accept_payload_sequence(
-    QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr,
-    QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr,
-    QueueIndexPointer<uint8_t> &eth_receiver_ptr,
-    QueueIndexPointer<uint8_t> &eth_receiver_ackptr,
-    uint32_t eth_channel_sync_ack_addr) {
-    bool did_something = false;
-    bool receive_pointers_full = QueueIndexPointer<uint8_t>::full(eth_receiver_ptr, eth_receiver_ackptr);
-
-    if (!receive_pointers_full) {
-        if (eth_bytes_are_available_on_channel(eth_receiver_ptr.index())) {
-            eth_receiver_channel_ack(eth_receiver_ptr.index(), eth_channel_sync_ack_addr);
-            eth_receiver_ptr.increment();
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-FORCE_INLINE bool receiver_noc_read_worker_completion_check_sequence(
-    QueueIndexPointer<uint8_t> &noc_writer_buffer_wrptr,
-    QueueIndexPointer<uint8_t> &noc_writer_buffer_ackptr,
-    const uint8_t noc_index) {
-    bool did_something = false;
-
-    bool noc_write_is_in_progress =
-        receiver_is_noc_write_in_progress(noc_writer_buffer_wrptr, noc_writer_buffer_ackptr);
-    if (noc_write_is_in_progress) {
-#if EMULATE_DRAM_READ_CYCLES == 1
-        bool write_finished = emulated_dram_write_cycles_finished();
-#else
-        bool writes_finished = ncrisc_noc_nonposted_writes_sent(noc_index);
-#endif
-        if (writes_finished) {
-            noc_writer_buffer_ackptr.increment();
-
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-FORCE_INLINE bool receiver_eth_send_ack_to_sender_sequence(
-    const QueueIndexPointer<uint8_t> noc_writer_buffer_wrptr,
-    const QueueIndexPointer<uint8_t> noc_writer_buffer_ackptr,
-    QueueIndexPointer<uint8_t> &eth_receiver_rdptr,
-    QueueIndexPointer<uint8_t> &eth_receiver_ackptr,
-    uint32_t &num_eth_sends_acked) {
-    bool did_something = false;
-    bool eth_sends_unacknowledged = eth_receiver_rdptr != eth_receiver_ackptr;
-    if (eth_sends_unacknowledged) {
-        // If data is done being sent out of this local l1 buffer and to the destination(s),
-        // then we can safely send the ack and increment the ackptr
-        bool buffer_writes_flushed = ncrisc_noc_nonposted_writes_sent(noc_index);
-        // bool buffer_writes_flushed = ncrisc_noc_nonposted_writes_flushed(noc_index);
-        if (buffer_writes_flushed) {
-            eth_receiver_channel_done(eth_receiver_ackptr.index());
-            num_eth_sends_acked++;
-            eth_receiver_ackptr.increment();
-
-            did_something = true;
-        }
-    }
-
-    return did_something;
-}
-
-};  // namespace deprecated
 
 };  // namespace datamover
 };  // namespace erisc

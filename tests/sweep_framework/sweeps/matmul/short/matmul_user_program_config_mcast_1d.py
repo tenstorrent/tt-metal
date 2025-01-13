@@ -52,7 +52,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -77,10 +76,9 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(28, core_grid, row_wise=True)),
+                    ttnn.num_cores_to_corerangeset(28, core_grid, row_wise=True),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -105,10 +103,9 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(35, core_grid, row_wise=True)),
+                    ttnn.num_cores_to_corerangeset(35, core_grid, row_wise=True),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -134,10 +131,9 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(28, core_grid, row_wise=True)),
+                    ttnn.num_cores_to_corerangeset(28, core_grid, row_wise=True),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -163,10 +159,9 @@ parameters = {
                 memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 buffer_type=ttnn.BufferType.L1,
                 shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(30, core_grid, row_wise=True)),
+                    ttnn.num_cores_to_corerangeset(30, core_grid, row_wise=True),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -198,7 +193,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -227,7 +221,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -256,7 +249,6 @@ parameters = {
                     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
                     (64, IN0_INNER_DIM_PER_CORE),
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],

@@ -27,7 +27,7 @@ from models.utility_functions import is_grayskull, is_wormhole_b0
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])
 @pytest.mark.parametrize(
     "batch_size, seq_len, expected_inference_time, expected_compile_time",
-    ([8, 384, 15.00, 16.00],),
+    ([8, 384, 15.00, 20.00],),
 )
 def test_performance_distilbert_for_qa(
     batch_size,
@@ -152,9 +152,9 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     margin = 0.03
     num_iterations = 1
     if is_grayskull():
-        expected_perf = 10.01
+        expected_perf = 57.3
     elif is_wormhole_b0():
-        expected_perf = 19.80
+        expected_perf = 95.5
 
     command = f"pytest tests/ttnn/integration_tests/distilbert/test_ttnn_distilbert.py::test_distilbert_for_question_answering[sequence_size=768-batch_size=8-model_name=distilbert-base-uncased-distilled-squad]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

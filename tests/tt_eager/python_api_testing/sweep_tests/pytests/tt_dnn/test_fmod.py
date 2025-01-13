@@ -16,7 +16,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull
 
 mem_configs = [
     ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -24,7 +24,6 @@ mem_configs = [
 ]
 
 
-@skip_for_blackhole("Only supported on WH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -45,13 +44,12 @@ class TestFmod:
         dst_mem_config,
         device,
     ):
+        # For FMOD on inputs with > 2 decimals, use float32 for precision: issue #15780
         datagen_func = [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-        ] + [
-            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
-        ]
+            generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)
+        ] + [generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.float32)]
         test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args.update({"output_mem_config": dst_mem_config})
+        test_args.update({"dtype": [ttnn.float32, ttnn.float32], "output_mem_config": dst_mem_config})
         comparison_func = comparison_funcs.comp_pcc
 
         run_single_pytorch_test(

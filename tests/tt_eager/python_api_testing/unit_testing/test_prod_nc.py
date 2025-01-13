@@ -28,7 +28,6 @@ def get_tensors(input_shape, output_shape, device):
     return tt_input, tt_output, torch_input
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape",
     (

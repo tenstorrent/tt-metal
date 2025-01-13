@@ -5,7 +5,8 @@
 import pytest
 
 from models.utility_functions import skip_for_grayskull
-from models.demos.t3000.llama2_70b.tt.llama_common import setup_llama_env, check_mesh_device
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
+from models.demos.t3000.llama2_70b.tt.llama_common import check_mesh_device
 from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_LlamaModel_inference
 
 
@@ -26,11 +27,11 @@ from models.demos.tg.llama3_70b.tests.test_llama_model_galaxy import run_test_Ll
     "batch, seq_len",
     [
         (32, 1),
-        #  (1, 256)
+        (1, 256),
     ],
     ids=[
         "decode",
-        #  "prefill"
+        "prefill",
     ],
 )
 @pytest.mark.parametrize(

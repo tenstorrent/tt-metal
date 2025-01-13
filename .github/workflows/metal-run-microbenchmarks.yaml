@@ -19,28 +19,33 @@ jobs:
           # {arch: wormhole_b0, runs-on: ["pipeline-perf", "N150", "bare-metal", "in-service"]},
           # N300
           {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"]},
+          {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], ccl: true},
         ]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       # Use BM for microbenchmarks
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build tt-metal and libs
         run: |
-          ./scripts/build_scripts/build_with_profiler_opt.sh
+          ./build_metal.sh --enable-profiler --build-programming-examples --build-tests
           ./create_venv.sh
-      - name: Build tests
-        run: cmake --build build --target tests -- -j`nproc`
       - name: Run microbenchmark tests
         timeout-minutes: 90
-        run: ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type microbenchmarks
+        run: |
+          PIPELINE_TYPE="microbenchmarks"
+          if [ "${{ matrix.runner-info.ccl }}" == "true" ]; then
+            PIPELINE_TYPE="ccl_microbenchmarks"
+          else
+            TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type ${{ matrix.runner-info.runs-on[0] }}
+          fi
+          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type "$PIPELINE_TYPE"
       - name: Upload microbenchmark report csvs
         uses: actions/upload-artifact@v4
         with:

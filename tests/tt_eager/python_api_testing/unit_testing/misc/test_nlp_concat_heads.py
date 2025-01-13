@@ -31,7 +31,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     logger.debug(f"in0: {in0_t.memory_config().buffer_type} and {in0_t.get_dtype()}")
     logger.debug(f"out: {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert list(out.get_legacy_shape()) == [batch, 1, seq_len, num_heads * head_dim]
+    assert list(out.shape.with_tile_padding()) == [batch, 1, seq_len, num_heads * head_dim]
 
     pyt_got_back_rm_out = tt2torch_tensor(out)
 

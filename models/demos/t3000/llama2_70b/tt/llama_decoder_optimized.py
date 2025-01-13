@@ -154,9 +154,20 @@ class TtLlamaDecoder_optimized:
         page_table=None,
         kv_cache=None,
         mode="decode",
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> ttnn.Tensor:
         if mode == "prefill":
-            return self.prefill_forward(xs, rot_mats, start_pos, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.prefill_forward(
+                xs,
+                rot_mats,
+                start_pos,
+                user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+            )
         elif mode == "decode":
             return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
         else:
@@ -176,7 +187,7 @@ class TtLlamaDecoder_optimized:
             xs,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -184,8 +195,8 @@ class TtLlamaDecoder_optimized:
             xs_replicated,
             epsilon=self.norm_eps,
             weight=self.attn_norm,
-            program_config=self.model_config["LN_F_PROGCFG"],
-            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_16_CORES_PROGCFG"],
+            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # attn_norm_replicated is sharded
@@ -207,7 +218,7 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(
             output,
             attn_outs,
-            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],
         )
         attn_outs.deallocate(True)
 
@@ -215,7 +226,7 @@ class TtLlamaDecoder_optimized:
             output,
             dim=3,
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
         )
 
         # In-place RMSNorm
@@ -223,8 +234,8 @@ class TtLlamaDecoder_optimized:
             attn_resid_replicated,
             epsilon=self.norm_eps,
             weight=self.ffn_norm,
-            program_config=self.model_config["LN_F_PROGCFG"],
-            memory_config=self.model_config["FINAL_ALL_GATHER_OUTPUT_MEMCFG"],
+            program_config=self.model_config["LN_16_CORES_PROGCFG"],
+            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
             compute_kernel_config=self.model_config["LN_COMPUTE_KERNEL_CONFIG"],
         )
         # ffn_norm_replicated is sharded
@@ -235,7 +246,7 @@ class TtLlamaDecoder_optimized:
         output = ttnn.add(
             output,
             ffn_out,
-            memory_config=self.model_config["RESIDUAL_ADD_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["RESIDUAL_16_CORES_OUTPUT_MEMCFG"],
         )
         ffn_out.deallocate(True)
 
@@ -276,15 +287,9 @@ class TtLlamaDecoder_optimized:
         user_id: int = 0,
         page_table=None,
         kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ) -> List[ttnn.Tensor]:
-        ### xs (residual stream) is fractured on all chips
-        # TODO: Reenable when typcast supports multidevice
-        # xs_replicated = []
-        # for i in range(self.num_devices):
-        #     xs_replicated.append(
-        #         ttnn.experimental.tensor.typecast(ttnn.clone(xs[i]), dtype=ttnn.bfloat8_b)
-        #     )
-
         attn_norm_interleaved = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.attn_norm_sharded)
         attn_norm_interleaved = ttnn.all_gather(
             attn_norm_interleaved,
@@ -302,6 +307,8 @@ class TtLlamaDecoder_optimized:
             page_table=page_table,
             kv_cache=kv_cache,
             mode="prefill",
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
 
         attn_norm_interleaved.deallocate(True)

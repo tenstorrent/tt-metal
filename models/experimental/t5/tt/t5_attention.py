@@ -421,8 +421,8 @@ class TtT5Attention(nn.Module):
         Mask is (batch_size, key_length) (non-causal) or (batch_size, key_length, key_length)
         past_key_value[0] is (batch_size, n_heads, q_len - 1, dim_per_head)
         """
-        batch_size = hidden_states.get_legacy_shape()[1]
-        seq_length = hidden_states.get_legacy_shape()[2]
+        batch_size = hidden_states.shape.with_tile_padding()[1]
+        seq_length = hidden_states.shape.with_tile_padding()[2]
 
         real_seq_length = seq_length
 
@@ -432,7 +432,7 @@ class TtT5Attention(nn.Module):
             ), f"past_key_value should have 2 past states: keys and values. Got { len(past_key_value)} past states"
             real_seq_length += past_key_value[0].shape[2] if query_length is None else query_length
 
-        key_length = real_seq_length if key_value_states is None else key_value_states.get_legacy_shape()[2]
+        key_length = real_seq_length if key_value_states is None else key_value_states.shape.with_tile_padding()[2]
 
         def shape(states):
             """projection"""
@@ -462,7 +462,7 @@ class TtT5Attention(nn.Module):
                     hidden_states = tt2torch_tensor(hidden_states)
                     hidden_states = torch.cat([past_key_value, hidden_states], dim=2)
                     hidden_states = torch2tt_tensor(hidden_states, self.device)
-                elif past_key_value.shape[2] != key_value_states.get_legacy_shape()[2]:
+                elif past_key_value.shape[2] != key_value_states.shape.with_tile_padding()[2]:
                     # checking that the `sequence_length` of the `past_key_value` is the same as
                     # the provided `key_value_states` to support prefix tuning
                     # cross-attn
@@ -519,7 +519,7 @@ class TtT5Attention(nn.Module):
             # if key and values are already calculated
             # we want only the last query position bias
             if past_key_value is not None:
-                position_bias = position_bias[:, :, -hidden_states.get_legacy_shape()[2] :, :]
+                position_bias = position_bias[:, :, -hidden_states.shape.with_tile_padding()[2] :, :]
 
             # "Broadcast" position bias so it can be used in + operation
             position_bias = position_bias.repeat(batch_size, 1, 1, 1)
@@ -529,7 +529,7 @@ class TtT5Attention(nn.Module):
 
             # Prunned heads!
             if self.pruned_heads:
-                mask = torch.ones(position_bias.get_legacy_shape()[2])
+                mask = torch.ones(position_bias.shape.with_tile_padding()[2])
                 mask[list(self.pruned_heads)] = 0
                 position_bias = position_bias[:, mask.bool()]
 

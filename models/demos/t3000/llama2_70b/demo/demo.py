@@ -261,8 +261,8 @@ def run_decode(
     # capture trace
     if trace_mode:
         logger.info("Capturing trace")
-        trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits = model.capture_trace(
-            tokens[:, prev_pos:min_prompt_len], prev_pos
+        trace_id, tt_inp_emb, rot_idxs_tt, cache_idxs_tt, tt_logits, _ = model.capture_trace(
+            tokens[:, prev_pos : prev_pos + 1], prev_pos
         )
 
     for cur_pos in range(min_prompt_len, total_len):
@@ -270,7 +270,7 @@ def run_decode(
         input_tokens = tokens[:, prev_pos:cur_pos]
         if trace_mode and input_tokens.shape[1] == 1:
             logits = model.decode_forward_trace(
-                input_tokens, prev_pos, trace_id, tt_inp_emb, rot_mat, cache_idxs_tt, tt_logits
+                input_tokens, prev_pos, trace_id, tt_inp_emb, rot_idxs_tt, cache_idxs_tt, tt_logits
             )
         else:
             logits = model.forward(input_tokens, prev_pos)
@@ -457,9 +457,7 @@ def test_LlamaModel_demo(
 
     check_mesh_device(t3k_mesh_device, model_config)
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
-        device.enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
     args = construct_arg(
         implementation=implementation,

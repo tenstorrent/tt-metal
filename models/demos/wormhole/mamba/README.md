@@ -78,7 +78,7 @@ pytest -svv models/demos/wormhole/mamba/tests/test_mamba_perf.py -m models_perfo
 
 ### Device-Side Performance
 
-Build with profiler support enabled (use the build script `./scripts/build_scripts/build_with_profiler_opt.sh`) and run the following command to test device-side performance:
+Build with profiler support enabled (use the build script `./build_metal.sh --enable-profiler`) and run the following command to test device-side performance:
 
 ```
 pytest -svv models/demos/wormhole/mamba/tests/test_mamba_perf.py -m models_device_performance_bare_metal

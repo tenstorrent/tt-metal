@@ -5,27 +5,28 @@
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/cb_utils.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::embedding_backward::detail {
 
 operation::ProgramWithCallbacks embedding_backward_multi_core(
-    const Tensor &index_tensor, const Tensor &grad_tensor, Tensor &output, const uint32_t num_embeddings) {
+    const Tensor& index_tensor, const Tensor& grad_tensor, Tensor& output, const uint32_t num_embeddings) {
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer *index_tensor_buffer = index_tensor.buffer();
-    tt_metal::Buffer *grad_tensor_buffer = grad_tensor.buffer();
-    tt_metal::Buffer *out_buffer = output.buffer();
+    tt_metal::Buffer* index_tensor_buffer = index_tensor.buffer();
+    tt_metal::Buffer* grad_tensor_buffer = grad_tensor.buffer();
+    tt_metal::Buffer* out_buffer = output.buffer();
 
-    Device *device = grad_tensor.device();
+    IDevice* device = grad_tensor.device();
     auto dst_addr = out_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -80,23 +81,23 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     ////////////////////////////////////////////////////////////////////////////
 
     // To read from grad tensor
-    create_cb(CB::c_in0, program, all_cores, grad_single_tile_size, max_tiles_per_core, grad_cb_data_format);
+    create_cb(CBIndex::c_0, program, all_cores, grad_single_tile_size, max_tiles_per_core, grad_cb_data_format);
 
     // To store index values for a single tile
-    create_cb(CB::c_in1, program, all_cores, index_single_page_size, 1, index_cb_data_format);
+    create_cb(CBIndex::c_1, program, all_cores, index_single_page_size, 1, index_cb_data_format);
 
     // To read from output tensor
-    create_cb(CB::c_in2, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    create_cb(CBIndex::c_2, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
 
     // To store mask values for a single tile
-    create_cb(CB::c_intermed0, program, all_cores, mask_single_page_size, 1, mask_cb_data_format);
+    create_cb(CBIndex::c_24, program, all_cores, mask_single_page_size, 1, mask_cb_data_format);
 
     // L1 scratch space to pass chunk_count from reader to UNPACK
     create_cb(
-        CB::c_intermed1, program, all_cores, 16, 1, grad_cb_data_format);  // grad_cb_data_format doesn't matter here
+        CBIndex::c_25, program, all_cores, 16, 1, grad_cb_data_format);  // grad_cb_data_format doesn't matter here
 
     // For tiles to be written to the output
-    create_cb(CB::c_out0, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
+    create_cb(CBIndex::c_16, program, all_cores, output_single_tile_size, max_tiles_per_core, output_cb_data_format);
 
     ////////////////////////////////////////////////////////////////////////////
     //                 Kernels
@@ -105,7 +106,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     // reader
 
     bool index_stick_size_is_power_of_two = is_power_of_two_at_least_32(index_page_size);
-    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? log2(index_page_size) : 0;
+    uint32_t index_log2_stick_size = index_stick_size_is_power_of_two ? std::log2(index_page_size) : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         grad_is_dram,
@@ -150,7 +151,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     uint32_t offset = 0;
     for (auto core : cores) {
         reader_runtime_args[4] = offset;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             reader_runtime_args[5] = num_tiles_per_core_group_1;
         } else {
             reader_runtime_args[5] = num_tiles_per_core_group_2;
@@ -162,17 +163,17 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     }
 
     auto override_runtime_args_callback = [reader_kernel_id, cores, device](
-                                              const Program &program,
-                                              const std::vector<Buffer *> &input_buffers,
-                                              const std::vector<Buffer *> &output_buffers) {
-        auto grad_dram_buffer = input_buffers.at(0);
-        auto index_dram_buffer = input_buffers.at(1);
+                                              const Program& program,
+                                              const std::vector<Buffer*>& input_buffers,
+                                              const std::vector<Buffer*>& output_buffers) {
+        auto index_dram_buffer = input_buffers.at(0);
+        auto grad_dram_buffer = input_buffers.at(1);
         auto output_dram_buffer = output_buffers.at(0);
 
-        auto &runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const auto &core : cores) {
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : cores) {
             {
-                auto &runtime_args = runtime_args_by_core[core.x][core.y];
+                auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = grad_dram_buffer->address();
                 runtime_args[1] = index_dram_buffer->address();
                 runtime_args[2] = output_dram_buffer->address();

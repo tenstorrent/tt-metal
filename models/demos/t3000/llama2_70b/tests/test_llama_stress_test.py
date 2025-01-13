@@ -98,12 +98,9 @@ def run_test_LlamaModel_stress_test(
         start_pos = 0
         prev_pos = start_pos
         for cur_pos in tqdm(range(start_pos + 1, total_len), desc="Decode to 2k Progress", leave=False, colour="green"):
-            tt_inp_emb, prev_pos, rot_mat, cache_idxs = tt_model.prepare_inputs(tokens[:, prev_pos:cur_pos], prev_pos)
-            tt_inp_emb = ttnn.to_device(tt_inp_emb, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            tt_inp_emb = tt_model.tt_embd(tt_inp_emb)
-            tt_inp_emb = ttnn.interleaved_to_sharded(tt_inp_emb, model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
-            rot_mat = ttnn.to_device(rot_mat, mesh_device, memory_config=model_config["ROT_MAT_MM_IN1_MEMCFG"])
-            cache_idxs = ttnn.to_device(cache_idxs, mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            tt_inp_emb, prev_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
+                tokens[:, prev_pos:cur_pos], prev_pos
+            )
 
             tt_logits = tt_model(tt_inp_emb, rot_mat, prev_pos, cache_idxs=cache_idxs)
 
@@ -147,9 +144,7 @@ def test_Llama_stress_test(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    for i in t3k_mesh_device.get_device_ids():
-        device = t3k_mesh_device.get_device(i)
-        device.enable_program_cache()
+    t3k_mesh_device.enable_program_cache()
     disable_compilation_reports()
     run_test_LlamaModel_stress_test(
         devices,

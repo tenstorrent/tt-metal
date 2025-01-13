@@ -276,8 +276,7 @@ def test_falcon_prefill_end_to_end_determinism(
 
     input_shape = [batch, seq_len]
     model_config = get_model_config(model_config_str, "prefill", input_shape, num_devices)
-    devices = t3k_mesh_device.get_devices()
-    compute_grid_size = devices[0].compute_with_storage_grid_size()
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
@@ -286,8 +285,7 @@ def test_falcon_prefill_end_to_end_determinism(
     )
 
     if enable_program_cache:
-        for device in devices:
-            device.enable_program_cache()
+        t3k_mesh_device.enable_program_cache()
 
     run_test_falcon_prefill_end_to_end_determinism(
         t3k_mesh_device,
@@ -304,5 +302,4 @@ def test_falcon_prefill_end_to_end_determinism(
     )
 
     if enable_program_cache:
-        for device in devices:
-            device.disable_and_clear_program_cache()
+        t3k_mesh_device.disable_and_clear_program_cache()

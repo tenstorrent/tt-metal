@@ -12,13 +12,13 @@ void bind_moreh_getitem_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::moreh_getitem,
-        "Moreh moreh_getitem operation",
+        "Moreh Getitem operation",
         ttnn::pybind_arguments_t{
             py::arg("input"),
             py::arg("index_tensors"),
             py::arg("index_dims"),
             py::kw_only(),
             py::arg("output") = std::nullopt,
-            py::arg("output_memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

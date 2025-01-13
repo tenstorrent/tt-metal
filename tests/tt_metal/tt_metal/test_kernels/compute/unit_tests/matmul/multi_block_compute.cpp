@@ -27,7 +27,7 @@ void MAIN {
     // out = in0[r x k]*in1[k x c]
     mm_init();
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
-        acquire_dst(tt::DstMode::Half);
+        acquire_dst();
         if (block_id > 0) {
             copy_tile_to_dst_init_short();
             cb_wait_front(partials_cb, out_block_num_tiles);
@@ -68,7 +68,7 @@ void MAIN {
                 cb_push_back(partials_cb, out_block_num_tiles);
             }
         }
-        release_dst(tt::DstMode::Half);
+        release_dst();
     }
 }
 }  // namespace NAMESPACE

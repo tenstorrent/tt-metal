@@ -9,7 +9,7 @@ namespace tt {
 namespace tt_metal {
 
 // Get global device profiling state based on build flag and environment variables
-bool getDeviceProfilerState ();
+bool getDeviceProfilerState();
 
 }  // namespace tt_metal
 

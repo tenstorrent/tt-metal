@@ -101,10 +101,10 @@ class TtTransformer(LightweightModule):
         # slicing for the last token
         if get_last_token != -1:
             x = ttnn.slice(
-                x, ttnn.Shape((0, 0, get_last_token, 0)), ttnn.Shape((0, 0, get_last_token + 31, 4095))
+                x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, 4096)
             )  # [:, :, get_last_token:get_last_token+32, :]
 
-        x_norm = self.norm(x)
+        x_norm = self.norm(x, mode)
         outputs = ttnn.matmul(
             x_norm,
             self.output_weight,

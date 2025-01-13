@@ -84,7 +84,7 @@ def run_conv_as_large_matmul(conv_op_test_params, pytorch_inputs_and_golden, dev
         K,
     )
     out = out.cpu()
-    assert out.get_legacy_shape() == conv_output_shape
+    assert out.shape.with_tile_padding() == conv_output_shape
     assert out.get_layout() == ttnn.ROW_MAJOR_LAYOUT
 
     # Copy output to host and convert tt tensor to pytorch tensor

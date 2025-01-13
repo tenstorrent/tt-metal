@@ -19,6 +19,7 @@ from models.experimental.functional_unet.tests.common import (
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
+    UNET_FULL_MODEL_PCC,
 )
 
 from models.perf.perf_utils import prep_perf_report
@@ -33,15 +34,17 @@ from models.utility_functions import (
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((2, 1, 650.0),),
+    ((1, 2, 1040.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    inference_time_key = "AVG DEVICE FW SAMPLES/S"
+    total_batch = groups * batch
+
+    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     post_processed_results = run_device_perf(
-        command, subdir="unet_shallow", num_iterations=1, cols=cols, batch_size=batch
+        command, subdir="unet_shallow", num_iterations=3, cols=cols, batch_size=total_batch
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_fps}
     expected_results = check_device_perf(
@@ -49,7 +52,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
     )
     prep_device_perf_report(
         model_name=f"unet-shallow_batch-{batch}_groups-{groups}",
-        batch_size=batch,
+        batch_size=total_batch,
         post_processed_results=post_processed_results,
         expected_results=expected_results,
         comments="",
@@ -61,7 +64,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_inference_time_ms",
-    ((2, 1, 16, 25.0, 39.0),),
+    ((1, 2, 16, 25.0, 39.0),),
 )
 def test_unet_perf_e2e(
     batch: int,
@@ -75,10 +78,10 @@ def test_unet_perf_e2e(
 ):
     profiler.clear()
 
-    torch_input, ttnn_input = create_unet_input_tensors(device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
 
     profiler.start(f"initialize_ref_model")
-    model = unet_shallow_torch.UNet.from_random_weights(groups=1)
+    model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     profiler.end(f"initialize_ref_model")
 
     profiler.start(f"initialize_model")
@@ -127,7 +130,7 @@ def test_unet_perf_e2e(
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
     ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, 0.97)
+    assert_with_pcc(torch_output_tensor, ttnn_tensor, UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -136,7 +139,7 @@ def test_unet_perf_e2e(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_inference_time_ms",
-    ((2, 1, 16, 25.0, 61.0),),
+    ((1, 2, 16, 25.0, 61.0),),
 )
 def test_unet_data_parallel_perf_e2e(
     batch: int,
@@ -158,7 +161,7 @@ def test_unet_data_parallel_perf_e2e(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(mesh_device, batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
 
     profiler.start(f"initialize_ref_model")
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
@@ -172,7 +175,7 @@ def test_unet_data_parallel_perf_e2e(
     num_devices = len(mesh_device.get_device_ids())
     total_batch = num_devices * batch
     torch_input, ttnn_input = create_unet_input_tensors(
-        mesh_device, total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
+        total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
     )
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
@@ -219,4 +222,4 @@ def test_unet_data_parallel_perf_e2e(
     )
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=0.97)
+    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=UNET_FULL_MODEL_PCC)

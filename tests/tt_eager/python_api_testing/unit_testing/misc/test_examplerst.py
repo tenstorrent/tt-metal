@@ -29,7 +29,7 @@ if __name__ == "__main__":
 
     # Move TT Tensor tt_relu_out to host and convert it to PyTorch tensor py_relu_out
     tt_relu_out = tt_relu_out.cpu()
-    py_relu_out = torch.Tensor(tt_relu_out.data()).reshape(tt_relu_out.get_legacy_shape())
+    py_relu_out = torch.Tensor(tt_relu_out.data()).reshape(tt_relu_out.shape.with_tile_padding())
 
     # Execute pow using PyTorch (since pow is not available from tt_lib)
     py_pow_out = torch.pow(py_relu_out, py_tensor_exp)

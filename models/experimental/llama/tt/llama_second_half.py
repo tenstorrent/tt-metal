@@ -143,8 +143,8 @@ class TtLlamaModelSecondHFModel(torch.nn.Module):
             raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             # batch_size, seq_length = input_ids.shape
-            batch_size = input_ids.get_legacy_shape()[0]
-            seq_length = input_ids.get_legacy_shape()[2]
+            batch_size = input_ids.shape.with_tile_padding()[0]
+            seq_length = input_ids.shape.with_tile_padding()[2]
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:

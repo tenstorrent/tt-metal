@@ -6,6 +6,8 @@
 
 #include "device/rotate_half_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {

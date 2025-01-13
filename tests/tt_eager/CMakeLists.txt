@@ -1,18 +1,12 @@
-
 add_library(test_eager_common_libs INTERFACE)
 target_link_libraries(test_eager_common_libs INTERFACE test_common_libs)
 
 set(TT_EAGER_TESTS_OPS
-    ops/ccl/test_ccl_helpers.cpp
-    ops/ccl/test_ccl_tensor_slicers.cpp
     ops/test_average_pool.cpp
     ops/test_eltwise_binary_op.cpp
     ops/test_eltwise_unary_op.cpp
     ops/test_softmax_op.cpp
     ops/test_layernorm_op.cpp
-    # ops/test_moreh_adam_op.cpp              # <- not called in run_tt_eager.py
-    # ops/test_moreh_matmul_op.cpp            # <- not called in run_tt_eager.py
-    # ops/test_moreh_layernorm_op.cpp         # <- not called in run_tt_eager.py
     ops/test_transpose_op.cpp
     ops/test_transpose_wh_single_core.cpp
     ops/test_transpose_wh_multi_core.cpp
@@ -26,6 +20,7 @@ set(TT_EAGER_TESTS_OPS
     ops/test_sfpu.cpp
     ops/test_sliding_window_ops.cpp
     ops/test_fold_op.cpp
+    ops/test_conv_prepare_weights_and_biases.cpp
 )
 
 set(TT_EAGER_TESTS_TENSORS
@@ -36,11 +31,9 @@ set(TT_EAGER_TESTS_TENSORS
     tensors/test_async_tensor_apis.cpp
 )
 
-set(TT_EAGER_TESTS_INTEGRATION
-    integration_tests/test_bert.cpp
-)
+set(TT_EAGER_TESTS_INTEGRATION integration_tests/test_bert.cpp)
 
-set(EAGER_TEST_TARGETS "")  # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
+set(EAGER_TEST_TARGETS "") # list of all eager test targets, used in CREATE_EAGER_TEST_EXE
 include(${PROJECT_SOURCE_DIR}/cmake/helper_functions.cmake)
 
 CREATE_EAGER_TEST_EXE("${TT_EAGER_TESTS_OPS}")

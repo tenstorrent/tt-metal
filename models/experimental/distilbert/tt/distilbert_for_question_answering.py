@@ -41,8 +41,8 @@ class TtDistilBertForQuestionAnswering(nn.Module):
         self.qa_weight = torch_to_tt_tensor_rm(state_dict["qa_outputs.weight"], self.device)
         self.qa_bias = torch_to_tt_tensor_rm(state_dict["qa_outputs.bias"], self.device)
         self.qa_linear = TtLinear(
-            self.qa_weight.get_legacy_shape()[-1],
-            self.qa_weight.get_legacy_shape()[-2],
+            self.qa_weight.shape.with_tile_padding()[-1],
+            self.qa_weight.shape.with_tile_padding()[-2],
             self.qa_weight,
             self.qa_bias,
         )

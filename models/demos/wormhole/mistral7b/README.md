@@ -4,6 +4,12 @@ Demo showcasing Mistral-7B running on Wormhole, using ttnn.
 
 ## How to Run
 
+⚠️ **WARNING: DO NOT RUN THIS DEMO FOR NOW** ⚠️
+
+This demo is currently disabled as it has been linked to hardware failures that can permanently damage cards. Please do not attempt to run it until further notice.
+
+[The issue](https://github.com/tenstorrent/cloud/issues/3323) appears to be connected to blown FETs (Field Effect Transistors) that can disable cards. We are investigating the root cause and will update this notice once the demo is confirmed to be safe to run.
+
 ### Download the weights
 
 Download the weights tarfile directly from Mistral-AI:

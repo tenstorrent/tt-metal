@@ -20,7 +20,6 @@ namespace sfpu {
 #define SIGN 0x80000000
 #define MAGNITUDE 0x7FFFFFFF
 
-
 sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
     v_if(value & SIGN) {
         vInt magnitude = (~value + 1) & MAGNITUDE;
@@ -64,12 +63,12 @@ inline void calculate_sum_int_col() {
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_sum_int_row() {
-  for (size_t i = 0; i < 8; i += 2) {
+    for (size_t i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
         a = sfpu_twos_comp_to_sign_mag(a);
 
         int arr[] = {1, 8, 9};
-        for (size_t j = 0; j < sizeof(arr)/sizeof(arr[0]); ++j) {
+        for (size_t j = 0; j < sizeof(arr) / sizeof(arr[0]); ++j) {
             vInt b = dst_reg[i + arr[j]];
             b = sfpu_twos_comp_to_sign_mag(b);
             a += b;
@@ -81,12 +80,11 @@ inline void calculate_sum_int_row() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void sum_int_init() {
-}
+inline void sum_int_init() {}
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
-    #pragma GCC unroll 8
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vInt a = dst_reg[0];
         vInt b = dst_reg[32];

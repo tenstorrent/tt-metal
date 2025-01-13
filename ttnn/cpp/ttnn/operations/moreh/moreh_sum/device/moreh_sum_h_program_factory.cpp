@@ -6,7 +6,7 @@
 
 #include "common/bfloat16.hpp"
 #include "moreh_sum_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
@@ -19,29 +19,27 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     auto input = tensor_args.input;
     auto output = output_tensor;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig &compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    auto memory_config = operation_attributes.memory_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     tt::tt_metal::ReduceOpMath reduce_op = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::H;
     float scaler = 1.0f;
 
-    const auto shape = input.get_shape().value;
-    const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
+    const auto shape = input.get_padded_shape();
+    const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
 
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
     uint32_t HtWt = Ht * Wt;
 
     // check mask for h-dim
-    const auto input_shape_without_padding = shape.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_H = input_shape_without_padding[-2];
     const bool do_mask_h = (origin_H % tt::constants::TILE_HEIGHT) != 0;
     const auto mask_h = do_mask_h ? origin_H % tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT;
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,
@@ -67,7 +65,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
 
     uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -77,14 +75,14 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         {0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
-        tt::operations::primary::split_work_to_cores(all_core_range, num_cols);
+        split_work_to_cores_wt_core_range(all_core_range, num_cols);
 
     string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/moreh_sum_h.cpp";
 
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     CBHandle cb_src0;
-    uint32_t src1_cb_index = tt::CB::c_in1;
+    uint32_t src1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_src1 = 0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -93,28 +91,28 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             .set_page_size(src0_cb_index, src0_single_tile_size);
     cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    uint32_t scaler_cb_index = tt::CB::c_in2;
+    uint32_t scaler_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_scaler_config =
         tt::tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
     auto cb_scaler = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     tt::tt_metal::CircularBufferConfig cb_mask_h_config =
-        tt::tt_metal::CircularBufferConfig(mask_h_single_tile_size, {{tt::CB::c_in3, mask_h_cb_data_format}})
-            .set_page_size(tt::CB::c_in3, mask_h_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(mask_h_single_tile_size, {{tt::CBIndex::c_3, mask_h_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_3, mask_h_single_tile_size);
     auto cb_mask_h = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_h_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CB::c_intermed0, intermed_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed0, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_24, intermed_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_24, intermed_single_tile_size);
     auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
-        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CB::c_intermed1, intermed1_cb_data_format}})
-            .set_page_size(tt::CB::c_intermed1, intermed_single_tile_size);
+        tt::tt_metal::CircularBufferConfig(intermed_single_tile_size, {{tt::CBIndex::c_25, intermed1_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_25, intermed_single_tile_size);
     auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
-    uint32_t output_cb_index = tt::CB::c_out0;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;  // output operands start at index 16
     CBHandle cb_output;
     uint32_t num_output_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_output_config =
@@ -156,14 +154,16 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         reduce_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
         1,                          // NC
         origin_H};
 
-    // set preserve_fp32_precision to the same value as fp32_dest_acc_en
-    bool preserve_fp32_precision = fp32_dest_acc_en;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
+    }
     auto reduce_compute_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
@@ -171,13 +171,13 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .preserve_fp32_precision = preserve_fp32_precision,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args_group_1,
             .defines = reduce_defines});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             Ht,                         // Ht
             num_cols_per_core_group_2,  // Wt
             1,                          // NC
@@ -190,7 +190,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = math_fidelity,
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .preserve_fp32_precision = preserve_fp32_precision,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
                 .math_approx_mode = math_approx_mode,
                 .compile_args = compute_kernel_args_group_2,
                 .defines = reduce_defines});
@@ -199,9 +199,9 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_cols_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_cols_per_core = num_cols_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");

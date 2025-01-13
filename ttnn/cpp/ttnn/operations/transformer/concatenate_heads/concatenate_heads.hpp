@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::transformer {
 
 struct ExecuteConcatenateHeads {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
+    static ttnn::Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 };
-}
+}  // namespace operations::transformer
 
 namespace transformer {
 constexpr auto concatenate_heads = ttnn::register_operation_with_auto_launch_op<

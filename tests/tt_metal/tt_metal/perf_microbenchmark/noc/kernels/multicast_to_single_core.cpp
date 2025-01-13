@@ -7,7 +7,7 @@
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
-    uint32_t src = 150*1024;
+    uint32_t src = 150 * 1024;
     uint64_t destination = get_noc_multicast_addr(WORKER_NOC_X, WORKER_NOC_Y, WORKER_NOC_X, WORKER_NOC_Y, src);
 
     {

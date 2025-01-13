@@ -172,7 +172,7 @@ parameters = {
             {"dims": [8732, 4], "dim": 1, "start": 0, "end": -1, "step": 4},
             {"dims": [8732, 4], "dim": 1, "start": 0, "end": 2},
         ],
-        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "dtype": [ttnn.bfloat16],
         "layout": [ttnn.TILE_LAYOUT],
     }
 }

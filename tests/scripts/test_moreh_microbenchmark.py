@@ -265,6 +265,86 @@ def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     run_moreh_single_test("DRAM BW test multi-core", command)
 
 
+def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-banks "
+        + str(num_banks)
+        + " --bank-start-id "
+        + str(bank_start_id)
+        + " --bypass-check "
+    )
+    run_moreh_single_test("DRAM BW test multi-core", command)
+
+
+def run_dram_read_remote_cb_sync_cmd(
+    k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_mixed_df_layers, use_sub_devices
+):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb "
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --cb-num-blocks "
+        + str(cb_num_blocks)
+        + " --cb-padding "
+        + str(cb_padding)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
+        + " --num-mixed-df-layers "
+        + str(num_mixed_df_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
+    )
+    run_moreh_single_test("DRAM read remote CB sync single-core ", command)
+
+
+def run_remote_cb_sync_matmul_single_core_cmd(
+    m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers, use_sub_devices
+):
+    command = (
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul "
+        + " --m "
+        + str(m)
+        + " --k "
+        + str(k)
+        + " --n "
+        + str(n)
+        + " --num-blocks "
+        + str(num_blocks)
+        + " --cb-num-blocks "
+        + str(cb_num_blocks)
+        + " --cb-padding "
+        + str(cb_padding)
+        + " --num-tests "
+        + str(1)
+        + " --data-type "
+        + str(df)
+        + " --num-receivers "
+        + str(num_receivers)
+        + " --num-layers "
+        + str(num_layers)
+        + (" --use-sub-devices " if use_sub_devices else "")
+    )
+    run_moreh_single_test("DRAM read remote CB sync single-core ", command)
+
+
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
@@ -449,6 +529,7 @@ def test_pcie_d2h_dram(iteration, test_vector_small, test_vector_large):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536, 262144, 1048576, 4194304, 16777216])),
     ],
 )
 def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
@@ -473,6 +554,7 @@ def test_pcie_h2d_l1(arch, iteration, L1_size, test_vector):
     [
         ("grayskull", 2, 1048576, np.array([4096, 16384, 65536])),
         ("wormhole_b0", 2, 1499136, np.array([4096, 16384, 65536])),
+        ("blackhole", 2, 1499136, np.array([4096, 16384, 65536])),
     ],
 )
 def test_pcie_d2h_l1(arch, iteration, L1_size, test_vector):
@@ -569,6 +651,16 @@ def test_matmul_dram(arch, freq, r, c, test_vector):
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
         ("wormhole_b0", 1000, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
+        # ########################### 512 512 512 x 8 subblock 4 2 ################################
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 0, 0, 0, 0, 717089.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 0, 0, 0, 0, 1233930.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 0, 1, 8, 1, 0, 0, 0, 664492.0),
+        ("blackhole", 800, np.array([[512, 512, 512]]), 0, 1, 1, 8, 1, 0, 0, 0, 1173029.0),
+        # ########################### 512 512 256x8 subblock 4 2 ################################
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 0, 0, 0, 0, 399068.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 0, 0, 0, 0, 658522.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 0, 1, 8, 1, 0, 0, 0, 346350.0),
+        ("blackhole", 800, np.array([[512, 512, 256]]), 0, 1, 1, 8, 1, 0, 0, 0, 597457.0),
     ],
 )
 def test_matmul_single_core_sharded(
@@ -635,9 +727,13 @@ def test_matmul_single_core_sharded(
     [
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 0, 12, 0),
         ("wormhole_b0", 1000, np.array([32768, 12 * 128]), 1, 8, 1, 12, 0),
+        ("wormhole_b0", 1000, np.array([2048, 3840]), 1, 4, 1, 12, 0),  # Padded FF1 shapes for llama 70b on TG
+        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 0, 8, 0),
+        ("blackhole", 800, np.array([32768, 8 * 128]), 1, 8, 1, 8, 0),
+        ("blackhole", 800, np.array([2048, 3840]), 1, 4, 1, 8, 0),  # Padded FF1 shapes for llama 70b on TG
     ],
 )
-def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
+def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id):
     data = []
     cycle_list = []
     time_list = []
@@ -673,10 +769,253 @@ def test_dram_read_12_core(arch, freq, test_vector, num_tests, nblock, data_form
 
 
 @pytest.mark.parametrize(
+    "arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target",
+    [
+        ("grayskull", np.array([32768 * 2, 8 * 128]), 1, 64, 1, 8, 0, None),
+        ("wormhole_b0", np.array([32768 * 2, 12 * 128]), 1, 64, 2, 12, 0, None),
+        ("blackhole", np.array([32768 * 8, 8 * 128]), 1, 256, 2, 8, 0, None),
+        # FF1/FF3 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 3840]),
+            1,
+            16,
+            0,
+            12,
+            0,
+            240,
+        ),  # 244 GB/s
+        (
+            "blackhole",
+            np.array([2048, 3840]),
+            1,
+            16,
+            0,
+            8,
+            0,
+            240,
+        ),  # 244 GB/s
+        # FF2 shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([3584, 2304]),
+            1,
+            28,
+            1,
+            12,
+            0,
+            250,
+        ),  # 255 GB/s
+        (
+            "blackhole",
+            np.array([3584, 2304]),
+            1,
+            28,
+            1,
+            8,
+            0,
+            250,
+        ),  # 255 GB/s
+        # Dense Out shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([1024, 2304]),
+            1,
+            8,
+            1,
+            12,
+            0,
+            220,
+        ),  # 226 GB/s
+        (
+            "blackhole",
+            np.array([1024, 2304]),
+            1,
+            8,
+            1,
+            8,
+            0,
+            220,
+        ),  # 226 GB/s
+        # QKV shapes for TG llama 70b
+        (
+            "wormhole_b0",
+            np.array([2048, 1536]),
+            1,
+            16,
+            1,
+            12,
+            0,
+            225,
+        ),  # 232 GB/s
+        (
+            "blackhole",
+            np.array([2048, 1536]),
+            1,
+            16,
+            1,
+            8,
+            0,
+            225,
+        ),  # 232 GB/ss
+    ],
+)
+def test_dram_read_l1_write_core(
+    arch, test_vector, num_tests, nblock, data_format, num_banks, bank_start_id, bw_target
+):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        k = int(test_vector[0])
+        n = int(test_vector[1])
+        if data_format == 0:  # BFP4
+            input_size = k * n * (512 + 64) // 1024
+        elif data_format == 1:  # BFP8
+            input_size = k * n * 1088 // 1024
+        elif data_format == 2:  # BFLOAT16
+            input_size = k * n * 2048 // 1024
+        run_dram_read_l1_write_cmd(k, n, nblock, data_format, num_banks, bank_start_id)
+        cycle = profile_results_kernel_duration()
+        dev_freq = get_device_freq()
+        time = cycle / dev_freq / 1000.0 / 1000.0
+        throughput = input_size / cycle * dev_freq / 1000.0
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    if arch == "grayskull":
+        bw_bound = 70.0  # Equals 85 GB/s with 1200 MHz
+    elif arch == "wormhole_b0":
+        bw_bound = 260.0
+    elif arch == "blackhole":
+        bw_bound = 340.0
+    if bw_target is not None:
+        bw_bound = bw_target
+    bw_bound = bw_bound * dev_freq / 1000.0  # Adjust for device frequency; target is based on max device frequency
+    assert bw_bound <= throughput
+
+
+@pytest.mark.parametrize(
+    "arch, test, test_vector, num_tests, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers",
+    [
+        # single layer single receiver test
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        # single layer multi receiver test
+        ("wormhole_b0", None, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        # multi layer multi receiver test
+        ("wormhole_b0", None, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        # Matmul test does not support mixed data format, just test for either bfp8 or fp16
+        # single layer single receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 4096, 128]), 1, 8, 10, 256, 0, 1, 1),
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 1, 1),
+        # # single layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 1),
+        # # multi layer multi receiver test
+        ("wormhole_b0", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
+        # single layer single receiver test
+        ("blackhole", None, np.array([32768, 128]), 1, 64, 5, 256, 1, 1, 1),
+        # single layer multi receiver test
+        ("blackhole", None, np.array([32768, 128]), 1, 64, 3, 256, 1, 2, 1),
+        # multi layer multi receiver test
+        ("blackhole", None, np.array([32768, 256]), 1, 64, 5, 256, 1, 4, 15),
+        # Matmul test does not support mixed data format, just test for either bfp8 or fp16
+        # single layer single receiver test
+        ("blackhole", "Matmul", np.array([32, 4096, 128]), 1, 8, 10, 256, 0, 1, 1),
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 1, 1),
+        # # single layer multi receiver test
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 1),
+        # # multi layer multi receiver test
+        ("blackhole", "Matmul", np.array([32, 2048, 128]), 1, 8, 10, 256, 1, 2, 15),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_sub_devices",
+    [False, True],
+)
+def test_dram_read_remote_cb_sync(
+    arch,
+    test,
+    test_vector,
+    num_tests,
+    nblock,
+    cb_nblock,
+    cb_padding,
+    data_format,
+    num_receivers,
+    num_mixed_df_layers,
+    use_sub_devices,
+):
+    data = []
+    cycle_list = []
+    time_list = []
+    throughput_list = []
+    for _ in range(num_tests):
+        if test == None:
+            k = int(test_vector[0])
+            n = int(test_vector[1])
+        elif test == "Matmul":
+            m = int(test_vector[0])
+            k = int(test_vector[1])
+            n = int(test_vector[2])
+        input_size = 0
+        if data_format == 0:
+            input_size += k * n * 1088 // 1024
+        elif data_format == 1:
+            input_size += k * n * 2048 // 1024
+        if test == None:
+            for i in range(num_mixed_df_layers - 1):
+                if i % 2 == 0:
+                    input_size += k * n * 1088 // 1024
+                else:
+                    input_size += k * n * 2048 // 1024
+            run_dram_read_remote_cb_sync_cmd(
+                k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
+            )
+        elif test == "Matmul":
+            input_size = input_size * num_mixed_df_layers
+            run_remote_cb_sync_matmul_single_core_cmd(
+                m, k, n, nblock, cb_nblock, cb_padding, data_format, num_receivers, num_mixed_df_layers, use_sub_devices
+            )
+        cycle = profile_results_kernel_duration()
+        time = cycle / get_device_freq() / 1000.0 / 1000.0
+        throughput = input_size / cycle * get_device_freq() / 1000.0
+        cycle_list.append(cycle)
+        time_list.append(time)
+        throughput_list.append(throughput)
+    cycle = sum(cycle_list) / len(cycle_list)
+    time = sum(time_list) / len(time_list)
+    throughput = sum(throughput_list) / len(throughput_list)
+    logger.info("DRAM read cycle: " + str(cycle))
+    logger.info("DRAM read time: " + str(time))
+    logger.info("DRAM read throughput: " + str(throughput))
+    data.append([throughput])
+    # check within range
+    if test == None:
+        if arch == "wormhole_b0":
+            bw_bound = 21.5
+    elif test == "Matmul":
+        if arch == "wormhole_b0":
+            bw_bound = 18.0
+    if use_sub_devices:
+        pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
+    assert bw_bound <= throughput
+
+
+@pytest.mark.parametrize(
     "arch, freq, r, c, test_vector_global, test_vector_local",
     [
         ("grayskull", 1020, 9, 12, np.array([[3456, 3072, 1024], [2304, 3072, 768]]), np.array([[2304, 3072, 768]])),
         ("wormhole_b0", 1000, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
+        ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):

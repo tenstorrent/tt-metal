@@ -103,6 +103,20 @@ def get_dispatch_core_type():
     return dispatch_core_type
 
 
+def get_updated_device_params(device_params):
+    import ttnn
+
+    dispatch_core_type = get_dispatch_core_type()
+    new_device_params = device_params.copy()
+    dispatch_core_axis = new_device_params.pop(
+        "dispatch_core_axis",
+        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
+    )
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    new_device_params["dispatch_core_config"] = dispatch_core_config
+    return new_device_params
+
+
 @pytest.fixture(scope="function")
 def device_params(request):
     return getattr(request, "param", {})
@@ -117,7 +131,8 @@ def device(request, device_params):
 
     num_devices = ttnn.GetNumPCIeDevices()
     assert device_id < num_devices, "CreateDevice not supported for non-mmio device"
-    device = ttnn.CreateDevice(device_id=device_id, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     yield device
@@ -137,7 +152,8 @@ def pcie_devices(request, device_params):
     request.node.pci_ids = device_ids
 
     # Get only physical devices
-    devices = ttnn.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -156,7 +172,8 @@ def all_devices(request, device_params):
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
     # Get only physical devices
-    devices = ttnn.CreateDevices(device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
 
     yield [devices[i] for i in range(num_devices)]
 
@@ -207,7 +224,8 @@ def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_par
 
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
 
-    mesh_device = ttnn.open_mesh_device(mesh_shape, dispatch_core_type=get_dispatch_core_type(), **device_params)
+    updated_device_params = get_updated_device_params(device_params)
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -229,13 +247,40 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
     except (ValueError, AttributeError):
         num_pcie_devices_requested = len(device_ids)
 
+    if num_pcie_devices_requested != 4:
+        pytest.skip("Only 4 PCIe devices are supported for testing")
+
     request.node.pci_ids = device_ids[:num_pcie_devices_requested]
 
+    updated_device_params = get_updated_device_params(device_params)
     mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(1, num_pcie_devices_requested),
-        dispatch_core_type=get_dispatch_core_type(),
-        **device_params,
-        physical_device_ids=device_ids[:num_pcie_devices_requested],
+        mesh_shape=ttnn.MeshShape(2, 2),
+        **updated_device_params,
+        offset=ttnn.MeshOffset(0, 1),
+        mesh_type=ttnn.MeshType.Ring,
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for device in mesh_device.get_devices():
+        ttnn.DumpDeviceProfiler(device)
+
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
+def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
+    updated_device_params = get_updated_device_params(device_params)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(1, 2),
+        **updated_device_params,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -255,10 +300,12 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     if ttnn.get_num_devices() < 8:
         pytest.skip()
 
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
     mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(2, 4),
-        dispatch_core_type=get_dispatch_core_type(),
-        **device_params,
+        mesh_shape=ttnn.MeshShape(2, 4),
+        **updated_device_params,
+        mesh_type=ttnn.MeshType.Ring,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
@@ -297,6 +344,8 @@ def get_devices(request):
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = request.getfixturevalue("mesh_device").get_devices()
+    elif "n300_mesh_device" in request.fixturenames:
+        devices = request.getfixturevalue("n300_mesh_device").get_devices()
     elif "t3k_mesh_device" in request.fixturenames:
         devices = request.getfixturevalue("t3k_mesh_device").get_devices()
     elif "pcie_mesh_device" in request.fixturenames:

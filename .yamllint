@@ -1,0 +1,12 @@
+---
+extends: relaxed
+yaml-files:
+  - '*.yaml'
+  - '*.yml'
+  - '.yamllint'
+  - '.clang-tidy'
+rules:
+  # 120 chars should be enough, but don't fail if a line is longer
+  line-length:
+    max: 120
+    level: warning

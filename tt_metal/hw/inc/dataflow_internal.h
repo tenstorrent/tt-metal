@@ -11,16 +11,18 @@
 #include "dataflow_api.h"
 
 FORCE_INLINE
-void noc_fast_read_wait_ready() {
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
-}
+void noc_fast_read_wait_ready() { while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF)); }
 
 FORCE_INLINE
 void noc_fast_read_set_src_xy(uint64_t src_addr) {
 #ifdef ARCH_BLACKHOLE
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & 0x1000000F);
 #endif
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, uint32_t(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc_index,
+        NCRISC_RD_CMD_BUF,
+        NOC_TARG_ADDR_COORDINATE,
+        uint32_t(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 }
 
 FORCE_INLINE
@@ -32,10 +34,11 @@ FORCE_INLINE
 void noc_fast_read(uint32_t src_addr, uint32_t dest_addr) {
     WAYPOINT("NFRW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(
-        noc_index, (uint64_t)(src_addr) | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE) << 32,
+        noc_index,
+        (uint64_t)(src_addr) | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE)
+                                   << 32,
         dest_addr,
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE)
-    );
+        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE));
     while (!noc_cmd_buf_ready(noc_index, NCRISC_RD_CMD_BUF));
     WAYPOINT("NFRD");
 
@@ -51,9 +54,7 @@ void noc_fast_read_inc_num_issued(uint32_t num_issued) {
 }
 
 FORCE_INLINE
-void noc_fast_write_wait_ready() {
-    while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF));
-}
+void noc_fast_write_wait_ready() { while (!noc_cmd_buf_ready(noc_index, NCRISC_WR_CMD_BUF)); }
 
 FORCE_INLINE
 void noc_fast_write_set_cmd_field(uint32_t vc, bool mcast, bool linked) {
@@ -69,7 +70,11 @@ void noc_fast_write_set_dst_xy(uint64_t dest_addr) {
 #ifdef ARCH_BLACKHOLE
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & 0x1000000F);
 #endif
-    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    NOC_CMD_BUF_WRITE_REG(
+        noc_index,
+        NCRISC_WR_CMD_BUF,
+        NOC_RET_ADDR_COORDINATE,
+        (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
 }
 
 FORCE_INLINE
@@ -81,10 +86,10 @@ void noc_fast_write_set_len(uint32_t len_bytes) {
 FORCE_INLINE
 void noc_fast_write(uint32_t src_addr, uint64_t dest_addr) {
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(
-        noc_index, dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE) << 32,
+        noc_index,
+        dest_addr | (uint64_t)NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_COORDINATE) << 32,
         dest_addr,
-        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE)
-    );
+        NOC_CMD_BUF_READ_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE));
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);

@@ -16,46 +16,48 @@
 namespace ttnn::operations::normalization {
 
 operation::ProgramWithCallbacks layernorm_multi_core(
-    const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const Tensor& a,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
     Tensor& output,
     LayerNormType norm_type,
     float eps,
-    DeviceComputeKernelConfig compute_kernel_config
-);
+    DeviceComputeKernelConfig compute_kernel_config);
 
 operation::ProgramWithCallbacks layernorm_multi_core_sharded(
-    const Tensor &a,
-    const std::optional<const Tensor> b,
-    const std::optional<const Tensor> gamma,
-    const std::optional<const Tensor> beta,
+    const Tensor& a,
+    const std::optional<const Tensor>& b,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     Tensor& output,
     LayerNormType norm_type,
+    DistributedLayerNormStage distributed_norm_stage,
     float eps,
     CoreCoord compute_grid_size,
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
-    DeviceComputeKernelConfig compute_kernel_config
-);
+    DeviceComputeKernelConfig compute_kernel_config);
 
 struct LayerNorm {
     LayerNormType norm_type;
+    DistributedLayerNormStage distributed_norm_stage;
     float eps;
     MemoryConfig output_mem_config;
     LayerNormProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(const std::vector<Tensor> &input_tensors, const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor> &input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor> &input_tensors) const;
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor> &output_tensors
-    ) const;
+        std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace ttnn::operations::normalization

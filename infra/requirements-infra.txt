@@ -5,3 +5,4 @@ loguru
 pydantic
 toolz
 defusedxml
+pytest

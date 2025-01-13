@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
         log_error(
             LogTest,
             "Metal library and test code should be build with "
-            "profiler option using ./scripts/build_scripts/build_with_profiler_opt.sh");
+            "profiler option using ./build_metal.sh --enable-profiler");
 #endif
         auto device_profiler = getenv("TT_METAL_DEVICE_PROFILER");
         TT_FATAL(
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         int clock_freq_mhz = get_tt_npu_clock(device);
         auto grid_coord = device->compute_with_storage_grid_size();
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 
         // limit size of the L1 buffer to do not exceed global L1 size
         uint32_t l1_buffer_size = num_cores_r * num_cores_c * (num_tiles > 256 ? 256 : num_tiles) * page_size;
-        auto l1_buffer = tt_metal::Buffer(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
+        auto l1_buffer = tt_metal::Buffer::create(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -166,9 +166,9 @@ int main(int argc, char** argv) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
                 uint32_t core_index = i * num_cores_c + j;
-                uint32_t l1_buffer_addr = l1_buffer.address();
+                uint32_t l1_buffer_addr = l1_buffer->address();
 
-                vector<uint32_t> noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
+                const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};
                 SetRuntimeArgs(program, noc_kernel, core, noc_runtime_args);
             }
         }

@@ -8,42 +8,20 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-#include "third_party/magic_enum/magic_enum.hpp"
+#include "tt_metal/impl/device/program_cache.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
 #include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_stl/concepts.hpp"
 #include "tt_stl/reflection.hpp"
-#include "tt_stl/unique_any.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/distributed/api.hpp"
 
 namespace ttnn {
 
 namespace device_operation {
 
-template <typename shared_variables_t>
-struct CachedProgram {
-    tt::tt_metal::Program program;
-    // Cached program needs to share shared_variables between create and override_runtime_arguments functions
-    shared_variables_t shared_variables;
-
-    CachedProgram(tt::tt_metal::Program&& program, shared_variables_t&& shared_variables) :
-        program{std::move(program)}, shared_variables{shared_variables} {}
-};
-
-struct CachedProgramFactory {
-    static constexpr auto MAX_SIZE = 4096;
-    static constexpr auto ALIGNMENT = 32;
-
-    tt::stl::unique_any<MAX_SIZE, ALIGNMENT> cached_program;
-    // program_factory_index is used to map a runtime value to a program factory type that is being used
-    std::size_t program_factory_index;
-
-    template <typename shared_variables_t>
-    CachedProgramFactory(CachedProgram<shared_variables_t>&& cached_program, std::size_t program_factory_index) :
-        cached_program{std::move(cached_program)}, program_factory_index{program_factory_index} {}
-};
+template <typename T>
+using CachedProgram = tt::tt_metal::program_cache::detail::CachedProgram<T>;
 
 template <typename program_factory_t>
 concept ProgramFactoryConcept = requires {
@@ -55,16 +33,25 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename device_operation_t>
+concept HasComputeOutputShapes = requires(device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {op.compute_output_shapes(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::shape_return_value_t>;
+};
+
+template <typename device_operation_t>
+concept HasComputeOutputSpecs = requires(device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    {op.compute_output_specs(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::spec_return_value_t>;
+};
+
+template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     [](const typename device_operation_t::operation_attributes_t& operation_attributes,
        const typename device_operation_t::tensor_args_t& tensor_args) {
         device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-
-        using shape_return_value_t = typename device_operation_t::shape_return_value_t;
-        static_assert(std::same_as<
-                      decltype(device_operation_t::compute_output_shapes(operation_attributes, tensor_args)),
-                      shape_return_value_t>);
 
         using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
         static_assert(std::same_as<
@@ -79,7 +66,7 @@ concept DeviceOperationConcept = requires {
             },
             program_factory);
     };
-};
+} && (HasComputeOutputSpecs<device_operation_t> || HasComputeOutputShapes<device_operation_t>);
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
@@ -89,6 +76,17 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         const typename device_operation_t::tensor_args_t& tensor_args) {
         { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
+
+template <typename device_operation_t>
+concept HasSkipLaunch = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    {
+        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::convertible_to<bool>;
+};
 
 namespace detail {
 template <typename... Ts>
@@ -138,10 +136,10 @@ inline auto& create_or_get_program_from_cache(
                     decltype(program_factory_t::create(operation_attributes, tensor_args, tensor_return_value));
                 program_cache.insert(
                     program_hash,
-                    CachedProgramFactory{
+                    tt::tt_metal::program_cache::detail::CachedProgramFactory{
                         program_factory_t::create(operation_attributes, tensor_args, tensor_return_value),
                         program_factory_index});
-                auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+                auto& cached_program_factory = program_cache.get(program_hash);
                 auto& cached_program = cached_program_factory.cached_program.template get<cached_program_t>();
                 return cached_program.program;
             },
@@ -149,7 +147,7 @@ inline auto& create_or_get_program_from_cache(
         return program;
     } else {
         ZoneScopedN("Program Cache Hit");
-        auto& cached_program_factory = program_cache.template get<CachedProgramFactory>(program_hash);
+        auto& cached_program_factory = program_cache.get(program_hash);
         auto program_factory_index = cached_program_factory.program_factory_index;
 
         using program_factory_variant_t =
@@ -180,7 +178,7 @@ struct CheckDeviceBufferIsAllocated {
 
     void operator()(const Tensor& tensor) {
         if (not tensor.is_allocated()) {
-            tt::log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
+            tt::log_debug(tt::LogOp, "Tensor at index {} is not allocated", index);
         }
         index++;
     }
@@ -251,7 +249,13 @@ template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
-    auto& program_cache = device->program_cache;
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
+
+    auto& program_cache = device->get_program_cache();
 
     auto program_hash = 0;
     bool program_cache_hit = false;
@@ -281,7 +285,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
     }
 
-    const auto enqueue_or_launch_program = [=](Program& program) {
+    const auto enqueue_or_launch_program = [=](tt::tt_metal::Program& program) {
         if (USE_FAST_DISPATCH) {
             ZoneScopedN("EnqueueProgram");
             auto& queue = device->command_queue(cq_id);
@@ -298,8 +302,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program.set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(&program);
-        if(GraphTracker::instance().hook_program(&program)) {
+        tt::tt_metal::GraphTracker::instance().track_program(&program, device);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(&program)) {
             return;
         }
 
@@ -327,8 +331,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
         program->set_runtime_id(device_operation_id);
 
-        GraphTracker::instance().track_program(program.get());
-        if(GraphTracker::instance().hook_program(program.get())) {
+        tt::tt_metal::GraphTracker::instance().track_program(program.get(), device);
+        if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
 
@@ -374,7 +378,7 @@ typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t ind
 }
 
 static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
-    return create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
+    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
 }
 
 static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
@@ -478,7 +482,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     ZoneScopedN("Run Device Operation");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
-    GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
+    tt::tt_metal::GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
 
 
     using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
@@ -509,7 +513,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     }
     */
 
-    GraphTracker::instance().track_function_end(tensor_return_value);
+    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
 }
 

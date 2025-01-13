@@ -23,10 +23,9 @@ jobs:
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
     runs-on: ${{ matrix.runner-info.runs-on }}
     steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
@@ -44,4 +43,4 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U0593J2RQRZ # Bill Teng
+          owner: U06CXU895AP # Michael Chiou

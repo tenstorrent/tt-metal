@@ -7,6 +7,7 @@ import math
 import torch
 import ttnn
 from ttnn import ShardTensorToMesh
+from models.demos.t3000.falcon40b.tt.model_utils import matmul_2d_config_from_tensor_shapes
 
 
 class TtLlamaAttention_optimized:
@@ -205,13 +206,30 @@ class TtLlamaAttention_optimized:
         page_table=None,
         kv_cache=None,
         mode="decode",
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if mode == "decode":
-            return self.decode_forward(xs, rot_mats, start_pos, cache_idxs, page_table=page_table, kv_cache=kv_cache)
+            return self.decode_forward(
+                xs,
+                rot_mats,
+                start_pos,
+                cache_idxs,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
         elif mode == "prefill":
-            return self.prefill_forward(xs, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.prefill_forward(
+                xs,
+                rot_mats,
+                user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+            )
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
@@ -238,7 +256,7 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        d = fused_query_key_value.get_legacy_shape()[-1]
+        d = fused_query_key_value.shape.with_tile_padding()[-1]
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
             ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
@@ -258,26 +276,19 @@ class TtLlamaAttention_optimized:
 
         fused_query_key_value.deallocate(True)
 
-        # ROTARY EMBEDDINGS
-        # Q Rotary Embeddings
-        query_layer = ttnn.matmul(
-            query_layer,
-            rot_mats,
-            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
-            # [seqlen, n_heads, bsz, head_dim]  # [1, 1, head_dim, head_dim]  => [seqlen, n_heads, bsz, head_dim]
+        # Q ROTARY EMBEDDINGS
+        query_layer_ret = ttnn.experimental.rotary_embedding_llama(
+            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+        query_layer.deallocate(True)
 
-        key_layer = ttnn.matmul(
-            key_layer,
-            rot_mats,
-            program_config=self.model_config["ROT_MAT_MM_PROGCFG"],
-            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=self.model_config["ROT_MAT_COMPUTE_KERNEL_CONFIG"],
+        # K Rotary Embeddings
+        key_layer_ret = ttnn.experimental.rotary_embedding_llama(
+            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+        key_layer.deallocate(True)
 
-        return query_layer, key_layer, value_layer
+        return query_layer_ret, key_layer_ret, value_layer
 
     def attn_mqa(self, query_layer, key_layer, value_layer, start_pos: int, cache_idxs, page_table=None, kv_cache=None):
         # K CACHE UPDATE
@@ -312,13 +323,10 @@ class TtLlamaAttention_optimized:
             )
 
         else:
-            # Have to reshape back since sdpa expects batch in dim 1
-            keys_reshaped = ttnn.reshape(keys, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
-            values_reshaped = ttnn.reshape(values, [self.n_local_kv_heads, self.max_batch_size, -1, self.head_dim])
             attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
                 query_layer,
-                keys_reshaped,
-                values_reshaped,
+                keys,
+                values,
                 # [start_pos for _ in range(self.max_batch_size)],
                 cur_pos_tensor=cache_idxs,
                 scale=self.scale,
@@ -338,28 +346,40 @@ class TtLlamaAttention_optimized:
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
 
-        attn_output = ttnn.all_gather(
-            attn_output,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
-        )
-
-        attn_output = ttnn.matmul(
+        _, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
             attn_output,
             self.wo,
+            dim=3,
+            all_gather_core_grid_offset=(0, 4),
+            num_links=1,
+            memory_config_ag=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-        )  # seqlen, 1, batch, hidden_size
+        )
 
-        return attn_output
+        return tt_matmul_out_tensor
 
-    def prefill_forward(self, xs, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
+    def prefill_forward(
+        self,
+        xs,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+        kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
         attn_outputs = self.prefill_attn_mqa(
-            query_layer, key_layer, value_layer, user_id, page_table=page_table, kv_cache=kv_cache
+            query_layer,
+            key_layer,
+            value_layer,
+            user_id,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
         return self.prefill_attn_selfout(attn_outputs)
 
@@ -381,7 +401,14 @@ class TtLlamaAttention_optimized:
             pc_qkv = self.model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_qkv = None
+            pc_qkv = matmul_2d_config_from_tensor_shapes(
+                xs.shape,
+                self.qkv.shape,
+                grid=ttnn.CoreGrid(y=min(8, xs.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         fused_query_key_value = ttnn.linear(
             xs,
@@ -415,20 +442,30 @@ class TtLlamaAttention_optimized:
         # Q Rotary Embeddings
         # query_layer: ttnn.Shape([1, 8, seq_len, 128]) -> [bsz, n_local_heads, seq_len, head_dim]
         query_layer_ret = ttnn.experimental.rotary_embedding_llama(
-            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+            query_layer, rot_mats[0], rot_mats[1], self.transformation_mats["prefill"]
         )
         query_layer.deallocate(True)
 
         # K Rotary Embeddings
         # key_layer: ttnn.Shape([1, 1, seq_len, 128]) -> [bsz, n_local_kv_heads, seq_len, head_dim]
         key_layer_ret = ttnn.experimental.rotary_embedding_llama(
-            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats
+            key_layer, rot_mats[0], rot_mats[1], self.transformation_mats["prefill"]
         )
         key_layer.deallocate(True)
 
         return query_layer_ret, key_layer_ret, value_layer
 
-    def prefill_attn_mqa(self, query_layer, key_layer, value_layer, user_id: int = 0, page_table=None, kv_cache=None):
+    def prefill_attn_mqa(
+        self,
+        query_layer,
+        key_layer,
+        value_layer,
+        user_id: int = 0,
+        page_table=None,
+        kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         if kv_cache:
             keys = kv_cache[self.layer_num][0]
             values = kv_cache[self.layer_num][1]
@@ -437,11 +474,21 @@ class TtLlamaAttention_optimized:
             values = self.layer_past[1]
 
         if page_table:
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys.shape[2]
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            page_len = fill_page_table.shape[1] * block_size
+
+            k_fill_sliced = key_layer[:, :, :page_len, :] if page_len < key_layer.shape[2] else key_layer
+            v_fill_sliced = value_layer[:, :, :page_len, :] if page_len < value_layer.shape[2] else value_layer
+
             ttnn.experimental.paged_fill_cache(
-                keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), page_table, batch_idx=user_id
+                keys, ttnn.experimental.typecast(k_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
             ttnn.experimental.paged_fill_cache(
-                values, ttnn.experimental.typecast(value_layer, self.kv_dtype), page_table, batch_idx=user_id
+                values, ttnn.experimental.typecast(v_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
         else:
             ttnn.fill_cache(keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
@@ -449,21 +496,37 @@ class TtLlamaAttention_optimized:
 
         seq_len = query_layer.shape[2]
         q_chunk_size = 128 if seq_len % 128 == 0 else 32
-        k_chunk_size = q_chunk_size
+        k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
 
         pc_sdpa = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=[8, 7],
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
         )
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query_layer,
-            key_layer,
-            value_layer,
-            is_causal=True,
-            scale=self.scale,
-            program_config=pc_sdpa,
-        )
+        if chunk_start_idx is not None:
+            """
+            Chunked prefill mode uses the chunk_start_idx to offset Q into the filled paged K and V cache.
+            """
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                query_layer,
+                keys,
+                values,
+                page_table,
+                chunk_start_idx,
+                program_config=pc_sdpa,
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+            )
+        else:
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                is_causal=True,
+                scale=self.scale,
+                program_config=pc_sdpa,
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+            )
 
         # deallocate keys and values
         query_layer.deallocate(True)
@@ -498,7 +561,14 @@ class TtLlamaAttention_optimized:
             pc_dense_out = self.model_config["PREFILL_SELFOUT_MM_PROGCFG_128"]
         else:
             # Use default program configs
-            pc_dense_out = None
+            pc_dense_out = matmul_2d_config_from_tensor_shapes(
+                attn_output.shape,
+                self.wo.shape,
+                grid=ttnn.CoreGrid(y=min(8, attn_output.shape[2] // 32), x=8),
+                is_fp32_accumulate=True,
+                overwrite_subblock_h=1,
+                overwrite_subblock_w=1,
+            )
 
         attn_output = ttnn.linear(
             attn_output,

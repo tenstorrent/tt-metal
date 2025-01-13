@@ -3,42 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal.hpp"
-#include "tt_metal/third_party/umd/device/tt_soc_descriptor.h"
-#include "tt_metal/third_party/umd/device/tt_arch_types.h"
 
+#include "tt_metal/common/tt_backend_api_types.hpp"
+#include "tt_metal/common/assert.hpp"
+
+#include "get_platform_architecture.hpp"
 namespace tt {
 
 namespace tt_metal {
 
-Hal hal;
+// Hal Constructor determines the platform architecture by using UMD
+// Once it knows the architecture it can self initialize architecture specific memory maps
+Hal::Hal() : arch_(get_platform_architecture()) {
+    switch (this->arch_) {
+        case tt::ARCH::GRAYSKULL: initialize_gs(); break;
 
-// This back poitner is a little clunky but necessary at least for now
-Hal::Hal() : initialized_(false) {
-}
+        case tt::ARCH::WORMHOLE_B0: initialize_wh(); break;
 
-void Hal::initialize(tt::ARCH arch) {
+        case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
-    const std::lock_guard<std::mutex> lock(this->lock);
-
-    if (!this->initialized_) {
-        switch (arch) {
-        case tt::ARCH::GRAYSKULL:
-            initialize_gs();
-            break;
-
-        case tt::ARCH::WORMHOLE_B0:
-            initialize_wh();
-            break;
-
-        case tt::ARCH::BLACKHOLE:
-            initialize_bh();
-            break;
-
-        default:
-            TT_THROW("Unsupported arch for HAL");
-        }
-
-        this->initialized_ = true;
+        case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
 }
 
@@ -54,18 +38,58 @@ uint32_t Hal::get_programmable_core_type_index(HalProgrammableCoreType programma
     }
 }
 
-HalCoreInfoType::HalCoreInfoType(HalProgrammableCoreType programmable_core_type,
-                                 CoreType core_type,
-                                 uint32_t core_proc_count,
-                                 const std::vector<DeviceAddr>& mem_map_bases,
-                                 const std::vector<uint32_t>& mem_map_sizes,
-                                 bool supports_cbs) :
+uint32_t Hal::get_num_risc_processors() const {
+    uint32_t num_riscs = 0;
+    for (uint32_t core_idx = 0; core_idx < core_info_.size(); core_idx++) {
+        uint32_t num_processor_classes = core_info_[core_idx].get_processor_classes_count();
+        for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+            num_riscs += core_info_[core_idx].get_processor_types_count(processor_class_idx);
+        }
+    }
+    return num_riscs;
+}
+
+HalCoreInfoType::HalCoreInfoType(
+    HalProgrammableCoreType programmable_core_type,
+    CoreType core_type,
+    const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    bool supports_cbs) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
-    proc_count_(core_proc_count),
+    processor_classes_(processor_classes),
     mem_map_bases_(mem_map_bases),
     mem_map_sizes_(mem_map_sizes),
-    supports_cbs_(supports_cbs) {
+    supports_cbs_(supports_cbs) {}
+
+uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
+    // Options for handling brisc fw not starting at mem[0]:
+    // 1) Program the register for the start address out of reset - no reset PC register on GS/WH/BH
+    // 2) Encode a jump in crt0 for mem[0]
+    // 3) Write the jump to mem[0] here
+    // This does #3.  #1 may be best, #2 gets messy (elf files
+    // drop any section before .init, crt0 needs ifdefs, etc)
+    constexpr uint32_t jal_opcode = 0x6f;
+    constexpr uint32_t jal_max_offset = 0x0007ffff;
+    uint32_t opcode = jal_opcode;
+    TT_FATAL(
+        firmware_base < jal_max_offset,
+        "Base FW address {} should be below JAL max offset {}",
+        firmware_base,
+        jal_max_offset);
+    // See riscv spec for offset encoding below
+    uint32_t jal_offset_bit_20 = 0;
+    uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
+    uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
+    uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
+    uint32_t jal_offset =
+        jal_offset_bit_20 |
+        jal_offset_bits_10_to_1 |
+        jal_offset_bit_11 |
+        jal_offset_bits_19_to_12;
+
+    return jal_offset | opcode;
 }
 
 }  // namespace tt_metal

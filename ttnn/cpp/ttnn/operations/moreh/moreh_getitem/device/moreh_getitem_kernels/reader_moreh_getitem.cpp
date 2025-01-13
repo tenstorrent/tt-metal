@@ -53,12 +53,12 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(i++);
     uint32_t stick_size = get_arg_val<uint32_t>(i++);
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_in2 = tt::CB::c_in2;
-    constexpr auto cb_in3 = tt::CB::c_in3;
-    constexpr auto cb_in4 = tt::CB::c_in4;
-    constexpr auto cb_in5 = tt::CB::c_in5;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_in2 = tt::CBIndex::c_2;
+    constexpr auto cb_in3 = tt::CBIndex::c_3;
+    constexpr auto cb_in4 = tt::CBIndex::c_4;
+    constexpr auto cb_in5 = tt::CBIndex::c_5;
 
     constexpr bool in_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool index0_is_dram = get_compile_time_arg_val(1) == 1;
@@ -88,7 +88,7 @@ void kernel_main() {
         index4_is_defined,
     };
 
-    tt::CB index_cbs[5] = {
+    tt::CBIndex index_cbs[5] = {
         cb_in1,
         cb_in2,
         cb_in3,
@@ -136,13 +136,12 @@ void kernel_main() {
         bool is_first_index = true;
         int32_t output_dim = 3;
         for (int32_t dim = 3; dim >= 0; dim--) {
-
             uint32_t input_stick_idx_stride = input_stick_idx_strides[dim];
             auto output_size = output_size_list[output_dim];
 
             if (index_is_defined[dim]) {
                 // read index tensor
-                tt::CB idx_cb = index_cbs[dim];
+                tt::CBIndex idx_cb = index_cbs[dim];
 
                 cb_reserve_back(idx_cb, 1);
                 uint32_t index_l1_addr = get_write_ptr(idx_cb);
@@ -167,8 +166,7 @@ void kernel_main() {
                 noc_async_read(index_noc_addr, index_l1_addr, index_stick_sizes[dim]);
                 noc_async_read_barrier();
 
-                volatile tt_l1_ptr int32_t* index_l1_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
+                volatile tt_l1_ptr int32_t* index_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(index_l1_addr);
                 int32_t noc_idx = index_l1_ptr[index_index];
 
                 if (noc_idx < 0) {
@@ -186,7 +184,7 @@ void kernel_main() {
                 output_stick_idx /= output_size;
             }
             if (!(index_start_dim < dim && dim <= index_end_dim)) {
-                output_dim --;
+                output_dim--;
             }
         }
 

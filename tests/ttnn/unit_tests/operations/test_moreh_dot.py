@@ -8,96 +8,56 @@ from loguru import logger
 
 import ttnn
 from models.utility_functions import comp_allclose_and_pcc
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
+    to_ttnn,
 )
 
 
-def create_tt_tensor(tensor, layout, dtype):
-    return ttnn.from_torch(tensor, layout=layout, dtype=dtype)
-
-
-def get_tensors(
-    input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device, use_randint=True
-):
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttnn.TILE_LAYOUT
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-
-    # create tensors for forward
-    if use_randint:
-        input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
-        other = torch.randint(-2, 3, other_shape, dtype=cpu_dtype)
-        output = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+def get_torch_dtype(dtype):
+    if dtype == ttnn.int32:
+        return torch.int32
     else:
-        input = torch.rand(input_shape, dtype=cpu_dtype)
-        other = torch.rand(other_shape, dtype=cpu_dtype)
-        output = torch.rand(output_shape, dtype=cpu_dtype)
-
-    tt_input = create_tt_tensor(input, cpu_layout, npu_dtype).pad_to_tile(float(1)).to(npu_layout).to(device)
-    tt_other = create_tt_tensor(other, cpu_layout, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-    tt_output = create_tt_tensor(output, cpu_layout, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-
-    torch_input = input.reshape(-1) if is_1d else input
-    torch_other = other.reshape(-1) if is_1d else other
-
-    # tensors for backward
-    output_grad = tt_output_grad = torch_output_grad = tt_input_grad = tt_other_grad = None
-    if require_input_grad or require_other_grad:
-        output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-        tt_output_grad = (
-            create_tt_tensor(output_grad, cpu_layout, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
-        )
-        torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
-
-        if require_input_grad:
-            input_grad = torch.full(input_shape, float("nan"), dtype=cpu_dtype)
-            tt_input_grad = (
-                create_tt_tensor(input_grad, cpu_layout, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-            )
-
-        if require_other_grad:
-            other_grad = torch.full(other_shape, float("nan"), dtype=cpu_dtype)
-            tt_other_grad = (
-                create_tt_tensor(other_grad, cpu_layout, npu_dtype).pad_to_tile(float("nan")).to(npu_layout).to(device)
-            )
-
-    return (
-        tt_input,
-        tt_other,
-        tt_output,
-        tt_output_grad,
-        tt_input_grad,
-        tt_other_grad,
-        torch_input,
-        torch_other,
-        torch_output_grad,
-    )
+        return torch.bfloat16
 
 
-@pytest.mark.parametrize(
-    "input_shape",
-    (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
-        [1, 1, 1, 32],  # test single tile
-        [1, 1, 1, 352],  # test multiple tiles
-        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
-    ),
-)
-def test_moreh_matmul_1d(input_shape, device):
-    torch.manual_seed(3072)
-    # get tensors
+def run_moreh_dot_test(input_shape, ttnn_dtype, device, use_optional_output=False):
+    # TODO @thanhnguyen-moreh: Support bfloat8_b in kernel
+    if ttnn_dtype == ttnn.bfloat8_b:
+        pytest.skip(f"bfloat8_b is not supported in the kernel")
+    torch_dtype = get_torch_dtype(ttnn_dtype)
     output_shape = [1, 1, 1, 1]
-    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
-        input_shape, input_shape, output_shape, False, False, True, device
+
+    if ttnn_dtype == ttnn.int32:
+        torch_input = torch.randint(-2, 3, input_shape, dtype=torch_dtype)
+        torch_other = torch.randint(-2, 3, input_shape, dtype=torch_dtype)
+        torch_optional_output = torch.randint(-2, 3, output_shape, dtype=torch_dtype)
+
+        tt_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )  # Input dtype must be of bfloat16 or bfloat8_b
+        tt_other = ttnn.from_torch(
+            torch_other, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )  # Input dtype must be of bfloat16 or bfloat8_b
+
+    else:
+        torch_input = torch.rand(input_shape, dtype=torch_dtype)
+        torch_other = torch.rand(input_shape, dtype=torch_dtype)
+        torch_optional_output = torch.rand(output_shape, dtype=torch_dtype)
+
+        tt_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+        tt_other = ttnn.from_torch(torch_other, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+
+    optional_output = (
+        ttnn.from_torch(torch_optional_output, device=device, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT)
+        if use_optional_output
+        else None
     )
 
-    # tt matmul
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_out = ttnn.moreh_dot(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=ttnn_dtype, output=optional_output)
+    tt_out = ttnn.to_torch(tt_out).to(torch_dtype)
 
     # torch matmul
     torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
@@ -111,3 +71,69 @@ def test_moreh_matmul_1d(input_shape, device):
     logger.debug(f"Output pcc={output_pcc}")
 
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 32],  # test single tile
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        ttnn.bfloat8_b,
+    ),
+)
+def test_moreh_dot(input_shape, dtype, device):
+    torch.manual_seed(3072)
+    run_moreh_dot_test(input_shape, dtype, device)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        [1, 1, 1, 10],  # test not mutiple of 32 case
+        [1, 1, 1, 32],  # test single tile
+        [1, 1, 1, 352],  # test multiple tiles
+        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (
+        ttnn.bfloat16,
+        ttnn.int32,
+        None,
+    ),
+)
+def test_moreh_matmul_1d_callback(input_shape, dtype, device, use_program_cache):
+    torch.manual_seed(3072)
+
+    for i in range(2):
+        run_moreh_dot_test(input_shape, dtype, device)
+        torch_dummy = torch.randn([32, 32])
+        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
+        if i == 0:
+            num_program_cache_entries = device.num_program_cache_entries()
+            assert num_program_cache_entries > 0
+        else:
+            assert device.num_program_cache_entries() == num_program_cache_entries
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    ([1, 1, 1, 10],),  # test not mutiple of 32 case
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+)
+def test_moreh_dot_optional_output_tensor(input_shape, dtype, device):
+    torch.manual_seed(3072)
+    run_moreh_dot_test(input_shape, dtype, device, use_optional_output=True)

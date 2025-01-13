@@ -10,33 +10,34 @@ all-reduce), allocation
 # Supported Operations
 
 
-## All Gather
+* All Gather
+* Reduce Scatter
+* All Reduce (experimental)
 
 ### Configurations
 For the time being, input and output configurations are expected to match
 
 Tested Configurations:
 * Layouts: {Row-Major, Tile}
-* Memory Allocation: {Interleaved, Sharded (width)}
+* Memory Allocation: {Interleaved, Sharded (width, height, block)}
 * Memory Locations: DRAM, L1
 * Datatypes: BFloat16, Bfloat8_b
 
 Unsupported Configurations:
-* Sharding: {Block, Height}
 * Row-Major + Bfloat8_b
   * Bfloat8_b must be in tile format
 
 ### Topologies
 Supported Topologies:
 * Ring
+* Linear
 
 Future Tologies:
-* Linear
 * Mesh
 * Torus (2d, 3d)
 
 # Future Operations
-* All Reduce
+* All Reduce (Full support)
 * Reduce
 * Scatter
 * Gather Scatter

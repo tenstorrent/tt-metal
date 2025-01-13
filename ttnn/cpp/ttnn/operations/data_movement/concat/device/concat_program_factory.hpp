@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#pragma once
+
 #include "tt_metal/common/work_split.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
+#include "ttnn/cpp/ttnn/operation.hpp"
 
-using namespace tt::constants;
-using namespace tt;
-
+#include "ttnn/operation.hpp"
 namespace ttnn::operations::data_movement::detail {
 
 // start is inclusive, end is exclusive
@@ -23,16 +23,16 @@ struct CorePageRange {
     PageRange range;
 };
 
-operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
-operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+tt::tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output);
 
-operation::ProgramWithCallbacks sharded_concat_multi_core(
-    const std::vector<Tensor> &input_tensors, uint32_t dim, Tensor &output);
+tt::tt_metal::operation::ProgramWithCallbacks sharded_concat_multi_core(
+    const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
-operation::ProgramWithCallbacks concat_multi_core(
-    const std::vector<Tensor> &input_tensors, const uint32_t dim, const Tensor &output);
+tt::tt_metal::operation::ProgramWithCallbacks concat_multi_core(
+    const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail

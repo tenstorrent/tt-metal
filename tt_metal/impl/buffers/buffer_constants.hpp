@@ -7,7 +7,6 @@
 #include <cstdint>
 
 namespace tt {
-
 namespace tt_metal {
 
 enum class TensorMemoryLayout {
@@ -23,6 +22,18 @@ enum class ShardOrientation {
     COL_MAJOR,
 };
 
-} // namespace tt_metal
+enum class ShardMode {
+    PHYSICAL,  // TODO: Deprecate this option to treat shard shape as physical
+    LOGICAL,
+};
 
-} // namespace tt
+enum class BufferType {
+    DRAM,
+    L1,
+    SYSTEM_MEMORY,
+    L1_SMALL,
+    TRACE,
+};
+
+}  // namespace tt_metal
+}  // namespace tt

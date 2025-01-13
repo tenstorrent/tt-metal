@@ -38,7 +38,7 @@ def test_fill_rm(device):
         .to(device)
     )
     xtt = ttnn.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
-    assert list(xtt.get_legacy_shape()) == [N, C, H, W]
+    assert list(xtt.shape.with_tile_padding()) == [N, C, H, W]
 
     tt_got_back = xtt.cpu().to_torch()
 

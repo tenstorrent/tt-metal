@@ -35,12 +35,11 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
     a = ttnn.Tensor(a, dtype).to(ttnn.TILE_LAYOUT).to(device, memory_config)
@@ -50,13 +49,12 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
         shard_grid,
         [1, E * N // num_cores],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     h_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, h_shard_spec)
     h_prev = ttnn.Tensor(h_prev, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device, h_memory_config)
 
     actual = ttnn.experimental.prefix_scan(a, bx, h_prev, memory_config=memory_config, dtype=dtype)
-    assert list(actual.get_legacy_shape()) == list(expected.shape)
+    assert list(actual.shape.with_tile_padding()) == list(expected.shape)
     assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)
@@ -119,12 +117,11 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     if num_availible_cores < num_cores:
         pytest.skip(f"Not enough cores availible (was {num_availible_cores} but need {num_cores})")
 
-    shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
     shard_spec = ttnn.ShardSpec(
         shard_grid,
         [L, E * N // num_cores],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -135,7 +132,6 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
         shard_grid,
         [1, E * N // num_cores],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     h_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, h_shard_spec)
     h_prev = ttnn.Tensor(h_prev, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device, h_memory_config)

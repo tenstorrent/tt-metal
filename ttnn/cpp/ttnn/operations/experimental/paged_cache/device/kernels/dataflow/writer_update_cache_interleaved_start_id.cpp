@@ -6,10 +6,13 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    const uint32_t cache_addr  = get_arg_val<uint32_t>(0);
+    const uint32_t cache_addr = get_arg_val<uint32_t>(0);
     const uint32_t cache_start_id = get_arg_val<uint32_t>(1);
     uint32_t cache_tile_offset_B = get_arg_val<uint32_t>(2);
     const uint32_t my_batch_idx = get_arg_val<uint32_t>(3);
+    const bool send_signal = get_arg_val<uint32_t>(4) == 1;
+    const uint32_t send_core_x = get_arg_val<uint32_t>(5);
+    const uint32_t send_core_y = get_arg_val<uint32_t>(6);
 
     constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
@@ -30,16 +33,17 @@ void kernel_main() {
     constexpr uint32_t max_blocks_per_seq = get_compile_time_arg_val(14);
     constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(15);
 
+    constexpr uint32_t St = get_compile_time_arg_val(16);
+    uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(17));  // semaphore for receiver
+    constexpr uint32_t head_offset_t = Wt * St;
+
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
     const DataFormat cache_data_format = get_dataformat(cache_cb_id);
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
     const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr,
-        .page_size = cache_tile_bytes,
-        .data_format = cache_data_format
-    };
+        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
@@ -59,7 +63,8 @@ void kernel_main() {
             if constexpr (is_paged_cache) {
                 cb_wait_front(page_table_cb_id, 1);
                 uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
-                volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
+                volatile tt_l1_ptr uint32_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
 
                 const uint32_t virtual_block_id = update_idx / block_size;
                 const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
@@ -77,35 +82,48 @@ void kernel_main() {
         }
     }
 
-    cb_wait_front(untilized_input_cb_id, Wt);
+    cb_wait_front(untilized_input_cb_id, Wt);  // input tensor
     uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(untilized_input_cb_id));
 
-    // Wait on compute to untilize a block. Update that block in L1.
-    cb_wait_front(untilized_cache_cb_id, Wt);
-    cb_reserve_back(untilized_cache2_cb_id, Wt);
-    uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + cache_tile_offset_B;
-    noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
-    noc_async_read_barrier();
-    cb_push_back(untilized_cache2_cb_id, Wt);
-    cb_pop_front(untilized_cache_cb_id, Wt); // NEW
+    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+        // Wait on compute to untilize a block. Update that block in L1.
+        cb_wait_front(untilized_cache_cb_id, Wt);
+        cb_reserve_back(untilized_cache2_cb_id, Wt);
 
-    // Wait on compute to tilize an updated block. Write that block to DRAM
-    cb_wait_front(cache_cb_id, Wt);
-    if (!skip_update) {
-        uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
-        for(uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-            noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
-            out_l1_read_addr += cache_tile_bytes;
+        uint32_t cache_l1_write_addr = get_read_ptr(untilized_cache_cb_id) + cache_tile_offset_B;
+        noc_async_read(input_l1_read_addr, cache_l1_write_addr, Wbytes);
+        noc_async_read_barrier();
+        cb_push_back(untilized_cache2_cb_id, Wt);
+        cb_pop_front(untilized_cache_cb_id, Wt);  // NEW
+
+        // Wait on compute to tilize an updated block. Write that block to DRAM
+        cb_wait_front(cache_cb_id, Wt);
+        if (!skip_update) {
+            uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
+            for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
+                noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
+                out_l1_read_addr += cache_tile_bytes;
+            }
+
+            noc_async_writes_flushed();
+        }
+        cb_pop_front(cache_cb_id, Wt);
+
+        if (!skip_update) {
+            // Delay syncing the writes to maximize perf.
+            noc_async_write_barrier();
         }
 
-        noc_async_writes_flushed();
+        // read from next head
+        input_l1_read_addr += Wbytes;
+        cache_id += head_offset_t;
     }
-    cb_pop_front(cache_cb_id, Wt);
 
     cb_pop_front(untilized_input_cb_id, Wt);
 
-    if (!skip_update) {
-        // Delay syncing the writes to maximize perf.
-        noc_async_write_barrier();
+    if (send_signal) {
+        // send signal to start compute
+        const uint64_t in0_sender_semaphore_noc_addr = get_noc_addr(send_core_x, send_core_y, semaphore_addr);
+        noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
     }
 }

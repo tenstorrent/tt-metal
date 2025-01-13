@@ -38,6 +38,8 @@ MULTI_DEVICE_STORAGE_TYPE = StorageType.MULTI_DEVICE
 
 TILE_SIZE = 32
 
+Tile = ttnn._ttnn.tensor.Tile
+
 Shape = ttnn._ttnn.types.Shape
 Tensor = ttnn._ttnn.tensor.Tensor
 
@@ -56,26 +58,16 @@ class CoreRange:
     end: CoreGrid
 
 
-@dataclasses.dataclass
-class MeshShape:
-    y: int
-    x: int
-
-    @property
-    def num_devices(self):
-        return self.y * self.x
-
-    def as_tuple(self):
-        return (self.y, self.x)
-
-
 class ShardStrategy(Enum):
     HEIGHT = 1
     WIDTH = 2
     BLOCK = 3
 
 
+MeshShape = ttnn._ttnn.multi_device.MeshShape
+MeshOffset = ttnn._ttnn.multi_device.MeshOffset
 ShardOrientation = ttnn._ttnn.tensor.ShardOrientation
+ShardMode = ttnn._ttnn.tensor.ShardMode
 ShardSpec = ttnn._ttnn.tensor.ShardSpec
 CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange

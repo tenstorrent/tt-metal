@@ -15,7 +15,7 @@ from models.utility_functions import torch_random
 TIMEOUT = 15  # longer timeout since permute calls transpose recursively
 
 parameters = {
-    "nightly": {
+    "traces": {
         "permute_specs": [
             {"shape": [1, 1, 1, 7, 7, 1024], "dims": [0, 1, 3, 2, 4, 5]},
             {"shape": [1, 1, 1, 7, 7, 768], "dims": [0, 1, 3, 2, 4, 5]},
@@ -258,6 +258,8 @@ parameters = {
             # {"shape": ["s0 + 1", "s0 + 1", 16], "dims": [2, 0, 1]},
             # {"shape": ["s0 + 1", "s0 + 1", 6], "dims": [2, 0, 1]},
             # {"shape": ["s0 + 1", "s0 + 1", 8], "dims": [2, 0, 1]}
+            {"shape": [1, 16, 256, 64], "dims": [0, 2, 1, 3]},
+            {"shape": [1, 256, 16, 64], "dims": [0, 2, 1, 3]},
         ],
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT],

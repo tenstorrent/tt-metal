@@ -1,0 +1,200 @@
+﻿2024-09-02T07:01:59.5457804Z Current runner version: '2.319.1'
+2024-09-02T07:01:59.5465043Z Runner name: 'tt-metal-ci-vm-108'
+2024-09-02T07:01:59.5465934Z Runner group name: 'Default'
+2024-09-02T07:01:59.5467139Z Machine name: 'tt-metal-ci-vm-108'
+2024-09-02T07:01:59.5487114Z Testing runner upgrade compatibility
+2024-09-02T07:01:59.6130340Z ##[group]GITHUB_TOKEN Permissions
+2024-09-02T07:01:59.6222746Z Actions: read
+2024-09-02T07:01:59.6223706Z Contents: read
+2024-09-02T07:01:59.6224225Z Metadata: read
+2024-09-02T07:01:59.6224769Z Pages: write
+2024-09-02T07:01:59.6225328Z ##[endgroup]
+2024-09-02T07:01:59.6231213Z Secret source: Actions
+2024-09-02T07:01:59.6232294Z Prepare workflow directory
+2024-09-02T07:01:59.7605823Z Prepare all required actions
+2024-09-02T07:01:59.7886680Z Getting action download info
+2024-09-02T07:01:59.9791832Z Download action repository 'tenstorrent-metal/metal-workflows@v2.0.0' (SHA:22c747950076e4c9627125e14734e287c08287a7)
+2024-09-02T07:02:00.4206634Z Getting action download info
+2024-09-02T07:02:00.5961594Z Download action repository 'actions/checkout@v4' (SHA:692973e3d937129bcbf40652eb9f2f61becf3332)
+2024-09-02T07:02:01.2134564Z Uses: tenstorrent/tt-metal/.github/workflows/umd-unit-tests.yaml@refs/heads/main (a9bcd03b1775ab989aebab822ec2e4f821abac41)
+2024-09-02T07:02:01.2137425Z ##[group] Inputs
+2024-09-02T07:02:01.2137980Z   arch: grayskull
+2024-09-02T07:02:01.2138463Z   runner-label: E150
+2024-09-02T07:02:01.2139802Z   timeout: 15
+2024-09-02T07:02:01.2140285Z ##[endgroup]
+2024-09-02T07:02:01.2141250Z Complete job name: umd-unit-tests (grayskull, E150) / grayskull E150
+2024-09-02T07:02:01.2939820Z A job started hook has been configured by the self-hosted runner administrator
+2024-09-02T07:02:01.3135966Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/reset.sh'
+2024-09-02T07:02:01.3156311Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:02:01.3157052Z ##[endgroup]
+2024-09-02T07:02:01.3466919Z Current date / time is Mon Sep 2 07:02:01 UTC 2024
+2024-09-02T07:02:01.9204494Z tt-smi reset was successful
+2024-09-02T07:02:02.3917786Z 
+2024-09-02T07:02:02.3918599Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:02:02.3944114Z [1A[J
+2024-09-02T07:02:02.3947088Z [95m Detected Chips: [93m1[0m
+2024-09-02T07:02:02.3948223Z 
+2024-09-02T07:02:02.3949912Z [94m Detecting ARC: [93m|[0m
+2024-09-02T07:02:02.3950292Z 
+2024-09-02T07:02:02.3950806Z [94m Detecting DRAM: [93m|[0m
+2024-09-02T07:02:02.3954815Z 
+2024-09-02T07:02:02.3955292Z  [95m[][94m ETH: [93m|[0m
+2024-09-02T07:02:02.4017350Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2024-09-02T07:02:02.4038815Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2024-09-02T07:02:02.4776590Z {
+2024-09-02T07:02:02.4782948Z     "time": "2024-09-02T07:02:02.395451",
+2024-09-02T07:02:02.4783805Z     "host_info": {
+2024-09-02T07:02:02.4784450Z         "OS": "Linux",
+2024-09-02T07:02:02.4785086Z         "Distro": "Ubuntu 20.04.6 LTS",
+2024-09-02T07:02:02.4785889Z         "Kernel": "5.4.0-192-generic",
+2024-09-02T07:02:02.4786625Z         "Hostname": "tt-metal-ci-vm-108",
+2024-09-02T07:02:02.4787315Z         "Platform": "x86_64",
+2024-09-02T07:02:02.4787940Z         "Python": "3.8.10",
+2024-09-02T07:02:02.4788665Z         "Memory": "47.14 GB",
+2024-09-02T07:02:02.4789286Z         "Driver": "TTKMD 1.27.1"
+2024-09-02T07:02:02.4789820Z     },
+2024-09-02T07:02:02.4790323Z     "device_info": [
+2024-09-02T07:02:02.4790842Z         {
+2024-09-02T07:02:02.4791331Z             "smbus_telem": {
+2024-09-02T07:02:02.4792140Z                 "BOARD_ID": "0x10000361152e00d",
+2024-09-02T07:02:02.4792907Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2024-09-02T07:02:02.4793621Z                 "SMBUS_TX_DEVICE_ID": "0xfaca1e52",
+2024-09-02T07:02:02.4794375Z                 "SMBUS_TX_ASIC_RO": null,
+2024-09-02T07:02:02.4795103Z                 "SMBUS_TX_ASIC_IDD": null,
+2024-09-02T07:02:02.4845266Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000036",
+2024-09-02T07:02:02.4846053Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1152e00d",
+2024-09-02T07:02:02.4851350Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x1070000",
+2024-09-02T07:02:02.4852064Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x1070000",
+2024-09-02T07:02:02.4852704Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2024-09-02T07:02:02.4853378Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x1070000",
+2024-09-02T07:02:02.4854059Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": null,
+2024-09-02T07:02:02.4854726Z                 "SMBUS_TX_ETH_FW_VERSION": null,
+2024-09-02T07:02:02.4855409Z                 "SMBUS_TX_M3_BL_FW_VERSION": null,
+2024-09-02T07:02:02.4856082Z                 "SMBUS_TX_M3_APP_FW_VERSION": null,
+2024-09-02T07:02:02.4856724Z                 "SMBUS_TX_DDR_SPEED": "0xe74",
+2024-09-02T07:02:02.4857355Z                 "SMBUS_TX_DDR_STATUS": "0x111111",
+2024-09-02T07:02:02.4858013Z                 "SMBUS_TX_ETH_STATUS0": null,
+2024-09-02T07:02:02.4858844Z                 "SMBUS_TX_ETH_STATUS1": null,
+2024-09-02T07:02:02.4859471Z                 "SMBUS_TX_PCIE_STATUS": "0x11040042",
+2024-09-02T07:02:02.4860129Z                 "SMBUS_TX_FAULTS": null,
+2024-09-02T07:02:02.4860747Z                 "SMBUS_TX_ARC0_HEALTH": "0xc3fb4979",
+2024-09-02T07:02:02.4861375Z                 "SMBUS_TX_ARC1_HEALTH": null,
+2024-09-02T07:02:02.4862012Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2024-09-02T07:02:02.4862626Z                 "SMBUS_TX_ARC3_HEALTH": null,
+2024-09-02T07:02:02.4863222Z                 "SMBUS_TX_FAN_SPEED": "0xff",
+2024-09-02T07:02:02.4863846Z                 "SMBUS_TX_AICLK": "0x4b200fa",
+2024-09-02T07:02:02.4864713Z                 "SMBUS_TX_AXICLK": "0x384",
+2024-09-02T07:02:02.4865311Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2024-09-02T07:02:02.4865926Z                 "SMBUS_TX_THROTTLER": null,
+2024-09-02T07:02:02.4866538Z                 "SMBUS_TX_VCORE": "0x2e4",
+2024-09-02T07:02:02.4867165Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x2db0210",
+2024-09-02T07:02:02.4867843Z                 "SMBUS_TX_VREG_TEMPERATURE": null,
+2024-09-02T07:02:02.4868676Z                 "SMBUS_TX_BOARD_TEMPERATURE": null,
+2024-09-02T07:02:02.4869288Z                 "SMBUS_TX_TDP": "0xaa0010",
+2024-09-02T07:02:02.4869911Z                 "SMBUS_TX_TDC": "0x12c0014",
+2024-09-02T07:02:02.4870546Z                 "SMBUS_TX_VDD_LIMITS": "0x3a202e4",
+2024-09-02T07:02:02.4871169Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2024-09-02T07:02:02.4871821Z                 "SMBUS_TX_WH_FW_DATE": "0x45011317",
+2024-09-02T07:02:02.4872486Z                 "SMBUS_TX_ASIC_TMON0": "0x22202122",
+2024-09-02T07:02:02.4873153Z                 "SMBUS_TX_ASIC_TMON1": "0x2120",
+2024-09-02T07:02:02.4873775Z                 "SMBUS_TX_MVDDQ_POWER": null,
+2024-09-02T07:03:43.3428203Z [32m2024-09-02 07:03:43.342[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2024-09-02T07:03:43.3431372Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2024-09-02T07:04:46.0573380Z [0m[       OK ] SiliconDriverGS.MultiThreadedMemBar (62717 ms)
+2024-09-02T07:04:46.0574457Z [----------] 9 tests from SiliconDriverGS (67413 ms total)
+2024-09-02T07:04:46.0575059Z 
+2024-09-02T07:04:46.0575364Z [----------] Global test environment tear-down
+2024-09-02T07:04:46.0576011Z [==========] 9 tests from 1 test suite ran. (67413 ms total)
+2024-09-02T07:04:46.0576606Z [  PASSED  ] 9 tests.
+2024-09-02T07:04:46.4087675Z Post job cleanup.
+2024-09-02T07:04:46.4185876Z Post job cleanup.
+2024-09-02T07:04:46.5363208Z [command]/usr/bin/git version
+2024-09-02T07:04:46.5409985Z git version 2.25.1
+2024-09-02T07:04:46.5465032Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/aebae943-dd9c-401d-9349-13ec0047bef8' before making global git config changes
+2024-09-02T07:04:46.5466566Z Adding repository directory to the temporary git global config as a safe directory
+2024-09-02T07:04:46.5472476Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2024-09-02T07:04:46.5518802Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2024-09-02T07:04:46.5554747Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2024-09-02T07:04:46.5853282Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:04:46.5895073Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:04:46.5938448Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:04:46.5981035Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:04:46.6028004Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:04:46.6080861Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:04:46.6124527Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:04:46.6165667Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:04:46.6207306Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:04:46.6252103Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:04:46.6294897Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:04:46.6357216Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2024-09-02T07:04:46.6387812Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.6403885Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2024-09-02T07:04:46.6445464Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2024-09-02T07:04:46.6714565Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2024-09-02T07:04:46.6743082Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.6784258Z Entering 'tt_metal/third_party/lfs'
+2024-09-02T07:04:46.6814042Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.6849155Z Entering 'tt_metal/third_party/pybind11'
+2024-09-02T07:04:46.6876372Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.6915230Z Entering 'tt_metal/third_party/sfpi'
+2024-09-02T07:04:46.6945907Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.6984084Z Entering 'tt_metal/third_party/taskflow'
+2024-09-02T07:04:46.7009732Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7048969Z Entering 'tt_metal/third_party/tracy'
+2024-09-02T07:04:46.7074031Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7110435Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2024-09-02T07:04:46.7137284Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7172161Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2024-09-02T07:04:46.7199176Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7231974Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2024-09-02T07:04:46.7257617Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7301759Z Entering 'tt_metal/third_party/umd'
+2024-09-02T07:04:46.7329081Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7369032Z Entering 'tt_metal/third_party/umd/third_party/fmt'
+2024-09-02T07:04:46.7392254Z http.https://github.com/.extraheader
+2024-09-02T07:04:46.7553442Z A job completed hook has been configured by the self-hosted runner administrator
+2024-09-02T07:04:46.7586066Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/cleanup.sh'
+2024-09-02T07:04:46.7600621Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2024-09-02T07:04:46.7601291Z ##[endgroup]
+2024-09-02T07:04:46.7665788Z Current date / time is Mon Sep 2 07:04:46 UTC 2024
+2024-09-02T07:04:46.7666464Z Printing out cpu information...
+2024-09-02T07:04:46.7699828Z Architecture:                       x86_64
+2024-09-02T07:04:46.7700700Z CPU op-mode(s):                     32-bit, 64-bit
+2024-09-02T07:04:46.7701557Z Byte Order:                         Little Endian
+2024-09-02T07:04:46.7702338Z Address sizes:                      40 bits physical, 48 bits virtual
+2024-09-02T07:04:46.7703226Z CPU(s):                             14
+2024-09-02T07:04:46.7703908Z On-line CPU(s) list:                0-13
+2024-09-02T07:04:46.7704533Z Thread(s) per core:                 1
+2024-09-02T07:04:46.7705327Z Core(s) per socket:                 1
+2024-09-02T07:04:46.7705933Z Socket(s):                          14
+2024-09-02T07:04:46.7717977Z NUMA node(s):                       2
+2024-09-02T07:04:46.7718656Z Vendor ID:                          AuthenticAMD
+2024-09-02T07:04:46.7719309Z CPU family:                         23
+2024-09-02T07:04:46.7719898Z Model:                              49
+2024-09-02T07:04:46.7720694Z Model name:                         AMD EPYC-Rome Processor
+2024-09-02T07:04:46.7721396Z Stepping:                           0
+2024-09-02T07:04:46.7722006Z CPU MHz:                            2300.000
+2024-09-02T07:04:46.7722643Z BogoMIPS:                           4600.00
+2024-09-02T07:04:46.7723281Z Virtualization:                     AMD-V
+2024-09-02T07:04:46.7724156Z Hypervisor vendor:                  KVM
+2024-09-02T07:04:46.7724777Z Virtualization type:                full
+2024-09-02T07:04:46.7725393Z L1d cache:                          448 KiB
+2024-09-02T07:04:46.7725995Z L1i cache:                          448 KiB
+2024-09-02T07:04:46.7726599Z L2 cache:                           7 MiB
+2024-09-02T07:04:46.7727227Z L3 cache:                           224 MiB
+2024-09-02T07:04:46.7727885Z NUMA node0 CPU(s):                  0-6
+2024-09-02T07:04:46.7728814Z NUMA node1 CPU(s):                  7-13
+2024-09-02T07:04:46.7729477Z Vulnerability Gather data sampling: Not affected
+2024-09-02T07:04:46.7730199Z Vulnerability Itlb multihit:        Not affected
+2024-09-02T07:04:46.7730867Z Vulnerability L1tf:                 Not affected
+2024-09-02T07:04:46.7731560Z Vulnerability Mds:                  Not affected
+2024-09-02T07:04:46.7732239Z Vulnerability Meltdown:             Not affected
+2024-09-02T07:04:46.7732930Z Vulnerability Mmio stale data:      Not affected
+2024-09-02T07:04:46.7733612Z Vulnerability Retbleed:             Vulnerable
+2024-09-02T07:04:46.7734633Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2024-09-02T07:04:46.7735966Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2024-09-02T07:04:46.7737694Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2024-09-02T07:04:46.7739079Z Vulnerability Srbds:                Not affected
+2024-09-02T07:04:46.7739816Z Vulnerability Tsx async abort:      Not affected
+2024-09-02T07:04:46.7744042Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2024-09-02T07:04:46.7939539Z Cleaning up orphan processes

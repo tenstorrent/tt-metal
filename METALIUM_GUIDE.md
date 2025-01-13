@@ -126,30 +126,30 @@ kernel:
 namespace NAMESPACE {
 void MAIN {
   mm_init();
-  acquire_dst(tt::DstMode::Tile);
+  acquire_dst();
 
-  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
-  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
 
-  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
 
-  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
-  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
 
-  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
-  pack_tile(0, tt::CB::c_out0);
-  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
 
-  release_dst(tt::DstMode::Tile);
+  release_dst();
 }
 }  // namespace NAMESPACE
 ```
 
-It takes two matrix tiles from `tt::CB::c_in0` and `tt::CB::c_in0` L1 and
+It takes two matrix tiles from `tt::CBIndex::c_0` and `tt::CBIndex::c_0` L1 and
 conducts a single-tile matrix multiplication. Finally, it packs the result to
-`tt::CB::c_out0`.
+`tt::CBIndex::c_16`.
 
-Note that tile registers are acquired by `acquire_dst(..)`, but actually we can
+Note that tile registers are acquired by `acquire_dst()`, but actually we can
 use `tile_regs_..()` functions for the more fine-grained tile register lock
 mechanism. At the end of this section, we will explain more details.
 
@@ -226,10 +226,10 @@ inline __attribute__((always_inline)) void cb_wait_front(uint32_t cbid, uint32_t
 }
 ```
 
-Another interesting function is `acquire_dst(tt::DstMode mode)`:
+Another interesting function is `acquire_dst()`:
 * The UNPACK kernel has an empty one:
 ```
-inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+inline __attribute__((always_inline)) void acquire_dst() {
     ;
 
     ;
@@ -237,7 +237,7 @@ inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
 ```
 * The MATH kernel waits for DEST available:
 ```
-inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+inline __attribute__((always_inline)) void acquire_dst() {
     ( llk_math_wait_for_dest_available() );
 
     ;
@@ -245,7 +245,7 @@ inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
 ```
 * The UNPACK kernel waits for the end of MATH kernel:
 ```
-inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
+inline __attribute__((always_inline)) void acquire_dst() {
     ;
 
     ( llk_packer_wait_for_math_done() );
@@ -254,14 +254,14 @@ inline __attribute__((always_inline)) void acquire_dst(tt::DstMode mode) {
 
 [Its implementation](https://github.com/tenstorrent/tt-metal/blob/6d4951a20ca4c392888f924f038ae0780a8cc656/tt_metal/include/compute_kernel_api/reg_api.h#L28-L32) matches the preprocessed code:
 ```
-ALWI void acquire_dst(tt::DstMode mode) {
+ALWI void acquire_dst() {
     MATH(( llk_math_wait_for_dest_available()  ));
 
     PACK(( llk_packer_wait_for_math_done()  ));
 }
 ```
 
-Based on the implementation of `acquire_dst(..)`, if we use it, we can guess it
+Based on the implementation of `acquire_dst()`, if we use it, we can guess it
 executes UNPACK, MATH, PACK in order, which will help you to follow the
 execution order and instructions that actually run on each kernel.
 
@@ -292,30 +292,30 @@ ALWI void tile_regs_release() {
 }
 ```
 
-We can replace `acquire_dst(..)` and `release_dst(..)` from the above example
+We can replace `acquire_dst()` from the above example
 with `tile_regs_..()` functions like:
 ```
 namespace NAMESPACE {
 void MAIN {
   mm_init();
 
-  cb_wait_front(tt::CB::c_in0, /* number of tiles */ 1);
-  cb_wait_front(tt::CB::c_in1, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
+  cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
 
   tile_regs_acquire();
 
-  matmul_tiles(tt::CB::c_in0, tt::CB::c_in1, 0, 0, 0, false);
+  matmul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0, false);
 
   tile_regs_commit();
 
-  cb_pop_front(tt::CB::c_in1, /* number of tiles */ 1);
-  cb_pop_front(tt::CB::c_in0, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_1, /* number of tiles */ 1);
+  cb_pop_front(tt::CBIndex::c_0, /* number of tiles */ 1);
 
   tile_regs_wait();
 
-  cb_reserve_back(tt::CB::c_out0, /* number of tiles */ 1);
-  pack_tile(0, tt::CB::c_out0);
-  cb_push_back(tt::CB::c_out0, /* number of tiles */ 1);
+  cb_reserve_back(tt::CBIndex::c_16, /* number of tiles */ 1);
+  pack_tile(0, tt::CBIndex::c_16);
+  cb_push_back(tt::CBIndex::c_16, /* number of tiles */ 1);
 
   tile_regs_release();
 }
@@ -367,9 +367,9 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1); // should be <= 8 in this kernel
 
-    constexpr auto cb_in0 = tt::CB::c_in0;
-    constexpr auto cb_in1 = tt::CB::c_in1;
-    constexpr auto cb_out0 =  tt::CB::c_out0;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_in1 = tt::CBIndex::c_1;
+    constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
     add_tiles_init();
@@ -400,7 +400,7 @@ void MAIN {
         cb_pop_front(cb_in0, per_core_block_size);
         cb_pop_front(cb_in1, per_core_block_size);
 
-        // push a block of tiles to output CB
+        // push a block of tiles to output CBIndex
         cb_push_back(cb_out0, per_core_block_size);
     }
 

@@ -10,22 +10,24 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::experimental::reduction {
 
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    auto& padded_shape = input_a.get_legacy_shape();
+    auto padded_shape = input_a.get_legacy_shape();
     auto& unpadded_shape = padded_shape.without_padding();
-    if (padded_shape == unpadded_shape)
+    if (padded_shape == unpadded_shape) {
         return input_a;
+    }
     float t_inf = -std::numeric_limits<float>::infinity();
-    Tensor masked_input = tt::numpy::mask_padded_input<::bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
+    Tensor masked_input = ttnn::mask_padded_input<::bfloat16>(padded_shape, unpadded_shape, DataType::BFLOAT16);
     masked_input = ttnn::where(masked_input, input_a, t_inf, output_mem_config.value());
     return masked_input;
 }
 // Argmax returns the index of maximum element in the tensor
-Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
-
+Tensor ArgmaxOperation::invoke(
+    const Tensor& input_t, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_t.memory_config());
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_t}))};
     operation::launch_op(
@@ -34,7 +36,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input = input_tensors.at(0);
-            auto& input_shape = input.get_legacy_shape();
+            auto input_shape = input.get_legacy_shape();
             TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
             Tensor input_a = create_mask(input, output_memory_config);
@@ -47,12 +49,12 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     bool is_width = (dim == (input_shape.rank() - 1));
                     Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     Tensor max_tensor = ttnn::zeros_like(input_a);
-                    Tensor tindex = tt::numpy::index_width<::bfloat16>(
+                    Tensor tindex = ttnn::index_width<::bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     if (is_width) {
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     } else {
-                        tindex = tt::numpy::index_height<::bfloat16>(
+                        tindex = ttnn::index_height<::bfloat16>(
                             input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     }
@@ -66,7 +68,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
                     result = ttnn::where(ttnn::eq(result, size), res_index, result, output_memory_config);
-                    std::vector<int64_t> permute_dims = {3, 0, 1, 2};
+                    ttnn::SmallVector<int64_t> permute_dims = {3, 0, 1, 2};
                     if (is_width) {
                         res_index = ttnn::add(res_index, result, std::nullopt, output_memory_config);
                     } else {
@@ -82,17 +84,19 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     int repeat = input.get_shape()[dim];
                     std::vector<Tensor> combined_tensors;
-                    for (int cid = 0; cid < repeat; cid++) combined_tensors.emplace_back(max_val);
+                    for (int cid = 0; cid < repeat; cid++) {
+                        combined_tensors.emplace_back(max_val);
+                    }
                     max_val.deallocate();
                     Tensor concat_out = ttnn::concat(combined_tensors, dim, output_memory_config);
                     // Needed till `max` stops autoformatting output
                     concat_out = ttnn::reshape(concat_out, input_a.get_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
                     concat_out.deallocate();
-                    Tensor tindex = tt::numpy::index_channel<::bfloat16>(
+                    Tensor tindex = ttnn::index_channel<::bfloat16>(
                         input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     if (!is_channel) {
-                        tindex = tt::numpy::index_batch<::bfloat16>(
+                        tindex = ttnn::index_batch<::bfloat16>(
                             input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
                     }
                     tindex = tindex.to(input_a.device());
@@ -102,9 +106,10 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
                     Tensor result = ttnn::where(ttnn::eqz(max_indices), midx, max_indices, output_memory_config);
                     result = ttnn::min(result, (int)dim, true, output_memory_config);
                     Tensor res_index = ttnn::zeros_like(result);
-                    result = ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
+                    result =
+                        ttnn::where(ttnn::eq(result, full_like(result, size)), res_index, result, output_memory_config);
                     if (is_channel) {
-                        std::vector<int64_t> permute_dims = {1, 0, 2, 3};
+                        ttnn::SmallVector<int64_t> permute_dims = {1, 0, 2, 3};
                         Tensor transpose_res = ttnn::permute(result, permute_dims, output_memory_config);
                         return {transpose_res};
                     } else {
@@ -114,7 +119,7 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
             }
             // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire
             // maximum value index
-            Tensor tindex = tt::numpy::index_all<::bfloat16>(
+            Tensor tindex = ttnn::index_all<::bfloat16>(
                 input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
             Tensor max_val = ttnn::max(input_a, std::nullopt, true, output_memory_config);
             Tensor max_tensor = ttnn::zeros_like(input_a);
@@ -131,10 +136,10 @@ Tensor ArgmaxOperation::invoke(const Tensor& input_t, int64_t _dim, bool all, co
         {input_t},
         output_tensors);
     return output_tensors[0];
-
 }
 
-Tensor ArgminOperation::invoke(const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor ArgminOperation::invoke(
+    const Tensor& input_a, int64_t _dim, bool all, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     Tensor neg_input = ttnn::neg(input_a, output_memory_config);
     return ttnn::experimental::argmax(neg_input, _dim, all, output_memory_config);

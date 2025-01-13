@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 from tracy import *
 
 
 def main():
     from optparse import OptionParser
 
-    usage = "python -m tracy [-m module | scriptfile] [arg] ..."
+    usage = "python3 -m tracy [-m module | scriptfile] [arg] ..."
     parser = OptionParser(usage=usage)
     parser.allow_interspersed_args = False
     parser.add_option("-m", dest="module", action="store_true", help="Profile a library module.", default=False)
@@ -20,7 +22,7 @@ def main():
         "--no-device", dest="device", action="store_false", help="Do not include device data", default=True
     )
     parser.add_option(
-        "-o", "--output-folder", action="store", help="Artifact output folder", type="string", dest="output_folder"
+        "-o", "--output-folder", action="store", help="Profiler artifacts folder", type="string", dest="output_folder"
     )
     parser.add_option(
         "-n",
@@ -64,8 +66,16 @@ def main():
     (options, args) = parser.parse_args()
     sys.argv[:] = args
 
+    outputFolderEnvStr = "TT_METAL_PROFILER_DIR"
+    outputFolder = PROFILER_ARTIFACTS_DIR
+    if options.output_folder:
+        logger.info(f"Setting profiler artifacts folder to {options.output_folder}")
+        Path(options.output_folder).mkdir(parents=True, exist_ok=True)
+        os.environ["TT_METAL_PROFILER_DIR"] = options.output_folder
+        outputFolder = Path(options.output_folder)
+
     if options.processLogsOnly:
-        generate_report("generated/profiler/.log/", "", None)
+        generate_report(generate_logs_folder(outputFolder), "", None)
         sys.exit(0)
 
     if options.port:
@@ -87,9 +97,10 @@ def main():
                 logger.error("No available port found")
                 sys.exit(1)
             logger.info(f"Using port {port}")
-            doReport, captureProcess = run_report_setup(options.verbose, port)
+            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, port)
 
         if not doReport:
+            code = None
             if options.module:
                 import runpy
 
@@ -99,18 +110,24 @@ def main():
                     "modname": args[0],
                 }
             else:
-                progname = args[0]
-                sys.path.insert(0, os.path.dirname(progname))
-                with io.open_code(progname) as fp:
-                    code = compile(fp.read(), progname, "exec")
-                spec = importlib.machinery.ModuleSpec(name="__main__", loader=None, origin=progname)
-                globs = {
-                    "__spec__": spec,
-                    "__file__": spec.origin,
-                    "__name__": spec.name,
-                    "__package__": None,
-                    "__cached__": None,
-                }
+                trySystem = False
+                try:
+                    progname = args[0]
+                    sys.path.insert(0, os.path.dirname(progname))
+                    with io.open_code(progname) as fp:
+                        code = compile(fp.read(), progname, "exec")
+                    spec = importlib.machinery.ModuleSpec(name="__main__", loader=None, origin=progname)
+                    globs = {
+                        "__spec__": spec,
+                        "__file__": spec.origin,
+                        "__name__": spec.name,
+                        "__package__": None,
+                        "__cached__": None,
+                    }
+                except ValueError as exc:
+                    trySystem = True
+                if trySystem:
+                    subprocess.run(progname, shell=True, check=True)
 
             if options.partial:
                 tracy_state.doPartial = True
@@ -119,7 +136,8 @@ def main():
                 tracy_state.doLine = True
 
             try:
-                runctx(code, globs, None, options.partial)
+                if code:
+                    runctx(code, globs, None, options.partial)
             except BrokenPipeError as exc:
                 # Prevent "Exception ignored" during interpreter shutdown.
                 sys.stdout = None
@@ -128,7 +146,7 @@ def main():
             originalArgs.remove("-r")
             osCmd = " ".join(originalArgs[1:])
 
-            testCommand = f"python -m tracy {osCmd}"
+            testCommand = f"python3 -m tracy {osCmd}"
 
             envVars = dict(os.environ)
             # No Dispatch cores for op_report
@@ -158,12 +176,12 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
-                generate_report(options.output_folder, options.name_append, options.child_functions)
+                generate_report(outputFolder, options.name_append, options.child_functions)
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on the correct build. Use scripts/build_scripts/build_with_profiler_opt.sh to build if you are not sure."
+                    f"No profiling data could be captured. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
                 )
                 sys.exit(1)
 

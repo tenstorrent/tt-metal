@@ -18,14 +18,28 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+def buffer_address(tensor):
+    addr = []
+    for ten in ttnn.get_device_tensors(tensor):
+        addr.append(ten.buffer_address())
+    return addr
+
+
+# TODO: Create ttnn apis for this
+ttnn.buffer_address = buffer_address
+
+
+def run_resnet50_inference(
+    device,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    model_location_generator,
+):
     test_infra = create_test_infra(
         device,
-        batch_size,
+        device_batch_size,
         act_dtype,
         weight_dtype,
         math_fidelity,
@@ -33,6 +47,7 @@ def run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fid
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
+
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
     # First run configures convs JIT
@@ -57,24 +72,19 @@ def run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fid
 
 def run_resnet50_trace_inference(
     device,
-    batch_size,
+    device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
     model_location_generator,
 ):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-
     test_infra = create_test_infra(
         device,
-        batch_size,
+        device_batch_size,
         act_dtype,
         weight_dtype,
         math_fidelity,
-        dealloc_input=True,
+        True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
@@ -97,7 +107,7 @@ def run_resnet50_trace_inference(
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = test_infra.input_tensor.buffer_address()
+    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     tt_image_res = ttnn.allocate_tensor_on_device(
@@ -108,7 +118,7 @@ def run_resnet50_trace_inference(
         input_mem_config,
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == tt_image_res.buffer_address()
+    assert trace_input_addr == ttnn.buffer_address(tt_image_res)
 
     # More optimized run with caching
     if use_signpost:
@@ -122,18 +132,21 @@ def run_resnet50_trace_inference(
     ttnn.release_trace(device, tid)
 
 
-def run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
+def run_resnet50_2cqs_inference(
+    device,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    math_fidelity,
+    model_location_generator,
+):
     test_infra = create_test_infra(
         device,
-        batch_size,
+        device_batch_size,
         act_dtype,
         weight_dtype,
         math_fidelity,
-        dealloc_input=True,
+        True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
@@ -176,7 +189,9 @@ def run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, mat
         test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
         ttnn.record_event(0, op_event)
         outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_device(device)
+
+    ttnn.synchronize_devices(device)
+
     if use_signpost:
         signpost(header="stop")
     for output in outputs:
@@ -185,24 +200,19 @@ def run_resnet50_2cqs_inference(device, batch_size, act_dtype, weight_dtype, mat
 
 def run_resnet50_trace_2cqs_inference(
     device,
-    batch_size,
+    device_batch_size,
     act_dtype,
     weight_dtype,
     math_fidelity,
     model_location_generator,
 ):
-    if batch_size == 8:
-        pytest.skip("Skipping batch size 8 due to memory config issue")
-    if is_wormhole_b0() and batch_size == 20:
-        pytest.skip("Skipping batch size 20 for Wormhole B0 due to fitting issue")
-
     test_infra = create_test_infra(
         device,
-        batch_size,
+        device_batch_size,
         act_dtype,
         weight_dtype,
         math_fidelity,
-        dealloc_input=True,
+        True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
         model_location_generator=model_location_generator,
     )
@@ -245,7 +255,7 @@ def run_resnet50_trace_2cqs_inference(
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     ttnn.record_event(0, op_event)
     test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = test_infra.input_tensor.buffer_address()
+    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     input_tensor = ttnn.allocate_tensor_on_device(
@@ -256,7 +266,7 @@ def run_resnet50_trace_2cqs_inference(
         input_mem_config,
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == input_tensor.buffer_address()
+    assert trace_input_addr == ttnn.buffer_address(input_tensor)
 
     # More optimized run with caching
     if use_signpost:
@@ -272,8 +282,8 @@ def run_resnet50_trace_2cqs_inference(
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
+    ttnn.synchronize_devices(device)
 
-    ttnn.synchronize_device(device)
     if use_signpost:
         signpost(header="stop")
     for output in outputs:

@@ -87,12 +87,12 @@ class TtRobertaForMultipleChoice(nn.Module):
         flat_position_ids = position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
         flat_token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1)) if token_type_ids is not None else None
         flat_attention_mask = (
-            fallback_ops.reshape(attention_mask, 1, 1, -1, attention_mask.get_legacy_shape()[-1])
+            fallback_ops.reshape(attention_mask, 1, 1, -1, attention_mask.shape.with_tile_padding()[-1])
             if attention_mask is not None
             else None
         )
         flat_inputs_embeds = (
-            fallback_ops.reshape(inputs_embeds, 1, 1, -1, inputs_embeds.get_legacy_shape()[-2])
+            fallback_ops.reshape(inputs_embeds, 1, 1, -1, inputs_embeds.shape.with_tile_padding()[-2])
             if inputs_embeds is not None
             else None
         )

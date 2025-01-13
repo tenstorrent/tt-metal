@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -17,33 +17,31 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     auto input = tensor_args.input;
     auto output = output_tensor;
 
-    auto output_mem_config = operation_attributes.output_mem_config;
-    const DeviceComputeKernelConfig& compute_kernel_config = init_device_compute_kernel_config(
-        input.device()->arch(), operation_attributes.compute_kernel_config, MathFidelity::HiFi4);
-    ;
+    auto memory_config = operation_attributes.memory_config;
+    const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::Device* device{input.device()};
+    tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};
-    const auto shape{input.get_legacy_shape()};
+    const auto shape{input.get_padded_shape()};
 
-    const auto [W, H, other_dims_product] = tt::operations::primary::extract_spatial_dims(shape);
+    const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
     uint32_t Wt{W / tt::constants::TILE_WIDTH};
     uint32_t Ht{H / tt::constants::TILE_HEIGHT};
     uint32_t num_tiles = input.volume() / tt::constants::TILE_HW;
     auto num_rows{other_dims_product * Ht};
 
     // check mask for w-dim
-    const auto input_shape_without_padding{shape.without_padding()};
+    const auto input_shape_without_padding{input.get_logical_shape()};
     const auto origin_W{input_shape_without_padding[-1]};
     const bool do_mask_w{(origin_W % tt::constants::TILE_WIDTH) != 0};
     const auto mask_w{do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH};
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
     log_debug(
         tt::LogOp,
@@ -84,33 +82,32 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::operations::primary::CreateCircularBuffer(
+    CreateCircularBuffer(
         program,
         all_cores,
         cb_data_format,
         {
-            {tt::CB::c_in0, in0_t},              // input
-            {tt::CB::c_in1, in1_t},              // mask
-            {tt::CB::c_intermed0, intermed0_t},  // accumalated sum
-            {tt::CB::c_out0, out0_t},            // output
+            {tt::CBIndex::c_0, in0_t},         // input
+            {tt::CBIndex::c_1, in1_t},         // mask
+            {tt::CBIndex::c_24, intermed0_t},  // accumalated sum
+            {tt::CBIndex::c_16, out0_t},       // output
         });
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(input))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
     std::map<string, string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(tt::operations::primary::is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
     const auto reader_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_int_sum_w.cpp"};
     const auto writer_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_int_sum_w.cpp"};
-    const auto reader_kernel_id{tt::operations::primary::CreateReadKernel(
-        program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
-    const auto writer_kernel_id{
-        tt::operations::primary::CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
+    const auto reader_kernel_id{
+        CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args, reader_defines)};
+    const auto writer_kernel_id{CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args)};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -126,7 +123,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     }
     const auto compute_kernel_file{
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_w_impl_kernels/moreh_int_sum_w.cpp"};
-    const auto compute_kernel_1_id = tt::operations::primary::CreateComputeKernel(
+    const auto compute_kernel_1_id = CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_rows_per_core_group_1, compute_args_group_1},
@@ -141,7 +138,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
             num_rows_per_core_group_2,  // num_rows
             Wt,                         // Wt
             origin_W};
-        compute_kernel_2_id = tt::operations::primary::CreateComputeKernel(
+        compute_kernel_2_id = CreateComputeKernel(
             program,
             compute_kernel_file,
             {core_group_2, num_rows_per_core_group_2, compute_args_group_2},
@@ -159,9 +156,9 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_rows_per_core{0};
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges.");

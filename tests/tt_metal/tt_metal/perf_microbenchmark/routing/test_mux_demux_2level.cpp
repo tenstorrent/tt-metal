@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/hostdevcommon/common_runtime_address_map.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
+using std::vector;
 using namespace tt;
 
 
@@ -93,7 +94,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         tt_metal::Program program = tt_metal::CreateProgram();
 
         constexpr uint32_t tx_x = 0;
@@ -169,6 +170,10 @@ int main(int argc, char **argv) {
                     src_endpoint_start_id, // 15: src_endpoint_start_id
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                    0, // 18: skip_pkt_content_gen
+                    0, // 19: pkt_dest_size_choice
+                    0, // 20: data_sent_per_iter_low
+                    0 // 21: data_sent_per_iter_high
                 };
             log_info(LogTest, "run TX {} at x={},y={} (phys x={},y={})",
                             i, tx_core[i].x, tx_core[i].y, tx_phys_core[i].x, tx_phys_core[i].y);
@@ -208,6 +213,7 @@ int main(int argc, char **argv) {
                     src_endpoint_start_id, // 15: src_endpoint_start_id
                     dest_endpoint_start_id, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
+                    0 // 18: disable_header_check
                 };
             log_info(LogTest, "run RX {} at x={},y={} (phys x={},y={})",
                     i, rx_core[i].x, rx_core[i].y, rx_phys_core[i].x, rx_phys_core[i].y);
@@ -590,7 +596,7 @@ int main(int argc, char **argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

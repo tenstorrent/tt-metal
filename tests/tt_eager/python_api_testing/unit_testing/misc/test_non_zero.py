@@ -10,15 +10,7 @@ import pathlib
 import torch
 import numpy as np
 import ttnn
-
-
-tt_dtype_to_torch_dtype = {
-    ttnn.uint16: torch.int16,
-    ttnn.uint32: torch.int32,
-    ttnn.float32: torch.float,
-    ttnn.bfloat16: torch.bfloat16,
-    ttnn.bfloat8_b: torch.float,
-}
+from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
 
 @pytest.mark.parametrize(
@@ -69,7 +61,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
     assert num_non_zeros == B - b
 
     a_pt = (
-        ttnn.slice(indices_tt, (0, 0, 0, 0), (0, 0, 0, num_non_zeros - 1), memory_config=mem_config)
+        ttnn.slice(indices_tt, (0, 0, 0, 0), (1, 1, 1, num_non_zeros), memory_config=mem_config)
         .cpu()
         .to(ttnn.ROW_MAJOR_LAYOUT)
         .to_torch()

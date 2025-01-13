@@ -9,25 +9,30 @@ from loguru import logger
 import ttnn
 import ttnn.operations
 from models.utility_functions import comp_allclose_and_pcc, skip_for_grayskull
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import (
+from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
     compute_kernel_ids,
 )
 
 
-def create_tt_tensor(tensor: torch.Tensor, device):
-    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+def create_tt_tensor(tensor: torch.Tensor, dtype, layout, device):
+    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device)
 
 
 def get_tensors(
-    input_shape, other_shape, output_shape, require_input_grad, require_other_grad, is_1d, device, use_randint=True
+    input_shape,
+    other_shape,
+    output_shape,
+    require_input_grad,
+    require_other_grad,
+    is_1d,
+    device,
+    use_randint=True,
+    npu_dtype=ttnn.bfloat16,
+    cpu_dtype=torch.bfloat16,
+    npu_layout=ttnn.TILE_LAYOUT,
 ):
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
-    npu_layout = ttnn.TILE_LAYOUT
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-
     # create tensors for forward
     if use_randint:
         input = torch.randint(-2, 3, input_shape, dtype=cpu_dtype)
@@ -38,9 +43,9 @@ def get_tensors(
         other = torch.rand(other_shape, dtype=cpu_dtype)
         output = torch.rand(output_shape, dtype=cpu_dtype)
 
-    tt_input = create_tt_tensor(input, device)
-    tt_other = create_tt_tensor(other, device)
-    tt_output = create_tt_tensor(output, device)
+    tt_input = create_tt_tensor(input, npu_dtype, npu_layout, device)
+    tt_other = create_tt_tensor(other, npu_dtype, npu_layout, device)
+    tt_output = create_tt_tensor(output, npu_dtype, npu_layout, device)
 
     torch_input = input.reshape(-1) if is_1d else input
     torch_other = other.reshape(-1) if is_1d else other
@@ -48,8 +53,13 @@ def get_tensors(
     # tensors for backward
     output_grad = tt_output_grad = torch_output_grad = tt_input_grad = tt_other_grad = None
     if require_input_grad or require_other_grad:
-        output_grad = torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
-        tt_output_grad = ttnn.Tensor(output_grad, npu_dtype).pad_to_tile(float(-1)).to(npu_layout).to(device)
+        output_grad = (
+            torch.randint(-2, 3, output_shape, dtype=cpu_dtype)
+            if use_randint
+            else torch.rand(output_shape, dtype=cpu_dtype)
+        )
+        tt_output_grad = create_tt_tensor(output_grad, npu_dtype, npu_layout, device)
+
         torch_output_grad = output_grad[0][0][0][0] if is_1d else output_grad
 
         if require_input_grad:
@@ -58,15 +68,7 @@ def get_tensors(
 
         if require_other_grad:
             other_grad = torch.full(other_shape, float("nan"), dtype=cpu_dtype)
-            tt_other_grad = (
-                ttnn.Tensor(
-                    other_grad,
-                    npu_dtype,
-                )
-                .pad_to_tile(float("nan"))
-                .to(npu_layout)
-                .to(device)
-            )
+            tt_other_grad = create_tt_tensor(other_grad, npu_dtype, npu_layout, device)
 
     return (
         tt_input,
@@ -81,11 +83,48 @@ def get_tensors(
     )
 
 
-def moreh_matmul(params, has_output, compute_kernel_config, device):
+def get_bias_tensors(bias_shape, require_bias_grad, device, use_int=True):
+    npu_dtype = ttnn.bfloat16
+    cpu_dtype = torch.bfloat16
+    npu_layout = ttnn.TILE_LAYOUT
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    bias = (
+        torch.randint(-10, 10, bias_shape, dtype=cpu_dtype)
+        if use_int
+        else torch.rand(bias_shape, dtype=cpu_dtype) * 10 - 5
+    )
+    tt_bias = create_tt_tensor(bias, npu_dtype, npu_layout, device)
+    tt_bias_grad = None
+    if require_bias_grad:
+        bias_grad = torch.full(bias_shape, float("nan"), dtype=cpu_dtype)
+        tt_bias_grad = create_tt_tensor(bias_grad, npu_dtype, npu_layout, device)
+    return tt_bias, bias, tt_bias_grad
+
+
+def moreh_matmul(
+    params,
+    has_output,
+    compute_kernel_config,
+    device,
+    use_randint=True,
+    npu_dtype=ttnn.bfloat16,
+    cpu_dtype=torch.bfloat16,
+    npu_layout=ttnn.TILE_LAYOUT,
+):
     torch.manual_seed(3072)
     input_shape, other_shape, output_shape, transpose_input, transpose_other = params
     tt_input, tt_other, tt_output, _, _, _, torch_input, torch_other, _ = get_tensors(
-        input_shape, other_shape, output_shape, False, False, False, device
+        input_shape,
+        other_shape,
+        output_shape,
+        False,
+        False,
+        False,
+        device,
+        use_randint=use_randint,
+        npu_dtype=npu_dtype,
+        cpu_dtype=cpu_dtype,
+        npu_layout=npu_layout,
     )
     if not has_output:
         tt_output = None
@@ -103,18 +142,89 @@ def moreh_matmul(params, has_output, compute_kernel_config, device):
         output=tt_output,
         compute_kernel_config=compute_kernel_config,
     )
-    tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_output_cpu = ttnn.to_torch(tt_output)
 
     # torch matmul
     torch_out = torch.matmul(torch_input, torch_other)
 
     # test for equivalance
     rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+    passing, output_pcc = comp_allclose_and_pcc(
+        torch_out, tt_output_cpu, pcc=0.999 if use_randint else 0.99, rtol=rtol, atol=atol
+    )
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
 
     return passing
+
+
+def moreh_matmul_backward(params, requires_grad, device, dtype=ttnn.bfloat16, use_randint=True):
+    input_shape, other_shape, output_shape = params
+    require_input_grad, require_other_grad = requires_grad
+
+    # get tensors
+    (
+        tt_input,
+        tt_other,
+        _,
+        tt_output_grad,
+        tt_input_grad,
+        tt_other_grad,
+        torch_input,
+        torch_other,
+        torch_output_grad,
+    ) = get_tensors(
+        input_shape,
+        other_shape,
+        output_shape,
+        require_input_grad,
+        require_other_grad,
+        False,
+        device,
+        use_randint=use_randint,
+        npu_dtype=dtype,
+    )
+
+    # torch matmul
+    torch_out = torch.matmul(
+        torch_input.requires_grad_(require_input_grad), torch_other.requires_grad_(require_other_grad)
+    )
+    torch_out.backward(torch_output_grad)
+
+    # tt matmul backward
+    tt_input_grad, tt_other_grad = ttnn.operations.moreh.matmul_backward(
+        tt_output_grad,
+        tt_input,
+        tt_other,
+        are_required_outputs=(require_input_grad, require_other_grad),
+        input_a_grad=tt_input_grad,
+        input_b_grad=tt_other_grad,
+    )
+
+    # test for equivalance
+    rtol = atol = 0.1
+    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
+    if require_input_grad:
+        ttcpu_input_grad = ttnn.to_torch(tt_input_grad)
+        passing, output_pcc = comp_allclose_and_pcc(
+            torch_input.grad, ttcpu_input_grad, pcc=0.999 if use_randint else 0.99, rtol=rtol, atol=atol
+        )
+        logger.debug(f"input_grad passing={passing}")
+        logger.debug(f"input_grad pcc={output_pcc}")
+        assert passing
+    else:
+        assert tt_input_grad is None
+
+    if require_other_grad:
+        ttcpu_other_grad = ttnn.to_torch(tt_other_grad)
+        passing, output_pcc = comp_allclose_and_pcc(
+            torch_other.grad, ttcpu_other_grad, pcc=0.999 if use_randint else 0.99, rtol=rtol, atol=atol
+        )
+        logger.debug(f"other_grad passing={passing}")
+        logger.debug(f"other_grad pcc={output_pcc}")
+        assert passing
+    else:
+        assert tt_other_grad is None
 
 
 @pytest.mark.parametrize(
@@ -145,10 +255,14 @@ def moreh_matmul(params, has_output, compute_kernel_config, device):
         ),  # batched matmul
     ),
 )
+@pytest.mark.parametrize("use_randint", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_moreh_matmul(params, compute_kernel_options, device):
+def test_moreh_matmul(params, dtype, use_randint, compute_kernel_options, device):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
-    passing = moreh_matmul(params, True, compute_kernel_config, device)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    passing = moreh_matmul(params, True, compute_kernel_config, device, use_randint=use_randint, npu_dtype=dtype)
     assert passing
 
 
@@ -168,8 +282,14 @@ def test_moreh_matmul(params, compute_kernel_options, device):
         ),  # batched matmul
     ),
 )
-def test_moreh_matmul_wo_output(params, device):
-    passing = moreh_matmul(params, False, None, device)
+@pytest.mark.parametrize("use_randint", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
+@pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
+def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_options, device):
+    compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    passing = moreh_matmul(params, False, compute_kernel_config, device, use_randint, dtype)
     assert passing
 
 
@@ -200,7 +320,7 @@ def test_moreh_matmul_enable_cache(params, device, use_program_cache):
     assert device.num_program_cache_entries() == 2
 
 
-@skip_for_grayskull("Doesn't seem to work properly on Grayskull devices. Wormhole_b0 devices work fine.")
+@skip_for_grayskull("GS does not support fp32")
 @pytest.mark.parametrize(
     "params",
     (
@@ -241,8 +361,8 @@ def test_moreh_matmul_fp32_dest_acc(params, device):
         compute_kernel_config=compute_kernel_config_bf16_dest_acc,
     )
 
-    tt_output_cpu_fp32 = tt_output_fp32.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
-    tt_output_cpu_bf16 = tt_output_fp16.cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_output_cpu_fp32 = ttnn.to_torch(tt_output_fp32)
+    tt_output_cpu_bf16 = ttnn.to_torch(tt_output_fp16)
 
     # torch matmul (float)
     torch_out = torch.matmul(torch_input.float(), torch_other.float())
@@ -272,37 +392,90 @@ def test_moreh_matmul_fp32_dest_acc(params, device):
 
 
 @pytest.mark.parametrize(
-    "input_shape",
+    "params",
     (
-        [1, 1, 1, 10],  # test not mutiple of 32 case
-        [1, 1, 1, 32],  # test single tile
-        [1, 1, 1, 352],  # test multiple tiles
-        [1, 1, 1, 323],  # test multiple tiles, not a multiple of 32
+        # input, other, output shape
+        ([3, 128, 96], [3, 4, 1, 96, 256], [3, 4, 3, 128, 256]),
+        ([3, 3, 313, 511], [3, 3, 511, 765], [3, 3, 313, 765]),
+        ([3, 1, 2, 1, 4, 1, 319, 95], [4, 2, 95, 470], [3, 1, 2, 1, 4, 2, 319, 470]),
+        ([3, 2, 1, 470, 95], [2, 1, 3, 1, 2, 2, 95, 319], [2, 1, 3, 3, 2, 2, 470, 319]),
     ),
 )
-def test_moreh_matmul_1d(input_shape, device):
+@pytest.mark.parametrize(
+    "requires_grad",
+    (
+        (True, False),
+        (False, True),
+        (True, True),
+    ),
+)
+@pytest.mark.parametrize("dtype", (ttnn.bfloat8_b, ttnn.bfloat16), ids=["bfloat8_b", "bfloat16"])
+def test_moreh_matmul_backward(params, requires_grad, dtype, device):
     torch.manual_seed(3072)
-    # get tensors
-    output_shape = [1, 1, 1, 1]
-    tt_input, tt_other, _, _, _, _, torch_input, torch_other, _ = get_tensors(
-        input_shape, input_shape, output_shape, False, False, True, device
-    )
+    if dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported")
+    moreh_matmul_backward(params, requires_grad, device, dtype=dtype)
 
+
+@skip_for_grayskull("GS does not support fp32")
+@pytest.mark.parametrize(
+    "params",
+    (
+        # input, other, output shape, transpose input, other
+        ([31, 3100], [3100, 31], [31, 31], False, False),
+    ),
+)
+def test_moreh_matmul_with_bias_add_fp32_dest_acc(params, device):
+    torch.manual_seed(3072)
+    input_shape, other_shape, output_shape, transpose_input, transpose_other = params
+    tt_input, tt_other, tt_output_fp32, _, _, _, torch_input, torch_other, _ = get_tensors(
+        input_shape, other_shape, output_shape, False, False, False, device, use_randint=False
+    )
+    tt_bias, torch_bias, _ = get_bias_tensors([1, 31], False, device, False)
+    compute_kernel_config_fp32_dest_acc = get_compute_kernel_options(True)
+    compute_kernel_config_bf16_dest_acc = get_compute_kernel_options(False)
+    torch_input = torch_input.transpose(-1, -2) if transpose_input else torch_input
+    torch_other = torch_other.transpose(-1, -2) if transpose_other else torch_other
     # tt matmul
-    cpu_layout = ttnn.ROW_MAJOR_LAYOUT
-    tt_out = (
-        ttnn.operations.moreh.matmul(tt_input, tt_other).cpu().to(cpu_layout).unpad_from_tile(output_shape).to_torch()
+    tt_output_fp32 = ttnn.operations.moreh.matmul(
+        tt_input,
+        tt_other,
+        transpose_input=transpose_input,
+        transpose_other=transpose_other,
+        output=tt_output_fp32,
+        bias=tt_bias,
+        compute_kernel_config=compute_kernel_config_fp32_dest_acc,
+    )
+    tt_output_fp16 = ttnn.operations.moreh.matmul(
+        tt_input,
+        tt_other,
+        transpose_input=transpose_input,
+        transpose_other=transpose_other,
+        bias=tt_bias,
+        compute_kernel_config=compute_kernel_config_bf16_dest_acc,
     )
 
-    # torch matmul
-    torch_input = torch.reshape(torch_input, (torch_input.shape[-1],))
-    torch_other = torch.reshape(torch_other, (torch_other.shape[-1],))
-    torch_out = torch.matmul(torch_input, torch_other)
+    tt_output_cpu_fp32 = ttnn.to_torch(tt_output_fp32)
+    tt_output_cpu_bf16 = ttnn.to_torch(tt_output_fp16)
 
+    # torch matmul (float)
+    torch_out = torch.matmul(torch_input.float(), torch_other.float()) + torch_bias
     # test for equivalance
     rtol = atol = 0.1
-    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_out[0][0][0][0], pcc=0.999, rtol=rtol, atol=atol)
+    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu_fp32, pcc=0.99, rtol=rtol, atol=atol)
     logger.debug(f"Out passing={passing}")
     logger.debug(f"Output pcc={output_pcc}")
-
+    diff = torch.abs(torch_out - tt_output_cpu_fp32)
+    logger.debug(f"std={torch.std(diff)}")
+    logger.debug(f"mean={diff.mean()}")
+    logger.debug(f"topk(5) {torch.topk(diff.reshape(-1), 5)}")
     assert passing
+    torch_out = torch.matmul(torch_input.bfloat16(), torch_other.bfloat16())
+    passing, output_pcc = comp_allclose_and_pcc(torch_out, tt_output_cpu_bf16, pcc=0.99, rtol=rtol, atol=atol)
+    logger.debug(f"Out passing={passing}")
+    logger.debug(f"Output pcc={output_pcc}")
+    diff_fp16 = torch.abs(torch_out - tt_output_cpu_bf16)
+    logger.debug(f"std={torch.std(diff_fp16)}")
+    logger.debug(f"mean={diff_fp16.mean()}")
+    logger.debug(f"topk(5) {torch.topk(diff_fp16.reshape(-1), 5)}")
+    assert diff.mean() < diff_fp16.mean()

@@ -23,7 +23,7 @@ void MAIN {
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
     mm_init();
-    acquire_dst(tt::DstMode::Half);
+    acquire_dst();
 
     uint32_t out_tile_index = 0;
     uint32_t in0_index_r_offset = 0;
@@ -50,6 +50,6 @@ void MAIN {
         pack_tile(tile_index, out_cb);
     }
     cb_push_back(out_cb, out_num_tiles);
-    release_dst(tt::DstMode::Half);
+    release_dst();
 }
 }  // namespace NAMESPACE

@@ -6,14 +6,14 @@ import pytest
 from loguru import logger
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+from ttnn import ReplicateTensorToMesh
 
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.tg.llama3_70b.tt.llama_decoder_galaxy import TtLlamaDecoder_galaxy
 from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute_freqs_cis
 from models.utility_functions import skip_for_grayskull
+from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.t3000.llama2_70b.tt.llama_common import (
-    setup_llama_env,
     check_mesh_device,
     extract_pcc_from_log,
     generate_rot_emb,
@@ -113,9 +113,12 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
         assert seq_len == 1, "Only supporting decode mode"
         x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, hidden_dim]
 
+        ACT_CORE_GRID_Y = llama_decoder_model.model_config["DECODE_ACT_CORE_GRID"][0]
+        ACT_CORE_GRID_X = llama_decoder_model.model_config["DECODE_ACT_CORE_GRID"][1]
+        ACT_CORE_GRID_SIZE = ACT_CORE_GRID_Y * ACT_CORE_GRID_X
         ACT_MEMCFG = ttnn.create_sharded_memory_config(
-            shape=(x.shape[2], x.shape[3] // 8 // llama_decoder_model.cluster_shape[0]),
-            core_grid=ttnn.CoreGrid(y=1, x=8),
+            shape=(x.shape[2], x.shape[3] // ACT_CORE_GRID_SIZE // llama_decoder_model.cluster_shape[0]),
+            core_grid=ttnn.CoreGrid(y=ACT_CORE_GRID_Y, x=ACT_CORE_GRID_X),
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -148,7 +151,6 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
                     llama_decoder_model.head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         rot_mats = ttnn.as_tensor(
@@ -359,9 +361,9 @@ def run_test_LlamaDecoder_inference(
 
     tt_layer_present_all = [ttnn.from_device(lp) for lp in tt_LlamaDecoder_model.attention.layer_past]
     tt_layer_present_all = [
-        ttnn.to_torch(
-            lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(1, 0), cluster_shape=cluster_shape)
-        ).transpose(0, 1)[:batch, ...]
+        ttnn.to_torch(lp, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(0, 1), cluster_shape=cluster_shape))[
+            :batch, ...
+        ]
         for lp in tt_layer_present_all
     ]
 
@@ -396,11 +398,11 @@ def run_test_LlamaDecoder_inference(
     "batch, seq_len, pcc",
     [
         (32, 1, 0.995),
-        #  (1, 256, 0.995)
+        (1, 256, 0.995),
     ],
     ids=[
         "decode",
-        #  "prefill"
+        "prefill",
     ],
 )
 @pytest.mark.parametrize(

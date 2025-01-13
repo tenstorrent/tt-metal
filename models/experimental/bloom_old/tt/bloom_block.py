@@ -82,7 +82,7 @@ class TtBloomBlock(torch.nn.Module):
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
         # Layer norm at the beginning of the transformer layer.
-        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.get_legacy_shape()[-2])
+        layernorm_output = self.input_layernorm(hidden_states, overrideH=hidden_states.shape.with_tile_padding()[-2])
 
         # Layer norm post the self attention.
         if self.apply_residual_connection_post_layernorm:
@@ -107,7 +107,7 @@ class TtBloomBlock(torch.nn.Module):
         outputs = attn_outputs[1:]
 
         layernorm_output = self.post_attention_layernorm(
-            attention_output, overrideH=attention_output.get_legacy_shape()[-2]
+            attention_output, overrideH=attention_output.shape.with_tile_padding()[-2]
         )
 
         # Get residual

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "tt_metal/graph/graph_tracking.hpp"
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 #include <mutex>
@@ -22,7 +22,7 @@ namespace ttnn::graph {
 
     public:
         ProcessorHooks() = default;
-        bool hook_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        bool hook_allocate(const tt::tt_metal::Buffer* buffer) override;
 
         bool hook_deallocate(tt::tt_metal::Buffer* buffer) override;
 
@@ -40,15 +40,15 @@ namespace ttnn::graph {
         GraphProcessor(tt::tt_metal::IGraphProcessor::RunMode mode);
         ~GraphProcessor() override;
 
-        void track_allocate(tt::tt_metal::Buffer* buffer, bool bottom_up) override;
+        void track_allocate(const tt::tt_metal::Buffer* buffer) override;
 
         void track_deallocate(tt::tt_metal::Buffer* buffer) override;
 
-        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size) override;
+        void track_allocate_cb(const CoreRangeSet &core_range, uint64_t addr, uint64_t size, bool is_globally_allocated, const tt::tt_metal::IDevice* device) override;
 
-        void track_deallocate_cb() override;
+        void track_deallocate_cb(const tt::tt_metal::IDevice* device) override;
 
-        void track_program(tt::tt_metal::Program* program) override;
+        void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;
 
         void track_function_start(std::string_view function_name, std::span<std::any> args) override;
 
@@ -73,14 +73,15 @@ namespace ttnn::graph {
         std::mutex mutex;
         RunMode run_mode = RunMode::NORMAL;
         std::stack<int> current_op_id;
-        std::unordered_map<std::int64_t, int> id_to_counter;
+        std::unordered_map<std::int64_t, int> buffer_id_to_counter;
+        std::unordered_map<std::int64_t, int> tensor_id_to_counter;
         int last_finished_op_id = -1;
         std::vector<Vertex> graph;
         std::unordered_map<std::type_index, ProcessFunc> begin_function_any_map;
         std::unordered_map<std::type_index, ProcessFunc> end_function_any_map;
 
         int add_tensor(const Tensor& t);
-        int add_buffer(tt::tt_metal::Buffer* buffer);
+        int add_buffer(const tt::tt_metal::Buffer* buffer);
 
         void begin_function_process_ref_vector(const std::any& any_val);
         void begin_function_process_ref_vector_optional(const std::any& any_val);

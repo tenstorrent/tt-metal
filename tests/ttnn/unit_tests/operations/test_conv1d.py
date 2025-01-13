@@ -45,6 +45,7 @@ def run_conv(
     deallocate_activation=True,
     debug=False,
     groups=1,
+    auto_shard=False,
 ):
     # has_bias = False
     has_bias = False
@@ -78,17 +79,24 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
+    shard_layout = (
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    )
+    if auto_shard:
+        shard_layout = None
+
     conv_config = ttnn.Conv1dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-        if use_1d_systolic_array
-        else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        shard_layout=shard_layout,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -99,7 +107,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_length, weights_device, bias_device] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -112,9 +120,12 @@ def run_conv(
         batch_size=batch_size,
         input_length=input_length,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -214,6 +225,7 @@ def test_conv1d_mamba(
         padded_input_channels=None,
         output_layout=output_layout,
         groups=groups,
+        auto_shard=True,
     )
 
 

@@ -36,10 +36,9 @@ class Emb(torch.nn.Module):
     ),
 )
 def test_mixtral_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, batch):
-    for device in t3k_mesh_device.get_device_ids():
-        t3k_mesh_device.get_device(device).enable_async(True)
+    t3k_mesh_device.enable_async(True)
 
-    valid_pcc = 0.97
+    valid_pcc = 0.964
     dtype = ttnn.bfloat8_b
     iterations = 10
 

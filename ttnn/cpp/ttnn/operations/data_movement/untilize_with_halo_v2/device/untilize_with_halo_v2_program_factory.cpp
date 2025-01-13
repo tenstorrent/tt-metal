@@ -6,8 +6,8 @@
 
 #include <math.h>
 
-#include "tt_dnn/op_library/cb_utils.hpp"
-#include "tt_dnn/op_library/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
@@ -15,6 +15,7 @@
 #include "ttnn/operation.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -30,7 +31,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor) {
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -49,7 +50,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     auto output_shard_shape = output_tensor.shard_spec().value().shape;
     TT_ASSERT(input_shard_shape[1] == output_shard_shape[1]);
     uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
-    uint32_t remapped_input_shard_shape_for_output_grid = input_nhw_height / ncores_nhw;
+    uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
     uint32_t ntiles_per_block = tt::div_up(input_shard_shape[1], TILE_WIDTH);
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
@@ -68,10 +69,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     // Construct CBs
     // //
 
-    uint32_t src_cb_id = tt::CB::c_in0;
-    uint32_t pad_cb_id = tt::CB::c_in1;
-    uint32_t untilize_out_cb_id = tt::CB::c_out0;
-    uint32_t out_cb_id = tt::CB::c_out1;
+    uint32_t src_cb_id = tt::CBIndex::c_0;
+    uint32_t pad_cb_id = tt::CBIndex::c_1;
+    uint32_t untilize_out_cb_id = tt::CBIndex::c_16;
+    uint32_t out_cb_id = tt::CBIndex::c_17;
 
     // input CB (sharded)
     auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
@@ -111,9 +112,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     log_debug(tt::LogOp, "CB {} :: npages = {}, pagesize = {}", pad_cb_id, pad_cb_npages, pad_cb_pagesize);
 
     // Additional CBs for sharded data kernel configs
-    uint32_t padding_config_cb_id = tt::CB::c_in2;
-    uint32_t local_config_cb_id = tt::CB::c_in3;
-    uint32_t remote_config_cb_id = tt::CB::c_in4;
+    uint32_t padding_config_cb_id = tt::CBIndex::c_2;
+    uint32_t local_config_cb_id = tt::CBIndex::c_3;
+    uint32_t remote_config_cb_id = tt::CBIndex::c_4;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -143,22 +144,23 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
     Buffer* padding_config_buffer = padding_config.buffer();
+    const uint32_t num_cores = all_cores.num_cores();
     auto padding_config_cb_config =
-        CircularBufferConfig(padding_config_buffer->size(), {{padding_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
             .set_page_size(padding_config_cb_id, padding_config_buffer->page_size())
             .set_globally_allocated_address(*padding_config_buffer);
     CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
     Buffer* local_config_buffer = local_config.buffer();
     auto local_config_cb_config =
-        CircularBufferConfig(local_config_buffer->size(), {{local_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
             .set_page_size(local_config_cb_id, local_config_buffer->page_size())
             .set_globally_allocated_address(*local_config_buffer);
     CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
     Buffer* remote_config_buffer = remote_config.buffer();
     auto remote_config_cb_config =
-        CircularBufferConfig(remote_config_buffer->size(), {{remote_config_cb_id, kernel_config_df}})
+        CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
             .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
@@ -166,6 +168,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
+    auto aligned_input_nstick_nbytes = out_stick_nbytes;
+    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
+        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+    }
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
         0,  // padding_config_cb_id
@@ -181,8 +187,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
-        is_width_sharded
-    };
+        is_width_sharded,
+        aligned_input_nstick_nbytes};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;

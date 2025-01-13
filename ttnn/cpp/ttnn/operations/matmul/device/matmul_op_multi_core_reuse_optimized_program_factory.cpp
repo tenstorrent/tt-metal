@@ -18,7 +18,7 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 operation::ProgramWithCallbacks create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -40,8 +40,7 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat in0_data_format,
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
-    bool untilize_out
-) {
+    bool untilize_out) {
     tt_metal::Program program{};
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
@@ -61,10 +60,17 @@ operation::ProgramWithCallbacks create_program(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
-    uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_data_format);
+    auto in0_tile = in0.get_tensor_spec().tile();
+    auto in1_tile = in1.get_tensor_spec().tile();
+    // currently only support transpose of the full tile
+    bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    // cannot use the output tensor tile directly as that might be changed by user override
+    auto output_tile = tt::tt_metal::Tile({in0_tile.get_tile_shape()[0], in1_tile_shape[1]});
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+    uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     tt_metal::Buffer* in0_buffer = in0.buffer();
     tt_metal::Buffer* in1_buffer = in1.buffer();
@@ -119,7 +125,7 @@ operation::ProgramWithCallbacks create_program(
     }
 
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
-    CoreRangeSet all_cores({}), core_group_1({}), core_group_2({});
+    CoreRangeSet all_cores, core_group_1, core_group_2;
 
     if (shard_spec.has_value()) {
         all_cores = shard_spec.value().grid;
@@ -184,7 +190,7 @@ operation::ProgramWithCallbacks create_program(
         all_cores,
         WriterDataMovementConfig(reader_writer_compile_time_args, mm_kernel_in1_reader_writer_defines));
 
-    vector<uint32_t> compute_kernel_args_group_1 = {
+    std::vector<uint32_t> compute_kernel_args_group_1 = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
@@ -195,6 +201,8 @@ operation::ProgramWithCallbacks create_program(
         in1_per_core_w,       // in1_per_core_w
 
         num_blocks,  // num_blocks
+        1,           // out_num_blocks_x
+        1,           // out_num_blocks_y
 
         out_subblock_h,               // out_subblock_h
         out_subblock_w,               // out_subblock_w
@@ -211,6 +219,9 @@ operation::ProgramWithCallbacks create_program(
     if (fp32_dest_acc_en) {
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
+    if (in1_transpose_tile) {
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
+    }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
 
@@ -226,7 +237,7 @@ operation::ProgramWithCallbacks create_program(
             .compile_args = compute_kernel_args_group_1,
             .defines = mm_kernel_defines});
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_kernel_args_group_2 = {
+        std::vector<uint32_t> compute_kernel_args_group_2 = {
             in0_block_w,             // in0_block_w
             in0_num_subblocks,       // in0_num_subblocks
             in0_block_num_tiles,     // in0_block_num_tiles
@@ -237,6 +248,8 @@ operation::ProgramWithCallbacks create_program(
             in1_per_core_w,       // in1_per_core_w
 
             num_blocks,  // num_blocks
+            1,           // out_num_blocks_x
+            1,           // out_num_blocks_y
 
             out_subblock_h,               // out_subblock_h
             out_subblock_w,               // out_subblock_w
@@ -261,7 +274,8 @@ operation::ProgramWithCallbacks create_program(
     uint32_t src0_cb_index = 0;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_size, {{src0_cb_index, in0_data_format}})
-            .set_page_size(src0_cb_index, in0_single_tile_size);
+            .set_page_size(src0_cb_index, in0_single_tile_size)
+            .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded) {
         cb_src0_config = cb_src0_config.set_globally_allocated_address(*in0_buffer);
     }
@@ -270,13 +284,14 @@ operation::ProgramWithCallbacks create_program(
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
-            .set_page_size(src1_cb_index, in1_single_tile_size);
+            .set_page_size(src1_cb_index, in1_single_tile_size)
+            .set_tile_dims(src1_cb_index, in1_tile);
     if (in1_is_sharded) {
         cb_src1_config = cb_src1_config.set_globally_allocated_address(*in1_buffer);
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
     tt_metal::CircularBufferConfig interm0_cb_config =
         tt_metal::CircularBufferConfig(0, {{interm0_cb_index, interm0_data_format}});
@@ -289,13 +304,15 @@ operation::ProgramWithCallbacks create_program(
             {output_cb_index, output_data_format},
         };
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
-                               .set_page_size(output_cb_index, output_single_tile_size);
+                               .set_page_size(output_cb_index, output_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile);
         // interm0
         std::map<uint8_t, tt::DataFormat> interm0_cb_data_format_spec{
             {interm0_cb_index, interm0_data_format},
         };
         interm0_cb_config = tt_metal::CircularBufferConfig(interm0_CB_size, interm0_cb_data_format_spec)
-                                .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                                .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                                .set_tile_dims(interm0_cb_index, output_tile);
 
         auto cb_interm0 = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), interm0_cb_config);
     } else {
@@ -304,7 +321,9 @@ operation::ProgramWithCallbacks create_program(
             {output_cb_index, output_data_format}, {interm0_cb_index, interm0_data_format}};
         output_cb_config = tt_metal::CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                .set_page_size(output_cb_index, output_single_tile_size)
-                               .set_page_size(interm0_cb_index, interm0_single_tile_size);
+                               .set_page_size(interm0_cb_index, interm0_single_tile_size)
+                               .set_tile_dims(output_cb_index, output_tile)
+                               .set_tile_dims(interm0_cb_index, output_tile);
     }
     // std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec {
     //     {output_cb_index, output_data_format},
@@ -474,6 +493,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     bool untilize_out) {
     const auto& ashape = a.get_legacy_shape();
     const auto& bshape = b.get_legacy_shape();
+    auto in0_tile_shape = a.get_tensor_spec().tile().get_tile_shape();
+    auto in1_tile_shape = b.get_tensor_spec().tile().get_tile_shape();
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
@@ -484,38 +505,13 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());    // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);  // output
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
 
-    MathFidelity math_fidelity;
-    bool math_approx_mode;
-    bool fp32_dest_acc_en;
-    bool packer_l1_acc;
-
-    std::visit(
-        [&](auto&& compute_kernel_config) {
-            using T = std::decay_t<decltype(compute_kernel_config)>;
-            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
-                TT_FATAL(device->arch() == ARCH::GRAYSKULL, "kernel config is not for graykull");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = false;
-                packer_l1_acc = false;
-            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
-                TT_FATAL(ttnn::device::is_wormhole_or_blackhole(device->arch()), "kernel config is not for wormhole_b0 or blackhole");
-                math_fidelity = compute_kernel_config.math_fidelity;
-                math_approx_mode = compute_kernel_config.math_approx_mode;
-                fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
-                packer_l1_acc = compute_kernel_config.packer_l1_acc;
-            } else {
-                TT_THROW("arch not supported");
-            }
-        },
-        compute_kernel_config);
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
@@ -529,9 +525,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     uint32_t B = get_batch_size(ashape);
-    uint32_t Mt = ashape[-2] / TILE_HEIGHT;
-    uint32_t Kt = ashape[-1] / TILE_WIDTH;
-    uint32_t Nt = bshape[-1] / TILE_WIDTH;
+    uint32_t Mt = ashape[-2] / in0_tile_shape[0];
+    uint32_t Kt = ashape[-1] / in0_tile_shape[1];
+    uint32_t Nt = bshape[-1] / in1_tile_shape[1];
 
     // TODO: Generalize
     TT_FATAL(!fuse_batch, "Only fuse_batch=false is supported for optimized bmm!");

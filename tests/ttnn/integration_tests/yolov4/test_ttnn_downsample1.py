@@ -5,23 +5,28 @@
 import ttnn
 import torch
 from models.utility_functions import skip_for_grayskull
-from models.experimental.yolov4.reference.downsample1 import DownSample1
-from models.experimental.yolov4.ttnn.downsample1 import Down1
+from models.demos.yolov4.reference.downsample1 import DownSample1
+from models.demos.yolov4.ttnn.downsample1 import Down1
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import pytest
 import time
 from loguru import logger
+import os
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_down1(device, reset_seeds, model_location_generator):
+    torch.manual_seed(0)
     model_path = model_location_generator("models", model_subdir="Yolo")
 
     if model_path == "models":
-        pytest.skip(
-            "Requires weights file to be downloaded from https://drive.google.com/file/d/1wv_LiFeCRYwtpkqREPeI13-gPELBDwuJ/view"
-        )
+        if not os.path.exists("tests/ttnn/integration_tests/yolov4/yolov4.pth"):  # check if yolov4.th is availble
+            os.system(
+                "tests/ttnn/integration_tests/yolov4/yolov4_weights_download.sh"
+            )  # execute the yolov4_weights_download.sh file
+
+        weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
 

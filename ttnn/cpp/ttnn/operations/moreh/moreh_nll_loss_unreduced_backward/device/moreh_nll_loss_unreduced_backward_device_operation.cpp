@@ -83,13 +83,15 @@ void MorehNllLossUnreducedBackwardDeviceOperation::validate_on_program_cache_hit
     validate_inputs(attributes, tensor_args);
 }
 
-MorehNllLossUnreducedBackwardDeviceOperation::shape_return_value_t
-MorehNllLossUnreducedBackwardDeviceOperation::compute_output_shapes(
+MorehNllLossUnreducedBackwardDeviceOperation::spec_return_value_t
+MorehNllLossUnreducedBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.input_grad_tensor.has_value()) {
+        return {tensor_args.input_grad_tensor->get_tensor_spec()};
+    }
     // To calculate the output shape, we need the channel_size. However, the required tensors, target and output_grad,
     // do not contain the channel_size information.
-    TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support create output tensors.");
-    return tensor_args.target_tensor.get_shape();
+    TT_FATAL(false, "moreh_nll_loss_unreduced_backward not support creating output tensors.");
 }
 
 MorehNllLossUnreducedBackwardDeviceOperation::tensor_return_value_t
@@ -99,11 +101,8 @@ MorehNllLossUnreducedBackwardDeviceOperation::create_output_tensors(
         return {tensor_args.input_grad_tensor.value()};
     }
 
-    auto output_shapes = compute_output_shapes(operation_attributes, tensor_args);
-    auto dtype = tensor_args.target_tensor.get_dtype();
-    Layout layout{Layout::TILE};
-    auto device = tensor_args.target_tensor.device();
-    return create_device_tensor(output_shapes, dtype, layout, device, operation_attributes.memory_config);
+    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.target_tensor.device());
 }
 
 std::tuple<
@@ -112,8 +111,8 @@ std::tuple<
 MorehNllLossUnreducedBackwardDeviceOperation::invoke(
     const Tensor& target_tensor,
     const Tensor& output_grad_tensor,
-    const std::optional<const Tensor> weight_tensor,
-    const std::optional<const Tensor> input_grad_tensor,
+    const std::optional<Tensor>& weight_tensor,
+    const std::optional<Tensor>& input_grad_tensor,
     const int32_t ignore_index,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
@@ -121,8 +120,13 @@ MorehNllLossUnreducedBackwardDeviceOperation::invoke(
         operation_attributes_t{
             ignore_index < 0 ? std::numeric_limits<uint32_t>::max() : ignore_index,
             memory_config.value_or(target_tensor.memory_config()),
-            compute_kernel_config},
-        tensor_args_t{target_tensor, output_grad_tensor, weight_tensor, input_grad_tensor}};
+            init_device_compute_kernel_config(
+                target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+        tensor_args_t{
+            target_tensor,
+            output_grad_tensor,
+            weight_tensor,
+            input_grad_tensor}};  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward
 }
 
 }  // namespace ttnn::operations::moreh::moreh_nll_loss_unreduced_backward

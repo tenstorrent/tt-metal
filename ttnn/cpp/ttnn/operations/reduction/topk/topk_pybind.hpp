@@ -38,16 +38,20 @@ void bind_reduction_topk_operation(py::module& module) {
                 return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, out=None)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for topk.
-                * :attr:`k`: the number of top elements to look for
-                * :attr:`dim`: the dimension to reduce
-                * :attr:`largest`: whether to return the largest or the smallest elements
-                * :attr:`sorted`: whether to return the elements in sorted order
+                input_tensor (ttnn.Tensor): the input tensor.
+                k (number): the number of top elements to look for.
+                dim (number): the dimension to reduce.
+                largest (bool): whether to return the largest or the smallest elements. Defaults to `False`.
+                sorted (bool): whether to return the elements in sorted order. Defaults to `False`.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensors
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
-                * :attr:`queue_id` (Optional[uint8]): command queue id
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                queue_id (int, optional): command queue id. Defaults to `0`.
+
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::topk);
@@ -56,28 +60,26 @@ void bind_reduction_topk_operation(py::module& module) {
         ttnn::topk,
         doc,
         ttnn::pybind_overload_t{
-            [] (const OperationType& self,
-                const ttnn::Tensor& input_tensor,
-                const uint16_t k,
-                const int8_t dim,
-                const bool largest,
-                const bool sorted,
-                std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                uint8_t queue_id) {
-                    return self(queue_id, input_tensor, k, dim, largest, sorted,
-                    memory_config, optional_output_tensors);
-                },
-                py::arg("input_tensor").noconvert(),
-                py::arg("k") = 32,
-                py::arg("dim") = -1,
-                py::arg("largest") = true,
-                py::arg("sorted") = true,
-                py::kw_only(),
-                py::arg("out") = std::nullopt,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("queue_id") = 0});
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const uint16_t k,
+               const int8_t dim,
+               const bool largest,
+               const bool sorted,
+               std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>> optional_output_tensors,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               uint8_t queue_id) {
+                return self(queue_id, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+            },
+            py::arg("input_tensor").noconvert(),
+            py::arg("k") = 32,
+            py::arg("dim") = -1,
+            py::arg("largest") = true,
+            py::arg("sorted") = true,
+            py::kw_only(),
+            py::arg("out") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0});
 }
-
 
 }  // namespace ttnn::operations::reduction::detail

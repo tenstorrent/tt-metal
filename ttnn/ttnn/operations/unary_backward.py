@@ -24,26 +24,26 @@ def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, 
     return golden_tensor
 
 
-def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
-    if torch_op == "leaky_relu":
-        pyt_y = torch.nn.functional.leaky_relu(input_tensor, negative_slope=alpha, inplace=False)
-    elif torch_op == "elu":
-        pyt_y = torch.nn.functional.elu(input_tensor, alpha=alpha)
-    elif torch_op == "celu":
-        pyt_y = torch.nn.functional.celu(input_tensor, alpha)
-    elif torch_op == "div_no_nan":
-        pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
-    else:
-        pyt_y = torch_op(input_tensor, alpha)
+def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
+    pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
     input_tensor.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
     golden_tensor = [input_tensor.grad]
-    if torch_op == "div_no_nan":
-        golden_tensor[0] = torch.where(torch.isnan(golden_tensor[0]), torch.zeros_like(input_tensor), golden_tensor[0])
+    golden_tensor[0] = torch.where(torch.isnan(golden_tensor[0]), torch.zeros_like(input_tensor), golden_tensor[0])
     return golden_tensor
 
 
-def _golden_function_unary_backward_with_two_float(torch_op, grad_tensor, input_tensor, a, b, *args, **kwargs):
+def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, *args, **kwargs):
+    pyt_y = torch_op(input_tensor, *args, **kwargs)
+    input_tensor.retain_grad()
+    pyt_y.backward(gradient=grad_tensor)
+    golden_tensor = [input_tensor.grad]
+    return golden_tensor
+
+
+def _golden_function_unary_backward_with_two_float(
+    torch_op, grad_tensor, input_tensor, a=None, b=None, *args, **kwargs
+):
     if torch_op == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
     else:
@@ -146,36 +146,36 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.hardshrink_bw,
-    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.hardshrink, grad, input, *args, **kwargs
+    golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.hardshrink, grad, input, lambd=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.softshrink_bw,
-    golden_function=lambda grad, input, *args, **kwargs: _golden_function_unary_backward(
-        torch.softshrink, grad, input, *args, **kwargs
+    golden_function=lambda grad, input, alpha=0.5, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.nn.functional.softshrink, grad, input, lambd=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.leaky_relu_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "leaky_relu", grad, input, alpha, *args, **kwargs
+    golden_function=lambda grad, input, alpha=1e-2, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.nn.functional.leaky_relu, grad, input, negative_slope=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.elu_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "elu", grad, input, alpha, *args, **kwargs
+    golden_function=lambda grad, input, alpha=1.0, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.nn.functional.elu, grad, input, alpha=alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.celu_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        "celu", grad, input, alpha, *args, **kwargs
+    golden_function=lambda grad, input, alpha=1.0, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.nn.functional.celu, grad, input, alpha=alpha, *args, **kwargs
     ),
 )
 
@@ -188,8 +188,8 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.logiteps_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
-        torch.logit, grad, input, alpha, *args, **kwargs
+    golden_function=lambda grad, input, alpha=None, *args, **kwargs: _golden_function_unary_backward_with_float(
+        torch.logit, grad, input, eps=alpha, *args, **kwargs
     ),
 )
 
@@ -216,13 +216,20 @@ ttnn.attach_golden_function(
 
 ttnn.attach_golden_function(
     ttnn.div_no_nan_bw,
-    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_unary_backward_with_float(
+    golden_function=lambda grad, input, alpha, *args, **kwargs: _golden_function_div_no_nan(
         "div_no_nan", grad, input, alpha, *args, **kwargs
     ),
 )
 
 ttnn.attach_golden_function(
     ttnn.clamp_bw,
+    golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
+        torch.clamp, grad, input, a, b, *args, **kwargs
+    ),
+)
+
+ttnn.attach_golden_function(
+    ttnn.clip_bw,
     golden_function=lambda grad, input, a, b, *args, **kwargs: _golden_function_unary_backward_with_two_float(
         torch.clamp, grad, input, a, b, *args, **kwargs
     ),
@@ -831,14 +838,14 @@ def _golden_function(grad_tensor, input_tensor, sizes, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.repeat_bw, golden_function=_golden_function)
 
 
-def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
+def _golden_function(grad_tensor, input_tensor, *args, value=2.0, **kwargs):
     import torch
 
-    pyt_y = torch.zeros_like(grad_tensor)
-    grad_sum = grad_tensor.sum()
-    pyt_y.fill_(grad_sum)
+    input_tensor.retain_grad()
+    pyt_y = torch.fill(input_tensor, value)
+    pyt_y.backward(gradient=grad_tensor)
 
-    return [pyt_y]
+    return [input_tensor.grad]
 
 
 ttnn.attach_golden_function(ttnn.fill_bw, golden_function=_golden_function)

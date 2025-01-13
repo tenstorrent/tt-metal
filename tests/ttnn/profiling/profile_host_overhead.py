@@ -29,14 +29,30 @@ all_num_call_to_stack = [20]  # For 10 and more test  execution spills to dispat
 NUM_REPEATS = 20
 
 
-def torch2tt_tensor(x, device, dlayout, in_mem_config, dtype):
-    return ttnn.from_torch(
-        x,
+def torch2tt_tensor(host_tensor, device, dlayout, in_mem_config, dtype, shard_tensor=False):
+    x = ttnn.from_torch(
+        host_tensor,
         dtype=dtype,
         layout=dlayout,
         device=device,
         memory_config=in_mem_config,
     )
+
+    if not shard_tensor:
+        return x
+
+    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
+    device_grid_size = ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+
+    block_sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=x.shape,
+        core_grid=device_grid_size,  # ttnn.CoreGrid(y=8, x=5),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=False,
+    )
+
+    return ttnn.to_memory_config(x, block_sharded_mem_config)
 
 
 def measure_host_overhead(op_func, op_name, device, num_call_to_stack, is_warmup):
@@ -93,6 +109,7 @@ def measure_host_overhead_binary(
     is_complex=[False, False],
     need_out_mem_cfg=False,
     is_warmup=False,
+    use_sharded_tensors=[False, False],
 ):
     input_shape_0 = input_shape
     input_shape_1 = input_shape
@@ -103,8 +120,8 @@ def measure_host_overhead_binary(
     x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
     y = torch.Tensor(size=input_shape_1).uniform_(-100, 100).bfloat16()
 
-    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
-    y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
+    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[0])
+    y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[1])
 
     if is_complex[0]:
         x = ttnn.complex_tensor(x, x)
@@ -143,6 +160,7 @@ def measure_host_overhead_unary(
     is_complex=[False],
     need_out_mem_cfg=False,
     is_warmup=False,
+    use_sharded_tensors=[False],
 ):
     input_shape_0 = input_shape
 
@@ -150,7 +168,7 @@ def measure_host_overhead_unary(
         input_shape_0 = shape_func(input_shape)
 
     x = torch.Tensor(size=input_shape_0).uniform_(-100, 100).bfloat16()
-    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
+    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[0])
 
     if is_complex[0]:
         x = ttnn.complex_tensor(x, x)
@@ -186,6 +204,7 @@ def measure_host_overhead_ternary(
     is_complex=[False, False, False],
     need_out_mem_cfg=False,
     is_warmup=False,
+    use_sharded_tensors=[False, False, False],
 ):
     input_shape_0 = input_shape
     input_shape_1 = input_shape
@@ -198,9 +217,9 @@ def measure_host_overhead_ternary(
     y = torch.Tensor(size=input_shape_1).uniform_(-100, 100).bfloat16()
     z = torch.Tensor(size=input_shape_2).uniform_(-100, 100).bfloat16()
 
-    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype)
-    y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype)
-    z = torch2tt_tensor(z, device, dlayout, in_mem_config, dtype)
+    x = torch2tt_tensor(x, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[0])
+    y = torch2tt_tensor(y, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[1])
+    z = torch2tt_tensor(z, device, dlayout, in_mem_config, dtype, shard_tensor=use_sharded_tensors[2])
 
     if is_complex[0]:
         x = ttnn.complex_tensor(x, x)
@@ -244,6 +263,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
         shape_func = None if "shape_func" not in op else op["shape_func"]
         is_complex = [False, False, False] if "is_complex" not in op else op["is_complex"]
         need_out_mem_cfg = False if "need_out_mem_cfg" not in op else op["need_out_mem_cfg"]
+        use_sharded_tensors = [False, False, False] if "use_sharded_tensors" not in op else op["use_sharded_tensors"]
 
         # Warmup
         measuring_func(
@@ -260,6 +280,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
             is_complex=is_complex,
             need_out_mem_cfg=need_out_mem_cfg,
             is_warmup=True,
+            use_sharded_tensors=use_sharded_tensors,
         )
 
         for num_call_to_stack in all_num_call_to_stack:
@@ -276,6 +297,7 @@ def run_measure_host_overhead(op, device, text_file, measuring_func):
                 shape_func=shape_func,
                 need_out_mem_cfg=need_out_mem_cfg,
                 is_complex=is_complex,
+                use_sharded_tensors=use_sharded_tensors,
             )
 
             op_count += len(overhead_ms) * num_call_to_stack * 2

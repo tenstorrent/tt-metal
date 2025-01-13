@@ -18,10 +18,10 @@ namespace operations {
 
 namespace matmul {
 
-operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor &b, Tensor &output, bool bcast_batch) {
+operation::ProgramWithCallbacks matmul_multi_core(const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
     tt_metal::Program program{};
 
-    const tt::tt_metal::LegacyShape& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const tt::tt_metal::LegacyShape &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
 
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.get_dtype());
@@ -31,11 +31,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    tt_metal::Buffer *src0_buffer = a.buffer();
-    tt_metal::Buffer *src1_buffer = b.buffer();
+    tt_metal::Buffer* src0_buffer = a.buffer();
+    tt_metal::Buffer* src1_buffer = b.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device *device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
     const tt::tt_metal::LegacyShape& cshape = output.get_legacy_shape();  // C=A*B, N1MK*11KN->N1MN
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
          num_output_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
-    tt_metal::Buffer *dst_buffer = output.buffer();
+    tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B*...
@@ -82,7 +82,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             .set_page_size(src1_cb_index, in1_single_tile_size);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    uint32_t output_cb_index = 16;  // output operands start at index 16
+    uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(
@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    vector<uint32_t> compute_args_group_1 = {
+    std::vector<uint32_t> compute_args_group_1 = {
         1,                                 // B
         1,                                 // Mt
         Kt,                                // Kt
@@ -121,10 +121,11 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_1});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_1});
 
     if (!core_group_2.ranges().empty()) {
-        vector<uint32_t> compute_args_group_2 = {
+        std::vector<uint32_t> compute_args_group_2 = {
             1,                                 // B
             1,                                 // Mt
             Kt,                                // Kt
@@ -136,16 +137,17 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
-            tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_args_group_2});
+            tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_2});
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_output_tiles_per_core = 0;
-        if (core_group_1.core_coord_in_core_ranges(core)) {
+        if (core_group_1.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_1;
-        } else if (core_group_2.core_coord_in_core_ranges(core)) {
+        } else if (core_group_2.contains(core)) {
             num_output_tiles_per_core = num_output_tiles_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
@@ -172,9 +174,9 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
 
     auto override_runtime_args_callback =
         [reader_kernel_id = reader_id, writer_kernel_id = writer_id, num_cores, num_cores_y](
-            const Program &program,
-            const std::vector<tt_metal::Buffer *> &input_buffers,
-            const std::vector<tt_metal::Buffer *> &output_buffers) {
+            const Program& program,
+            const std::vector<tt_metal::Buffer*>& input_buffers,
+            const std::vector<tt_metal::Buffer*>& output_buffers) {
             auto src_dram_buffer_a = input_buffers.at(0);
             auto src_dram_buffer_b = input_buffers.at(1);
 
@@ -184,13 +186,13 @@ operation::ProgramWithCallbacks matmul_multi_core(const Tensor &a, const Tensor 
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_dram_buffer_a->address();
                     runtime_args[1] = src_dram_buffer_b->address();
                 }
 
                 {
-                    auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = dst_dram_buffer->address();
                 }
             }

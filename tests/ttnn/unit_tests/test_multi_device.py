@@ -95,6 +95,11 @@ def test_multi_device_open_close_galaxy_mesh(silicon_arch_name, silicon_arch_wor
 #######
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
@@ -116,6 +121,11 @@ def test_ttnn_to_multi_device_multiple_times(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -136,6 +146,11 @@ def test_ttnn_to_and_from_multi_device_shard(mesh_device, layout, memory_config,
     assert_with_pcc(torch_tensor, torch_loop_back_tensor, pcc=0.9999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -159,6 +174,11 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
         shard_offset += shard_size
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("shape", [(1, 1, 32, 128), (1, 1, 16, 32)])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -182,6 +202,11 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_ttnn_multi_device_all_gather(pcie_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation"""
     if pcie_mesh_device.get_num_devices() <= 1:
@@ -198,6 +223,11 @@ def test_ttnn_multi_device_all_gather(pcie_mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_multi_device_single_op_unary(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -215,6 +245,11 @@ def test_multi_device_single_op_unary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_multi_device_single_op_binary(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op binary"""
     torch_input_a_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -239,6 +274,11 @@ def test_multi_device_single_op_binary(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_multi_device_multi_op(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device multi-op"""
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
@@ -258,6 +298,11 @@ def test_multi_device_multi_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_multi_device_data_parallel_matmul_op(mesh_device):
     """Multidevice API: Data Parallel on matmul"""
     torch_input_a_tensor = torch.rand((mesh_device.get_num_devices(), 1, 32, 32), dtype=torch.bfloat16)
@@ -282,6 +327,11 @@ def test_multi_device_data_parallel_matmul_op(mesh_device):
     assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.993)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
@@ -333,6 +383,11 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             assert_with_pcc(ttnn_torch_output_tensor, torch_output_golden, pcc=0.991)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
@@ -364,6 +419,11 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
         assert_with_pcc(input_tensor, torch_loaded_tensor, pcc=expected_pcc)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
@@ -385,6 +445,11 @@ def test_multi_device_permute(mesh_device, layout, memory_config, dtype):
     assert_with_pcc(torch_golden, torch_loop_back_tensor, pcc=0.9999)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_max(mesh_device):
     gate_logits_1SB8 = ttnn.from_torch(
         torch.randn(1, 1, 32, 8),
@@ -398,6 +463,11 @@ def test_max(mesh_device):
     print(weights_ex0_1SB1)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
     """Multidevice API test for ttnn.all_gather CCL operation for full 8-device T3K"""
     if t3k_mesh_device.get_num_devices() < 8:
@@ -417,6 +487,11 @@ def test_ttnn_multi_device_all_gather_all_devices(t3k_mesh_device):
         assert torch.all(device_tensor_torch == full_tensor)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}, {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
+    indirect=True,
+)
 def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.from_torch(
         torch.randn(1, 32, 32, 128),
@@ -436,11 +511,16 @@ def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
     keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
 
+    core_grid = ttnn.CoreGrid(y=4, x=8)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
+        pytest.skip("Test requires larger grid size")
+
     q_heads_1B4D = ttnn.to_memory_config(
         q_heads_1B4D,
         ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -451,7 +531,7 @@ def test_sharded_matmul(t3k_mesh_device):
         keys_1BDP,
         ttnn.create_sharded_memory_config(
             shape=(128, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -467,7 +547,7 @@ def test_sharded_matmul(t3k_mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -587,3 +667,28 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
     for device in mesh_device.get_devices():
         device_tensor = ttnn.get_device_tensor(tensor, device)
         assert torch.allclose(ttnn.to_torch(device_tensor), torch_input_tensor)
+
+
+def test_visualize_mesh_device(t3k_mesh_device):
+    ttnn.visualize_mesh_device(t3k_mesh_device)
+
+
+def test_all_gather_multiple_submeshes(t3k_mesh_device):
+    """Test all_gather with multiple submeshes"""
+
+    def model(submesh):
+        full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
+        for i in range(submesh.get_num_devices()):
+            full_tensor[..., i * 32 : (i + 1) * 32] = i
+
+        ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=ShardTensorToMesh(submesh, dim=3))
+        ttnn_tensor = ttnn.to_device(ttnn_tensor, submesh)
+        ttnn_tensor = ttnn.all_gather(ttnn_tensor, dim=3, num_links=1)
+
+        for device_tensor in ttnn.get_device_tensors(ttnn_tensor):
+            device_tensor_torch = ttnn.to_torch(device_tensor)
+            assert torch.all(device_tensor_torch == full_tensor)
+
+    submesh_devices = t3k_mesh_device.create_submeshes(ttnn.MeshShape(2, 2), ttnn.MeshType.Ring)
+    for submesh in submesh_devices:
+        model(submesh)

@@ -8,6 +8,9 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
+#include "ttnn/distributed/api.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
@@ -19,7 +22,7 @@ bool can_deallocate(const Tensor& input_tensor, bool from_multi_device = false) 
                 return storage.buffer.use_count() == (from_multi_device ? 2 : 1);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 bool can_dealloc = true;
-                auto input_tensors = get_tensors_from_multi_device_storage(input_tensor);
+                auto input_tensors = distributed::get_tensors_from_multi_device_storage(input_tensor);
                 for (const auto& device_tensor : input_tensors) {
                     can_dealloc &= can_deallocate(device_tensor, true);
                 }
@@ -79,7 +82,10 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, L1_ALIGNMENT);
+        output_tensor.buffer()->size(),
+        output_tensor.buffer()->page_size(),
+        num_l1_banks,
+        hal.get_alignment(HalMemType::L1));
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type) {
@@ -95,9 +101,9 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     }
 
     bool fits_in_cb =
-        (L1_UNRESERVED_BASE + size_per_l1_bank) <= (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1
-                                                        ? output_tensor.buffer()->address()
-                                                        : output_tensor.device()->l1_size_per_core());
+        (output_tensor.device()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
+        (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
+                                                                       : output_tensor.device()->l1_size_per_core());
 
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE;
     if ((not non_overlap) and fits_in_cb and compute_with_storage_grid_size.x > 1 and
@@ -118,7 +124,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 static inline Tensor move_sharded(
     uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    bool from_multi_device = is_multi_device_tensor(input_tensor);
+    bool from_multi_device = distributed::is_multi_device_tensor(input_tensor);
     operation::launch_op(
         [from_multi_device, mem_config](
             const std::vector<Tensor>& input_tensors,

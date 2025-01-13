@@ -33,13 +33,15 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
     check_kv_cache,
 )
 from models.utility_functions import nearest_32
+from models.demos.t3000.llama2_70b.tt.llama_rope import TtLlamaRotarySetup
 
 
 class PytorchLlamaDecoderModel(torch.nn.Module):
-    def __init__(self, hf_reference_model, layer_num, rope_theta):
+    def __init__(self, hf_reference_model, layer_num, rope_theta, use_scaled_rope):
         super().__init__()
         self.decoder = hf_reference_model.layers[layer_num]
         self.rope_theta = rope_theta
+        self.use_scaled_rope = use_scaled_rope
 
         # Disable dropout
         self.decoder.eval()
@@ -56,7 +58,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         start_pos, and KV cache has valid data up to start_pos.
         """
         batch = x.size(0)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope)
         freqs_cis = freqs_cis[start_pos : start_pos + 1]
 
         attn_mask = torch.zeros(batch, 1, 1, start_pos + 1)
@@ -72,7 +74,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         """
         batch = x.size(0)
         seq_len = x.size(1)
-        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta)
+        freqs_cis = precompute_freqs_cis(self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope)
         freqs_cis = freqs_cis[start_pos : start_pos + seq_len]
 
         attn_mask = torch.full((seq_len, seq_len), float("-inf"))
@@ -99,7 +101,7 @@ class PytorchLlamaDecoderModel(torch.nn.Module):
         return result
 
 
-def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
+def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode, rope_setup=None, use_scaled_rope=False):
     assert len(x.size()) == 3
     batch, seq_len, hidden_size = x.shape
 
@@ -123,7 +125,10 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
         xs = ttnn.to_device(xs, llama_decoder_model.mesh_device)
 
         cos, sin = precompute_freqs(
-            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
+            llama_decoder_model.head_dim,
+            llama_decoder_model.max_seq_len * 2,
+            llama_decoder_model.rope_theta,
+            use_scaled_rope,
         )
         cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
         assert cos_gathered.size() == (1, 1, seq_len, llama_decoder_model.head_dim)
@@ -172,26 +177,7 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
         xs = ttnn.to_device(xs, llama_decoder_model.mesh_device)
         xs = ttnn.interleaved_to_sharded(xs, llama_decoder_model.model_config["WORD_EMBEDDING_OUTPUT_MEMCFG"])
 
-        rot_emb = generate_rot_emb(
-            llama_decoder_model.head_dim, llama_decoder_model.max_seq_len * 2, llama_decoder_model.rope_theta
-        )
-
         cache_idxs = torch.tensor([start_pos for _ in range(batch)])
-
-        rot_mat = get_rotation_mat(rot_emb, cache_idxs, seq_len, batch=batch)
-        assert rot_mat.size() == (1, batch, llama_decoder_model.head_dim, llama_decoder_model.head_dim)
-        rot_mats = ttnn.as_tensor(
-            rot_mat,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
-            device=llama_decoder_model.mesh_device,
-        )
-        rot_mats = ttnn.to_device(rot_mats, llama_decoder_model.mesh_device)
-
-        rot_mats = ttnn.interleaved_to_sharded(rot_mats, llama_decoder_model.model_config["ROT_MAT_MM_IN1_MEMCFG"])
-
         cache_idxs_tt = ttnn.as_tensor(
             cache_idxs,
             dtype=ttnn.int32,
@@ -200,6 +186,8 @@ def tt_llama_decoder_prepare_inputs(llama_decoder_model, x, start_pos, mode):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(llama_decoder_model.mesh_device),
         )
+
+        rot_mats = rope_setup.get_rot_mats(cache_idxs)
 
     return (
         xs,
@@ -224,10 +212,11 @@ def run_test_LlamaDecoder_inference(
     skip_model_load = should_skip_model_load()
 
     # Prepare configs
+    max_seq_len = MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3
     hugging_face_reference_model = Llama.build(
         ckpt_dir,
         tokenizer_path,
-        max_seq_len=MAX_SEQ_LEN if llama_version == "llama2" else MAX_SEQ_LEN_LLAMA3,
+        max_seq_len=max_seq_len,
         max_batch_size=batch,
         n_layers=UNIT_TEST_N_LAYER,
         skip_model_load=skip_model_load,
@@ -237,22 +226,32 @@ def run_test_LlamaDecoder_inference(
     logger.info(state_dict.keys())
     torch.manual_seed(0)
     configuration = hugging_face_reference_model.params
+    mode = "prefill" if seq_len > 1 else "decode"
 
     # PyTorch model --------------------------------------------------------------------
     pytorch_LlamaDecoder_model = PytorchLlamaDecoderModel(
-        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta
+        hugging_face_reference_model, UNIT_TEST_LAYER_NUM, configuration.rope_theta, configuration.use_scaled_rope
     )
     # TT model -------------------------------------------------------------------------
-    transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
-    transformation_mats = ttnn.as_tensor(
-        transformation_mat_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=t3k_mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
-    )
-    transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
+    if mode == "decode":
+        head_dim = configuration.dim // configuration.n_heads
+        rope_setup = TtLlamaRotarySetup(
+            t3k_mesh_device, head_dim, max_seq_len, configuration.rope_theta, configuration.use_scaled_rope
+        )
+        transformation_mats = rope_setup.get_trans_mats()
+        transformation_mats = {"decode": transformation_mats}
+    else:
+        transformation_mat_torch = get_rot_transformation_mat(32)  # 32 for tile size
+        transformation_mats = ttnn.as_tensor(
+            transformation_mat_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=t3k_mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        )
+        transformation_mats = ttnn.to_device(transformation_mats, t3k_mesh_device)
+        transformation_mats = {"prefill": transformation_mats}
 
     tt_LlamaDecoder_model = TtLlamaDecoder_optimized(
         t3k_mesh_device,
@@ -264,8 +263,6 @@ def run_test_LlamaDecoder_inference(
         transformation_mats,
         cache_path=cache_path,
     )
-
-    mode = "prefill" if seq_len > 1 else "decode"
 
     all_tests_pass, all_pccs = True, []
     if mode == "prefill":
@@ -298,7 +295,12 @@ def run_test_LlamaDecoder_inference(
 
         # TT hardware execution -------------------------------------------------------------
         x_input, start_pos, rot_mat, cache_idxs_tt = tt_llama_decoder_prepare_inputs(
-            tt_LlamaDecoder_model, tt_input, start_pos, mode=mode
+            tt_LlamaDecoder_model,
+            tt_input,
+            start_pos,
+            mode=mode,
+            rope_setup=rope_setup if mode == "decode" else None,
+            use_scaled_rope=configuration.use_scaled_rope,
         )
 
         tt_out = tt_LlamaDecoder_model(

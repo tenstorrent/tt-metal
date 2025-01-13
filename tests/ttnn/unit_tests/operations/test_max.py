@@ -32,6 +32,48 @@ def test_max(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("batch_size1", [2])
+@pytest.mark.parametrize("batch_size2", [32])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("dim", [-3])
+def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((batch_size1, batch_size2, h, w), -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.max(input_tensor, dim=dim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [64])
+@pytest.mark.parametrize("dim", [-2, -1, 0, 1])
+def test_max_2d(device, h, w, dim):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch_random((h, w), -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim, keepdim=True)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.max(input_tensor, dim=dim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
@@ -46,5 +88,31 @@ def test_max_global(device, batch_size, h, w):
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor[0, 0, 0]
+
+    assert_with_pcc(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shape_and_dim",
+    [
+        ((32, 32, 32, 64), -4),
+        ((2, 32, 32, 64), -3),
+        ((32, 32, 64), -3),
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_max_dim(device, input_shape_and_dim, keepdim):
+    input_shape, max_dim = input_shape_and_dim
+
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor, _ = torch.max(torch_input_tensor, dim=max_dim, keepdim=keepdim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.max(input_tensor, dim=max_dim, keepdim=keepdim)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor)

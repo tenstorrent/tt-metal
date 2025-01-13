@@ -9,7 +9,7 @@ import sys
 import torch
 
 import ttnn
-from models.utility_functions import print_diff_argmax, skip_for_blackhole
+from models.utility_functions import print_diff_argmax, is_blackhole
 import pytest
 from loguru import logger
 
@@ -22,8 +22,12 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config):
     if layout == ttnn.ROW_MAJOR_LAYOUT and dtype == ttnn.bfloat8_b:
         pytest.skip("Illegal config")
-    if layout == ttnn.TILE_LAYOUT:
-        if input_shape[-2] % 32 != 0 or input_shape[-1] % 32 != 0:
+    rm_last_dim_repeat_on_bh = layout == ttnn.ROW_MAJOR_LAYOUT and is_blackhole() and repeats[-1] != 1
+    if layout == ttnn.TILE_LAYOUT or rm_last_dim_repeat_on_bh:
+        alignment = 64 if is_blackhole() else 32
+        if rm_last_dim_repeat_on_bh and input_shape[-1] % alignment != 0:
+            pytest.skip(f"Illegal config for BH see #14518")
+        elif (input_shape[-2] % alignment != 0 or input_shape[-1] % alignment != 0) and layout == ttnn.TILE_LAYOUT:
             pytest.skip("Illegal config")
     input = torch.rand(input_shape).to(torch.bfloat16)
     tt_input = (
@@ -49,7 +53,6 @@ def run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, ou
     assert passing
 
 
-@skip_for_blackhole("Alignment failure on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, repeats",
     (
@@ -100,7 +103,6 @@ def test_repeat(
     run_repeat(input_shape, repeats, device, layout, dtype, input_mem_config, output_mem_config)
 
 
-@skip_for_blackhole("Alignment failure on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shape, repeats",
     (

@@ -135,7 +135,7 @@ def pad_and_fold_with_permute_and_reshape_on_device(
     activation_pyt_padded = ttnn.slice(
         activation_pyt_padded,
         (0, 0, 0, 0),
-        (n - 1, target_h - 1, target_w - 1, c - 1),
+        (n, target_h, target_w, c),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
@@ -234,14 +234,14 @@ def pad_and_fold_with_permute_and_reshape_on_device_sharded(device, tt_input_ten
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, c), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, c), ttnn.ShardOrientation.ROW_MAJOR)
     slice_sharded_memory_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     tt_output_tensor = ttnn.slice(
         tt_output_tensor,
         (0, 0, 0, 0),
-        (n - 1, target_h - 1, target_w - 1, c - 1),
+        (n, target_h, target_w, c),
         memory_config=slice_sharded_memory_config,
     )
     print("output " + str(tt_output_tensor.shape))
@@ -397,7 +397,7 @@ def test_fold_sharded(device):
     )
     n_cores = 100
 
-    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
     tt_input = torch2tt_tensor(
         torch_input,

@@ -16,13 +16,12 @@
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "dataflow_api.h"
-
 #include <kernel_includes.hpp>
+#if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#include "remote_circular_buffer_api.h"
+#endif
 
-uint8_t noc_index = NOC_INDEX;
-
-void kernel_launch() {
+void kernel_launch(uint32_t kernel_base_addr) {
 
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
 #ifdef KERNEL_RUN_TIME
@@ -30,10 +29,17 @@ void kernel_launch() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    firmware_kernel_common_init((void tt_l1_ptr *)MEM_BRISC_INIT_LOCAL_L1_BASE);
+    extern uint32_t __kernel_init_local_l1_base[];
+    extern uint32_t __fw_export_end_text[];
+    do_crt1((uint32_t tt_l1_ptr
+                 *)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base - (uint32_t)__fw_export_end_text));
 
-    noc_local_state_init(noc_index);
-
+    if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+        noc_local_state_init(NOC_INDEX);
+    }
+#ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+    ALIGN_LOCAL_CBS_TO_REMOTE_CBS
+#endif
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         kernel_main();

@@ -1,4 +1,4 @@
-name: "[TGG] TGG model perf tests"
+name: "(TGG) TGG model perf tests"
 
 on:
   workflow_dispatch:
@@ -13,75 +13,5 @@ jobs:
     secrets: inherit
   tgg-model-perf-tests:
     needs: build-artifact
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          {
-            name: "TGG LLM model perf tests",
-            model-type: "LLM",
-            arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tgg", "in-service", "bare-metal", "pipeline-perf"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type llm_model_perf_tgg_device --dispatch-mode ""'
-          },
-          {
-            name: "TGG CNN model perf tests",
-            model-type: "CNN",
-            arch: wormhole_b0,
-            runs-on: ["arch-wormhole_b0", "config-tgg", "in-service", "bare-metal", "pipeline-perf"],
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tgg_device --dispatch-mode ""'
-          },
-        ]
-    name: ${{ matrix.test-group.name }}
-    env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.test-group.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    environment: dev
-    runs-on: ${{ matrix.test-group.runs-on }}
-    steps:
-      - uses: tenstorrent-metal/metal-workflows/.github/actions/checkout-with-submodule-lfs@v2.0.0
-      - name: Enable performance mode
-        run: |
-          sudo cpupower frequency-set -g performance
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
-      - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
-      - uses: ./.github/actions/install-python-deps
-      - name: Run model perf regression tests
-        timeout-minutes: 60
-        run: |
-          source ${{ github.workspace }}/python_env/bin/activate
-          cd $TT_METAL_HOME
-          export PYTHONPATH=$TT_METAL_HOME
-          ${{ matrix.test-group.cmd }}
-      - name: Check perf report exists
-        id: check-perf-report
-        if: ${{ !cancelled() }}
-        run: |
-          ls -hal
-          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      - name: Upload perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
-          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - name: Disable performance mode
-        if: always()
-        run: |
-          sudo cpupower frequency-set -g ondemand
+    secrets: inherit
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml

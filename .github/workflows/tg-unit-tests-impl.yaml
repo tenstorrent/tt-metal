@@ -1,0 +1,82 @@
+name: "[internal] TG unit tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  TG-UMD-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          {
+            name: "TG UMD unit tests",
+            arch: wormhole_b0,
+            runs-on: ["arch-wormhole_b0", "config-tg", "in-service", "bare-metal", "pipeline-functional"],
+            cmd: "./build/test/umd/galaxy/unit_tests_glx"
+          },
+        ]
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+    runs-on: ${{ matrix.test-group.runs-on }}
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - name: Build UMD device and tests
+        run: |
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
+          cmake --build build --target umd_tests
+      - name: Run UMD unit regression tests
+        timeout-minutes: 10
+        run: |
+          cd $TT_METAL_HOME
+          ${{ matrix.test-group.cmd }}
+  TG-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "TG unit tests", arch: wormhole_b0, model: unit, timeout: 30, owner_id: XXXXX},  # Add owner
+          { name: "TG Llama3-small unit tests", arch: wormhole_b0, model: llama3-small, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
+        ]
+    name: ${{ matrix.test-group.name }}
+    env:
+      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on:
+      - arch-wormhole_b0
+      - config-tg
+      - in-service
+      - bare-metal
+      - pipeline-functional
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_${{ matrix.test-group.arch }}
+      - name: Extract files
+        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run unit regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type unit_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}

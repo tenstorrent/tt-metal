@@ -3,29 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_getitem_device_operation.hpp"
-#include "ttnn/deprecated/tt_dnn/op_library/moreh_helper_functions.hpp"
+#include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
     bool is_defined;
     bool is_dram;
     uint32_t address;
     uint32_t unit_size;
 };
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 namespace ttnn::operations::moreh::moreh_getitem {
 MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOperation::MorehGetItemRmFactory::create(
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &output_tensor) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::operations::primary;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     auto input = tensor_args.input;
     auto index_tensors = tensor_args.index_tensors;
     auto output = output_tensor;
     auto index_dims = operation_attributes.index_dims;
-    auto output_memory_config = operation_attributes.output_memory_config;
+    auto memory_config = operation_attributes.memory_config;
     // auto core_range = operation_attributes.core_range;
     auto device = input.device();
     auto grid_coord = device->compute_with_storage_grid_size();
@@ -55,7 +59,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t index_end_dim = index_dims.back();
 
     Tensor input_5d = input;
-    input_5d = input_5d.reshape(input_5d_shape.value);
+    input_5d = input_5d.reshape(input_5d_shape);
 
     auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 
@@ -83,7 +87,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
-        split_work_to_cores(core_range, num_units);
+        split_work_to_cores_wt_core_range(core_range, num_units);
 
     Program program = Program();
 
@@ -92,30 +96,28 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     auto index_cb_data_format = datatype_to_dataformat_converter(index_tensors[0].get_dtype());
     auto output_cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
 
-    auto src_cb_index = CB::c_in0;
+    auto src_cb_index = CBIndex::c_0;
     auto rounded_input_page_size = round_up_to_mul32(input_unit_size);
-    auto cb_src0_config =
-        CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
-            .set_page_size(src_cb_index, rounded_input_page_size);
+    auto cb_src0_config = CircularBufferConfig(rounded_input_page_size, {{src_cb_index, src_cb_data_format}})
+                              .set_page_size(src_cb_index, rounded_input_page_size);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     for (uint32_t dim = 0; dim < 5; dim++) {
-        if (!index_info[dim].is_defined)
+        if (!index_info[dim].is_defined) {
             continue;
+        }
 
-        auto src1_cb_index = CB::c_in1 + dim;
+        auto src1_cb_index = CBIndex::c_1 + dim;
         auto index_page_size = round_up_to_mul32(index_info[dim].unit_size);
-        auto cb_index_config =
-            CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
-                .set_page_size(src1_cb_index, index_page_size);
+        auto cb_index_config = CircularBufferConfig(index_page_size, {{src1_cb_index, index_cb_data_format}})
+                                   .set_page_size(src1_cb_index, index_page_size);
         auto cb_src1 = CreateCircularBuffer(program, all_cores, cb_index_config);
     }
 
-    auto out_cb_index = CB::c_out0;
+    auto out_cb_index = CBIndex::c_16;
     auto rounded_output_page_size = round_up_to_mul32(input_unit_size);
-    auto cb_out0_config =
-        CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
-            .set_page_size(out_cb_index, rounded_input_page_size);
+    auto cb_out0_config = CircularBufferConfig(rounded_input_page_size, {{out_cb_index, output_cb_data_format}})
+                              .set_page_size(out_cb_index, rounded_input_page_size);
     auto cb_out0 = CreateCircularBuffer(program, all_cores, cb_out0_config);
 
     // create read/wrtie kernel
@@ -162,7 +164,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
         uint32_t num_units_per_core = i < g1_numcores ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        vector<uint32_t> reader_args = {
+        std::vector<uint32_t> reader_args = {
             // buffers
             input_5d.buffer()->address(),
             index_info[0].address,
@@ -211,7 +213,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
             input_unit_size,
         };
 
-        vector<uint32_t> writer_args = {
+        std::vector<uint32_t> writer_args = {
             // buffer
             output.buffer()->address(),
 
@@ -233,19 +235,18 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 }
 
 void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
-    cached_program_t &cached_program,
-    const operation_attributes_t &operation_attributes,
-    const tensor_args_t &tensor_args,
-    tensor_return_value_t &tensor_return_value) {
-    auto &program = cached_program.program;
-    auto &reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto &writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
+    cached_program_t& cached_program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto& program = cached_program.program;
+    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
+    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
     auto num_cores = cached_program.shared_variables.num_cores;
     auto core_h = cached_program.shared_variables.core_h;
     auto index_dims = cached_program.shared_variables.index_dims;
     auto input_dim_offset = cached_program.shared_variables.input_dim_offset;
-
-    TT_ASSERT(tensor_return_value.buffer()->size() == 1);
 
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = tensor_return_value.buffer();
@@ -263,7 +264,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
         CoreCoord core = {icore / core_h, icore % core_h};
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
             runtime_args[1] = index_info[0].address;
             runtime_args[2] = index_info[1].address;
@@ -273,7 +274,7 @@ void MorehGetItemOperation::MorehGetItemRmFactory::override_runtime_arguments(
         }
 
         {
-            auto &runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
         }
     }

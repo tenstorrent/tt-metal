@@ -5,7 +5,11 @@
 import torch
 import ttnn
 from ttnn import ReplicateTensorToMesh
-from models.demos.falcon7b_common.tt.model_utils import get_falcon_default_core_grid, get_weights_cached
+from models.demos.falcon7b_common.tt.model_utils import (
+    get_falcon_default_core_grid,
+    get_weights_cached,
+    get_default_hifi2_kernel_config,
+)
 from models.demos.falcon7b_common.tests.test_utils import tt_from_torch
 from torch import nn
 from models.utility_functions import (
@@ -54,11 +58,17 @@ def falcon_dense_h_to_4h_matmul(
     output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
     output_dtype=None,
 ):
-    seq_len = input_tensor_a.get_legacy_shape()[2]
+    seq_len = input_tensor_a.shape.with_tile_padding()[2]
     if seq_len > 1024:
         # TODO: Review if this path is used? If not, we can delete
         assert fused_activation == None
-        return ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_mem_config, dtype=output_dtype)
+        return ttnn.matmul(
+            input_tensor_a,
+            input_tensor_b,
+            memory_config=output_mem_config,
+            dtype=output_dtype,
+            compute_kernel_config=get_default_hifi2_kernel_config(),
+        )
 
     if is_grayskull():
         compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
@@ -367,8 +377,9 @@ class TtFalconMLPDecode(nn.Module):
         if self.model_config["PREFILL_OPTIMIZED_MODE"] and self.prefill_seq_len in [1024, 2048]:
             hidden_states = ttnn.slice(
                 hidden_states,
-                [0, 0, 0, 0],
-                [0, 0, batch_size - 1, self.hidden_size - 1],
+                starts=(0, 0, 0, 0),
+                ends=(1, 1, batch_size, self.hidden_size),
+                steps=(1, 1, 1, 1),
                 memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             )
 

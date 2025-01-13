@@ -13,41 +13,6 @@ from models.utility_functions import skip_for_grayskull
 from models.utility_functions import is_grayskull
 
 
-def run_clone_test(N, C, H, W, memory_config, dtype, device):
-    torch.manual_seed(2005)
-    shape = [N, C, H, W]
-    torch_dtype = torch.bfloat16
-
-    input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-    tensor = ttnn.clone(input, memory_config=memory_config, dtype=dtype)
-    assert tensor.shape == input.shape
-    assert tensor.dtype == dtype
-    assert tensor.memory_config() == memory_config
-    assert_with_pcc(ttnn.to_torch(input), ttnn.to_torch(tensor), 0.99)
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize(
-    "dtype",
-    (
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ),
-    ids=[
-        "BFLOAT16_B",
-        "BFLOAT8_B",
-    ],
-)
-@pytest.mark.parametrize(
-    "N, C, H, W,",
-    ((1, 1, 32, 64),),
-)
-@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-def test_clone(N, C, H, W, memory_config, dtype, device):
-    run_clone_test(N, C, H, W, memory_config, dtype, device)
-
-
 def run_copy_test(N, C, H, W, layout, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]

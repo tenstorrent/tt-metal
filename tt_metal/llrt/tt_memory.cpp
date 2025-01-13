@@ -2,77 +2,86 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-#include <cassert>
-#include <cstdio>
-#include <fstream>
-#include <limits>
-#include <stdexcept>
-
-#include "tensix.h"
 #include "tt_memory.h"
-#include "tt_hexfile.h"
 
-using std::numeric_limits;
-using std::runtime_error;
-using std::string;
-using std::vector;
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+
+#include "tt_elffile.hpp"
+#include "tt_metal/common/assert.hpp"
 
 namespace ll_api {
 
-// We use stoul to parse an address. We cast address_t to unsigned long to format with %08lX.
-static_assert(
-    numeric_limits<unsigned long>::max() >= numeric_limits<memory::address_t>::max(),
-    "unsigned long can't cover whole range of addresses");
+memory::memory() {
+    constexpr uint32_t initial_data_space_ = 0x400;
+    constexpr uint32_t initial_span_space_ = 4;
 
-// We cast word_t to unsigned long to format with %08lX.
-static_assert(
-    numeric_limits<unsigned long>::max() >= numeric_limits<memory::word_t>::max(),
-    "unsigned long can't cover whole range of words");
-
-
-memory::memory() : data_(0), link_spans_(0) {
     data_.reserve(initial_data_space_);
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::istream& is) : data_(0), link_spans_(0) {
-    data_.reserve(initial_data_space_);
-    link_spans_.reserve(initial_span_space_);
-    fill_from_discontiguous_hex(is);
-}
+memory::memory(std::string const& path, Loading loading) : loading_(loading) {
+    ElfFile elf;
 
-bool memory::operator==(const memory& other) const {
-    return
-        data_ == other.data_ &&
-        link_spans_ == other.link_spans_;
-}
+    elf.ReadImage(path);
+    if (loading == Loading::CONTIGUOUS_XIP) {
+        elf.MakeExecuteInPlace();
+    }
 
-void memory::fill_from_discontiguous_hex(std::istream& is) {
-    // Intended to start empty
-    assert(data_.size() == 0);
-    bool first = true;
-    address_t last_addr = 0;
-    // hex files run low address to high address
-    read_discontiguous_hex_file(is, [&](memory::address_t word_addr, memory::word_t value) {
-        if (first || word_addr != last_addr + 1) {
-            link_spans_.push_back({word_addr << 2, 0});
-            first = false;
+    auto const& segments = elf.GetSegments();
+
+    // The ELF file puts the text segment first, but one set of
+    // binaries (ncrisc) places data a lower address, and at least one
+    // consumer (unknown) requires spans in address order, so generate
+    // a mapping table.
+    // TODO: Perhaps we can relax this?
+    std::vector<unsigned> map;
+    map.reserve(segments.size());
+    for (unsigned ix = 0; ix != segments.size(); ix++) {
+        map.push_back(ix);
+    }
+    if (loading == Loading::DISCRETE) {
+        std::sort(
+            map.begin(), map.end(), [&](unsigned a, unsigned b) { return segments[a].address < segments[b].address; });
+    }
+
+    link_spans_.reserve(segments.size());
+    text_addr_ = segments[0].address;
+    text_size_ = segments[0].contents.size() * sizeof(word_t);
+    auto lma = segments[0].lma;
+
+    for (unsigned ix : map) {
+        auto const& segment = segments[map[ix]];
+        if (not segment.relocs.empty()) {
+            TT_THROW("{}: unexpected dynamic relocations", path);
         }
-
-        data_.push_back(value);
-        link_spans_.back().len++;
-        last_addr = word_addr;
-    });
+        if (loading != Loading::DISCRETE) {
+            if (segment.lma != lma) {
+                TT_THROW("{}: inconsistent load addresses for packing", path);
+            }
+            lma += segment.contents.size() * sizeof(word_t);
+        }
+        if (loading == Loading::DISCRETE ? segment.contents.size() != 0 : link_spans_.empty()) {
+            link_spans_.emplace_back(segment.address, 0);
+        }
+        link_spans_.back().len += segment.contents.size();
+        data_.insert(data_.end(), segment.contents.begin(), segment.contents.end());
+    }
 }
 
-void memory::fill_from_mem_template(const memory& mem_template, const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+bool memory::operator==(const memory& other) const { return data_ == other.data_ && link_spans_ == other.link_spans_; }
+
+void memory::fill_from_mem_template(
+    const memory& mem_template,
+    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
     link_spans_ = mem_template.link_spans_;
     data_.resize(mem_template.data_.size());
     process_spans(callback);
 }
 
-void memory::process_spans(const std::function<void (std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
+void memory::process_spans(
+    const std::function<void(std::vector<uint32_t>::const_iterator, uint64_t addr, uint32_t len)>& callback) const {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
         std::vector<uint32_t>::const_iterator cit = data_.cbegin() + offset;
@@ -81,7 +90,8 @@ void memory::process_spans(const std::function<void (std::vector<uint32_t>::cons
     }
 }
 
-void memory::process_spans(const std::function<void (std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
+void memory::process_spans(
+    const std::function<void(std::vector<uint32_t>::iterator, uint64_t addr, uint32_t len)>& callback) {
     uint32_t offset = 0;
     for (const auto& span : link_spans_) {
         std::vector<uint32_t>::iterator it = data_.begin() + offset;

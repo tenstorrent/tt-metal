@@ -36,7 +36,7 @@ def test_pow_fractional_composite(device):
     pow_trunc_log = ttnn.multiply(ttnn.log(xt), yt_trunc)
     pow_frac = ttnn.exp(pow_trunc_log)
     xtt = ttnn.mul(ttnn.pow(xt, yt_floor), pow_frac)
-    assert list(xtt.get_legacy_shape()) == [N, C, H, W]
+    assert list(xtt.shape.with_tile_padding()) == [N, C, H, W]
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     xtt_fp = ttnn.pow(xt, yt.item())

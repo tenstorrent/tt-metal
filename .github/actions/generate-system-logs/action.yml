@@ -1,0 +1,32 @@
+name: ""
+description: "Generate system logs for hardware debugging"
+
+inputs:
+  run_args:
+    description: 'Commands to run in docker'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Get Runner Host Name
+      id: get_hostname
+      shell: bash
+      run: |
+        echo "HOSTNAME=$(hostname)" >> $GITHUB_ENV
+        echo "TIMESTAMP=$(date +'%Y%m%d%H%M%S')" >> $GITHUB_ENV
+    - name: Determine Docker Tag to use
+      shell: bash
+      run: |
+        rm -rf ~/run-log
+        mkdir -p ~/run-log/
+        sudo dmesg > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_dmesg.log
+        sudo lspci > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_lspci.log
+        sudo lshw > ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_lshw.log
+    - name: 'Tar files'
+      shell: bash
+      run: tar -cvf ~/run-log/sys_logs.tar ~/run-log/${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_*
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.TIMESTAMP}}_${{ env.HOSTNAME }}_sys_logs
+        path: ~/run-log/${{ env.TIMESTAMP}}_sys_logs.tar

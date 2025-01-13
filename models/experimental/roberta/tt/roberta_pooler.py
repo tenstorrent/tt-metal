@@ -31,8 +31,8 @@ class TtRobertaPooler(nn.Module):
         self.dense_weight = pad_by_zero(state_dict[f"{base_address}.dense.weight"], self.device)[0]
         self.dense_bias = pad_by_zero(state_dict[f"{base_address}.dense.bias"], self.device)[0]
         self.dense_linear = TTLinear(
-            self.dense_weight.get_legacy_shape()[-1],
-            self.dense_weight.get_legacy_shape()[-2],
+            self.dense_weight.shape.with_tile_padding()[-1],
+            self.dense_weight.shape.with_tile_padding()[-2],
             self.dense_weight,
             self.dense_bias,
         )

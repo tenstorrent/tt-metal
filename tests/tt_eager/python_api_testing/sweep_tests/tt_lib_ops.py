@@ -60,7 +60,7 @@ def linear(
     if bias is not None:
         tt_bias = setup_tt_tensor(bias, device, layout[2], input_mem_config[2], dtype[2])
 
-    _, __, out_features, in_features = tt_weight.get_legacy_shape()
+    _, __, out_features, in_features = tt_weight.shape.with_tile_padding()
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)
@@ -235,7 +235,7 @@ def eltwise_hardtanh(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.hardtanh(t0, min=low, max=high, memory_config=output_mem_config)
+    t1 = ttnn.hardtanh(t0, low, high, memory_config=output_mem_config)
 
     return tt2torch_tensor(t1)
 
@@ -889,7 +889,6 @@ def eltwise_bitwise_xor(
 def eltwise_bitwise_not(
     x,
     *args,
-    value,
     device,
     dtype,
     layout,
@@ -898,7 +897,7 @@ def eltwise_bitwise_not(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.bitwise_not(t0, value, memory_config=output_mem_config, queue_id=0)
+    t1 = ttnn.bitwise_not(t0, memory_config=output_mem_config, queue_id=0)
 
     return tt2torch_tensor(t1)
 
@@ -1257,6 +1256,7 @@ def prod(
     *args,
     all_dimensions,
     dim,
+    keepdim,
     device,
     dtype,
     layout,
@@ -1265,7 +1265,7 @@ def prod(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.prod(t0, all_dimensions, dim, memory_config=output_mem_config)
+    t1 = ttnn.prod(t0, all_dimensions, dim, keepdim=keepdim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)

@@ -75,7 +75,7 @@ class TtDeiTForImageClassificationWithTeacher(nn.Module):
 
         # during inference, return the average of both classifier predictions
         logits = ttnn.add(cls_logits, distillation_logits)
-        half = ttnn.full(logits.get_legacy_shape(), 0.5)
+        half = ttnn.full(logits.shape.with_tile_padding(), 0.5)
         logits = ttnn.mul(logits, half)
 
         # if not return_dict:

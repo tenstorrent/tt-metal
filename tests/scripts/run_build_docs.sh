@@ -9,7 +9,6 @@ fi
 echo "Checking docs build..."
 
 cd $TT_METAL_HOME/docs
-python -m pip install -r requirements-docs.txt
+python3 -m pip install -r requirements-docs.txt
 make clean
-make ttnn_sweeps
 make html

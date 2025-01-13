@@ -40,15 +40,14 @@ class TestUpdateCache:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+                shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                        xt.get_legacy_shape()[-1],
+                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                        xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -89,6 +88,10 @@ class TestUpdateCache:
     ):
         if num_users > 32 or (num_users + batch_offset) > 32:
             pytest.skip("Batch offset is only used when num_users < 32 and batch_offset + num_users <= 32")
+        if cache_dtype != ttnn.bfloat16:
+            pytest.skip(
+                "#12931: Update Cache currently produces non-deterministic output on GS when converting data types for cache tensor"
+            )
         input_shape = [num_users, num_heads, 1, head_dim]
         cache_shape = [num_users, num_heads, max_seq_len, head_dim]
         cache = torch.randn(cache_shape).bfloat16().float()
@@ -104,15 +107,14 @@ class TestUpdateCache:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                    xt.get_legacy_shape()[-1],
+                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                    xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -171,15 +173,14 @@ class TestUpdateCacheFP32:
             if in_sharded:
                 compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores = min(seq_len // 32 * num_heads, 32)  # Always use max 32 cores for testing
-                shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+                shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                        xt.get_legacy_shape()[-1],
+                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                        xt.shape.with_tile_padding()[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 )
                 input_mem_config = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -237,15 +238,14 @@ class TestUpdateCacheFP32:
         if in_sharded:
             compute_grid_size = device.compute_with_storage_grid_size()
             num_cores = min(max(num_users, 32) // 32 * num_heads, compute_grid_size.x * compute_grid_size.y)
-            shard_grid = ttnn.CoreRangeSet(ttnn.num_cores_to_corerange_set(num_cores, compute_grid_size, True))
+            shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.get_legacy_shape()[-1] // num_cores,
-                    xt.get_legacy_shape()[-1],
+                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
+                    xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
