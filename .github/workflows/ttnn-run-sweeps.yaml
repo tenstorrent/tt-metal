@@ -47,13 +47,16 @@ on:
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_sharded
           - eltwise.unary.rsub.rsub_pytorch2
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rsqrt.rsqrt_forge
           - eltwise.unary.rdiv.rdiv
+          - eltwise.unary.rdiv.rdiv_sharded
           - eltwise.unary.frac.frac
           - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
+          - eltwise.unary.ceil.ceil_sharded
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
           - eltwise.unary.trunc.trunc_sharded
@@ -355,7 +358,9 @@ on:
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
           - eltwise.ternary.addcmul.addcmul
+          - eltwise.ternary.addcmul.addcmul_sharded
           - eltwise.ternary.addcdiv.addcdiv
+          - eltwise.ternary.addcdiv.addcdiv_sharded
           - eltwise.ternary.mac.mac
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where
