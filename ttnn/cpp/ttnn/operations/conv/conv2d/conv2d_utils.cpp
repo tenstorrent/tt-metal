@@ -673,16 +673,13 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
     if (needs_shard_or_reshard) {
-        const auto input_shape = input_tensor.get_logical_shape();
+        auto input_shape = input_tensor.get_logical_shape();
         if (input_shape[0] != 1 or input_shape[1] != 1) {
-            // reshape to [1, 1, N*H*W, C]
-            input_tensor = ttnn::reshape(
-                input_tensor,
-                ttnn::SimpleShape(std::array<uint32_t, 4>{
-                    1,
-                    1,
-                    input_shape[0] * input_shape[1] * input_shape[2],
-                    input_shape[3]}));
+            const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
+            const uint32_t channels = input_shape[3];
+            ttnn::SimpleShape new_shape({1, 1, nhw, channels});
+            input_tensor = ttnn::reshape(input_tensor, new_shape);
+            input_shape = new_shape;
         }
 
         uint32_t tensor_height = input_shape[2];
