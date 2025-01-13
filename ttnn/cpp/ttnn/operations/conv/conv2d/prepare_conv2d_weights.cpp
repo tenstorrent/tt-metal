@@ -731,15 +731,29 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     weight_tensor_ =
         ttnn::pad(weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
-    // First reshape the weights to 5D, and permute in 5D.
-    weight_tensor_ =
-        ttnn::reshape(weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
-    // for conv op, pad the weights to block shape
-    // if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
+    // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
+    if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_FATAL(
+            in_channels_padded % input_num_cores_channels == 0,
+            "Input channels {} must be divisble by num cores {}",
+            in_channels_padded,
+            input_num_cores_channels);
+        auto in_channels_per_core = in_channels_padded / input_num_cores_channels;
+        weight_tensor_ = ttnn::reshape(
+            weight_tensor_,
+            ttnn::Shape({out_channels_padded, input_num_cores_channels, in_channels_per_core, window_h, window_w}));
+        weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({1, 3, 4, 2, 0}));
+        weight_tensor_ = ttnn::reshape(
+            weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+    } else {
+        // Reshape the weights to 5D, and permute in 5D.
+        weight_tensor_ = ttnn::reshape(
+            weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
 
-    weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({0, 3, 4, 2, 1}));
-    weight_tensor_ = ttnn::reshape(
-        weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+        weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({0, 3, 4, 2, 1}));
+        weight_tensor_ = ttnn::reshape(
+            weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+    }
     weight_tensor_ = ttnn::tilize(
         weight_tensor_,
         ttnn::MemoryConfig(
