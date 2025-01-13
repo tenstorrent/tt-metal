@@ -5,15 +5,6 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-template <size_t N, typename T>
-void dprint_array(const T arr[N], const char* name) {
-    DPRINT << name << ": ";
-    for (size_t i = 0; i < N; i++) {
-        DPRINT << arr[i] << " ";
-    }
-    DPRINT << ENDL();
-}
-
 // ------------------------------------------------------------------
 // 1) unflatten_index<N>:
 //    Unflatten 'flat_idx' in row-major order for a shape[] of length N.

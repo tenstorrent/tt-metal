@@ -39,8 +39,8 @@ ttnn::Tensor permute_impl(
     };
 
     if (rank > 4) {
-        if (a.get_layout() == Layout::TILE && (dims[rank - 1] == rank - 1) ||
-            (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
+        if (a.get_layout() == Layout::TILE &&
+            ((dims[rank - 1] == rank - 1) || (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))) {
             return prim_permute(a);
         }
         auto input = a.get_layout() == Layout::TILE
