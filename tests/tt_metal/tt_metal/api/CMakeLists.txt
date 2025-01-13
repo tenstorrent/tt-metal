@@ -84,6 +84,6 @@ set(ARCHITECTURES
 )
 
 # Create a test executable for each architecture
-foreach(arch ${ARCHITECTURES})
+foreach(arch IN LISTS ARCHITECTURES)
     create_unit_test_executable(${arch})
 endforeach()
