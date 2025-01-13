@@ -8,6 +8,7 @@ from models.demos.ttnn_resnet.tt.ttnn_functional_resnet50_model_utils import get
 from models.utility_functions import (
     is_grayskull,
     is_wormhole_b0,
+    is_blackhole,
     _nearest_y,
 )
 from typing import List
@@ -48,6 +49,10 @@ hardcoded_matmul_config_linear = {
         fused_activation=None,
         mcast_in0=True,
     ),
+}
+
+ops_parallel_config = {
+    "layer1_module1_input": None,
 }
 
 
@@ -153,7 +158,7 @@ class resnet50Bottleneck:
         reshard_if_not_optimal=False,
         height_sharding=None,
         transpose_shards=True,
-        packer_l1_accum_enabled=True if is_wormhole_b0() else False,
+        packer_l1_accum_enabled=True if not is_grayskull() else False,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
@@ -179,7 +184,7 @@ class resnet50Bottleneck:
                     if height_sharding
                     else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     deallocate_activation=True,
-                    reallocate_halo_output=not (is_wormhole_b0() and batch_size == 16),
+                    reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
                     transpose_shards=transpose_shards,
                     enable_act_double_buffer=enable_act_double_buffer
@@ -192,6 +197,8 @@ class resnet50Bottleneck:
                     enable_subblock_padding=enable_subblock_padding,
                 ),
             }
+            if is_blackhole():
+                conv_kwargs["conv_config"].enable_split_reader = False
 
             if not ttnn.is_tensor_storage_on_device(self.ds_conv_weight_tensor):
                 self.ds_conv_weight_tensor = ttnn.prepare_conv_weights(
@@ -223,6 +230,8 @@ class resnet50Bottleneck:
                     packer_l1_acc=packer_l1_accum_enabled,
                 ),
                 conv_op_cache=conv_op_cache,
+                return_output_dim=False,
+                return_weights_and_bias=False,
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -242,18 +251,24 @@ class resnet50Bottleneck:
         height_sharding=None,
         eltwise_binary_out_in_place=True,
         transpose_shards=True,
-        packer_l1_acc=True if is_wormhole_b0() else False,
+        packer_l1_acc=True if not is_grayskull() else False,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
+        ops_parallel_config=None,
+        layer_module=None,
     ):
         logger.debug(
             f"==== Running {batch_size}, {input_height}, {input_width}, {self.conv1_input_channels}, {self.conv1_output_channels}"
         )
 
+        ds_input_height = input_height
+        ds_input_width = input_width
+
         # conv1 is 1x1 conv
         logger.debug(f"Running conv1")
         module_input_height = input_height
+        module_input_width = input_width
         conv_kwargs_1 = {
             "in_channels": self.conv1_input_channels,
             "out_channels": self.conv1_output_channels,
@@ -277,6 +292,8 @@ class resnet50Bottleneck:
                 transpose_shards=transpose_shards,
             ),
         }
+        if is_blackhole():
+            conv_kwargs_1["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
             self.conv1_weight_tensor = ttnn.prepare_conv_weights(
@@ -313,46 +330,30 @@ class resnet50Bottleneck:
         )
 
         act_block_h_override = 0
+        run_downsample_before_conv2 = True
+        ds_out = None
+
         if is_grayskull():
             if self.conv2_output_channels == 64 and input_height == 56 and batch_size == 20:
                 act_block_h_override = 320
         elif is_wormhole_b0():
-            if (
-                self.conv2_input_channels == 128
-                and self.conv2_output_channels == 128
-                and input_height == 56
-                and batch_size == 20
-            ):
-                act_block_h_override = 160
+            run_downsample_before_conv2 = False
 
-        run_downsample_before_conv2 = False
-        if not (input_height == 56 and self.conv1_input_channels == 64):
-            run_downsample_before_conv2 = True
-        if (
-            is_wormhole_b0()
-            and batch_size == 16
-            and (
-                (input_height == 56 and self.conv1_input_channels == 256 and self.conv1_output_channels == 128)
-                or (input_height == 28 and self.conv1_input_channels == 512 and self.conv1_output_channels == 256)
-                or (input_height == 14 and self.conv1_input_channels == 1024 and self.conv1_output_channels == 512)
-            )
-        ):
-            run_downsample_before_conv2 = True
-
-        # ds_mem_config_grid = None
         if run_downsample_before_conv2:
-            if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
-                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                ttnn.deallocate(x)
-                if is_wormhole_b0():
-                    out = ttnn.reallocate(out)
-                x = ttnn.reallocate(x_rm)
+            if layer_module and layer_module == "layer4_module1":
+                if ops_parallel_config and "layer4_module1_downsample" in ops_parallel_config:
+                    x = ttnn.to_memory_config(x, ops_parallel_config["layer4_module1_downsample"])
+            if is_grayskull():
+                if input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
+                    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                    ttnn.deallocate(x)
+                    x = ttnn.reallocate(x_rm)
             ds_out = self.run_downsample_if_req(
                 x,
                 device,
                 batch_size,
-                input_height,
-                input_width,
+                ds_input_height,
+                ds_input_width,
                 conv_op_cache,
                 reshard_if_not_optimal,
                 height_sharding,
@@ -362,9 +363,24 @@ class resnet50Bottleneck:
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
             )
+            if layer_module and layer_module == "layer4_module1":
+                if ops_parallel_config and "layer4_module1_downsample" not in ops_parallel_config:
+                    x_memory_config = ttnn.get_memory_config(ds_out)
+                    sharded_config = ttnn.create_sharded_memory_config_(
+                        ttnn.Shape([batch_size, ds_input_height, ds_input_width, self.conv1_input_channels]),
+                        x_memory_config.shard_spec.grid,
+                        x_memory_config.memory_layout,
+                        x_memory_config.shard_spec.orientation,
+                        tile_layout=True,
+                    )
+                    ops_parallel_config["layer4_module1_downsample"] = sharded_config
 
-        reallocate_halo_output = batch_size == 20
         logger.debug(f"Running conv2")
+
+        if layer_module and layer_module == "layer4_module1":
+            if ops_parallel_config and "layer4_module1_input" in ops_parallel_config:
+                out = ttnn.to_memory_config(out, ops_parallel_config["layer4_module1_input"])
+
         conv_kwargs_2 = {
             "in_channels": self.conv2_input_channels,
             "out_channels": self.conv2_output_channels,
@@ -382,7 +398,7 @@ class resnet50Bottleneck:
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
-                reallocate_halo_output=reallocate_halo_output,
+                reallocate_halo_output=not is_wormhole_b0(),
                 act_block_h_override=act_block_h_override,
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
@@ -395,6 +411,11 @@ class resnet50Bottleneck:
                 enable_subblock_padding=enable_subblock_padding,
             ),
         }
+
+        if is_blackhole():
+            conv_kwargs_2["conv_config"].act_block_h_override = 2 * 32
+            conv_kwargs_2["conv_config"].enable_subblock_padding = False
+            conv_kwargs_2["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
             self.conv2_weight_tensor = ttnn.prepare_conv_weights(
@@ -428,20 +449,17 @@ class resnet50Bottleneck:
             return_output_dim=True,
             return_weights_and_bias=False,
         )
-
-        logger.debug(
-            f"{batch_size} and {input_height} and {self.conv1_input_channels} and {self.conv1_output_channels}"
-        )
-
-        if (
-            is_wormhole_b0()
-            and batch_size == 20
-            and input_height == 28
-            and self.conv1_input_channels == 256
-            and self.conv1_output_channels == 128
-        ):
-            logger.info(f"==== Reallocating conv2 output")
-            out = ttnn.reallocate(out)
+        if layer_module and layer_module == "layer4_module1":
+            if ops_parallel_config and "layer4_module1_input" not in ops_parallel_config:
+                x_memory_config = ttnn.get_memory_config(out)
+                sharded_config = ttnn.create_sharded_memory_config_(
+                    ttnn.Shape([batch_size, module_input_height, module_input_width, self.conv2_input_channels]),
+                    x_memory_config.shard_spec.grid,
+                    x_memory_config.memory_layout,
+                    x_memory_config.shard_spec.orientation,
+                    tile_layout=True,
+                )
+                ops_parallel_config["layer4_module1_input"] = sharded_config
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
@@ -467,6 +485,8 @@ class resnet50Bottleneck:
                 transpose_shards=transpose_shards,
             ),
         }
+        if is_blackhole():
+            conv_kwargs_3["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):
             self.conv3_weight_tensor = ttnn.prepare_conv_weights(
@@ -496,29 +516,19 @@ class resnet50Bottleneck:
                 packer_l1_acc=packer_l1_acc,
             ),
             conv_op_cache=conv_op_cache,
+            return_output_dim=False,
+            return_weights_and_bias=False,
         )
 
         if not run_downsample_before_conv2:
-            ds_reshard = (
-                False
-                if is_grayskull()
-                and batch_size == 20
-                and (
-                    input_height == 28
-                    and self.conv1_input_channels == 256
-                    or input_height == 14
-                    and self.conv1_input_channels == 512
-                )
-                else reshard_if_not_optimal
-            )
             ds_out = self.run_downsample_if_req(
                 x,
                 device,
                 batch_size,
-                input_height,
-                input_width,
+                ds_input_height,
+                ds_input_width,
                 conv_op_cache,
-                ds_reshard,
+                reshard_if_not_optimal,
                 height_sharding,
                 transpose_shards=transpose_shards,
                 packer_l1_accum_enabled=packer_l1_acc,
@@ -526,6 +536,8 @@ class resnet50Bottleneck:
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
             )
+
+        assert ds_out is not None, "ds_out is None"
 
         assert ttnn.get_memory_config(out) == ttnn.get_memory_config(
             ds_out
@@ -544,10 +556,8 @@ class resnet50Bottleneck:
                 ds_out,
                 activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-            )  ## TODO: check why not out mem config???
+            )
         ttnn.deallocate(ds_out)
-        if batch_size == 20 and (is_wormhole_b0() or (module_input_height == 56 and self.conv1_input_channels == 64)):
-            out = ttnn.reallocate(out)
         return out, input_height, input_width
 
 
@@ -575,18 +585,13 @@ class resnet50:
         self.conv_op_cache = {}
         self.inplanes = 64
         self.final_output_mem_config = final_output_mem_config
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=model_config["MATH_FIDELITY"],
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=model_config["MATH_FIDELITY"],
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
         self.conv1_input_channels = self.conv1_weight_tensor.shape[1]
@@ -663,22 +668,12 @@ class resnet50:
         self.transpose_shards = True
         act_block_h_override = 1568
 
-        if is_wormhole_b0():
+        if is_wormhole_b0() or is_blackhole():
             self.transpose_shards = False
-            if batch_size == 16:
-                act_block_h_override = 1568
-            elif batch_size == 20:
-                act_block_h_override = 640
         else:
             act_block_h_override = 0
-        # input_channels_alignment = 16 if not is_wormhole_b0() else 32
-        whb0_and_b16 = is_wormhole_b0() and self.batch_size == 16
-        if not is_wormhole_b0():
-            input_channels_alignment = 16
-        elif whb0_and_b16:
-            input_channels_alignment = 16
-        else:
-            input_channels_alignment = 32
+
+        input_channels_alignment = 16
         self.conv1_config = ttnn.Conv2dConfig(
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
@@ -687,8 +682,8 @@ class resnet50:
             input_channels_alignment=input_channels_alignment,
             act_block_h_override=act_block_h_override,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
-            enable_split_reader=True if whb0_and_b16 or not is_wormhole_b0() else False,
+            enable_act_double_buffer=is_wormhole_b0() or is_blackhole(),
+            enable_split_reader=True,
             enable_subblock_padding=False,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
@@ -696,9 +691,9 @@ class resnet50:
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=self.model_config["MATH_FIDELITY"],
-            packer_l1_acc=True if whb0_and_b16 else False,
+            packer_l1_acc=True,
         )
-        if whb0_and_b16:
+        if is_wormhole_b0():
             # Issue #13145: Temp workaround for Galaxy to avoid hangs
             if type(device) == ttnn.MeshDevice and device.get_num_devices() > 8:
                 self.conv1_config.act_block_h_override = 64
@@ -706,6 +701,10 @@ class resnet50:
                 # Todo: restore after issue #16895 is fixed
                 # self.conv1_config.act_block_h_override = 49 * 32
                 self.conv1_config.act_block_h_override = 2 * 32
+        if is_blackhole():
+            # self.conv1_config.act_block_h_override = 7 * 32
+            # self.conv1_config.act_block_h_override = 2 * 32
+            self.conv1_config.enable_split_reader = False
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -736,6 +735,8 @@ class resnet50:
             w // self.fold_stride_w,
             C * (self.fold_stride_h * self.fold_stride_w),
         )
+        num_cores_x = 8
+        num_cores_y = 8
         if self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
@@ -743,9 +744,12 @@ class resnet50:
             if is_grayskull():
                 num_cores_x = 10
                 num_cores_y = 8
-            elif is_wormhole_b0():  # untested due to unsupported batch20 on WH
+            elif is_wormhole_b0():
                 num_cores_x = 8
                 num_cores_y = 5
+            elif is_blackhole():
+                num_cores_x = 8
+                num_cores_y = 10
         self.fold_compute_grid_size = (num_cores_x, num_cores_y)
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
@@ -765,9 +769,8 @@ class resnet50:
         )
 
     def __del__(self):
-        # Need to clear global configs for each Resnet run
-        self.conv_op_cache.clear()
-        self.max_pool_reader_patterns_cache.clear()
+        # Nothing to do
+        pass
 
     def _make_layer(
         self,
@@ -900,34 +903,42 @@ class resnet50:
         x_width = 56
         x = ttnn.reshape(x, (1, 1, x_height * x_width * self.batch_size, 64))
 
-        if is_wormhole_b0():
-            # TODO: fix the need to do the reshard here
+        if is_blackhole():
+            core_range_set = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(12, 7),
+                    ),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 8),
+                        ttnn.CoreCoord(7, 8),
+                    ),
+                }
+            )
+        elif is_wormhole_b0():
+            core_range_set = ttnn.CoreGrid(x=8, y=7)
+
+        if is_blackhole() or is_wormhole_b0():
             mem_config = ttnn.create_sharded_memory_config_(
                 ttnn.Shape([self.batch_size * x_height * x_width, 64]),
-                ttnn.CoreGrid(x=8, y=7),
+                core_range_set,
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 tile_layout=True,
             )
             x = ttnn.to_memory_config(x, mem_config)
+
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=self.model_config["ACTIVATIONS_DTYPE"])
 
-        if self.batch_size == 20 and not is_wormhole_b0():
+        if self.batch_size == 20 and is_grayskull():
             x = ttnn.reallocate(x)
 
         logger.debug(f"==== Running layer 1 module 1")
         layer1_module1_input_shape = ttnn.Shape(x.padded_shape)
 
         reshard = False
-        height_shard = False
-        if is_wormhole_b0() and self.batch_size == 20:
-            if is_first_run:
-                reshard = True
-                height_shard = True
-            else:
-                x = ttnn.to_memory_config(x, ops_parallel_config["layer1_module1_input"])
-
-        whb0_and_b16 = is_wormhole_b0() and self.batch_size == 16
+        height_shard = True
 
         x, x_height, x_width = self.layer1_module1(
             x,
@@ -939,9 +950,9 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 else False,
-            enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True if whb0_and_b16 else False,
+            enable_act_double_buffer=True,
+            enable_split_reader=True,
+            enable_subblock_padding=not is_grayskull(),
         )
 
         if is_first_run:
@@ -964,8 +975,8 @@ class resnet50:
             conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
-            enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True if whb0_and_b16 else False,
+            enable_split_reader=True,
+            enable_subblock_padding=not is_grayskull(),
         )
 
         logger.debug(f"==== Running layer 1 module 3")
@@ -978,24 +989,37 @@ class resnet50:
             conv_op_cache,
             transpose_shards=self.transpose_shards,
             enable_act_double_buffer=False,
-            enable_split_reader=True if whb0_and_b16 else False,
-            enable_subblock_padding=True if whb0_and_b16 else False,
+            enable_split_reader=True,
+            enable_subblock_padding=not is_grayskull(),
         )
-
-        if self.batch_size == 20 and is_wormhole_b0():
-            x = ttnn.reallocate(x)
 
         layer2_module1_input_shape = ttnn.Shape(x.padded_shape)
 
-        reshard = False
-        height_shard = False
-        is_gs = is_grayskull()
-        if is_wormhole_b0() and self.batch_size == 20:
-            if is_first_run:
-                reshard = True if not is_wormhole_b0() else False
-                height_shard = True
-            else:
-                x = ttnn.to_memory_config(x, ops_parallel_config["layer2_module1_input"])
+        reshard = not (is_wormhole_b0() or is_grayskull())
+        height_shard = True
+
+        if is_blackhole():
+            ## 98
+            core_range_set = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(12, 6),
+                    ),
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 7),
+                        ttnn.CoreCoord(6, 7),
+                    ),
+                }
+            )
+            mem_config = ttnn.create_sharded_memory_config_(
+                layer2_module1_input_shape,
+                core_range_set,
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                tile_layout=True,
+            )
+            x = ttnn.to_memory_config(x, mem_config)
 
         logger.debug(f"==== Running layer 2 module 1")
         x, x_height, x_width = self.layer2_module1(
@@ -1008,7 +1032,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1046,7 +1070,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1060,20 +1084,34 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
 
         layer3_module1_input_shape = ttnn.Shape(x.padded_shape)
 
-        reshard = False
+        reshard = is_wormhole_b0() or is_grayskull()
         height_shard = False
-        if is_first_run:
-            reshard = True
-            height_shard = False
-        else:
-            x = ttnn.to_memory_config(x, ops_parallel_config["layer3_module1_input"])
+
+        if is_blackhole():
+            ## 104
+            core_range_set = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(12, 7),
+                    ),
+                }
+            )
+            mem_config = ttnn.create_sharded_memory_config_(
+                layer3_module1_input_shape,
+                core_range_set,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
+                tile_layout=True,
+            )
+            x = ttnn.to_memory_config(x, mem_config)
 
         logger.debug(f"==== Running layer 3 module 1")
         x, x_height, x_width = self.layer3_module1(
@@ -1086,7 +1124,7 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1110,7 +1148,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1124,9 +1162,10 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            layer_module="layer3_module3",
         )
 
         logger.debug(f"==== Running layer 3 module 4")
@@ -1138,9 +1177,10 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            layer_module="layer3_module4",
         )
 
         logger.debug(f"==== Running layer 3 module 5")
@@ -1152,9 +1192,10 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            layer_module="layer3_module5",
         )
 
         logger.debug(f"==== Running layer 3 module 6")
@@ -1167,36 +1208,44 @@ class resnet50:
             conv_op_cache,
             eltwise_binary_out_in_place=True,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
 
-        if is_wormhole_b0() and self.batch_size == 16:
-            xshape = x.shape
-            x = ttnn.slice(
-                x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1)
-            )
+        reshard = is_grayskull()
+        height_shard = False
 
         layer4_module1_input_shape = ttnn.Shape(x.padded_shape)
-
-        if is_wormhole_b0():
+        if is_blackhole():
+            # 104
+            grid_size = (13, 8)
+            core_range_set = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+                    ),
+                }
+            )
+            mem_config = ttnn.create_sharded_memory_config_(
+                layer4_module1_input_shape,
+                core_range_set,
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.ShardOrientation.COL_MAJOR,
+                tile_layout=True,
+            )
+            x = ttnn.to_memory_config(x, mem_config)
+        elif is_wormhole_b0():
+            core_range_set = ttnn.CoreGrid(x=8, y=7)
             shard_config = ttnn.create_sharded_memory_config_(
                 layer4_module1_input_shape,
-                ttnn.CoreGrid(x=8, y=7),
+                core_range_set,
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 ttnn.ShardOrientation.ROW_MAJOR,
                 tile_layout=True,
             )
             x = ttnn.to_memory_config(x, shard_config)
-        else:
-            reshard = False
-            height_shard = False
-            if is_first_run:
-                reshard = True
-                height_shard = False
-            else:
-                x = ttnn.to_memory_config(x, ops_parallel_config["layer4_module1_input"])
 
         logger.debug(f"==== Running layer 4 module 1")
         x, x_height, x_width = self.layer4_module1(
@@ -1209,20 +1258,12 @@ class resnet50:
             reshard_if_not_optimal=reshard,
             height_sharding=height_shard,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            ops_parallel_config=ops_parallel_config,
+            layer_module="layer4_module1",
         )
-
-        if is_first_run:
-            x_memory_config = ttnn.get_memory_config(x)
-            ops_parallel_config["layer4_module1_input"] = ttnn.create_sharded_memory_config_(
-                layer4_module1_input_shape,
-                x_memory_config.shard_spec.grid,
-                x_memory_config.memory_layout,
-                x_memory_config.shard_spec.orientation,
-                tile_layout=True,
-            )
 
         logger.debug(f"==== Running layer 4 module 2")
         x, x_height, x_width = self.layer4_module2(
@@ -1233,7 +1274,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
@@ -1247,7 +1288,7 @@ class resnet50:
             x_width,
             conv_op_cache,
             transpose_shards=self.transpose_shards,
-            enable_act_double_buffer=True if whb0_and_b16 or is_gs else False,
+            enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
         )
