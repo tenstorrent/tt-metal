@@ -18,7 +18,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "circular_buffer_init.h"
+#include "remote_circular_buffer_api.h"
 #endif
 
 void kernel_launch(uint32_t kernel_base_addr) {

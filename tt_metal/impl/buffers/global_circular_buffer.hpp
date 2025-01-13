@@ -9,7 +9,6 @@
 
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
@@ -17,7 +16,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class Buffer;
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -28,11 +27,10 @@ namespace experimental {
 class GlobalCircularBuffer {
 public:
     GlobalCircularBuffer(
-        Device* device,
-        const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+        IDevice* device,
+        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
-        BufferType buffer_type = BufferType::L1,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        BufferType buffer_type = BufferType::L1);
 
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
@@ -48,20 +46,20 @@ public:
     DeviceAddr buffer_address() const;
     DeviceAddr config_address() const;
     uint32_t size() const;
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("sender_receiver_core_mapping", "size");
     const auto attribute_values() const { return std::make_tuple(this->sender_receiver_core_mapping_, this->size_); }
 
 private:
-    void setup_cb_buffers(
-        BufferType buffer_type, uint32_t max_num_receivers_per_sender, tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
     std::shared_ptr<Buffer> cb_buffer_;
     std::shared_ptr<Buffer> cb_config_buffer_;
-    Device* device_;
-    std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping_;
+    IDevice* device_;
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;

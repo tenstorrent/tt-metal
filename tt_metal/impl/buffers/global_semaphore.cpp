@@ -14,33 +14,24 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/impl/buffers/buffer.hpp"
 #include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_metal {
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
-    const CoreRangeSet& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) :
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) :
     device_(device), cores_(cores) {
-    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
+    this->setup_buffer(initial_value, buffer_type);
 }
 
 GlobalSemaphore::GlobalSemaphore(
-    Device* device,
-    CoreRangeSet&& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) :
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) :
     device_(device), cores_(std::move(cores)) {
-    this->setup_buffer(initial_value, buffer_type, sub_device_ids);
+    this->setup_buffer(initial_value, buffer_type);
 }
 
-void GlobalSemaphore::setup_buffer(
-    uint32_t initial_value, BufferType buffer_type, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void GlobalSemaphore::setup_buffer(uint32_t initial_value, BufferType buffer_type) {
     TT_FATAL(
         buffer_type == BufferType::L1 or buffer_type == BufferType::L1_SMALL,
         "Global semaphore can only be created for L1 buffer types");
@@ -59,29 +50,24 @@ void GlobalSemaphore::setup_buffer(
         shard_parameters,
         std::nullopt);
 
-    this->reset_semaphore_value(initial_value, sub_device_ids);
+    this->reset_semaphore_value(initial_value);
 }
 
-Device* GlobalSemaphore::device() const { return device_; }
+IDevice* GlobalSemaphore::device() const { return device_; }
 
 DeviceAddr GlobalSemaphore::address() const { return buffer_->address(); }
 
-void GlobalSemaphore::reset_semaphore_value(
-    uint32_t reset_value, tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
     // Write the initial value to the semaphore to the device
     // Only block for the slow dispatch case
     auto* device = this->device_;
-    device->push_work([device,
-                       reset_value,
-                       sub_device_ids = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end()),
-                       num_cores = this->cores_.num_cores(),
-                       buffer = this->buffer_] {
+    device->push_work([device, reset_value, num_cores = this->cores_.num_cores(), buffer = this->buffer_] {
         std::vector<uint32_t> host_buffer(num_cores, reset_value);
         if (device->using_slow_dispatch()) {
             detail::WriteToBuffer(*buffer, host_buffer);
             tt::Cluster::instance().l1_barrier(device->id());
         } else {
-            EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false, sub_device_ids);
+            EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false);
         }
     });
 }

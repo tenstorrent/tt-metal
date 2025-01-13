@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
         Tensor host_a = a.cpu();  // Move tensor a to host to validate
         Tensor g = Tensor(host_a.get_storage(), shape, DataType::BFLOAT16, Layout::ROW_MAJOR);
         // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = g.get_legacy_shape();
+        auto padded_shape = g.get_padded_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_g = g.pad(padded_shape, ttnn::SimpleShape{0, 0, 0, 0}, 0);

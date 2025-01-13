@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "tt_metal/common/core_coord.hpp"
-#include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -207,7 +206,7 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
     return worker_sender_num_transfers;
 }
 
-static void emit_sharded_tensor_kernel_rt_args(Device* d, Tensor const& tensor, std::vector<uint32_t>& args) {
+static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor, std::vector<uint32_t>& args) {
     auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
@@ -229,7 +228,7 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 }
 
 static void emit_sharded_tensor_kernel_ct_args(
-    Device* d,
+    IDevice* d,
     Tensor const& tensor,
     std::vector<uint32_t>& args,
     std::size_t pages_per_shard_y,

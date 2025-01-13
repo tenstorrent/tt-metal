@@ -5,7 +5,6 @@
 #include <algorithm>
 
 #include "tt_metal/common/core_coord.hpp"
-#include "eth_l1_address_map.h"
 #include "impl/buffers/buffer.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -276,7 +275,8 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
                     compute_kernel_config,
                     config,
                     untilize_out,
-                    matmul_fused_op_signaler);
+                    matmul_fused_op_signaler,
+                    std::nullopt);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;
             } else {

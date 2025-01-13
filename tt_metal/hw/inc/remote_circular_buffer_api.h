@@ -69,18 +69,20 @@ FORCE_INLINE void resize_remote_sender_cb_interface(uint32_t cb_id, uint32_t pag
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
 
     uint32_t next_fifo_wr_ptr = fifo_start_addr + align(fifo_wr_ptr - fifo_start_addr, page_size);
-    uint32_t aligned_page_adjustment = 0;
-    if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
-        aligned_page_adjustment =
-            (fifo_start_addr + fifo_size - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-        next_fifo_wr_ptr = fifo_start_addr;
-    } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
-        aligned_page_adjustment = (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    }
     if constexpr (update_remote_over_noc) {
+        uint32_t aligned_page_adjustment = 0;
+        if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+            aligned_page_adjustment =
+                (fifo_start_addr + fifo_size - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            next_fifo_wr_ptr = fifo_start_addr;
+        } else if (next_fifo_wr_ptr != fifo_wr_ptr) {
+            aligned_page_adjustment = (next_fifo_wr_ptr - fifo_wr_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+        }
         if (aligned_page_adjustment != 0) {
             detail::update_pages_sent(sender_cb_interface, aligned_page_adjustment, noc);
         }
+    } else if (next_fifo_wr_ptr >= fifo_limit_page_aligned) {
+        next_fifo_wr_ptr = fifo_start_addr;
     }
     sender_cb_interface.fifo_wr_ptr = next_fifo_wr_ptr;
     sender_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;
@@ -99,18 +101,19 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t prev_fifo_limit_page_aligned = receiver_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
-    uint32_t aligned_page_adjustment = 0;
-    if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
-        aligned_page_adjustment = (fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-        next_fifo_rd_ptr = fifo_start_addr;
-    } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
-        aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    }
-
     if constexpr (update_remote_over_noc) {
+        uint32_t aligned_page_adjustment = 0;
+        if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
+            aligned_page_adjustment = (fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            next_fifo_rd_ptr = fifo_start_addr;
+        } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
+            aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+        }
         if (aligned_page_adjustment != 0) {
             detail::update_pages_acked(receiver_cb_interface, aligned_page_adjustment, noc);
         }
+    } else if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
+        next_fifo_rd_ptr = fifo_start_addr;
     }
     receiver_cb_interface.fifo_rd_ptr = next_fifo_rd_ptr;
     receiver_cb_interface.fifo_limit_page_aligned = fifo_limit_page_aligned;

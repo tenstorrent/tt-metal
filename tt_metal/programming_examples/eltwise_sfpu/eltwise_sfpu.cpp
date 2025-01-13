@@ -4,7 +4,7 @@
 
 #include "tt_metal/host_api.hpp"
 #include "common/bfloat16.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
          * Silicon accelerator setup
          */
         constexpr int device_id = 0;
-        Device* device = CreateDevice(device_id);
+        IDevice* device = CreateDevice(device_id);
 
         /*
          * Setup program to execute along with its buffers and kernels to use

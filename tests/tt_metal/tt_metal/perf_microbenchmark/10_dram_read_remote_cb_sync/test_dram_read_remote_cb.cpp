@@ -82,10 +82,10 @@ void get_max_page_size_and_num_pages(
 
 std::tuple<std::vector<tt_metal::Program>, tt_metal::v1::experimental::GlobalCircularBuffer>
 create_programs(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t k,
@@ -549,7 +549,7 @@ bool validation_mixed_df(
 }
 
 std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
@@ -708,7 +708,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -721,8 +721,9 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
+            { dram_reader_core_coord, l1_receiver_core }
+        };
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});

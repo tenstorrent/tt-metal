@@ -462,6 +462,7 @@ class UNet:
         ttnn.deallocate(c4_residual)
         x = self.upblock2(x, c3_residual)
         ttnn.deallocate(c3_residual)
+        c2_residual = ttnn.to_memory_config(c2_residual, ttnn.L1_MEMORY_CONFIG)
         x = self.upblock3(x, c2_residual)
         ttnn.deallocate(c2_residual)
         x = self.upblock4(x, c1_residual)

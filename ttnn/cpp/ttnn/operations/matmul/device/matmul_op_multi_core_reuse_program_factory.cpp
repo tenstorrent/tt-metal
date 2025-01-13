@@ -14,7 +14,7 @@ using namespace tt;
 using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt::DataFormat in0_cb_data_format,
     tt::DataFormat in1_cb_data_format,
     tt::DataFormat out_cb_data_format,
@@ -274,7 +274,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse(
     TT_FATAL(Kt % in0_block_w == 0, "Error");
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;

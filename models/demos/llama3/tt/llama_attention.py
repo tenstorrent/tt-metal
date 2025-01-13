@@ -40,6 +40,7 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_dtype = configuration.ccl_dtype
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
         self.num_all_gather_links = configuration.num_all_gather_links
+        self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
 
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
@@ -472,8 +473,10 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 2048:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         xqkv_fused = ttnn.linear(
             x_11SH,
@@ -494,7 +497,7 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype,
         )
 
-        if seq_len > 2048:
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)

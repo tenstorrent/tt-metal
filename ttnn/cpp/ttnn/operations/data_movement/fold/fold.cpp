@@ -28,7 +28,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
@@ -154,7 +154,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     CoreCoord grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE and input.storage_type() != StorageType::MULTI_DEVICE) {

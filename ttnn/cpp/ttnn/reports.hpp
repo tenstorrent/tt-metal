@@ -33,7 +33,7 @@ struct DeviceInfo {
     size_t cb_limit;
 };
 
-DeviceInfo get_device_info(const Device& device) {
+DeviceInfo get_device_info(const IDevice& device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device.id());
     const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_config);

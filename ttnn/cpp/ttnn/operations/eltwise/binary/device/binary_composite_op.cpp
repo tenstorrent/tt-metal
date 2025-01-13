@@ -516,8 +516,8 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     if (!skip_reshape_b) {
         b_slim = ttnn::reshape(input_b, ttnn::SimpleShape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
     }
-    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
-    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
+    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
 
     auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
     if (device != nullptr) {

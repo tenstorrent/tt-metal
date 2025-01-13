@@ -64,19 +64,13 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> RotaryEmbedding::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.get_legacy_shape();
+    auto shape = input_tensor.get_padded_shape();
     if (!this->token_idx.has_value()) {
         shape[-2] = round_up(this->seq_len, TILE_HEIGHT);
     }
-    return {shape};
-}
 
-std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    auto output_shape = this->compute_output_shapes(input_tensors)[0];
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
         if (input_tensor.is_sharded()) {
@@ -99,16 +93,12 @@ std::vector<Tensor> RotaryEmbedding::create_output_tensors(const std::vector<Ten
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_device_tensor(
-            output_shape, input_tensor.get_dtype(), input_tensor.get_layout(), input_tensor.device(), mem_config)};
-    } else {
-        return {create_device_tensor(
-            output_shape,
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            this->output_mem_config)};
+        return {TensorSpec(
+            shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), mem_config))};
     }
+
+    return {TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks RotaryEmbedding::create_program(

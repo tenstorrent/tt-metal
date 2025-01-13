@@ -21,7 +21,7 @@ struct ConvTranpose2dOperation {
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        Device* device,
+        IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,

@@ -42,7 +42,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
 
-std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedPartialDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     tt::tt_metal::LegacyShape shape = input_tensor.get_legacy_shape();
@@ -53,20 +53,18 @@ std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedPartialDeviceOperatio
     shape[0] = 1;
     shape[1] = 1;
     shape[2] = new_height;
-    return {shape};
-}
 
-std::vector<Tensor> InterleavedToShardedPartialDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
     auto mem_config = this->output_mem_config;
     mem_config.shard_spec = this->shard_spec;
-    return {create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        this->output_dtype,
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        mem_config)};
+
+    return {TensorSpec(
+        shape.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig(input_tensor.get_layout()),
+            mem_config,
+            shape.logical_shape(),
+            shape.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedPartialDeviceOperation::create_program(
