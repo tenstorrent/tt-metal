@@ -1316,12 +1316,8 @@ void HWCommandQueue::enqueue_write_buffer(
                 dst_page_index = dst_page_index % num_banks_to_use;
             }
 
-            uint32_t initial_src_addr_offset;
-            if (write_partial_pages) {
-                initial_src_addr_offset = bank_base_address - buffer.address();
-            } else {
-                initial_src_addr_offset = total_num_pages_written * buffer.page_size();
-            }
+            const uint32_t initial_src_addr_offset = write_partial_pages ? bank_base_address - buffer.address()
+                                                                         : total_num_pages_written * buffer.page_size();
 
             tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", this->id);
 
