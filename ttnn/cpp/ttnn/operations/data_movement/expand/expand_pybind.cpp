@@ -23,9 +23,9 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const Shape& repeat_dims,
+               const ttnn::SmallVector<int32_t> output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(input_tensor, repeat_dims, memory_config, queue_id); },
+               const uint8_t queue_id) { return self(input_tensor, output_shape, memory_config, queue_id); },
             py::arg("input_tensor"),
             py::arg("output_shape"),
             py::kw_only(),
