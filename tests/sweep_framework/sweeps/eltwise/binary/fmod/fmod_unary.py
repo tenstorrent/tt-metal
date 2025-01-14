@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_wormhole_b0
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -26,17 +26,34 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 128, 128], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
+        "unsafe_range": [[-0.01, 0.01]],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "xfail": {
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 128, 128], [1, 1, 1, 1], 16)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
+        "unsafe_range": [None],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+def mesh_device_fixture():
+    device = ttnn.open_device(device_id=0)
+    assert ttnn.device.is_wormhole_b0(device), "This op is available for Wormhole_B0 only"
+    yield (device, "Wormhole_B0")
+    ttnn.close_device(device)
+    del device
 
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
@@ -45,10 +62,8 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["input_b_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Input_tensor_a doesn't support bfloat8_b"
     return False, None
 
 
@@ -58,11 +73,10 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    unsafe_range,
     input_a_dtype,
-    input_b_dtype,
     input_layout,
     input_a_memory_config,
-    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -77,12 +91,13 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_shape)
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    if unsafe_range:
+        while unsafe_range[0] <= scalar <= unsafe_range[1]:
+            scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    golden_function = ttnn.get_golden_function(ttnn.minimum)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -92,16 +107,8 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
     start_time = start_measuring_time()
-    output_tensor = ttnn.minimum(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.remainder(input_tensor_a, scalar, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)

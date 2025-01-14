@@ -30,10 +30,8 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
@@ -45,9 +43,7 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["input_b_dtype"] == ttnn.bfloat8_b
-    ):
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
 
@@ -59,10 +55,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     input_a_dtype,
-    input_b_dtype,
     input_layout,
     input_a_memory_config,
-    input_b_memory_config,
     output_memory_config,
     *,
     device,
@@ -77,12 +71,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-    )(input_shape)
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100)
 
-    golden_function = ttnn.get_golden_function(ttnn.minimum)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    golden_function = ttnn.get_golden_function(ttnn.maximum)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -92,16 +84,8 @@ def run(
         memory_config=input_a_memory_config,
     )
 
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
     start_time = start_measuring_time()
-    output_tensor = ttnn.minimum(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.maximum(input_tensor_a, scalar.item(), memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
