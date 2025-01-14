@@ -36,9 +36,6 @@ LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_b
 }
 
 autograd::TensorPtr LinearLayer::operator()(const autograd::TensorPtr& tensor) {
-    if (m_bias == nullptr) {
-        return ops::linear_op_no_bias(tensor, m_weight);
-    }
     return ops::linear_op(tensor, m_weight, m_bias);
 }
 
