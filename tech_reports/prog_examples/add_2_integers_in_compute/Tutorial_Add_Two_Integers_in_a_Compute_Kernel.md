@@ -1,9 +1,18 @@
 # Tutorial - Add Two Integers in a Compute Kernel 🚧
 
-1. To build and execute use the following commands
-```export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh  --build-tests
+1. To build and execute:
+Run the appropriate command for the Tenstorrent card you have installed:
+
+| Card             | Command                              |
+|------------------|--------------------------------------|
+| Grayskull        | ```export ARCH_NAME=grayskull```     |
+| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+| Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+Then run the following:
+```bash
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_compute
 ```
 
