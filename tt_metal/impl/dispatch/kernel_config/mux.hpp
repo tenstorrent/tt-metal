@@ -21,6 +21,8 @@ typedef struct mux_static_config {
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;
     std::optional<uint32_t> input_packetize_src_endpoint;   // Packed w/ max 4 assumption
     std::optional<uint32_t> input_packetize_dest_endpoint;  // Same as src
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> mux_input_ptr_buffers;  // [25:28]
+    std::optional<uint32_t> mux_output_ptr_buffer;
 } mux_static_config_t;
 
 typedef struct mux_dependent_config {
@@ -35,6 +37,8 @@ typedef struct mux_dependent_config {
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;                // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size;  // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_upstream_sem;   // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> mux_input_remote_ptr_buffers;   // [29,32], dependent
+    std::optional<uint32_t> mux_output_remote_ptr_buffer;                                  // Dependent
 } mux_dependent_config_t;
 
 class MuxKernel : public FDKernel {

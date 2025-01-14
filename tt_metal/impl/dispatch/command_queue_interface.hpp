@@ -13,6 +13,7 @@
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/util/include/dispatch_settings.hpp"
 #include "tt_metal/impl/dispatch/util/include/helpers.hpp"
+#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"  // packet_queue_ptr_buffer_size, MAX_TUNNEL_LANES
 
 // FIXME: Don't do this in header files
 using namespace tt::tt_metal;
@@ -31,7 +32,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
     DISPATCH_MESSAGE = 7,
-    UNRESERVED = 8
+    PACKET_QUEUE_PTRS = 8,
+    UNRESERVED = 9,
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -188,6 +190,8 @@ private:
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::PACKET_QUEUE_PTRS) {
+                device_cq_addr_sizes_[dev_addr_idx] = get_max_queues_used() * packet_queue_ptr_buffer_size;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
             }
@@ -201,6 +205,8 @@ private:
             CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
             if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
                 device_cq_addrs_[dev_addr_idx] = align_addr(device_cq_addrs_[dev_addr_idx], pcie_alignment);
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::PACKET_QUEUE_PTRS) {
+                device_cq_addrs_[dev_addr_idx] = align_addr(device_cq_addrs_[dev_addr_idx], l1_alignment);
             }
         }
 

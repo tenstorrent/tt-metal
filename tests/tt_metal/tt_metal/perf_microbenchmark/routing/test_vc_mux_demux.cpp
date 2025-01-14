@@ -5,18 +5,13 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+#include "tt_metal/include/tt_metal/device.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
-using std::vector;
 using namespace tt;
 using json = nlohmann::json;
 
 int main(int argc, char **argv) {
-
     constexpr uint32_t default_tx_x = 0;
     constexpr uint32_t default_tx_y = 0;
     constexpr uint32_t default_rx_x = 0;
@@ -30,6 +25,9 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 1024*1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
+
+    constexpr uint32_t default_input_scratch_buffer_base_addr = 0x60000;
+    constexpr uint32_t default_output_scratch_buffer_base_addr = 0x70000;
 
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
@@ -98,6 +96,8 @@ int main(int argc, char **argv) {
         log_info(LogTest, "  --tx_data_sent_per_iter_high: the criteria to determine the amount of tx data sent per iter is high (unit: words); if both 0, then disable counting it in tx kernel, default = {}", default_tx_data_sent_per_iter_high);
         log_info(LogTest, "  --dump_stat_json: Dump stats in json to output_dir, default = {}", default_dump_stat_json);
         log_info(LogTest, "  --output_dir: Output directory, default = {}", default_output_dir);
+        log_info(LogTest, "  --input_scratch_buffer_base_addr: Scratch buffer for input queues base address, default = {:#x}", default_input_scratch_buffer_base_addr);
+        log_info(LogTest, "  --output_scratch_buffer_base_addr: Scratch buffer for output queues base address, default = {:#x}", default_output_scratch_buffer_base_addr);
         return 0;
     }
 
@@ -133,11 +133,28 @@ int main(int argc, char **argv) {
     uint8_t tx_pkt_dest_size_choice = (uint8_t) test_args::get_command_option_uint32(input_args, "--tx_pkt_dest_size_choice", default_tx_pkt_dest_size_choice);
     uint32_t tx_data_sent_per_iter_low = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_low", default_tx_data_sent_per_iter_low);
     uint32_t tx_data_sent_per_iter_high = test_args::get_command_option_uint32(input_args, "--tx_data_sent_per_iter_high", default_tx_data_sent_per_iter_high);
+    uint32_t input_scratch_buffer_base_addr = test_args::get_command_option_uint32(input_args, "--input_scratch_buffer_base_addr", default_input_scratch_buffer_base_addr);
+    uint32_t output_scratch_buffer_base_addr = test_args::get_command_option_uint32(input_args, "--output_scratch_buffer_base_addr", default_output_scratch_buffer_base_addr);
 
     assert((pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE && rx_disable_header_check || (pkt_dest_size_choices_t)tx_pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM);
 
     uint32_t num_src_endpoints = num_endpoints;
     uint32_t num_dest_endpoints = num_endpoints;
+
+    const auto input_scratch_buffers = make_buffer_addresses_for_test(input_scratch_buffer_base_addr, packet_queue_ptr_buffer_size, {
+        { "traffic_gen_tx", num_src_endpoints },
+        { "vc_packet_router_l", MAX_SWITCH_FAN_OUT },
+        { "vc_packet_router_r", MAX_SWITCH_FAN_OUT },
+        { "traffic_gen_rx", num_dest_endpoints },
+
+    });
+
+    const auto output_scratch_buffers = make_buffer_addresses_for_test(output_scratch_buffer_base_addr, packet_queue_ptr_buffer_size, {
+        { "traffic_gen_tx_mock", num_src_endpoints },
+        { "traffic_gen_tx", num_src_endpoints },
+        { "vc_packet_router_l", MAX_SWITCH_FAN_OUT},
+        { "vc_packet_router_r", MAX_SWITCH_FAN_OUT },
+    });
 
     bool pass = true;
 
@@ -147,7 +164,7 @@ int main(int argc, char **argv) {
 
     try {
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice *device = tt_metal::CreateDevice(device_id);
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -188,10 +205,14 @@ int main(int argc, char **argv) {
                     tx_skip_pkt_content_gen, // 18: skip_pkt_content_gen
                     tx_pkt_dest_size_choice, // 19: pkt_dest_size_choice
                     tx_data_sent_per_iter_low, // 20: data_sent_per_iter_low
-                    tx_data_sent_per_iter_high // 21: data_sent_per_iter_high
+                    tx_data_sent_per_iter_high, // 21: data_sent_per_iter_high
+                    input_scratch_buffers.at("traffic_gen_tx")[i], // 22: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx_mock")[i], // 23: traffic_gen_input_mock_remote_ptrs_addr
+                    output_scratch_buffers.at("traffic_gen_tx")[i], // 24: traffic_gen_output_ptrs_addr
+                    input_scratch_buffers.at("vc_packet_router_l")[i], // 25: traffic_gen_output_remote_ptrs_addr
                 };
 
-            log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
+            log_info(LogTest, "run traffic_gen_tx at x={},y={}", tx_phys_core.back().x, tx_phys_core.back().y);
             auto kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp",
@@ -229,10 +250,12 @@ int main(int argc, char **argv) {
                     src_endpoint_start_id + i, // 15: src_endpoint_start_id
                     dest_endpoint_start_id + i, // 16: dest_endpoint_start_id
                     timeout_mcycles * 1000 * 1000, // 17: timeout_cycles
-                    rx_disable_header_check // 18: disable_header_check
+                    rx_disable_header_check, // 18: disable_header_check
+                    input_scratch_buffers.at("traffic_gen_rx")[i], // 19: traffic_gen_input_ptrs_addr
+                    output_scratch_buffers.at("vc_packet_router_r")[i], // 20: traffic_gen_input_remote_ptrs_addr
                 };
 
-            log_info(LogTest, "run traffic_gen_rx at x={},y={}", core.x, core.y);
+            log_info(LogTest, "run traffic_gen_rx at x={},y={}", rx_phys_core.back().x, rx_phys_core.back().y);
             auto kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp",
@@ -302,10 +325,30 @@ int main(int argc, char **argv) {
                 test_results_addr, // 22: test_results_addr
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000, // 24: timeout_cycles,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 // 25-35: packetize/depacketize settings
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 25-35: packetize/depacketize settings
+
+                input_scratch_buffers.at("vc_packet_router_l")[0], // 36: vc_packet_router_input_ptr_buffers[0]
+                input_scratch_buffers.at("vc_packet_router_l")[1], // 37: vc_packet_router_input_ptr_buffers[1]
+                input_scratch_buffers.at("vc_packet_router_l")[2], // 38: vc_packet_router_input_ptr_buffers[2]
+                input_scratch_buffers.at("vc_packet_router_l")[3], // 39: vc_packet_router_input_ptr_buffers[3]
+
+                output_scratch_buffers.at("traffic_gen_tx")[0], // 40: vc_packet_router_input_remote_ptr_buffers[0]
+                output_scratch_buffers.at("traffic_gen_tx")[1], // 41: vc_packet_router_input_remote_ptr_buffers[1]
+                output_scratch_buffers.at("traffic_gen_tx")[2], // 42: vc_packet_router_input_remote_ptr_buffers[2]
+                output_scratch_buffers.at("traffic_gen_tx")[3], // 43: vc_packet_router_input_remote_ptr_buffers[3]
+
+                output_scratch_buffers.at("vc_packet_router_l")[0], // 44: vc_packet_router_output_ptr_buffers[0]
+                output_scratch_buffers.at("vc_packet_router_l")[1], // 45: vc_packet_router_output_ptr_buffers[1]
+                output_scratch_buffers.at("vc_packet_router_l")[2], // 46: vc_packet_router_output_ptr_buffers[2]
+                output_scratch_buffers.at("vc_packet_router_l")[3], // 47: vc_packet_router_output_ptr_buffers[3]
+
+                input_scratch_buffers.at("vc_packet_router_r")[0], // 48: vc_packet_router_output_remote_ptr_buffers[0]
+                input_scratch_buffers.at("vc_packet_router_r")[1], // 49: vc_packet_router_output_remote_ptr_buffers[1]
+                input_scratch_buffers.at("vc_packet_router_r")[2], // 50: vc_packet_router_output_remote_ptr_buffers[2]
+                input_scratch_buffers.at("vc_packet_router_r")[3], // 51: vc_packet_router_output_remote_ptr_buffers[3]
             };
 
-        log_info(LogTest, "run mux at x={},y={}", mux_core.x, mux_core.y);
+        log_info(LogTest, "run mux at x={},y={}", mux_phys_core.x, mux_phys_core.y);
         auto mux_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",
@@ -350,10 +393,6 @@ int main(int argc, char **argv) {
                 (rx_queue_size_bytes >> 4), // 13: remote_tx_queue_size_words 2
                 (rx_queue_start_addr >> 4), // 14: remote_tx_queue_start_addr_words 3
                 (rx_queue_size_bytes >> 4), // 15: remote_tx_queue_size_words 3
-                //(uint32_t)mux_phys_core.x, // 16: remote_rx_x
-                //(uint32_t)mux_phys_core.y, // 17: remote_rx_y
-                //num_dest_endpoints, // 18: remote_rx_queue_id
-                //(uint32_t)DispatchRemoteNetworkType::NOC0, // 19: tx_network_type
                 packet_switch_4B_pack(mux_phys_core.x,
                                       mux_phys_core.y,
                                       num_dest_endpoints,
@@ -375,11 +414,31 @@ int main(int argc, char **argv) {
                 test_results_addr, // 22: test_results_addr
                 test_results_size, // 23: test_results_size
                 timeout_mcycles * 1000 * 1000, // 24: timeout_cycles
-                0, 0, 0, 0, 0, // 25-29: depacketize settings
-                0, 0, 0, 0, 0, 0// 30-35: packetize settings
+                0, 0, 0, 0, 0, // 25 - 29: depacketize settings
+                0, 0, 0, 0, 0, 0, // 30 - 35: packetize settings
+
+                input_scratch_buffers.at("vc_packet_router_r")[0], // 36: vc_packet_router_input_ptr_buffers[0]
+                input_scratch_buffers.at("vc_packet_router_r")[1], // 37: vc_packet_router_input_ptr_buffers[1]
+                input_scratch_buffers.at("vc_packet_router_r")[2], // 38: vc_packet_router_input_ptr_buffers[2]
+                input_scratch_buffers.at("vc_packet_router_r")[3], // 39: vc_packet_router_input_ptr_buffers[3]
+
+                output_scratch_buffers.at("vc_packet_router_l")[0], // 40: vc_packet_router_input_remote_ptr_buffers[0]
+                output_scratch_buffers.at("vc_packet_router_l")[1], // 41: vc_packet_router_input_remote_ptr_buffers[1]
+                output_scratch_buffers.at("vc_packet_router_l")[2], // 42: vc_packet_router_input_remote_ptr_buffers[2]
+                output_scratch_buffers.at("vc_packet_router_l")[3], // 43: vc_packet_router_input_remote_ptr_buffers[3]
+
+                output_scratch_buffers.at("vc_packet_router_r")[0], // 44: vc_packet_router_output_ptr_buffers[0]
+                output_scratch_buffers.at("vc_packet_router_r")[1], // 45: vc_packet_router_output_ptr_buffers[1]
+                output_scratch_buffers.at("vc_packet_router_r")[2], // 46: vc_packet_router_output_ptr_buffers[2]
+                output_scratch_buffers.at("vc_packet_router_r")[3], // 47: vc_packet_router_output_ptr_buffers[3]
+
+                input_scratch_buffers.at("traffic_gen_rx")[0], // 48: vc_packet_router_output_remote_ptr_buffers[0]
+                input_scratch_buffers.at("traffic_gen_rx")[1], // 49: vc_packet_router_output_remote_ptr_buffers[1]
+                input_scratch_buffers.at("traffic_gen_rx")[2], // 50: vc_packet_router_output_remote_ptr_buffers[2]
+                input_scratch_buffers.at("traffic_gen_rx")[3], // 51: vc_packet_router_output_remote_ptr_buffers[3]
             };
 
-        log_info(LogTest, "run demux at x={},y={}", demux_core.x, demux_core.y);
+        log_info(LogTest, "run demux at x={},y={}", demux_phys_core.x, demux_phys_core.y);
         auto demux_kernel = tt_metal::CreateKernel(
             program,
             "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",
@@ -401,8 +460,8 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        vector<vector<uint32_t>> tx_results;
-        vector<vector<uint32_t>> rx_results;
+        std::vector<std::vector<uint32_t>> tx_results;
+        std::vector<std::vector<uint32_t>> rx_results;
 
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             tx_results.push_back(
@@ -420,13 +479,13 @@ int main(int argc, char **argv) {
             pass &= (rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
         }
 
-        vector<uint32_t> mux_results =
+        std::vector<uint32_t> mux_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), mux_phys_core, test_results_addr, test_results_size);
         log_info(LogTest, "MUX status = {}", packet_queue_test_status_to_string(mux_results[PQ_TEST_STATUS_INDEX]));
         pass &= (mux_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
 
-        vector<uint32_t> demux_results =
+        std::vector<uint32_t> demux_results =
             tt::llrt::read_hex_vec_from_core(
                 device->id(), demux_phys_core, test_results_addr, test_results_size);
         log_info(LogTest, "DEMUX status = {}", packet_queue_test_status_to_string(demux_results[PQ_TEST_STATUS_INDEX]));

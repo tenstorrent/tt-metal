@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "demux.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "eth_tunneler.hpp"
 
 #include "tt_metal/host_api.hpp"
@@ -11,12 +12,14 @@
 using namespace tt::tt_metal;
 
 void DemuxKernel::GenerateStaticConfigs() {
+    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    const auto ptr_base_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PACKET_QUEUE_PTRS);
     uint16_t channel =
         tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio
     logical_core_ = dispatch_core_manager::instance().demux_core(servicing_device_id_, channel, placement_cq_id_);
     static_config_.endpoint_id_start_index = 0xD1;
-    static_config_.rx_queue_start_addr_words =
-        hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
+    static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     static_config_.rx_queue_size_words = 0x10000 >> 4;
     static_config_.demux_fan_out = downstream_kernels_.size();
 
@@ -25,6 +28,12 @@ void DemuxKernel::GenerateStaticConfigs() {
     static_config_.test_results_buf_addr_arg = 0;
     static_config_.test_results_buf_size_bytes = 0;
     static_config_.timeout_cycles = 0;
+    static_config_.demux_input_ptr_buffer = get_ptr_addr(ptr_base_addr, 0);
+
+    for (int idx = 0; idx < static_config_.demux_fan_out.value(); idx++) {
+        // output queue id is idx + 1. (+1 because the input queue)
+        static_config_.demux_output_ptr_buffers[idx] = get_ptr_addr(ptr_base_addr, idx + 1);
+    }
 
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
         FDKernel* k = downstream_kernels_[idx];
@@ -41,18 +50,27 @@ void DemuxKernel::GenerateDependentConfigs() {
     // Upstream, expect EthTunneler or DEMUX
     TT_ASSERT(upstream_kernels_.size() == 1);
     if (auto us = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0])) {
+        const auto tunnel_lanes = us->GetStaticConfig().vc_count.value();
+        const auto remote_queue_id = tunnel_lanes * 2 - 1;
+        // vc eth tunneler output queue ids are offset by tunnel_lanes (vc_count)
         dependent_config_.remote_rx_x = us->GetVirtualCore().x;
         dependent_config_.remote_rx_y = us->GetVirtualCore().y;
-        dependent_config_.remote_rx_queue_id = us->GetStaticConfig().vc_count.value() * 2 - 1;
+        dependent_config_.remote_rx_queue_id = remote_queue_id;
+        dependent_config_.demux_input_remote_ptr_buffer =
+            us->GetStaticConfig().vc_eth_tunneler_output_ptr_buffers[remote_queue_id - tunnel_lanes].value();
     } else if (auto us = dynamic_cast<DemuxKernel*>(upstream_kernels_[0])) {
+        // demux output queue ids are +1 because input queue id is 0
+        const auto remote_queue_id = us->GetDownstreamPort(this) + 1;
         dependent_config_.remote_rx_x = us->GetVirtualCore().x;
         dependent_config_.remote_rx_y = us->GetVirtualCore().y;
-        dependent_config_.remote_rx_queue_id = us->GetDownstreamPort(this) + 1;  // TODO: can this be cleaned up?
+        dependent_config_.remote_rx_queue_id = remote_queue_id;  // TODO: can this be cleaned up?
         // TODO: why is just this one different? Just match previous implementation for now
         if (us->GetDownstreamPort(this) == 1) {
             static_config_.endpoint_id_start_index =
                 static_config_.endpoint_id_start_index.value() + downstream_kernels_.size();
         }
+        dependent_config_.demux_input_remote_ptr_buffer =
+            us->GetStaticConfig().demux_output_ptr_buffers[remote_queue_id - 1].value();
     } else {
         TT_FATAL(false, "Unexpected kernel type upstream of DEMUX");
     }
@@ -81,6 +99,7 @@ void DemuxKernel::GenerateDependentConfigs() {
             uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
+            dependent_config_.demux_output_remote_ptr_buffers[idx] = 0;
         } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(k)) {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 demux_kernel->GetStaticConfig().rx_queue_start_addr_words.value();
@@ -96,6 +115,8 @@ void DemuxKernel::GenerateDependentConfigs() {
             }
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
+            dependent_config_.demux_output_remote_ptr_buffers[idx] =
+                demux_kernel->GetStaticConfig().demux_input_ptr_buffer.value();
         } else {
             TT_FATAL(false, "Unexpected kernel type downstream of DEMUX");
         }
@@ -133,8 +154,20 @@ void DemuxKernel::CreateKernel() {
         0,
         0,
         0,
-        0  // Populate output_depacketize_config after
+        0,  // Populate output_depacketize_config after
+        static_config_.demux_input_ptr_buffer.value(),
+        dependent_config_.demux_input_remote_ptr_buffer.value(),
+        // Static checks in the kernel will make sure these are non zero if they are used
+        static_config_.demux_output_ptr_buffers[0].value_or(0),
+        static_config_.demux_output_ptr_buffers[1].value_or(0),
+        static_config_.demux_output_ptr_buffers[2].value_or(0),
+        static_config_.demux_output_ptr_buffers[3].value_or(0),
+        dependent_config_.demux_output_remote_ptr_buffers[0].value_or(0),
+        dependent_config_.demux_output_remote_ptr_buffers[1].value_or(0),
+        dependent_config_.demux_output_remote_ptr_buffers[2].value_or(0),
+        dependent_config_.demux_output_remote_ptr_buffers[3].value_or(0),
     };
+
     for (int idx = 0; idx < MAX_SWITCH_FAN_OUT; idx++) {
         if (dependent_config_.remote_tx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_tx_x[idx].value() & 0xFF);
@@ -158,7 +191,7 @@ void DemuxKernel::CreateKernel() {
             }
         }
     }
-    TT_ASSERT(compile_args.size() == 30);
+    TT_ASSERT(compile_args.size() == 40);
     const auto& grid_size = device_->grid_size();
     tt_cxy_pair my_virtual_core =
         tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());

@@ -13,6 +13,8 @@ typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> kernel_status_buf_addr_arg;
     std::optional<uint32_t> kernel_status_buf_size_bytes;
     std::optional<uint32_t> timeout_cycles;
+    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> vc_eth_tunneler_input_ptr_buffers;
+    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> vc_eth_tunneler_output_ptr_buffers;
 } eth_tunneler_static_config_t;
 
 typedef struct eth_tunneler_dependent_config {
@@ -28,6 +30,10 @@ typedef struct eth_tunneler_dependent_config {
     std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES> remote_sender_network_type;    // [34:43], dependent
 
     std::optional<uint32_t> inner_stop_mux_d_bypass;  // Dependent
+    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES>
+        vc_eth_tunneler_input_remote_ptr_buffers;  // [58:67], dependent
+    std::array<std::optional<uint32_t>, MAX_TUNNEL_LANES>
+        vc_eth_tunneler_output_remote_ptr_buffers;  // [78:87], dependent
 } eth_tunneler_dependent_config_t;
 
 class EthTunnelerKernel : public FDKernel {

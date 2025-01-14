@@ -14,12 +14,14 @@ typedef struct eth_router_static_config {
     std::optional<uint32_t> kernel_status_buf_size_bytes;
     std::optional<uint32_t> timeout_cycles;
 
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_log_page_size;  // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_local_sem;      // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_remove_header;  // [26:29]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;                    // [30:33]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size;      // [30:33]
-    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;          // [30:33]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_log_page_size;     // [26:29]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_local_sem;         // [26:29]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> output_depacketize_remove_header;     // [26:29]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize;                       // [30:33]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_log_page_size;         // [30:33]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_local_sem;             // [30:33]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> vc_packet_router_input_ptr_buffers;    // [36:39]
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT> vc_packet_router_output_ptr_buffers;  // [44:47]
 } eth_router_static_config_t;
 
 typedef struct eth_router_dependent_config {
@@ -39,6 +41,10 @@ typedef struct eth_router_dependent_config {
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_upstream_sem;        // [30:33], dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_src_endpoint;        // Dependent
     std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN> input_packetize_dst_endpoint;        // Dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_IN>
+        vc_packet_router_input_remote_ptr_buffers;  // [40:43], dependent
+    std::array<std::optional<uint32_t>, MAX_SWITCH_FAN_OUT>
+        vc_packet_router_output_remote_ptr_buffers;  // [48:51], dependent
 } eth_router_dependent_config_t;
 
 class EthRouterKernel : public FDKernel {
