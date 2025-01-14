@@ -49,7 +49,6 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       LOGURU_LEVEL: INFO
-      ARCH_NAME: ${{ inputs.arch }}
     runs-on:
       - ${{ inputs.runner-label }}
       - in-service
@@ -71,6 +70,8 @@ jobs:
         with:
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
