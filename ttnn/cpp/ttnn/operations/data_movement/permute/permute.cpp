@@ -39,18 +39,7 @@ ttnn::Tensor permute_impl(
     };
 
     if (rank > 4) {
-        if (a.get_layout() == Layout::TILE &&
-            ((dims[rank - 1] == rank - 1) || (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))) {
-            return prim_permute(a);
-        }
-        auto input = a.get_layout() == Layout::TILE
-                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr)
-                         : a;
-        TT_FATAL(
-            !(pad_value.has_value() && pad_value.value() != 0.0f),
-            "Non-zero padding is not supported for permute on tensors with rank > 4.");
-        input = prim_permute(input);
-        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+        return prim_permute(a);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
