@@ -301,7 +301,7 @@ def run_test_sdpa_decode_single_device(
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
@@ -586,7 +586,7 @@ def run_test_sdpa_decode_single_device_priority_tensor(
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
     shard_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (padded_num_heads, d), ttnn.ShardOrientation.ROW_MAJOR)
 
     height_sharded_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
