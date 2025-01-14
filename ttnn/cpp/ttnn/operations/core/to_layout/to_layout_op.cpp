@@ -123,11 +123,6 @@ Tensor to_layout_impl(
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
-                    // if (shard_shape[0] % ttnn::TILE_SIZE != 0 or shard_shape[1] % ttnn::TILE_SIZE != 0) {
-                    //     TT_THROW(
-                    //         "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
-                    //         "TILE_SIZE!");
-                    // }
                 }
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
@@ -149,12 +144,8 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
             }
 
-            tensor = ttnn::untilize_with_unpadding(
-                tensor,
-                // tt::tt_metal::LegacyShape(output_tensor_end.view()),
-                output_tensor_end,
-                output_memory_config,
-                use_multicore_untilize);
+            tensor =
+                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
