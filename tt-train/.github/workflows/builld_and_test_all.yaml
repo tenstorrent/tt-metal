@@ -18,11 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-          lfs: true
-
-      - name: LFS pull
-        run: |
-          git submodule foreach --recursive git lfs pull
+          lfs: false
 
       # actions/checkout runs `git clean -ffdx && git reset --hard HEAD` before fetching
       # but `build`, `build_Release`, `built` (contains compiled kernels) dirs are not removed because they are in .gitignore
