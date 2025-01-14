@@ -255,7 +255,6 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     std::unordered_map<CoreCoord, ttnn::ccl::tensor_address_runtime_args_overrider> writer_rt_args_overrider_map;
 
     for (std::size_t link = 0; link < num_links; link++) {
-        // CoreCoord core = {num_workers_per_link - 1, link};
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core

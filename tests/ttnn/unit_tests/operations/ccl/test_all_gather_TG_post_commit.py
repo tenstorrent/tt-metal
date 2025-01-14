@@ -255,9 +255,8 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 )
 
             if enable_persistent_fabric:
-                logger.info(f"Waiting for op")
                 ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
-                logger.info(f"Done iteration")
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")

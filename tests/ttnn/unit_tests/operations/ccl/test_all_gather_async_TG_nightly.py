@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ def test_line_all_gather_sharded_on_TG_rows_post_commit(
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and per_chip_output_shape == (1, 1, 32, 1024 * 4):
-        pytest.skip("Skiped due to hang Issue #16699")
+        pytest.skip("Skipped due to hang Issue #16699")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
@@ -224,7 +224,7 @@ def test_line_all_gather_sharded_on_TG_cols_post_commit(
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
     if input_dtype == ttnn.bfloat16 and input_shape == (1, 1, 256, 2048):
-        pytest.skip("Skiped due to hang Issue #16699")
+        pytest.skip("Skipped due to hang Issue #16699")
     input_shard_spec = ttnn.ShardSpec(
         shard_grid,
         input_shard_shape,
