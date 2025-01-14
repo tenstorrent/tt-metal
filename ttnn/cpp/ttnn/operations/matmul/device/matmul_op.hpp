@@ -21,6 +21,10 @@ namespace operations {
 
 namespace matmul {
 
+using DeviceGlobalCircularBuffer = std::variant<
+    tt::tt_metal::v1::experimental::GlobalCircularBuffer,
+    ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>;
+
 using ttnn::operations::unary::UnaryWithParam;
 
 /*
@@ -181,8 +185,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
-    std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_global_cb;
+    const std::optional<const DeviceGlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

@@ -346,9 +346,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
-               const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>&
-                   multi_global_cb) -> ttnn::Tensor {
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -362,8 +360,7 @@ void py_module(py::module& module) {
                     core_grid,
                     output_tile,
                     optional_output_tensor,
-                    global_cb,
-                    multi_global_cb);
+                    global_cb);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -379,7 +376,6 @@ void py_module(py::module& module) {
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("global_cb") = std::nullopt,
-            py::arg("multi_global_cb") = std::nullopt,
         });
 
     bind_registered_operation(
@@ -434,9 +430,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
-               const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>&
-                   multi_global_cb) -> ttnn::Tensor {
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -451,8 +445,7 @@ void py_module(py::module& module) {
                     core_grid,
                     output_tile,
                     optional_output_tensor,
-                    global_cb,
-                    multi_global_cb);
+                    global_cb);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -469,7 +462,6 @@ void py_module(py::module& module) {
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("global_cb") = std::nullopt,
-            py::arg("multi_global_cb") = std::nullopt,
         });
 }
 
