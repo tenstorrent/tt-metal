@@ -26,7 +26,7 @@ extern void kernel_init(uint32_t kernel_init);
 extern void kernel_launch(uint32_t kernel_base_addr);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
-#define STREAM_CHANNEL 6
+#define STREAM_CHANNEL 31
 #define RUN_ALL_TRISCS 7
 #define RUN_NCRISC 8
 #define RUN_ALL 15
