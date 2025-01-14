@@ -20,7 +20,7 @@ jobs:
           #{type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
           {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
         ]
-        arch: [grayskull, wormhole_b0, blackhole]
+        arch: [any]
     env:
       ARCH_NAME: ${{ matrix.arch }}
       # So we can get all the makefile output we want
