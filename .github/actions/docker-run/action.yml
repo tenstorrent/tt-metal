@@ -84,7 +84,6 @@ runs:
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
-          -e ARCH_NAME=${{ env.ARCH_NAME }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
           -e PYTHONPATH=${{ github.workspace }}
           -e HOME=${{ github.workspace }}
