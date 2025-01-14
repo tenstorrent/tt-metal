@@ -14,7 +14,7 @@ namespace operations::reduction {
 
 ttnn::SmallVector<int> generate_reduce_dim(
     const Tensor& input_tensor_arg, const std::optional<std::variant<int, ttnn::SmallVector<int>>>& dim_arg) {
-    auto input_shape = input_tensor_arg.get_shape();
+    auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     ttnn::SmallVector<int> dim{};
     if (dim_arg.has_value()) {
@@ -59,7 +59,7 @@ static Tensor reduce_impl(
     float scalar,
     bool reshape) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_shape = input_tensor_arg.get_shape();
+    auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 
@@ -205,7 +205,7 @@ static Tensor std_var_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    auto input_shape = input_tensor_arg.get_shape();
+    auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
 

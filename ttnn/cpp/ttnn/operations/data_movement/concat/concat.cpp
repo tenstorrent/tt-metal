@@ -67,9 +67,9 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         },
         .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
             ttnn::Tensor res = output;
-            while (res.get_shape().rank() > input_rank) {
-                const auto shape = res.get_shape();
-                const auto full_shape = res.get_shape().with_tile_padding();
+            while (res.get_logical_shape().rank() > input_rank) {
+                const auto shape = res.get_logical_shape();
+                const auto full_shape = res.get_padded_shape();
                 SmallVector<uint32_t> shape_vec{};
                 SmallVector<uint32_t> full_shape_vec{};
                 for (int i = 1; i < shape.rank(); i++) {

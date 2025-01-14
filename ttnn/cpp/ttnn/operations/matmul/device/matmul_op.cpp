@@ -105,9 +105,9 @@ operation::OpPerformanceModel create_op_performance_model_for_matmul(
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<Tensor>& output_tensors,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
-    const auto& in_a_shape = input_tensors.at(0).get_shape();
-    const auto& in_b_shape = input_tensors.at(1).get_shape();
-    const auto& out_shape = output_tensors.at(0).get_shape();
+    const auto& in_a_shape = input_tensors.at(0).get_logical_shape();
+    const auto& in_b_shape = input_tensors.at(1).get_logical_shape();
+    const auto& out_shape = output_tensors.at(0).get_logical_shape();
 
     const auto& t = output_tensors.at(0);
     if (t.storage_type() != StorageType::DEVICE) {
@@ -347,10 +347,8 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const TensorMemoryLayout input_layout_a,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
-    auto input_shape_a = input_tensor_a.get_shape();
-    auto input_shape_b = input_tensor_b.get_shape();
-    auto a_padded_shape = input_shape_a.padded_shape();
-    auto b_padded_shape = input_shape_b.padded_shape();
+    const auto& a_padded_shape = input_tensor_a.get_padded_shape();
+    const auto& b_padded_shape = input_tensor_b.get_padded_shape();
     auto k_size = a_padded_shape[-1];
     auto m_size = a_padded_shape[-2];
     auto n_size = b_padded_shape[-1];
@@ -638,10 +636,10 @@ MatmulProgramConfig create_matmul_program_config(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const MemoryConfig& mem_config,
     const tt::tt_metal::DataType output_dtype) {
-    auto a_shape = input_tensor_a.get_shape();
-    auto b_shape = input_tensor_b.get_shape();
-    auto a_padded_shape = a_shape.with_tile_padding();
-    auto b_padded_shape = b_shape.with_tile_padding();
+    const auto& a_shape = input_tensor_a.get_logical_shape();
+    const auto& b_shape = input_tensor_b.get_logical_shape();
+    const auto& a_padded_shape = input_tensor_a.get_padded_shape();
+    const auto& b_padded_shape = input_tensor_b.get_padded_shape();
     auto a_layout = input_tensor_a.memory_config().memory_layout;
     auto inteneded_k_size_of_a = a_shape[-1];
     auto inteneded_k_size_of_b = b_shape[-2];
@@ -1336,8 +1334,9 @@ void Matmul::validate(
     TT_FATAL(input_tensors.size() == 2, "Error");
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto& a_shape = input_tensor_a.get_shape();
-    const auto& b_shape = input_tensor_b.get_shape();
+    const auto& a_shape = input_tensor_a.get_logical_shape();
+    const auto& b_shape = input_tensor_b.get_logical_shape();
+    const auto& b_shape_aligned = input_tensor_b.get_padded_shape();
     auto in0_tile_shape = input_tensor_a.get_tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = input_tensor_b.get_tensor_spec().tile().get_tile_shape();
 
@@ -1423,20 +1422,21 @@ void Matmul::validate(
             (bias_tile_shape[0] == in0_tile_shape[0] && bias_tile_shape[1] == in1_tile_shape[1]),
             "Input tile dims must have inner dim equal to 32 due to llk constraints");
         TT_FATAL(bias.get_layout() == Layout::TILE, "Unsupported input layout");
-        const auto& bias_shape = bias.get_shape();
+        const auto& bias_shape = bias.get_logical_shape();
+        const auto& bias_shape_aligned = bias.get_padded_shape();
         uint32_t bias_batch_size = get_batch_size(bias_shape);
         TT_FATAL(bias_batch_size == 1, "Unsupported bias shape: batch size not equal to 1.");
         TT_FATAL(
-            bias_shape.with_tile_padding()[-2] == in0_tile_shape[0],
+            bias_shape_aligned[-2] == in0_tile_shape[0],
             "Unsupported bias shape: padded second last dimension of bias, {}, not equal to tile height, {}",
-            bias_shape.with_tile_padding()[-2],
+            bias_shape_aligned[-2],
             in0_tile_shape[0]);
         TT_FATAL(
-            bias_shape.with_tile_padding()[-1] == b_shape.with_tile_padding()[-1],
+            bias_shape_aligned[-1] == b_shape_aligned[-1],
             "Unsupported bias shape: padded last dimension of bias, {}, not equal to second input's padded last "
             "dimension, {}.",
-            bias_shape.with_tile_padding()[-1],
-            b_shape.with_tile_padding()[-1]);
+            bias_shape_aligned[-1],
+            b_shape_aligned[-1]);
         TT_FATAL(
             bias_shape[-1] >= b_shape[-1],
             "Unsupported bias shape: last dimension of bias, {}, not equal to or greater than second input's last "
