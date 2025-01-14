@@ -35,8 +35,8 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
-    WeightTyingType weight_tying = WeightTyingType::Disabled;
     RunnerType runner_type = RunnerType::Default;
+    WeightTyingType weight_tying = WeightTyingType::Disabled;
     PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
 
     struct Experimental {
