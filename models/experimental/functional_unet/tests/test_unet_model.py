@@ -11,7 +11,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
-from models.experimental.functional_unet.tests.common import check_pcc_conv, UNET_FULL_MODEL_PCC
+from models.experimental.functional_unet.tests.common import verify_with_pcc, UNET_FULL_MODEL_PCC
 
 
 @pytest.mark.parametrize("batch", [1])
@@ -27,4 +27,6 @@ def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
     torch_output_tensor = model(torch_input)
     output_tensor = ttnn_model(ttnn_input)
 
-    check_pcc_conv(torch_output_tensor, output_tensor, UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(output_tensor).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)

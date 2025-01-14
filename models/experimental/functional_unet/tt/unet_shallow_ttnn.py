@@ -402,7 +402,12 @@ class UNet:
         )
 
         self.output_layer = UNetConv2D(
-            parameters.output_layer, device=device, cache=self.conv_cache, activation="", mesh_mapper=mesh_mapper
+            parameters.output_layer,
+            device=device,
+            cache=self.conv_cache,
+            activation="",
+            mesh_mapper=mesh_mapper,
+            activation_dtype=ttnn.bfloat16,
         )
 
         self.parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
@@ -438,12 +443,18 @@ class UNet:
 
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
-        return ttnn.to_layout(
-            ttnn.reshape(
-                x, shape=ttnn.Shape([1, 1, x.shape[2], 16], [1, 1, x.shape[2], 32])
-            ),  # At the moment we can only reduce the padding from 32 to 16 because reshape is broken.
-            ttnn.ROW_MAJOR_LAYOUT,
+        assert x.is_sharded(), "Expected output tensor to be sharded"
+        input_shard_spec = x.memory_config().shard_spec
+        output_shard_shape = (x.shape[-1], input_shard_spec.shape[0])
+        output_shard_spec = ttnn.ShardSpec(
+            input_shard_spec.grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config)
 
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
