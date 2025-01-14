@@ -82,7 +82,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     DataType output_dtype =
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
-        uint32_t fused_height = output_shape.volume() / output_shape[-1];
+        uint32_t fused_height = input_tensor_a.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
