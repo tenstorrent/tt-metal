@@ -7,13 +7,10 @@ These instructions will guide you through the installation of Tenstorrent system
 > If you are using a release version of this software, check installation instructions packaged with it.
 > You can find them in either the release assets for that version, or in the source files for that [version tag](https://github.com/tenstorrent/tt-metal/tags).
 
----
-
 ## Prerequisites:
 
-### 1: [Setup the Hardware](https://docs.tenstorrent.com/quickstart.html#unboxing-and-hardware-setup)
-
-Once you have setup the hardware move on to step 2.
+### 1: Set Up the Hardware
+- Follow the intructions for the Tenstorrent device you are using at: [Hardware Setup](https://docs.tenstorrent.com/quickstart.html#unboxing-and-hardware-setup)
 
 ---
 
@@ -131,25 +128,28 @@ Once hardware and system software are installed, verify that the system has been
 
 ---
 
-## TT-Metalium Installation
+### TT-Metalium Installation
 
 #### There are three options for installing TT-Metalium:
 
 - [Option 1: From Source](#option-1-from-source)
+
   Installing from source gets developers closer to the metal and the source code.
 
 - [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+  
   Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
 
 - [Option 3: From Wheel](#option-3-from-wheel)
+  
   Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
 
 --- 
 
-## Option 1: From Source
+### Option 1: From Source
 Install from source if you are a developer who wants to be close to the metal or the source code.
 
-### Step 1. Clone the Repository:
+#### Step 1. Clone the Repository:
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
@@ -157,21 +157,11 @@ cd tt-metal
 git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-### Step 2. Setup Environment Variables and Invoke our Build Scripts:
-- Run the appropriate command for the Tenstorrent card you have installed:
+#### Step 2. Invoke our Build Scripts:
 
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-- Then run: 
-  ```
-  export TT_METAL_HOME=$(pwd)
-  export PYTHONPATH=$(pwd)
-  ./build_metal.sh
-  ```
+```
+./build_metal.sh
+```
 
 - (recommended) For an out-of-the-box virtual environment to use, execute:
 ```
@@ -191,7 +181,7 @@ source python_env/bin/activate
 
 ---
 
-## Option 2: From Docker Release Image
+### Option 2: From Docker Release Image
 Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
 
 - Download the Latest Docker Release Image by running the command for the Tenstorrent card architecture you have installed:
@@ -213,10 +203,10 @@ Installing from Docker Release Image is the quickest way to access our APIs and 
 
 ---
 
-## Option 3: From Wheel
+### Option 3: From Wheel
 Instal from wheel for quick access to our APIs and to get an AI model running
 
-### Step 1. Download and Install the Latest Wheel:
+#### Step 1. Download and Install the Latest Wheel:
 
 - Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed. 
 
@@ -226,7 +216,7 @@ Instal from wheel for quick access to our APIs and to get an AI model running
   pip install <wheel_file.whl>
   ```
 
-### Step 2. (For models users only) Set Up Environment for Models:
+#### Step 2. (For models users only) Set Up Environment for Models:
 
 To try our pre-built models in `models/`, you must:
 
@@ -242,17 +232,36 @@ To try our pre-built models in `models/`, you must:
   sudo cpupower frequency-set -g performance
   ```
 
-#### You are All Set!
+---
 
-- To verify your installation, try executing an example:
+### You are All Set!
 
+#### To verify your installation, try executing a programming example:
+
+- First, set the following environment variables:
+
+  - Run the appropriate command for the Tenstorrent card you have installed:
+  
+  | Card             | Command                              |
+  |------------------|--------------------------------------|
+  | Grayskull        | ```export ARCH_NAME=grayskull```     |
+  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+  - Run: 
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ```
+
+- Then, try running a programming example:
   ```
   python3 -m ttnn.examples.usage.run_op_on_device
   ```
 
-- Visit Tenstorrent's [TT-NN Basic Examples page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html)
 
 ---
 
-## Interested in Contributing?
+### Interested in Contributing?
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
