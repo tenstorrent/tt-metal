@@ -12,6 +12,8 @@ namespace ttml::ops {
 autograd::TensorPtr linear_op(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias);
 
+autograd::TensorPtr linear_op_no_bias(const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight);
+
 void ttnn_linear_backward(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
@@ -23,6 +25,18 @@ void moreh_linear_backward(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
+    const autograd::TensorPtr& out,
+    const ttnn::WormholeComputeKernelConfig& config = ttml::core::ComputeKernelConfig::matmul());
+
+void ttnn_linear_backward(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& out,
+    const ttnn::WormholeComputeKernelConfig& config = ttml::core::ComputeKernelConfig::matmul());
+
+void moreh_linear_backward(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
     const autograd::TensorPtr& out,
     const ttnn::WormholeComputeKernelConfig& config = ttml::core::ComputeKernelConfig::matmul());
 

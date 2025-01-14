@@ -5,6 +5,7 @@
 #include "linear_op.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <optional>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
@@ -66,6 +67,30 @@ void ttnn_linear_backward(
     bias->add_grad(bias_grad);
 }
 
+void ttnn_linear_backward(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& out,
+    const ttnn::WormholeComputeKernelConfig& config) {
+    const auto& tensor_value = tensor->get_value();
+    auto volume_without_features = tensor_value.get_logical_volume() / tensor_value.get_shape()[-1];
+    auto reshaped_tensor =
+        ttnn::reshape(tensor_value, ttnn::Shape({volume_without_features, tensor_value.get_shape()[-1]}));
+
+    auto reshaped_grad =
+        ttnn::reshape(out->get_grad(), ttnn::Shape({volume_without_features, out->get_grad().get_shape()[-1]}));
+    auto reshaped_weight_grad =
+        matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false, config);
+    auto reshaped_tensor_grad =
+        matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false, config);
+
+    auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().get_shape());
+    auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.get_shape());
+
+    tensor->add_grad(tensor_grad);
+    weight->add_grad(weight_grad);
+}
+
 void moreh_linear_backward(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
@@ -104,6 +129,72 @@ void moreh_linear_backward(
         throw std::runtime_error("Bias gradient is not available");
     }
     bias->add_grad(res[2].value());
+}
+
+void moreh_linear_backward(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& out,
+    const ttnn::WormholeComputeKernelConfig& config) {
+    auto tensor_grad = ttnn::empty_like(tensor->get_value());
+    auto weight_grad = ttnn::empty_like(weight->get_value());
+
+    auto res = ttnn::moreh_linear_backward(
+        out->get_grad(),
+        tensor->get_value(),
+        weight->get_value(),
+        /* are required outputs */ std::vector<bool>{true, true, false},
+        std::nullopt,
+        tensor_grad,
+        weight_grad,
+        std::nullopt,
+        /* input_grad_mem_config */ std::nullopt,
+        /* weight_grad_mem_config */ std::nullopt,
+        /* bias_grad_mem_config */ std::nullopt,
+        /* compute_kernel_config */ config);
+
+    if (!res[0].has_value()) {
+        throw std::runtime_error("Tensor gradient is not available");
+    }
+    tensor->add_grad(res[0].value());
+
+    if (!res[1].has_value()) {
+        throw std::runtime_error("Weight gradient is not available");
+    }
+    weight->add_grad(res[1].value());
+}
+
+autograd::TensorPtr linear_op_no_bias(const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight) {
+    auto out = autograd::create_tensor();
+
+    out->set_value(ttnn::linear(
+        tensor->get_value(),
+        weight->get_value(),
+        std::nullopt,
+        /* transpose_a */ false,
+        /* tranpose_b */ true,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
+        /* core_grid */ ttnn::CoreGrid{7, 8}));
+
+    autograd::GradFunction grad = [weight, tensor, out]() {
+        auto tensor_shape = tensor->get_value().get_shape();
+        auto grad_shape = out->get_grad().get_shape();
+        // for some reason, reshape produces wrong values when last dimensions not divisible by TILE
+        if (tensor_shape[-2] % TILE_HEIGHT != 0 ||
+            tensor_shape[-1] % TILE_WIDTH != 0 && grad_shape[-1] % TILE_WIDTH != 0) {
+            moreh_linear_backward(tensor, weight, out);
+        } else {
+            ttnn_linear_backward(tensor, weight, out);
+        }
+    };
+
+    auto links = autograd::get_links(weight, tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
 }
 
 autograd::TensorPtr linear_op(
