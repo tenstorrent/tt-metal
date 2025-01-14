@@ -68,7 +68,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      arch: [any]
+      arch: '["any"]'
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
