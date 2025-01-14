@@ -1719,7 +1719,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
 
 # @skip_for_grayskull()
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
