@@ -659,7 +659,7 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
 )
 def test_slice_5d(input_shape, input_start, input_ends, input_stride, layout, device):
     if layout == ttnn.TILE_LAYOUT:
-        if input_stride is not (1, 1, 1, 1, 1):
+        if input_stride != (1, 1, 1, 1, 1):
             pytest.skip("Cannot untilize 5D tensor")
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
