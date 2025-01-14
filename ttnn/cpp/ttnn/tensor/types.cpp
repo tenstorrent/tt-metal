@@ -193,6 +193,9 @@ ttnn::SimpleShape LegacyShape::padded_shape() const {
 const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
+    if (normalized_index < 0 || normalized_index >= rank) {
+        TT_THROW("qq");
+    }
     TT_FATAL(
         normalized_index >= 0 and normalized_index < rank,
         "Index is out of bounds for the rank, should be between 0 and {} however is {}",
