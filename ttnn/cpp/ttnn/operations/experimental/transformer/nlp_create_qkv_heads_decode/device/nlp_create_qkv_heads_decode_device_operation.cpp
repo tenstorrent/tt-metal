@@ -53,6 +53,18 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
                 this->head_dim % input_tensor.shard_spec().value().shape[1] == 0,
                 "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
         }
+        TT_FATAL(
+            !(this->batch_offset.has_value() ^ this->slice_size.has_value()),
+            "Both batch_offset and slice_size must be provided or neither");
+        if (this->batch_offset.has_value() && this->slice_size.has_value()) {
+            TT_FATAL(this->batch_offset.value().get_shape()[0] == 1, "batch_offset must be unary tensor");
+            uint32_t device_batch_offset = static_cast<uint32_t>(this->batch_offset.value().to_vector<int32_t>()[0]);
+            TT_FATAL(
+                device_batch_offset + this->slice_size.value() <= num_users,
+                "Batch offset + slice size should be less than or equal to num_users");
+            num_users = this->slice_size.value();
+        }
+
     } else {
         TT_FATAL(this->overlap_qk_coregrid, "Overlap_qk_coregrid must be true for non-sharded input");
     }
@@ -63,8 +75,6 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
             this->output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
         "Output tensor must be height sharded");
 
-    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
-
     // Support maximum 32 heads for now
     TT_FATAL(this->num_q_heads <= 32, "There are {} q heads only 32 are supported", this->num_q_heads);
     TT_FATAL(
@@ -73,14 +83,23 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         this->num_q_heads,
         this->num_kv_heads);
 
-    uint32_t num_cores = core_grid.x * core_grid.y;
+    uint32_t num_cores;
+    if (this->input_on_subcoregrids) {
+        auto input_core_grid = input_tensor.shard_spec().value().grid;
+        num_cores = input_core_grid.num_cores();
+
+    } else {
+        auto core_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+        num_cores = core_grid_size.x * core_grid_size.y;
+    }
     // 1 User Per Core Max and 32 users for now
     if (this->overlap_qk_coregrid) {
         TT_FATAL(num_cores >= num_users, "Grid Size is {}. Need at least 32 cores for decode", num_cores);
     } else {
         TT_FATAL(
             num_cores >= 2 * num_users,
-            "Grid Size is {}. Need cores atleast double of num_users for decode when q and k heads are not overlapping "
+            "Input coregrid size is {}. Need cores atleast double of num_users for decode when q and k heads are not "
+            "overlapping "
             "coregrid",
             num_cores);
     }
@@ -93,6 +112,9 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     const auto input_shape = input_tensor.get_padded_shape();
 
     auto batch = input_tensor.get_shape()[2];
+    if (this->batch_offset.has_value() && this->slice_size.has_value()) {
+        batch = this->slice_size.value();
+    }
     auto head_dim = this->head_dim;
 
     const SimpleShape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});
@@ -164,6 +186,8 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
         this->head_dim,
         this->overlap_qk_coregrid,
         this->input_on_subcoregrids,
+        this->batch_offset,
+        this->slice_size,
         output_tensors,
         compute_with_storage_grid_size);
 }
