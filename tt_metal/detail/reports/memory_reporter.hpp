@@ -8,14 +8,20 @@
 #include <atomic>
 #include <fstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "tt_metal/impl/allocator/allocator.hpp"
+
 namespace tt::tt_metal {
 inline namespace v0 {
 
 class Program;
-class Device;
+class IDevice;
 
 }  // namespace v0
 namespace detail {
+struct MemoryView;
 
 /**
  * Enable generation of reports for memory allocation statistics.
@@ -56,9 +62,35 @@ void DisableMemoryReports();
  *
  * | Argument      | Description                                       | Type            | Valid Range | Required |
  * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
- * | device        | The device for which memory stats will be dumped. | const Device *  | | True     |
+ * | device        | The device for which memory stats will be dumped. | const IDevice*  | | True     |
  * */
-void DumpDeviceMemoryState(const Device* device, const std::string& prefix = "");
+void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix = "");
+
+/**
+ * Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.
+ *
+ * num_banks: total number of BufferType banks for given device
+ * total_bytes_per_bank: total allocatable size per bank of BufferType in bytes
+ * total_bytes_allocated_per_bank: currently allocated size per bank of BufferType in bytes
+ * total_bytes_free_per_bank: total free size per bank of BufferType in bytes
+ * largest_contiguous_bytes_free_per_bank: largest contiguous free block of BufferType in bytes
+ * block_table: list of all blocks in BufferType (blockID, address, size, prevID, nextID, allocated)
+ *
+ * | Argument      | Description                                       | Type            | Valid Range | Required |
+ * |---------------|---------------------------------------------------|-----------------|--------------------------------------------------------|----------|
+ * | device        | The device for which memory stats will be dumped. | const IDevice *  | | True     |
+ * | buffer_type   | The type of buffer to populate the memory view.   | const BufferType& | | True     |
+ * */
+MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type);
+
+struct MemoryView {
+    std::uint64_t num_banks = 0;
+    size_t total_bytes_per_bank = 0;
+    size_t total_bytes_allocated_per_bank = 0;
+    size_t total_bytes_free_per_bank = 0;
+    size_t largest_contiguous_bytes_free_per_bank = 0;
+    MemoryBlockTable block_table;
+};
 
 class MemoryReporter {
 public:
@@ -67,9 +99,11 @@ public:
     MemoryReporter(const MemoryReporter&) = delete;
     MemoryReporter(MemoryReporter&& other) noexcept = delete;
 
-    void flush_program_memory_usage(uint64_t program_id, const Device* device);
+    void flush_program_memory_usage(uint64_t program_id, const IDevice* device);
 
-    void dump_memory_usage_state(const Device* device, const std::string& prefix = "") const;
+    void dump_memory_usage_state(const IDevice* device, const std::string& prefix = "") const;
+
+    MemoryView get_memory_view(const IDevice* device, const BufferType& buffer_type) const;
 
     static void toggle(bool state);
     static MemoryReporter& inst();

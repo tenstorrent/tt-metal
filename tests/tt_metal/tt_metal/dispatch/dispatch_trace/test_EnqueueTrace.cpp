@@ -13,7 +13,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/dispatch/command_queue.hpp"
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/common/scoped_timer.hpp"
@@ -25,7 +25,7 @@ using namespace tt::tt_metal;
 
 Program create_simple_unary_program(Buffer& input, Buffer& output) {
     Program program = CreateProgram();
-    Device* device = input.device();
+    IDevice* device = input.device();
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
@@ -678,6 +678,7 @@ TEST_F(RandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
             kernel_properties.max_num_sems = MAX_NUM_SEMS / 2;
             this->create_kernel(program, CoreType::WORKER, false, kernel_properties);
         }
+        program.set_runtime_id(i);
 
         EnqueueProgram(this->device_->command_queue(), program, false);
     }

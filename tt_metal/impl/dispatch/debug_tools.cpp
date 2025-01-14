@@ -83,7 +83,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 }
 
 void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
-    const char* DISPATCH_MAP_DUMP, Device* device) {
+    const char* DISPATCH_MAP_DUMP, IDevice* device) {
     std::string device_dispatch_dump_file_name = "device_" + std::string(DISPATCH_MAP_DUMP);
     while (true) {
         std::ifstream device_dispatch_dump_file;
@@ -215,10 +215,10 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 break;
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
-                    " (packed_page_flags={:#02x}, length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
+                    " (start_page={:#02x}, is_dram_and_length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
                     "pages={:#010x})",
-                    val(cmd->relay_paged.packed_page_flags),
-                    val(cmd->relay_paged.length_adjust),
+                    val(cmd->relay_paged.start_page),
+                    val(cmd->relay_paged.is_dram_and_length_adjust),
                     val(cmd->relay_paged.base_addr),
                     val(cmd->relay_paged.page_size),
                     val(cmd->relay_paged.pages));

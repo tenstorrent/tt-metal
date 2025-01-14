@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 
 // #include "debug/dprint.h"
+// #include "debug/dprint_pages.h"
 
 // inline void print_cb_details(uint32_t cb_id) {
 //     DPRINT << "cb_id " << cb_id << ": { "
@@ -15,17 +16,6 @@
 //             << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
 //             << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
 //             << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
-// }
-
-// inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-//     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-//     for (uint32_t page = 0; page < npages; ++ page) {
-//         DPRINT << start + page << ": ";
-//         for (uint32_t j = 0; j < pagelen; ++ j, ++ ptr) {
-//             DPRINT << BF16(*ptr) << " ";
-//         }
-//         DPRINT << ENDL();
-//     }
 // }
 
 inline uint32_t generate_reader_pattern_indices(

@@ -35,9 +35,6 @@
 #include "umd/device/types/xy_pair.h"
 #include "umd/device/hugepage.h"
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
-
 #include "dev_msgs.h"
 
 #include "llrt/hal.hpp"
@@ -68,6 +65,10 @@ Cluster::Cluster() {
 
     this->detect_arch_and_target();
 
+    if (arch_ != ARCH::GRAYSKULL) {
+        routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
+    }
+
     this->generate_cluster_descriptor();
 
     this->initialize_device_drivers();
@@ -86,25 +87,6 @@ void Cluster::detect_arch_and_target() {
     this->target_type_ = (std::getenv("TT_METAL_SIMULATOR")) ? TargetDevice::Simulator : TargetDevice::Silicon;
 
     this->arch_ = tt_metal::get_platform_architecture();
-
-#ifdef ARCH_GRAYSKULL
-    TT_FATAL(
-        this->arch_ == tt::ARCH::GRAYSKULL,
-        "Arch={} doesn't match compile-time build for GRAYSKULL",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_WORMHOLE
-    TT_FATAL(
-        (this->arch_ == tt::ARCH::WORMHOLE_B0) || (this->arch_ == tt::ARCH::WORMHOLE),
-        "Arch={} doesn't match compile-time build for WORMHOLE",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_BLACKHOLE
-    TT_FATAL(
-        this->arch_ == tt::ARCH::BLACKHOLE,
-        "Arch={} doesn't match compile-time build for BLACKHOLE",
-        get_string(this->arch_));
-#endif
 
     TT_FATAL(
         this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
@@ -798,7 +780,6 @@ void Cluster::initialize_ethernet_sockets() {
 
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -973,18 +954,21 @@ std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
 }
 
 // TODO: ALLAN Can change to write one bit
-void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing) const {
+void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t> &target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
-    std::vector<chip_id_t> mmio_devices;
-    mmio_devices.reserve(this->devices_grouped_by_assoc_mmio_device_.size());
     std::vector<chip_id_t> non_mmio_devices;
-    for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
-        mmio_devices.emplace_back(assoc_mmio_device);
-        for (const auto &chip_id : devices) {
+    std::vector<chip_id_t> mmio_devices = target_mmio_devices;
+    if (mmio_devices.size() == 0) {
+        mmio_devices.reserve(tt::Cluster::instance().number_of_pci_devices());
+        for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
+            mmio_devices.emplace_back(assoc_mmio_device);
+        }
+    }
+    for (const auto &mmio_chip_id : mmio_devices) {
+        for (const auto &chip_id : this->devices_grouped_by_assoc_mmio_device_.at(mmio_chip_id)) {
             non_mmio_devices.emplace_back(chip_id);
         }
     }
@@ -1000,7 +984,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
                 write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
         for (const auto &chip_id : mmio_devices) {
@@ -1008,7 +992,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
                 write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
     } else {
@@ -1022,7 +1006,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
                 write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
         for (const auto &chip_id : non_mmio_devices) {
@@ -1030,7 +1014,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
                 write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
     }

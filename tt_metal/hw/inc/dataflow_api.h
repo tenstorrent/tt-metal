@@ -16,6 +16,7 @@
 
 #include "core_config.h"
 #include "circular_buffer.h"
+#include "dataflow_cmd_bufs.h"
 #include "debug/sanitize_noc.h"
 #include "debug/waypoint.h"
 #include "eth_l1_address_map.h"
@@ -47,32 +48,6 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];
-
-#if defined(KERNEL_BUILD)
-#if defined(COMPILE_FOR_BRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
-#elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
-#else  // use the default cmf buffers for compute/eth
-constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
-#endif
-#else  // FW build
-constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf = NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NCRISC_AT_CMD_BUF;
-#endif
 
 /** @file */
 
@@ -225,31 +200,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
-
-FORCE_INLINE
-constexpr static std::int32_t GET_TILE_SIZE(uint format) {
-    switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::Float16_b): return ((2048));
-        case ((uint8_t)DataFormat::Float16): return ((2048));
-
-        case ((uint8_t)DataFormat::UInt8): return ((1024));
-        case ((uint8_t)DataFormat::UInt16): return ((2048));
-
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b): return ((1024) + (64));
-
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::UInt32):
-        case ((uint8_t)DataFormat::Float32): return ((4096));
-
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((512) + (64));
-
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((256) + (64));
-        default: return ((1024) + (64));
-    };
-}
 
 template <uint32_t tile_hw = 1024>
 FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
@@ -669,8 +619,8 @@ uint64_t get_dram_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
-                    bank_to_dram_offset[bank_index];
+    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
+                    offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -684,8 +634,8 @@ uint64_t get_l1_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<false>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<false>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
-                    bank_to_dram_offset[bank_index];
+    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
+                    offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -1055,7 +1005,7 @@ template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size = align(page_size, ALLOCATOR_ALIGNMENT);
+    const uint32_t aligned_page_size = align_power_of_2(page_size, ALLOCATOR_ALIGNMENT);
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1796,6 +1746,31 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
     WAYPOINT("NABW");
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
     WAYPOINT("NABD");
+}
+
+/**
+ * This blocking call waits for all the outstanding read, write, and atomic NOC
+ * transactions issued on the current Tensix core to complete. After returning
+ * from this call all transaction queues will be empty for the current Tensix
+ * core.
+ *
+ * Return value: None
+ */
+FORCE_INLINE
+void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
+    WAYPOINT("NFBW");
+    do {
+        invalidate_l1_cache();
+    } while (!ncrisc_noc_reads_flushed(noc_idx));
+    WAYPOINT("NFCW");
+    while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+    WAYPOINT("NFDW");
+    while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+    WAYPOINT("NFEW");
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    WAYPOINT("NFFW");
+    while (!ncrisc_noc_posted_writes_sent(noc_idx));
+    WAYPOINT("NFBD");
 }
 
 /**

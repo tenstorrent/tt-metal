@@ -42,7 +42,14 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
 
 tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        binary_op_type, memory_config, get_dtype(), compute_kernel_config, subtile_broadcast_type);
+        binary_op_type,
+        lhs_activations,
+        rhs_activations,
+        post_activations,
+        memory_config,
+        get_dtype(),
+        compute_kernel_config,
+        subtile_broadcast_type);
 }
 
 DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
@@ -92,18 +99,18 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const auto input_shape_b =
         tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
 
-    constexpr int max_rank = 4;
-    if (input_shape_a.rank() > 0 && input_shape_b.rank() > 0) {
-        for (int i = 1; i <= max_rank; i++) {
-            auto a_dim = i <= input_shape_a.rank() ? input_shape_a[-i] : 1;
-            auto b_dim = i <= input_shape_b.rank() ? input_shape_b[-i] : 1;
-            TT_FATAL(
-                a_dim == b_dim || a_dim == 1 || b_dim == 1,
-                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
-                i,
-                a_dim,
-                b_dim);
-        }
+    const int rank_a = input_shape_a.rank();
+    const int rank_b = input_shape_b.rank();
+    const int larger_rank = std::max(rank_a, rank_b);
+    for (int i = -1; i >= -larger_rank; --i) {
+        auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
+        auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            i,
+            a_dim,
+            b_dim);
     }
 }
 
@@ -192,6 +199,13 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         attributes, input_tensor_a.dtype(), std::get<DeviceStorage>(input_tensor_a.storage()).memory_config());
 }
 
+bool BinaryNgDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
+}
+
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>
 BinaryNgDeviceOperation::invoke(
     const Tensor& input_tensor_a_arg,
@@ -199,7 +213,10 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a_arg.get_logical_shape()[-2],
         input_tensor_a_arg.get_logical_shape()[-1],
@@ -209,6 +226,9 @@ BinaryNgDeviceOperation::invoke(
     return {
         operation_attributes_t{
             binary_op_type,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             std::nullopt,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),
@@ -225,10 +245,16 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
+    std::optional<Tensor> optional_output_tensor,
+    tt::stl::Span<const unary::UnaryOpType> lhs_activations,
+    tt::stl::Span<const unary::UnaryOpType> rhs_activations,
+    tt::stl::Span<const unary::UnaryOpType> post_activations) {
     return {
         operation_attributes_t{
             binary_op_type,
+            {lhs_activations.begin(), lhs_activations.end()},
+            {rhs_activations.begin(), rhs_activations.end()},
+            {post_activations.begin(), post_activations.end()},
             scalar,
             memory_config.value_or(input_tensor_a_arg.memory_config()),
             input_tensor_a_arg.get_dtype(),

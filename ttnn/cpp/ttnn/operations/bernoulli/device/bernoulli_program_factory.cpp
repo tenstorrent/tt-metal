@@ -23,7 +23,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
-    Device* device = output.device();
+    IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
     auto core_h = grid.y;
 

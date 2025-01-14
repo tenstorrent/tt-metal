@@ -42,6 +42,7 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, const DeviceComputeKernelConfig compute_kernel_config);

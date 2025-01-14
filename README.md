@@ -25,20 +25,20 @@
 | Model                                                         | Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |---------------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | [Falcon 7B (decode only)](./models/demos/ttnn_falcon7b)       | 32    | [e150](https://tenstorrent.com/hardware/grayskull)       |           | 4.2   | 4.4             | 134.4  |                                               |                                                                            |
-| [Falcon 7B](./models/demos/wormhole/falcon7b)                 | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 71        | 17.6  | 26              | 563.2  | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |                                                                                                   |
+| [Falcon 7B](./models/demos/wormhole/falcon7b)                 | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 71        | 18.0  | 26              | 576.0  | [v0.54.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc3) |                                                                                                   |
 | [Mistral 7B](./models/demos/wormhole/mistral7b)               | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        |           | 9.9   | 25              | 316.8  | [v0.51.0-rc28](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc28) |                                                                                                   |
 | [Mamba 2.8B](./models/demos/wormhole/mamba)                   | 32    | [n150](https://tenstorrent.com/hardware/wormhole)        | 48        | 12.3  | 41              | 393.6  | [v0.51.0-rc26](https://github.com/tenstorrent/tt-metal/tree/v0.51.0-rc26) |                                                                                                   |
-| [Llama 3.1 8B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 151       | 22.8  | 23              | 729.6   | [v0.53.1-rc23](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc23)  |                                                                                                   |
-| [Llama 3.2 1B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 56        | 55.1  | 160             | 1763.2   | [v0.53.1-rc23](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc23)  |                                                                                                   |
-| [Llama 3.2 3B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 96       | 35.0  | 60              | 1120.0   | [v0.53.1-rc23](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc23)  |                                                                                                   |
-| [Falcon 7B (DP=8)](./models/demos/t3000/falcon7b)             | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 97        | 14.6  | 26              | 3737.6 | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |                                                                                                   |
+| [Llama 3.1 8B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 169       | 23.4  | 23              | 748.8   | [v0.54.0-rc20](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc20)  | [2f33504](https://github.com/tenstorrent/vllm/tree/2f33504bad49a6202d3685155107a6126a5b5e6e)                                                                                                  |
+| [Llama 3.2 1B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 68        | 58.6  | 160             | 1875.2   | [v0.54.0-rc20](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc20)  | [2f33504](https://github.com/tenstorrent/vllm/tree/2f33504bad49a6202d3685155107a6126a5b5e6e)                                                                                                  |
+| [Llama 3.2 3B](./models/demos/llama3)                         | 32     | [n150](https://tenstorrent.com/hardware/wormhole)        | 110       | 36.1  | 60              | 1155.2   | [v0.54.0-rc20](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc20)  | [2f33504](https://github.com/tenstorrent/vllm/tree/2f33504bad49a6202d3685155107a6126a5b5e6e)                                                                                                  |
+| [Falcon 7B (DP=8)](./models/demos/t3000/falcon7b)             | 256   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 96        | 14.7  | 26              | 3763.2 | [v0.54.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc3) |                                                                                                   |
 | [Llama 3.1 70B (TP=8)](./models/demos/t3000/llama3_70b)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 190       | 15.1  | 20              | 483.2  | [v0.54.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.54.0-rc2) | [9531611](https://github.com/tenstorrent/vllm/tree/953161188c50f10da95a88ab305e23977ebd3750)      |
 | [Falcon 40B (TP=8)](./models/demos/t3000/falcon40b)           | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) |           | 5.3   | 36              | 169.6  | [v0.53.1-rc23](https://github.com/tenstorrent/tt-metal/tree/v0.53.1-rc23)  |                                                                                                   |
 | [Mixtral 8x7B (TP=8)](./models/demos/t3000/mixtral8x7b)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 230       | 14.6  | 33              | 467.2  | [v0.53.0-rc44](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc44) |                                                                                                   |
 | [Falcon 7B (DP=32)](./models/demos/tg/falcon7b)               | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 242       | 4.4   | 26              | 4505.6 | [v0.53.0-rc33](https://github.com/tenstorrent/tt-metal/tree/v0.53.0-rc33) |                                                                                                   |
 | [Llama 3.1 70B (DP=4, TP=8)](./models/demos/t3000/llama3_70b) | 128   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 190       | 14.3  | 20              | 1835.5 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |                                                                                                   |
 
-> **Last Update:** December 16, 2024
+> **Last Update:** January 13, 2025
 >
 > **Notes:**
 >
@@ -78,15 +78,15 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## TT-NN Tech Reports
 
-- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Dec 4th)
-- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 9th)
-- [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd)
-- [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th)
-- [YOLOv4 Implementation in TT-NN on WH](./tech_reports/YoloV4-TTNN/yolov4.md)  (updated November 8th)
+- [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Dec 4th, 2024)
+- [Programming Mesh of Devices](./tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md) (updated Sept 9th, 2024)
+- [ViT Implementation in TT-NN on GS](./tech_reports/ViT-TTNN/vit.md)  (updated Sept 22nd, 2024)
+- [LLMs Bring up in TT-NN](./tech_reports/LLMs/llms.md)  (updated Oct 29th, 2024)
+- [YOLOv4 Implementation in TT-NN on WH](./tech_reports/YoloV4-TTNN/yolov4.md)  (updated November 8th, 2024)
 
 ## Benchmarks
 
-- [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th)
+- [Matrix Multiply FLOPS on WH](./tech_reports/GEMM_FLOPS/GEMM_FLOPS.md)  (updated November 13th, 2024)
 
 ---
 
@@ -109,18 +109,19 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 
 ## TT-Metalium Tech Reports
 
-- [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md) (updated Sept 6th)
-- [Data Formats](./tech_reports/data_formats/data_formats.md) (updated Sept 7th)
-- [Reconfiguring Data Formats](./tech_reports/data_formats/reconfig_data_format.md) (updated Oct 17th)
-- [Handling special floating-point numbers](./tech_reports/Handling_Special_Value/special_values.md) (updated Oct 5th)
-- [Allocator](./tech_reports/memory/allocator.md) (Updated Dec 19th)
-- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th)
-- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th)
-- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th)
-- [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th)
-- [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th)
-- [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th)
-- [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th)
+- [Matrix Engine](./tech_reports/matrix_engine/matrix_engine.md) (updated Sept 6th, 2024)
+- [Data Formats](./tech_reports/data_formats/data_formats.md) (updated Sept 7th, 2024)
+- [Reconfiguring Data Formats](./tech_reports/data_formats/reconfig_data_format.md) (updated Oct 17th, 2024)
+- [Handling special floating-point numbers](./tech_reports/Handling_Special_Value/special_values.md) (updated Oct 5th, 2024)
+- [Allocator](./tech_reports/memory/allocator.md) (Updated Dec 19th, 2024)
+- [Tensor Layouts](./tech_reports/tensor_layouts/tensor_layouts.md) (updated Sept 6th, 2024)
+- [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th, 2024)
+- [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th, 2024)
+- [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th, 2024)
+- [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
+- [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th, 2024)
+- [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
+- [Sub-Devices](./tech_reports/SubDevices/SubDevices.md) (Updated Jan 7th, 2025)
 
 ## TT-Metalium Programming Examples
 

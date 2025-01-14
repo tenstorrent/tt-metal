@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     int32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     const auto& input_shape = a.get_padded_shape();
     const auto& output_shape = output.get_padded_shape();
 
-    Device* device = a.device();
+    IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
@@ -228,8 +228,16 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t padded_row_size_bytes = input_shape[-1] * a.element_size();     // Assuming bfloat16 dataformat
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes;
+    uint32_t unpadded_row_size_bytes;
+
+    if (a.get_dtype() == DataType::BFLOAT8_B) {
+        padded_row_size_bytes = input_shape[-1] * output.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
+    } else {
+        padded_row_size_bytes = input_shape[-1] * a.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    }
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
     create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
@@ -304,8 +312,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     Padding padding(
         {{0, input_w - output_w}, {0, input_z - output_z}, {0, input_y - output_y}, {0, input_x - output_x}},
         Padding::PadValue::Any);
-    auto core_assignments =
-        ttnn::distribute_work(output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff);
+    uint32_t tile_height = output.get_tensor_spec().tile().get_height();
+    auto core_assignments = ttnn::distribute_work(
+        output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
@@ -389,7 +398,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     auto grid_size = device->compute_with_storage_grid_size();
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,

@@ -67,7 +67,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     const uint32_t scale_factor_w,
     const DeviceComputeKernelConfig compute_kernel_config) {
     Program program = CreateProgram();
-    Device* device = input.device();
+    IDevice* device = input.device();
 
     auto input_shape = input.get_legacy_shape();
     auto output_shape = output.get_legacy_shape();

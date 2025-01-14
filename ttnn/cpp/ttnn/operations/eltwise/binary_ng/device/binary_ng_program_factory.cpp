@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "binary_ng_device_operation.hpp"
+#include "binary_ng_utils.hpp"
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -17,124 +18,6 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tens
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
-}
-
-enum class KernelName {
-    ReaderNoBcast,
-    ReaderRowBcast,
-    ReaderColBcast,
-    ReaderScalarBcast,
-    WriterNoBcast,
-    WriterRowBcast,
-    WriterColBcast,
-    WriterScalarBcast,
-    WriterScalar,
-    ComputeNoBcast,
-    ComputeBcast,
-    ComputeScalar
-};
-
-struct BinaryNgKernelConfig {
-    BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
-        switch (subtile_broadcast_type) {
-            case SubtileBroadcastType::NONE:
-                reader_kernel = KernelName::ReaderNoBcast;
-                compute_kernel = KernelName::ComputeNoBcast;
-                writer_kernel = KernelName::WriterNoBcast;
-                bcast_input = std::nullopt;
-                break;
-
-            case SubtileBroadcastType::SCALAR_A:
-                reader_kernel = KernelName::ReaderScalarBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterNoBcast;
-                bcast_input = 0;
-                break;
-
-            case SubtileBroadcastType::SCALAR_B:
-                reader_kernel = KernelName::ReaderNoBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterScalarBcast;
-                bcast_input = 1;
-                break;
-
-            case SubtileBroadcastType::ROW_A:
-                reader_kernel = KernelName::ReaderRowBcast;
-                compute_kernel = KernelName::ComputeNoBcast;
-                writer_kernel = KernelName::WriterNoBcast;
-                bcast_input = std::nullopt;
-                break;
-
-            case SubtileBroadcastType::ROW_B:
-                reader_kernel = KernelName::ReaderNoBcast;
-                compute_kernel = KernelName::ComputeNoBcast;
-                writer_kernel = KernelName::WriterRowBcast;
-                bcast_input = std::nullopt;
-                break;
-
-            case SubtileBroadcastType::COL_A:
-                reader_kernel = KernelName::ReaderColBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterNoBcast;
-                bcast_input = 0;
-                break;
-
-            case SubtileBroadcastType::COL_B:
-                reader_kernel = KernelName::ReaderNoBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterColBcast;
-                bcast_input = 1;
-                break;
-
-            case SubtileBroadcastType::ROW_A_COL_B:
-                reader_kernel = KernelName::ReaderRowBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterColBcast;
-                bcast_input = 1;
-                break;
-
-            case SubtileBroadcastType::ROW_B_COL_A:
-                reader_kernel = KernelName::ReaderColBcast;
-                compute_kernel = KernelName::ComputeBcast;
-                writer_kernel = KernelName::WriterRowBcast;
-                bcast_input = 0;
-                break;
-        }
-    }
-
-    std::string bcast_input_str() const {
-        if (bcast_input.has_value()) {
-            return std::to_string(*bcast_input);
-        }
-        return "";
-    }
-
-    KernelName reader_kernel;
-    KernelName compute_kernel;
-    KernelName writer_kernel;
-    std::optional<uint32_t> bcast_input;
-};
-
-std::string get_kernel_file_path(KernelName kernel_name) {
-    constexpr std::string_view root = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels";
-    constexpr std::string_view dataflow = "{}/dataflow/{}";
-    constexpr std::string_view compute = "{}/compute/{}";
-
-    switch (kernel_name) {
-        case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderScalarBcast: return fmt::format(dataflow, root, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::WriterNoBcast: return fmt::format(dataflow, root, "writer_interleaved_no_bcast.cpp");
-        case KernelName::WriterRowBcast: return fmt::format(dataflow, root, "writer_interleaved_row_bcast.cpp");
-        case KernelName::WriterColBcast: return fmt::format(dataflow, root, "writer_interleaved_col_bcast.cpp");
-        case KernelName::WriterScalarBcast: return fmt::format(dataflow, root, "writer_interleaved_scalar_bcast.cpp");
-        case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
-        case KernelName::ComputeNoBcast: return fmt::format(compute, root, "eltwise_binary_no_bcast.cpp");
-        case KernelName::ComputeBcast: return fmt::format(compute, root, "eltwise_binary.cpp");
-        case KernelName::ComputeScalar: return fmt::format(compute, root, "eltwise_binary_scalar.cpp");
-        default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
-    }
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -301,10 +184,55 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     Buffer* b_buffer = nullptr;
     Buffer* c_buffer = c.buffer();
 
+    auto op_type = operation_attributes.binary_op_type;
+    OpConfig op_config(op_type);
+    auto compute_kernel_defines = op_config.as_defines();
+
+    {
+        ttnn::SmallVector<unary::UnaryOpType> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::UnaryOpType> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::UnaryOpType> post_activations = operation_attributes.post_activations;
+
+        if (op_config.process_lhs.has_value()) {
+            lhs_activations.push_back(*op_config.process_lhs);
+        }
+
+        if (op_config.process_rhs.has_value()) {
+            rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        if (op_config.postprocess.has_value()) {
+            post_activations.insert(post_activations.begin(), *op_config.postprocess);
+        }
+
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
+
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
+            post_activations[0] == unary::UnaryOpType::RELU) {
+            compute_kernel_defines["PACK_RELU"] = "1";
+            compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
+            unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+        } else {
+            add_activation_defines(compute_kernel_defines, post_activations, "POST");
+        }
+    }
+
+    bool op_has_exp =
+        op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
+
     // How many tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
     auto [a_cb, a_cb_handle] =
         create_cb(tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
+
+    if (not compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty()) {
+        auto a_intermediate_format = op_has_exp ? tt::DataFormat::Float16_b : a_data_format;
+        uint32_t a_intermediate_single_tile_size = tt_metal::detail::TileSize(a_intermediate_format);
+        auto [a_cb_interim, a_cb_interim_handle] = create_cb(
+            tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+    }
+
     auto [c_cb, c_cb_handle] =
         create_cb(tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);
 
@@ -312,6 +240,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_num_tiles_per_cb = b_buffer != nullptr ? num_tiles_per_cb : 1;
     auto [b_cb, b_cb_handle] =
         create_cb(tt::CBIndex::c_1, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+
+    if (not compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty()) {
+        auto b_intermediate_format = op_has_exp ? tt::DataFormat::Float16_b : b_data_format;
+        uint32_t b_intermediate_single_tile_size = tt_metal::detail::TileSize(b_intermediate_format);
+        auto [b_cb_interim, b_cb_interim_handle] = create_cb(
+            tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
+    }
 
     auto a_is_dram = static_cast<uint32_t>(a_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     bool b_is_dram = false;
@@ -349,12 +284,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     // Compute kernel needs to know which op it's going to perform
     // This has to be passed as a compile-time argument
     // For now we're just going to do addition
+    compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel),
         all_device_cores,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .defines = {{"BCAST_INPUT", kernel_config.bcast_input_str()}}});
+        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = compute_kernel_defines});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

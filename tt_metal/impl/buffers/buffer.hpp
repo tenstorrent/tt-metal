@@ -32,7 +32,7 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 }  // namespace v0
 
@@ -47,7 +47,6 @@ struct ShardSpec {
 
     /* The sequence order of the grid cores that the shards are layed out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
-    bool halo = false;
 
     // In ShardMode::PHYSICAL, physical_shard_shape will always be std::nullopt
     ShardMode mode = ShardMode::PHYSICAL;
@@ -57,18 +56,16 @@ struct ShardSpec {
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const bool &halo_ = false,
         const ShardMode &shard_mode_ = ShardMode::PHYSICAL) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(shard_mode_), physical_shard_shape(std::nullopt) {
     }
 
     ShardSpec(
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const std::array<uint32_t, 2> &physical_shard_shape_,
-        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR,
-        const bool &halo_ = false) :
-        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), halo(halo_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
+        const ShardOrientation &shard_orientation_ = ShardOrientation::ROW_MAJOR) :
+        grid(core_sets_), shape(shard_shape_), orientation(shard_orientation_), mode(ShardMode::LOGICAL), physical_shard_shape(physical_shard_shape_) {
         TT_FATAL(physical_shard_shape_[0] >= shard_shape_[0] and physical_shard_shape_[1] >= shard_shape_[1], "Physical shard shape ({}, {}) must be greater or equal to logical shard shape ({}, {})!", physical_shard_shape_[0], physical_shard_shape_[1], shard_shape_[0], shard_shape_[1]);
     }
 
@@ -78,9 +75,9 @@ struct ShardSpec {
     bool operator==(const ShardSpec& other) const;
     bool operator!=(const ShardSpec& other) const;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "halo", "mode", "physical_shard_shape");
+    static constexpr auto attribute_names = std::forward_as_tuple("grid", "shape", "orientation", "mode", "physical_shard_shape");
     constexpr auto attribute_values() const {
-        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->halo, this->mode, this->physical_shard_shape);
+        return std::forward_as_tuple(this->grid, this->shape, this->orientation, this->mode, this->physical_shard_shape);
     }
 };
 
@@ -94,10 +91,9 @@ struct ShardSpecBuffer {
         const CoreRangeSet &core_sets_,
         const std::array<uint32_t, 2> &shard_shape_,
         const ShardOrientation &shard_orientation_,
-        const bool &halo_,
         const std::array<uint32_t, 2> &page_shape,
         const std::array<uint32_t, 2> &tensor2d_shape) :
-        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_, halo_) {
+        tensor_shard_spec(core_sets_, shard_shape_, shard_orientation_) {
         this->page_shape = page_shape;
         this->tensor2d_shape = tensor2d_shape;
     }
@@ -112,7 +108,6 @@ struct ShardSpecBuffer {
     CoreRangeSet grid() const { return tensor_shard_spec.grid; }
     std::array<uint32_t, 2> shape() const { return tensor_shard_spec.shape; }
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
-    bool halo() const { return tensor_shard_spec.halo; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
     /* Shape in pages of the full tensor, not per core */
@@ -123,7 +118,7 @@ struct ShardSpecBuffer {
 inline namespace v0 {
 
 struct BufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
@@ -135,7 +130,7 @@ typedef BufferConfig InterleavedBufferConfig;
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct ShardedBufferConfig {
-    Device *device;
+    IDevice *device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
@@ -163,12 +158,20 @@ struct BufferPageMapping {
 
 inline namespace v0 {
 
+struct BufferRegion {
+    DeviceAddr offset = 0;
+    DeviceAddr size = 0;
+
+    BufferRegion() = delete;
+    BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
+};
+
 class Buffer final {
     struct Private { explicit Private() = default; };
 
    public:
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -177,7 +180,7 @@ class Buffer final {
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
-        Device *device,
+        IDevice *device,
         DeviceAddr address,
         DeviceAddr size,
         DeviceAddr page_size,
@@ -192,7 +195,7 @@ class Buffer final {
     Buffer(Buffer &&other) = delete;
     Buffer &operator=(Buffer &&other) = delete;
 
-    Device *device() const { return device_; }
+    IDevice* device() const { return device_; }
     Allocator *allocator() const { return allocator_; }
     DeviceAddr size() const { return size_; }
     bool is_allocated() const;
@@ -212,6 +215,9 @@ class Buffer final {
     bool is_l1() const;
     bool is_dram() const;
     bool is_trace() const;
+
+    bool is_valid_region(const BufferRegion& region) const;
+    bool is_valid_partial_region(const BufferRegion& region) const;
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
@@ -247,7 +253,7 @@ class Buffer final {
     size_t unique_id() const { return unique_id_; }
 
     Buffer(
-        Device *device,
+        IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
@@ -274,7 +280,7 @@ class Buffer final {
 
     DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
 
-    Device * const device_;
+    IDevice* const device_;
     const DeviceAddr size_; // Size in bytes
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;

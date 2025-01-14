@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
 
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

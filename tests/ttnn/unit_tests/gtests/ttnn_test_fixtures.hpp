@@ -15,7 +15,7 @@
 #include "ttnn/types.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/hostdevcommon/common_values.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
 
 namespace ttnn {
@@ -36,7 +36,7 @@ protected:
 
 class TTNNFixtureWithDevice : public TTNNFixture {
 protected:
-    tt::tt_metal::Device* device_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;
 
     void SetUp() override {
         TTNNFixture::SetUp();
@@ -48,7 +48,7 @@ protected:
         tt::tt_metal::CloseDevice(device_);
     }
 
-    tt::tt_metal::Device& getDevice() { return *device_; }
+    tt::tt_metal::IDevice& getDevice() { return *device_; }
 };
 
 }  // namespace ttnn
@@ -71,6 +71,10 @@ protected:
     }
 
     void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+
         mesh_device_->close_devices();
         mesh_device_.reset();
     }

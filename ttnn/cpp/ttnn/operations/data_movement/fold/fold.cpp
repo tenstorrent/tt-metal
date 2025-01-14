@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
@@ -27,7 +28,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
@@ -61,13 +62,8 @@ std::vector<Tensor> fold_with_transpose_(
 
     tt::log_debug("pad_output: {}", pad_output.shape());
 
-    // transpose
-    auto transpose_hw_output = ttnn::transpose(pad_output, 2, 3, L1_mem_config);
-
-    tt::log_debug("transpose_hw_output: {}", transpose_hw_output.shape());
-
-    // transpose
-    auto transpose_hc_output = ttnn::transpose(transpose_hw_output, 1, 2, L1_mem_config);
+    auto transpose_hc_output = ttnn::prim::permute(
+        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     tt::log_debug("transpose_hc_output: {}", transpose_hc_output.shape());
 
@@ -140,8 +136,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
         .shard_spec = ShardSpec{
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}}}},
             {shard_height, shard_width},
-            orientation,
-            false}};
+            orientation}};
 
     return sharded_memory_config;
 }
@@ -158,7 +153,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     CoreCoord grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE and input.storage_type() != StorageType::MULTI_DEVICE) {

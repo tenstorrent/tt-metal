@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    IDevice* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -572,7 +572,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_two_stage_reduce = false;
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x <= device->compute_with_storage_grid_size().x &&
+        if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
             grid_size.y > 1) {  // row major and multiple rows
             use_two_stage_reduce = true;
         } else if (

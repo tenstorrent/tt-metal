@@ -151,11 +151,11 @@ std::map<std::string, std::string> get_defines(
     defines["ELTWISE_OP"] = op_name.c_str();
     defines["ELTWISE_OP_TYPE"] = op_binary_type.c_str();
     if (fused_activations.has_value()) {
-        if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and
-            fused_activations.value().at(0).op_type == UnaryOpType::RELU) {
+        if (op_type == BinaryOpType::ADD and fused_activations->size() == 1 and
+            fused_activations->at(0).op_type == UnaryOpType::RELU and not input_tensor_a_activation.has_value()) {
             defines["PACK_RELU"] = "1";
         } else {
-            defines.merge(ttnn::operations::unary::utils::get_block_defines(fused_activations.value(), "0", idst));
+            defines.merge(ttnn::operations::unary::utils::get_block_defines(*fused_activations, "0", idst));
         }
     }
 
@@ -186,14 +186,30 @@ std::map<std::string, std::string> get_defines_fp32(
                 new_defines.insert({"ADD_INT32_INIT", fmt::format("add_int32_tile_init();")});
                 op_name = "add_int32_tile";
             } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
                 op_name = "add_binary_tile";
             }
             break;
-        case BinaryOpType::SUB: op_name = "sub_binary_tile"; break;
-        case BinaryOpType::MUL: op_name = "mul_binary_tile"; break;
-        case BinaryOpType::RSUB: op_name = "rsub_binary_tile"; break;
-        case BinaryOpType::POWER: op_name = "power_binary_tile"; break;
-        case BinaryOpType::DIV_FAST: op_name = "div_binary_tile"; break;
+        case BinaryOpType::SUB:
+            new_defines.insert({"BINOP_INIT", fmt::format("sub_binary_tile_init();")});
+            op_name = "sub_binary_tile";
+            break;
+        case BinaryOpType::MUL:
+            new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
+            op_name = "mul_binary_tile";
+            break;
+        case BinaryOpType::RSUB:
+            new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
+            op_name = "rsub_binary_tile";
+            break;
+        case BinaryOpType::POWER:
+            new_defines.insert({"BINOP_INIT", fmt::format("power_binary_tile_init();")});
+            op_name = "power_binary_tile";
+            break;
+        case BinaryOpType::DIV_FAST:
+            new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
+            op_name = "div_binary_tile";
+            break;
         case BinaryOpType::BITWISE_AND:
             new_defines.insert({"BITWISE_INIT", fmt::format("binary_bitwise_tile_init();")});
             op_name = "and_binary_tile";
@@ -219,12 +235,14 @@ std::map<std::string, std::string> get_defines_fp32(
             // PRE_IN1_0 ====> Applies prescaling for second input
             new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
             new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
+            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst1));
             break;
         case BinaryOpType::LOGADDEXP2:
             new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
             new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
+            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst1));
             break;
@@ -241,12 +259,14 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "0", idst1));
             break;
         case BinaryOpType::BIAS_GELU:
+            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst1));
             break;
         case BinaryOpType::LOGICAL_OR:
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0"));
             new_defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN1_0"));
+            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
             new_defines.merge(get_defines(UnaryOpType::GTZ, std::nullopt, "0", idst1));
             break;

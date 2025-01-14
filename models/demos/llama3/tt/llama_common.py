@@ -323,14 +323,14 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
 def get_padded_prefill_len(seq_len):
     """
     If seq_len is less than 128, pad to 128
-    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 1024
-    TODO: Generalize for max_mm_seq_len different from 1024
+    If seq_len is more than 128, pad to whichever is smaller: a power of 2 or a multiple of 2048
+    TODO: Generalize for max_mm_seq_len different from 2048
     """
     if seq_len <= 128:
         return 128
     pow_2_pad = nearest_pow_2(seq_len)
-    mult_1024_pad = 1024 * math.ceil(seq_len / 1024)
-    min_extended_pad = min(pow_2_pad, mult_1024_pad)
+    mult_2048_pad = 2048 * math.ceil(seq_len / 2048)
+    min_extended_pad = min(pow_2_pad, mult_2048_pad)
     return min_extended_pad
 
 
@@ -348,29 +348,30 @@ def nearest_pow_2(x):
 
 def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
     """
-    Determine the largest multiple of 1024 that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
+    Determine the largest multiple of 2048 that divides `seq_len` and is less than or equal to `max_prefill_seq_len`.
 
     **Assumptions**:
-    - `seq_len` is a multiple of 1024.
-    - `max_prefill_seq_len` is a multiple of 1024.
+    - `seq_len` is a multiple of 2048.
+    - `max_prefill_seq_len` is a multiple of 2048.
     """
+    MIN_CHUNK_SIZE = 2048
 
     if not isinstance(seq_len, int) or not isinstance(max_prefill_seq_len, int):
         raise TypeError("Both seq_len and max_prefill_seq_len must be integers.")
     if seq_len <= 0 or max_prefill_seq_len <= 0:
         raise ValueError("Both seq_len and max_prefill_seq_len must be positive integers.")
 
-    if seq_len % 1024 != 0:
-        raise ValueError("seq_len must be a multiple of 1024.")
-    if max_prefill_seq_len % 1024 != 0:
-        raise ValueError("max_prefill_seq_len must be a multiple of 1024.")
+    if seq_len % MIN_CHUNK_SIZE != 0:
+        raise ValueError(f"seq_len ({seq_len}) must be a multiple of {MIN_CHUNK_SIZE}.")
+    if max_prefill_seq_len % MIN_CHUNK_SIZE != 0:
+        raise ValueError(f"max_prefill_seq_len ({max_prefill_seq_len}) must be a multiple of {MIN_CHUNK_SIZE}.")
 
     # Calculate the maximum possible chunk size
     # It cannot exceed either max_prefill_seq_len or seq_len
     max_possible_chunk = min(max_prefill_seq_len, seq_len)
 
-    # Iterate from the largest possible multiple of 1024 down to 1024
-    for chunk_size in range(max_possible_chunk, 0, -1024):
+    # Iterate from the largest possible multiple of MIN_CHUNK_SIZE down to MIN_CHUNK_SIZE
+    for chunk_size in range(max_possible_chunk, 0, -MIN_CHUNK_SIZE):
         if seq_len % chunk_size == 0:
             return chunk_size
 

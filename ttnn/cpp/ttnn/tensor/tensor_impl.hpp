@@ -99,6 +99,9 @@ static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
     const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    if (shape.width() * shape.height() == 0) {
+        return std::vector<T>();
+    }
     TT_FATAL(
         (shape.height() % tile.get_tile_shape()[0] == 0 && shape.width() % tile.get_tile_shape()[1] == 0),
         "Unsupported shape for tensor conversion from row-major to tile layout. The tensor shape height and width must "
@@ -170,7 +173,7 @@ std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const Ten
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(Device* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
 void validate_sharded_buffer_allocation(
     const ttnn::SimpleShape& shape,
     Layout layout,
@@ -188,16 +191,12 @@ void validate_sharded_buffer_allocation(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(Device* device, const TensorSpec& tensor_spec);
+DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
 
 template <typename T>
 inline void read_data_from_device_buffer(
-    CommandQueue& cq,
-    DeviceBuffer device_buffer,
-    void* host_buffer_data,
-    bool blocking,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {}) {
-    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking, sub_device_ids);
+    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+    EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
@@ -210,19 +209,14 @@ inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(
-    const Tensor& tensor,
-    bool blocking = true,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
-    Device* target_device,
+    IDevice* target_device,
     const MemoryConfig& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    uint8_t cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
@@ -236,7 +230,7 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const tt::tt_metal::LegacyShape& output_shape,
+    const ttnn::SimpleShape& output_padded_shape,
     const ttnn::SimpleShape& input_tensor_start,
     float pad_value);
 

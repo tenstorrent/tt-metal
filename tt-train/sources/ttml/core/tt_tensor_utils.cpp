@@ -202,10 +202,10 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, logical_shape, data_type, Layout::ROW_MAJOR);
 
-    const size_t MAX_TILE_DIMENSION = 32678;
+    const size_t MAX_TILE_DIMENSION = 16384;
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
-    if (logical_shape[-1] > MAX_TILE_DIMENSION && layout == Layout::TILE) {
+    if (logical_shape[-1] >= MAX_TILE_DIMENSION && layout == Layout::TILE) {
         output = ttnn::to_layout(output, Layout::TILE, std::nullopt, output_mem_config, device);
         output = ttnn::to_device(output, device, output_mem_config);
     } else {
@@ -302,5 +302,48 @@ void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& n
         print_tensor_stats_<uint32_t>(tensor, name);
     }
 }
+
+template <class T, DataType TensorType>
+tt::tt_metal::Tensor from_xtensor(
+    const xt::xarray<T>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<T>& composer,
+    Layout layout) {
+    auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
+    auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
+    auto output = from_xtensors_to_host<T, TensorType>(sharded_tensors, config);
+    MemoryConfig output_mem_config{};
+
+    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t>) {
+        if (layout != Layout::ROW_MAJOR) {
+            output = ttnn::to_layout(output, layout, std::nullopt, output_mem_config, device);
+        }
+        output = ttnn::to_device(output, device, output_mem_config);
+    } else {
+        output = ttnn::to_device(output, device, output_mem_config);
+        if (layout == Layout::TILE) {
+            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+        }
+    }
+    return output;
+}
+
+template tt::tt_metal::Tensor from_xtensor<float, DataType::BFLOAT16>(
+    const xt::xarray<float>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<float>& composer,
+    Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<int32_t, DataType::INT32>(
+    const xt::xarray<int32_t>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<int32_t>& composer,
+    Layout layout);
+
+template tt::tt_metal::Tensor from_xtensor<uint32_t, DataType::UINT32>(
+    const xt::xarray<uint32_t>& tensor,
+    ttnn::distributed::MeshDevice* device,
+    const XTensorToMeshVariant<uint32_t>& composer,
+    Layout layout);
 
 }  // namespace ttml::core

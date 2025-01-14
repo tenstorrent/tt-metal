@@ -5,16 +5,15 @@
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
 #include "tt_log.h"
 #include "ttnn/operation.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
-
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -117,7 +116,7 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
 
@@ -651,7 +650,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     tt::log_debug("single_tile_size: {}", single_tile_size);
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -676,7 +675,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
     // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
     // tiles
-    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                     : hal::get_l1_alignment();
     bool misaligned = alignment > sub_tile_line_bytes;
     if (row_major) {
         auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1
@@ -864,7 +864,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
@@ -939,7 +939,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
@@ -1173,7 +1173,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
@@ -1542,7 +1542,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 
@@ -1780,7 +1780,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     const uint32_t tile_hw = tile.get_tile_hw();
     int32_t num_tiles = a.volume() / tile_hw;
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -2041,7 +2041,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 
