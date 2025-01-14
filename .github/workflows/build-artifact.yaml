@@ -6,7 +6,7 @@ on:
       arch:
         required: false
         type: string
-        default: '["grayskull", "wormhole_b0"]'
+        default: '["any"]'
       build-type:
         required: false
         type: string
@@ -35,7 +35,7 @@ on:
       arch:
         required: false
         type: string
-        default: '["grayskull", "wormhole_b0"]'
+        default: '["any"]'
       build-type:
         required: false
         type: string
@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
+        arch: ${{ fromJson(inputs.arch) }}
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
