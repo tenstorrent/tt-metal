@@ -41,7 +41,7 @@ sudo ./install_dependencies.sh
 ---
 
 #### Install the Driver (TT-KMD)
-- DKMs must be installed:
+- DKMS must be installed:
 
 | OS              | Command                |
 |------------------------|----------------------------------------------------|
