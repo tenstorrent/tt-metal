@@ -23,6 +23,11 @@ enum class RunnerType {
     Default,
 };
 
+enum class WeightTyingType {
+    Disabled,
+    Enabled,
+};
+
 struct TransformerConfig {
     uint32_t num_heads = 6;
     uint32_t embedding_dim = 384;
@@ -30,6 +35,7 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
+    WeightTyingType weight_tying = WeightTyingType::Disabled;
     RunnerType runner_type = RunnerType::Default;
     PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
 

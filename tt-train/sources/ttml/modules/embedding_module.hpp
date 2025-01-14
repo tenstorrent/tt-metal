@@ -14,6 +14,7 @@ class Embedding : public autograd::ModuleBase {
 
 public:
     Embedding(uint32_t num_embeddings, uint32_t embedding_dim);
+    autograd::TensorPtr get_weight() const;
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
 };

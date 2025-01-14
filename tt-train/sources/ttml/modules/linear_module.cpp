@@ -31,6 +31,15 @@ LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features) {
     register_tensor(m_bias, "bias");
 }
 
+autograd::TensorPtr LinearLayer::get_weight() const {
+    return m_weight;
+}
+
+void LinearLayer::set_weight(const autograd::TensorPtr& weight) {
+    m_weight = weight;
+    override_tensor(m_weight, "weight");
+}
+
 autograd::TensorPtr LinearLayer::operator()(const autograd::TensorPtr& tensor) {
     return ops::linear_op(tensor, m_weight, m_bias);
 }

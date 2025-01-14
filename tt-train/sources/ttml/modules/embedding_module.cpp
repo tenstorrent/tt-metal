@@ -45,4 +45,8 @@ autograd::TensorPtr Embedding::operator()(const autograd::TensorPtr& tensor) {
     return ops::embedding_op(tensor, m_weight);
 }
 
+autograd::TensorPtr Embedding::get_weight() const {
+    return m_weight;
+}
+
 }  // namespace ttml::modules
