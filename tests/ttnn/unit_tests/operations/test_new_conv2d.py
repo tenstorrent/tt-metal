@@ -100,7 +100,7 @@ def run_conv(
         .float()
         .reshape(1, 1, filter_height, filter_width)
     )
-    # torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_weight_tensor = torch.broadcast_to(torch_weight_tensor, conv_weight_shape)
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
