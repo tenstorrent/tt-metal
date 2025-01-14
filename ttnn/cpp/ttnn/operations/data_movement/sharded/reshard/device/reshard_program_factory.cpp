@@ -583,14 +583,14 @@ compute_width_sharded_reshard_runtime_args(
             const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
             const uint32_t transfer_size = std::min(remaining_input, remaining_output);
 
-            auto bank_id =
+            const auto bank_id =
                 device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[current_remote_core_idx])[0];
-            auto bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+            const auto bank_offset = device->bank_offset(remote_buffer_type, bank_id);
             core_args.emplace_back(
                 element_size * transfer_size,
                 element_size * local_shard_offset,
                 bank_id,
-                element_size * remote_shard_offset + bank_offset);
+                element_size * remote_shard_offset);
 
             local_shard_offset += transfer_size;
             remote_shard_offset += transfer_size;
