@@ -31,7 +31,7 @@ void MAIN {
     constexpr uint32_t largest = get_compile_time_arg_val(11);
     constexpr uint32_t sorted = get_compile_time_arg_val(12);
 
-    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+    SliceRange sr = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -39,13 +39,18 @@ void MAIN {
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
+    constexpr uint32_t tiles_per_seq = std::max(K / 32, (uint32_t)1);
+
+    int end_phase = (K <= 64) ? logk - 1 : 5;
     // init pack, compute and unpack
 
     ckernel::topk_tile_init();
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
 
+    bool ascending = !largest;
+    bool switch_dir = (K == 64);
+
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = !largest;
         cb_reserve_back(input_transposed_cb_index, Wt);
         cb_reserve_back(index_transposed_cb_index, Wt);
 
@@ -68,7 +73,7 @@ void MAIN {
             transpose_wh_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
-            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
+            ckernel::topk_local_sort(0, (int)ascending, end_phase);
 
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_cb_index);
@@ -83,6 +88,7 @@ void MAIN {
             cb_pop_front(input_cb_index, 2);
             cb_pop_front(index_cb_index, 2);
             release_dst();
+            ascending = switch_dir ? !ascending : ascending;
         }
 
         cb_push_back(input_transposed_cb_index, Wt);
@@ -99,34 +105,44 @@ void MAIN {
             // UNPACK(DPRINT << "input_transposed_cb_index VALUES ARE " << TSLICE(input_transposed_cb_index, 0, sr) <<
             // ENDL());
 
-            for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
-                uint32_t right_ind = left_ind + (1 << m_iter);
-                acquire_dst();
+            int target_tiles = (Wt == 1 || tiles_per_seq == 1) ? 1 : 2;
 
-                copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
-                copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
-                copy_tile(input_transposed_cb_index, right_ind, input_dest_end);
+            for (uint32_t left_iter = 0; left_iter < Wt - (1 << m_iter); left_iter += 2 << m_iter) {
+                for (uint32_t t = 0; t < tiles_per_seq; t++) {
+                    uint32_t left_ind = left_iter + t;
+                    uint32_t right_ind = left_ind + (1 << m_iter);
+                    if (right_ind >= Wt) {
+                        break;
+                    }
+                    acquire_dst();
 
-                // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
-                copy_tile(index_transposed_cb_index, left_ind, index_dest_start);
-                copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
+                    copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
+                    copy_tile(input_transposed_cb_index, left_ind, input_dest_start);
+                    copy_tile(input_transposed_cb_index, right_ind, input_dest_end);
 
-                // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
-                // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
+                    // unpack indices into dest
+                    copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
+                    copy_tile(index_transposed_cb_index, left_ind, index_dest_start);
+                    copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 
-                // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values for
-                // topk, which was in input_dest_start
-                pack_reconfig_data_format(input_transposed_cb_index);
-                pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
+                    // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
+                    ckernel::topk_merge(0, m_iter, K);
+                    // sort within the larger 32 values
+                    ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, target_tiles == 1);
 
-                // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values for
-                // topk, which was in index_dest_start
-                pack_reconfig_data_format(index_transposed_cb_index);
-                pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
-                release_dst();
+                    // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values
+                    // for topk, which was in input_dest_start
+                    pack_reconfig_data_format(input_transposed_cb_index);
+                    pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
+                    pack_tile<true>(input_dest_end, input_transposed_cb_index, right_ind);
+
+                    // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values
+                    // for topk, which was in index_dest_start
+                    pack_reconfig_data_format(index_transposed_cb_index);
+                    pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
+                    pack_tile<true>(index_dest_end, index_transposed_cb_index, right_ind);
+                    release_dst();
+                }
                 a = !a;
             }
             cb_reserve_back(input_transposed_cb_index, Wt);

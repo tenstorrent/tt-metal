@@ -43,7 +43,6 @@ void TopK::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
-    TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
     TT_FATAL(this->dim == -1 || this->dim == 3, "Only the last dim is supported right now, got {}", this->dim);
 
     TT_FATAL(
