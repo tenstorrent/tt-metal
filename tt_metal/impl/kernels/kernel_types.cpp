@@ -5,6 +5,8 @@
 #include "tt_metal/impl/kernels/kernel_types.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
+#include <utility>
+
 namespace tt::tt_metal {
 
 ReaderDataMovementConfig::ReaderDataMovementConfig(
