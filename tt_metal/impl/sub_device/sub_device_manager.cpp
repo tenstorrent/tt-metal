@@ -156,6 +156,22 @@ bool SubDeviceManager::has_allocations() const {
 
 DeviceAddr SubDeviceManager::local_l1_size() const { return local_l1_size_; }
 
+const std::vector<SubDeviceId>& SubDeviceManager::get_sub_device_stall_group() const { return sub_device_stall_group_; }
+
+void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TT_FATAL(!sub_device_ids.empty(), "sub_device_ids to stall must not be empty");
+    for (const auto& sub_device_id : sub_device_ids) {
+        TT_FATAL(
+            sub_device_id.to_index() < sub_devices_.size(),
+            "SubDevice index {} out of bounds {}",
+            sub_device_id.to_index(),
+            sub_devices_.size());
+    }
+    sub_device_stall_group_ = std::vector<SubDeviceId>(sub_device_ids.begin(), sub_device_ids.end());
+}
+
+void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
+
 void SubDeviceManager::set_fabric_sub_device_id(SubDeviceId fabric_sub_device_id) {
     const auto& fabric_sub_device = this->sub_device(fabric_sub_device_id);
     TT_FATAL(
@@ -221,6 +237,7 @@ void SubDeviceManager::populate_sub_device_ids() {
     for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
         sub_device_ids_[i] = SubDeviceId{i};
     }
+    this->reset_sub_device_stall_group();
 }
 
 void SubDeviceManager::populate_num_cores() {

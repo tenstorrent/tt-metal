@@ -619,8 +619,8 @@ uint64_t get_dram_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
-                    bank_to_dram_offset[bank_index];
+    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
+                    offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -634,8 +634,8 @@ uint64_t get_l1_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<false>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<false>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address + offset +
-                    bank_to_dram_offset[bank_index];
+    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
+                    offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -1005,7 +1005,7 @@ template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size = align(page_size, ALLOCATOR_ALIGNMENT);
+    const uint32_t aligned_page_size = align_power_of_2(page_size, ALLOCATOR_ALIGNMENT);
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1746,6 +1746,31 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
     WAYPOINT("NABW");
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
     WAYPOINT("NABD");
+}
+
+/**
+ * This blocking call waits for all the outstanding read, write, and atomic NOC
+ * transactions issued on the current Tensix core to complete. After returning
+ * from this call all transaction queues will be empty for the current Tensix
+ * core.
+ *
+ * Return value: None
+ */
+FORCE_INLINE
+void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
+    WAYPOINT("NFBW");
+    do {
+        invalidate_l1_cache();
+    } while (!ncrisc_noc_reads_flushed(noc_idx));
+    WAYPOINT("NFCW");
+    while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
+    WAYPOINT("NFDW");
+    while (!ncrisc_noc_nonposted_writes_flushed(noc_idx));
+    WAYPOINT("NFEW");
+    while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
+    WAYPOINT("NFFW");
+    while (!ncrisc_noc_posted_writes_sent(noc_idx));
+    WAYPOINT("NFBD");
 }
 
 /**

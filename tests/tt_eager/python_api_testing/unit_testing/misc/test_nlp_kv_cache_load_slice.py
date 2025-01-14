@@ -108,7 +108,6 @@ def test_run_unpadding_test(
                     32,  # head dim
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)

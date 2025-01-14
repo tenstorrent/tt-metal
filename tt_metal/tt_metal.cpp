@@ -1152,7 +1152,8 @@ uint32_t CreateSemaphore(
             if constexpr (std::is_same_v<T, CoreRange>) {
                 crs = CoreRangeSet(c);
             } else {
-                crs = c;
+                // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
+                crs = c.merge_ranges();
             }
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
@@ -1176,21 +1177,13 @@ uint32_t CreateSemaphore(
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, sub_device_ids);
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    CoreRangeSet&& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
@@ -1391,11 +1384,10 @@ namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
 }
 
 CBHandle CreateCircularBuffer(

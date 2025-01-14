@@ -100,14 +100,11 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
         "FillRM does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> FillRM::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {ttnn::SimpleShape({this->N, this->C, this->H, this->W})};
-}
-
-std::vector<Tensor> FillRM::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    ttnn::SimpleShape shape({this->N, this->C, this->H, this->W});
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), Layout::ROW_MAJOR, this->output_mem_config);
+    return {
+        TensorSpec(shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks FillRM::create_program(

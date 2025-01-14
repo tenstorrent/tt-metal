@@ -144,7 +144,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
 #endif
-    tilize_init_short(cb_in_rm, per_core_N);
+    tilize_init_short(cb_in_rm, per_core_N, cb_in);
     for (uint32_t m = 0; m < per_core_M; ++m) {
 #ifdef READER_REPACK
         cb_wait_front(cb_in_rm, per_core_N);
@@ -154,7 +154,7 @@ void MAIN {
         cb_push_back(cb_in, per_core_N);
         cb_pop_front(cb_in_rm, per_core_N);
     }
-    tilize_uninit(cb_in_rm);
+    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_input_mask, cb_x);

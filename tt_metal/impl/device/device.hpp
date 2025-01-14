@@ -147,6 +147,8 @@ public:
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const override;
     void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const override;
 
+    MemoryBlockTable get_memory_block_table(const BufferType &buffer_type) const override;
+
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
@@ -213,7 +215,7 @@ public:
 
     void push_work(std::function<void()> work, bool blocking) override;
 
-    // Program cache interface. Syncrhonize with worker worker threads before querying or
+    // Program cache interface. Synchronize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
@@ -242,6 +244,9 @@ public:
     LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId> &get_sub_device_ids() const override;
+    const std::vector<SubDeviceId> &get_sub_device_stall_group() const override;
+    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete

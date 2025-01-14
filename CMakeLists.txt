@@ -36,6 +36,7 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
+message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -204,11 +205,6 @@ target_link_libraries(
         numa
 )
 
-if(NOT DEFINED ENV{ARCH_NAME})
-    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
-endif(NOT DEFINED ENV{ARCH_NAME})
-string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
-add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
     -Wno-deprecated-declarations
@@ -261,6 +257,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_fabric)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -276,6 +273,15 @@ endif()
 # Install for build artifacts that will upload build/lib
 include(GNUInstallDirs)
 
+install(
+    TARGETS
+        tt_fabric
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
+)
 install(
     TARGETS
         tt_metal

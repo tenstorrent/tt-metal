@@ -51,7 +51,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init_short(in0_cb, num_tiles);
+    tilize_init_short(in0_cb, num_tiles, out_cb);
     cb_wait_front(sync_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     tilize_block(in0_cb, num_tiles, out_cb);
@@ -60,7 +60,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     // Pop shared cbs after tilize
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb);
+    tilize_uninit(in0_cb, out_cb);
 }
 
 namespace NAMESPACE {

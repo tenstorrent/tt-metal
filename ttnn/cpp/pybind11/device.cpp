@@ -108,6 +108,18 @@ void py_device_module_types(py::module& m_device) {
     py::class_<SubDeviceId>(m_device, "SubDeviceId", "ID of a sub-device.");
 
     py::class_<SubDeviceManagerId>(m_device, "SubDeviceManagerId", "ID of a sub-device manager.");
+
+    py::class_<tt::tt_metal::detail::MemoryView>(
+        m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
+        .def_readonly("num_banks", &tt::tt_metal::detail::MemoryView::num_banks)
+        .def_readonly("total_bytes_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_per_bank)
+        .def_readonly(
+            "total_bytes_allocated_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_allocated_per_bank)
+        .def_readonly("total_bytes_free_per_bank", &tt::tt_metal::detail::MemoryView::total_bytes_free_per_bank)
+        .def_readonly(
+            "largest_contiguous_bytes_free_per_bank",
+            &tt::tt_metal::detail::MemoryView::largest_contiguous_bytes_free_per_bank)
+        .def_readonly("block_table", &tt::tt_metal::detail::MemoryView::block_table);
 }
 
 void device_module(py::module& m_device) {
@@ -239,6 +251,27 @@ void device_module(py::module& m_device) {
 
                 Args:
                     sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
+            )doc")
+        .def(
+            "set_sub_device_stall_group",
+            [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
+                device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
+            },
+            py::arg("sub_device_ids"),
+            R"doc(
+                Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
+                Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
+                The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
+
+                Args:
+                    sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
+            )doc")
+        .def(
+            "reset_sub_device_stall_group",
+            [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
+            R"doc(
+                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
+                back to all SubDevice IDs.
             )doc")
         .def("sfpu_eps", &IDevice::sfpu_eps, R"doc(Returns machine epsilon value for current device.)doc")
         .def("sfpu_nan", &IDevice::sfpu_nan, R"doc(Returns NaN value for current device.)doc")
@@ -517,6 +550,22 @@ void device_module(py::module& m_device) {
     )doc");
 
     m_device.def(
+        "GetMemoryView",
+        &tt::tt_metal::detail::GetMemoryView,
+        py::arg().noconvert(),
+        py::arg().noconvert(),
+        R"doc(
+        Populates MemoryView for BufferType [dram, l1, l1 small, trace]. Used when storing to disk is not an option.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump memory state for  | ttnn.Device           |             | Yes      |
+        | buffer_type      | Type of buffer for memory view   | ttnn.BufferType       |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
+
+    m_device.def(
         "synchronize_device",
         [](IDevice* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             // Send finish command to issue queue through worker thread
@@ -536,7 +585,7 @@ void device_module(py::module& m_device) {
                 Args:
                     device (ttnn.device.Device): The device to synchronize with.
                     cq_id (int, optional): The command queue ID to synchronize. Defaults to `None`.
-                    sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchronize. Defaults to all sub-devices.
+                    sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchronize. Defaults to sub-devices set by set_sub_device_stall_group.
 
                 Returns:
                     `None`: The op ensures that all operations are completed.

@@ -1038,6 +1038,12 @@ void pytensor_module(py::module& m_tensor) {
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
         .def_property_readonly("shape", [](const Tensor& self) { return self.get_shape(); })
+        .def_property_readonly(
+            "logical_shape",
+            [](const Tensor& self) {
+                auto logical_shape = self.get_logical_shape();
+                return std::vector<uint32_t>(logical_shape.cbegin(), logical_shape.cend());
+            })
         .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
         .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
         .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })
@@ -1050,21 +1056,15 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
-                &Tensor::to, py::const_),
+            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t>(&Tensor::to, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-            ``sub_device_ids`` can be used to specify which specific sub devices to wait on before writing the tensor to device memory.
-
-            If it is not provided, device will stall for all programs of the specified cq to finish before writing the tensor to device memory.
 
             If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
 
@@ -1076,8 +1076,6 @@ void pytensor_module(py::module& m_tensor) {
             | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg3      | Sub device IDs to wait on before writing tensor | List[ttnn.SubDeviceId]     |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
             .. code-block:: python
@@ -1092,21 +1090,15 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t, const std::vector<SubDeviceId>&>(
-                &Tensor::to, py::const_),
+            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t>(&Tensor::to, py::const_),
             py::arg("mesh_device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             py::keep_alive<0, 2>(),
             R"doc(
             Move TT Tensor from host device to TT accelerator device.
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-            ``sub_device_ids`` can be used to specify which specific sub devices to wait on before writing the tensor to device memory.
-
-            If it is not provided, device will stall for all programs of the specified cq to finish before writing the tensor to device memory.
 
             If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
 
@@ -1118,8 +1110,6 @@ void pytensor_module(py::module& m_tensor) {
             | arg1      | MemoryConfig of tensor of TT accelerator device | ttnn.MemoryConfig          |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | arg2      | CQ ID of TT accelerator device to use           | uint8_t                    |                       | No       |
-            +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
-            | arg3      | Sub device IDs to wait before writing tensor    | List[ttnn.SubDeviceId]     |                       | No       |
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
 
             .. code-block:: python
@@ -1175,18 +1165,11 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self, bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-                return self.cpu(blocking, cq_id, sub_device_ids);
-            },
+            [](const Tensor& self, bool blocking, uint8_t cq_id) { return self.cpu(blocking, cq_id); },
             py::arg("blocking") = true,
             py::arg("cq_id") = ttnn::DefaultQueueId,
-            py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
             R"doc(
             Move TT Tensor from TT accelerator device to host device.
-
-            ``sub_device_ids`` can be used to specify which specific sub devices to wait on before reading the tensor from device memory.
-
-            If it is not provided, device will stall waiting for all programs of the specified cq to finish before reading the tensor from device memory.
 
             .. code-block:: python
 

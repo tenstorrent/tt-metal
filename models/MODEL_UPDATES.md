@@ -4,6 +4,12 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## January 13, 2025
+
+### [Llama 3.1/3.2](demos/llama3)
+- Integrated Llama3 models (1B/3B/8B/11B/70B) into [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal) for all compatible Tenstorrent devices (N150/N300/T3000/Galaxy).
+- Enabled prefill with the maximum context length (131072) when running the Llama3 text models on smaller devices (N150/N300) via chunked prefill.
+
 ## December 16, 2024
 
 ### [Llama 3.1/3.2](demos/llama3)

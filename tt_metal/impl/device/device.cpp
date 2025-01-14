@@ -28,10 +28,6 @@
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "tt_metal/types.hpp"
-#include "noc/noc_parameters.h"
-
-// FIXME: ARCH_NAME specific
-#include "eth_l1_address_map.h"
 #include "impl/dispatch/topology.hpp"
 
 namespace tt {
@@ -455,10 +451,10 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     this->initialize_device_bank_to_noc_tables(core_type, virtual_core);
     uint32_t core_type_idx = hal.get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal.get_processor_classes_count(core_type);
+    auto jit_build_config = hal.get_jit_build_config(core_type_idx, 0, 0); // Only the first risc needs to be programmed
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
-            llrt::program_risc_startup_addr(this->id(), virtual_core);
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                 auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
                 for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
@@ -514,11 +510,6 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
                     }
                 }
             }
-            if (is_idle_eth) {
-                llrt::program_risc_startup_addr(this->id(), virtual_core);
-            } else {
-                llrt::launch_erisc_app_fw_on_core(this->id(), virtual_core);
-            }
             // Ethernet worker core. Launch messages will be sent by FD infra if it's enabled
             // Idle ethernet core. Used by FD infra. Host will write launch messages during init.
             launch_msg->kernel_config.mode = (this->using_slow_dispatch() or is_idle_eth) ? DISPATCH_MODE_HOST :  DISPATCH_MODE_DEV;
@@ -527,6 +518,9 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
         default:
             TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
     }
+
+    tt::Cluster::instance().write_core(
+        &jit_build_config.fw_launch_addr_value, sizeof(uint32_t), tt_cxy_pair(this->id_, virtual_core), jit_build_config.fw_launch_addr);
 
     // Initialize each entry in the launch_msg ring buffer with the correct dispatch mode - Cores that don't get a valid
     // launch_message during program execution need to at least have the correct dispatch mode.
@@ -759,12 +753,14 @@ void Device::initialize_and_launch_firmware() {
     }
 
     // Clear erisc sync info
-    std::vector<uint32_t> zero_vec_erisc_init(eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE / sizeof(uint32_t), 0);
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
+
+        static std::vector<uint32_t> zero_vec_erisc_init(hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO) / sizeof(uint32_t), 0);
+
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
-            this->id(), virtual_core, zero_vec_erisc_init, eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE);
+            this->id(), virtual_core, zero_vec_erisc_init, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::APP_SYNC_INFO));
     }
 
     // Load erisc app base FW to eth cores
@@ -818,20 +814,22 @@ void Device::clear_l1_state() {
 
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
-    std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-        (eth_l1_mem::address_map::MAX_L1_LOADING_SIZE - eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE) / sizeof(uint32_t),
-        0);
-
     // Clear erisc sync info
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
+
+        static const uint32_t max_l1_loading_size = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) + hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+
+        static std::vector<uint32_t> zero_vec_above_tile_header_buffer(
+            (max_l1_loading_size - hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER)) / sizeof(uint32_t), 0);
+
+
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
 
         llrt::write_hex_vec_to_core(
             this->id(),
             virtual_core,
             zero_vec_above_tile_header_buffer,
-            eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE);
-
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
     }
     // TODO: clear idle eriscs as well
 }
@@ -1299,6 +1297,8 @@ void Device::reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceMana
     }
     // Reset the launch_message ring buffer state seen on host
     sub_device_manager->reset_worker_launch_message_buffer_state();
+
+    sub_device_manager->reset_sub_device_stall_group();
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -1429,6 +1429,11 @@ void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &ou
 void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
     return allocator::dump_memory_blocks(*allocator, buffer_type, out);
+}
+
+MemoryBlockTable Device::get_memory_block_table(const BufferType& buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_memory_block_table(*allocator, buffer_type);
 }
 
 const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
@@ -1711,7 +1716,8 @@ void Device::generate_device_bank_to_noc_tables()
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
             uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
             uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);
         }
     }
@@ -1723,7 +1729,8 @@ void Device::generate_device_bank_to_noc_tables()
             auto l1_noc_coords = this->virtual_noc0_coordinate(noc, l1_noc_coord_per_bank[bank_id]);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
-            uint16_t xy = ((noc_y << NOC_ADDR_NODE_ID_BITS) | noc_x) << NOC_COORD_REG_OFFSET;
+            uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
+                          << tt::tt_metal::hal.get_noc_coord_reg_offset();
             l1_bank_to_noc_xy_.push_back(xy);
         }
     }
@@ -1831,6 +1838,18 @@ void Device::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id)
 
 const std::vector<SubDeviceId> &Device::get_sub_device_ids() const {
     return this->active_sub_device_manager_->get_sub_device_ids();
+}
+
+const std::vector<SubDeviceId> &Device::get_sub_device_stall_group() const {
+    return this->active_sub_device_manager_->get_sub_device_stall_group();
+}
+
+void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    this->active_sub_device_manager_->set_sub_device_stall_group(sub_device_ids);
+}
+
+void Device::reset_sub_device_stall_group() {
+    this->active_sub_device_manager_->reset_sub_device_stall_group();
 }
 
 DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type) const {

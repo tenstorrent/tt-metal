@@ -162,6 +162,10 @@ class Cluster {
     // Converts logical ethernet core coord to physical ethernet core coord
     CoreCoord ethernet_core_from_logical_core(chip_id_t chip_id, const CoreCoord &logical_core) const;
 
+    // Returns virtual eth coord from channel
+    CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const;
+
+
     // Bookkeeping for mmio device tunnels
     uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
     uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
@@ -201,6 +205,10 @@ class Cluster {
             mmio_device_id);
         return this->devices_grouped_by_assoc_mmio_device_.at(mmio_device_id);
     }
+
+    // Returns map of connected chip ids to active ethernet cores
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
+        chip_id_t chip_id) const;
 
     // Returns vector of unique tunnels originating from mmio device.
     // Each vector entry is another vector of remote devices on that tunnel.
@@ -242,9 +250,7 @@ class Cluster {
 
     // Reserves ethernet cores in cluster for tunneling
     void reserve_ethernet_cores_for_tunneling();
-    // Returns map of connected chip ids to active ethernet cores
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
-        chip_id_t chip_id) const;
+
     void initialize_ethernet_sockets();
 
     // Set tunnels from mmio
@@ -298,6 +304,8 @@ class Cluster {
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
+
+    uint32_t routing_info_addr_ = 0;
 };
 
 }  // namespace tt

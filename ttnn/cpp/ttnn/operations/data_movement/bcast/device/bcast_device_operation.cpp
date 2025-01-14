@@ -50,12 +50,12 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     TT_FATAL(is_floating_point(input_tensor_a.get_dtype()), "Unsupported data format");
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
         TT_FATAL(is_floating_point(output_tensors.at(0).value().get_dtype()), "Unsupported data format");
-        const std::vector<ttnn::SimpleShape> output_shape_required = this->compute_output_shapes(input_tensors);
+        const auto output_spec_required = this->compute_output_specs(input_tensors, output_tensors);
         const auto& out_tensor = output_tensors.at(0).value();
         TT_FATAL(
-            out_tensor.get_logical_shape() == output_shape_required.at(0),
+            out_tensor.get_logical_shape() == output_spec_required.at(0).logical_shape(),
             "The input tensors need a shape of {}, however the output tensor is only {}",
-            output_shape_required,
+            output_spec_required.at(0).logical_shape(),
             out_tensor.get_legacy_shape());
     }
     if (this->in_place) {
@@ -122,16 +122,10 @@ void EltwiseBinaryBroadcast::validate_with_output_tensors(
     }
 }
 
-std::vector<ttnn::SimpleShape> EltwiseBinaryBroadcast::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_logical_shape()};
-}
-
-std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
+std::vector<ttnn::TensorSpec> EltwiseBinaryBroadcast::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
-        return {output_tensors.at(0).value()};
+        return {output_tensors.at(0)->get_tensor_spec()};
     }
     if (this->in_place) {
         return {};
@@ -145,16 +139,36 @@ std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
         }
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = shard_spec;
-        return {create_device_tensor(
-            input_tensor.get_legacy_shape(),
-            input_tensor.get_dtype(),
-            Layout::TILE,
-            input_tensor.device(),
-            mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
+        return {TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                input_tensor.get_dtype(),
+                PageConfig(Layout::TILE),
+                mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape()))};
     }
+
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            PageConfig(Layout::TILE),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
+}
+
+std::vector<Tensor> EltwiseBinaryBroadcast::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (!output_tensors.empty() && output_tensors.at(0).has_value()) {
+        return {output_tensors.at(0).value()};
+    }
+    if (this->in_place) {
+        return {};
+    }
+    auto spec = compute_output_specs(input_tensors, output_tensors)[0];
+    return {create_device_tensor(spec, input_tensors.at(0).device())};
 }
 
 operation::ProgramWithCallbacks EltwiseBinaryBroadcast::create_program(

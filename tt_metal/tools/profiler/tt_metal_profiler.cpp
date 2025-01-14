@@ -59,26 +59,36 @@ std::mutex device_mutex;
 
 constexpr CoreCoord SYNC_CORE = {0, 0};
 
-void setControlBuffer(uint32_t device_id, std::vector<uint32_t>& control_buffer) {
+void setControlBuffer(IDevice* device, std::vector<uint32_t>& control_buffer) {
 #if defined(TRACY_ENABLE)
+    auto device_id = device->id();
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
 
-    for (auto& core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
-        profiler_msg_t* profiler_msg;
-        if (tt::Cluster::instance().is_worker_core(core.first, device_id)) {
-            profiler_msg =
-                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+    for (auto core : tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id)) {
+        HalProgrammableCoreType CoreType;
+        auto curr_core = core.first;
+        if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+            CoreType = HalProgrammableCoreType::TENSIX;
         } else {
-            // ETH
-            profiler_msg =
-                hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+            CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+            auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+            if (active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                    device_id, curr_core)) != active_eth_cores.end()) {
+                CoreType = tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+            }
+            auto idle_eth_cores = tt::Cluster::instance().get_inactive_ethernet_cores(device_id);
+            if (idle_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                    device_id, curr_core)) != idle_eth_cores.end()) {
+                CoreType = tt_metal::HalProgrammableCoreType::IDLE_ETH;
+            }
         }
+        profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
         tt::llrt::write_hex_vec_to_core(
-            device_id, core.first, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
+            device_id, curr_core, control_buffer, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 #endif
 }
@@ -262,7 +272,7 @@ void syncDeviceHost(
 void ClearProfilerControlBuffer(IDevice* device) {
     auto device_id = device->id();
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    setControlBuffer(device_id, control_buffer);
+    setControlBuffer(device, control_buffer);
 }
 
 void InitDeviceProfiler(IDevice* device) {
@@ -307,7 +317,7 @@ void InitDeviceProfiler(IDevice* device) {
         std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS] =
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer->address();
-        setControlBuffer(device_id, control_buffer);
+        setControlBuffer(device, control_buffer);
 
         std::vector<uint32_t> inputs_DRAM(
             tt_metal_device_profiler_map.at(device_id).output_dram_buffer->size() / sizeof(uint32_t), 0);
@@ -355,9 +365,6 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
             const auto curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
             worker_cores.push_back(curr_core);
         }
-        for (const CoreCoord& core : tt::Cluster::instance().get_virtual_eth_cores(device_id)) {
-            worker_cores.push_back(core);
-        }
     }
     if (getDeviceProfilerState()) {
         if (!lastDump) {
@@ -367,60 +374,54 @@ void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_co
             }
         } else {
             if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
-                bool waitForDispatch = true;
-                uint8_t loopCount = 0;
-                CoreCoord unfinishedCore = {0, 0};
+                auto device_id = device->id();
                 constexpr uint8_t maxLoopCount = 10;
                 constexpr uint32_t loopDuration_us = 10000;
-                while (waitForDispatch) {
-                    waitForDispatch = false;
-                    std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
-                    auto device_id = device->id();
-                    auto device_num_hw_cqs = device->num_hw_cqs();
-                    loopCount++;
-                    if (loopCount > maxLoopCount) {
-                        std::string msg = fmt::format(
-                            "Device profiling never finished on device {}, worker core {}, {}",
-                            device_id,
-                            unfinishedCore.x,
-                            unfinishedCore.y);
-                        TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
-                        log_warning(msg.c_str());
-                        break;
+                auto device_num_hw_cqs = device->num_hw_cqs();
+                std::vector<CoreCoord> dispatchCores =
+                    tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config);
+
+                while (dispatchCores.size() > 0) {
+                    bool coreDone = false;
+
+                    auto curr_core = device->virtual_core_from_logical_core(dispatchCores[0], dispatch_core_type);
+
+                    HalProgrammableCoreType CoreType;
+                    if (tt::Cluster::instance().is_worker_core(curr_core, device_id)) {
+                        CoreType = HalProgrammableCoreType::TENSIX;
+                    } else {
+                        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+                        bool is_active_eth_core =
+                            active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                                device_id, curr_core)) != active_eth_cores.end();
+
+                        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
                     }
-                    for (const CoreCoord& core :
-                         tt::get_logical_dispatch_cores(device_id, device_num_hw_cqs, dispatch_core_config)) {
-                        const auto curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
-                        profiler_msg_t* profiler_msg =
-                            device->get_dev_addr<profiler_msg_t*>(curr_core, HalL1MemAddrType::PROFILER);
+                    profiler_msg_t* profiler_msg =
+                        hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
+                    for (int i = 0; i < maxLoopCount; i++) {
                         std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
                             device_id,
                             curr_core,
                             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
                             kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0) {
-                            unfinishedCore = curr_core;
-                            waitForDispatch = true;
-                            continue;
+                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
+                            coreDone = true;
+                            break;
                         }
+                        std::this_thread::sleep_for(std::chrono::microseconds(loopDuration_us));
                     }
-                    if (waitForDispatch) {
-                        continue;
-                    }
-                    for (const CoreCoord& virtual_core : tt::Cluster::instance().get_virtual_eth_cores(device_id)) {
-                        profiler_msg_t* profiler_msg =
-                            device->get_dev_addr<profiler_msg_t*>(virtual_core, HalL1MemAddrType::PROFILER);
-                        std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
+                    if (!coreDone) {
+                        std::string msg = fmt::format(
+                            "Device profiling never finished on device {}, worker core {}, {}",
                             device_id,
-                            virtual_core,
-                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
-                        if (control_buffer[kernel_profiler::PROFILER_DONE] == 0) {
-                            unfinishedCore = virtual_core;
-                            waitForDispatch = true;
-                            continue;
-                        }
+                            curr_core.x,
+                            curr_core.y);
+                        TracyMessageC(msg.c_str(), msg.size(), tracy::Color::Tomato3);
+                        log_warning(msg.c_str());
                     }
+                    dispatchCores.erase(dispatchCores.begin());
                 }
             }
         }

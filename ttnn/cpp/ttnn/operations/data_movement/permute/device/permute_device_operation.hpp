@@ -26,7 +26,7 @@ struct PermuteDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using shape_return_value_t = ttnn::SimpleShape;  // waiting on TensorSpec here
+    using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = Tensor;
 
@@ -72,8 +72,29 @@ struct PermuteDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
+    struct MultiCoreTileInvariant {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
-    using program_factory_t = std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric>;
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric, MultiCoreTileInvariant>;
 
     // Mandatory methods
 
@@ -87,7 +108,7 @@ struct PermuteDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
