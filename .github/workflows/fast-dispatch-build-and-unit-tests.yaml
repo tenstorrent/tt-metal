@@ -82,7 +82,7 @@ jobs:
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e ARCH_NAME=${{ matrix.arch }}
+            -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report
