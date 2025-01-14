@@ -30,7 +30,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
     Program program = CreateProgram();
 
     // Initialize data
-    auto input_shape_tmp = input.get_shape();
+    const auto& input_shape_tmp = input.get_logical_shape();
     std::vector<int64_t> input_shape;
 
     // Strip empty leading dimensions (for what we are doing next, this spell P-A-I-N)
@@ -49,7 +49,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
         input_shape.push_back(1);
     }
 
-    auto output_shape = output.get_shape();
+    const auto& output_shape = output.get_logical_shape();
     uint32_t data_size = input.element_size();
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 

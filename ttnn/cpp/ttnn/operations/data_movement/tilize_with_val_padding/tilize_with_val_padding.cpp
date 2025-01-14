@@ -21,11 +21,13 @@ using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<SimpleShape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
-            *original_shape = input_tensor.get_shape();
+            *original_shape = input_tensor.get_logical_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },

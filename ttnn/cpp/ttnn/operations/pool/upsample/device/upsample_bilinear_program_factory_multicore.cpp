@@ -49,10 +49,9 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .snap_to_tile = false,
         .is_bilinear = true};
 
-    input_tensor = ttnn::reshape(
-        input_tensor,
-        SimpleShape(std::array<uint32_t, 4>{
-            1, 1, input.get_shape()[0] * input.get_shape()[1] * input.get_shape()[2], input.get_shape()[3]}));
+    const auto& input_shape = input.get_logical_shape();
+    SimpleShape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(
         DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, 0, input_tensor.memory_config(), false);
