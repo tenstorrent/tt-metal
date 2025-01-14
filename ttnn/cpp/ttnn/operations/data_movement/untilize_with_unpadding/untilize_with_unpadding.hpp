@@ -13,7 +13,6 @@ struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        // const tt::tt_metal::LegacyShape& output_tensor_end,
         const ttnn::SimpleShape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
@@ -21,7 +20,6 @@ struct ExecuteUntilizeWithUnpadding {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        // const tt::tt_metal::LegacyShape& output_tensor_end,
         const ttnn::SimpleShape& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
@@ -30,7 +28,6 @@ struct ExecuteUntilizeWithUnpadding {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        // const tt::tt_metal::LegacyShape& output_tensor_end,
         const ttnn::SmallVector<uint32_t>& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
@@ -38,7 +35,6 @@ struct ExecuteUntilizeWithUnpadding {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        // const tt::tt_metal::LegacyShape& output_tensor_end,
         const ttnn::SmallVector<uint32_t>& output_tensor_end,
         const std::optional<MemoryConfig>& memory_config,
         bool use_multicore = true,
