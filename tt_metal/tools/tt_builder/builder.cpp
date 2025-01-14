@@ -7,6 +7,7 @@
 #include "tt_metal/common/utils.hpp"
 #include "tt_metal/jit_build/build.hpp"
 #include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/tools/tt_builder/builder.hpp"
 #include "llrt/hal.hpp"
 #include <magic_enum/magic_enum.hpp>
@@ -160,5 +161,10 @@ void BuilderTool::build_firmware() {
     tt_metal::CloseDevice(device);
 }
 
-void BuilderTool::build_dispatch() { throw(runtime_error("Dispatch Build not implemented for builder")); }
+void BuilderTool::build_dispatch() {
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    device->init_command_queue_host();
+    populate_fd_kernels({device_id}, num_hw_cqs);
+    create_and_compile_cq_program(device);
+}
 }  // namespace tt::tt_metal
