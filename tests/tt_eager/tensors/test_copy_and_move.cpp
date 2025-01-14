@@ -18,7 +18,7 @@ using namespace constants;
 
 bool test_tensor_copy_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::SimpleShape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     // host tensor to host tensor copy constructor
     Tensor host_a = ttnn::random::random(single_tile_shape).to(Layout::TILE);
@@ -37,7 +37,7 @@ bool test_tensor_copy_semantics(IDevice* device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::arange(/*start=*/0, /*stop=*/tt_metal::compute_volume(single_tile_shape), /*step=*/1)
+    Tensor host_c = ttnn::arange(/*start=*/0, /*stop=*/single_tile_shape.volume(), /*step=*/1)
                         .reshape(single_tile_shape)
                         .to(Layout::TILE);
     Tensor host_c_copy = ttnn::random::random(single_tile_shape).to(Layout::TILE);
@@ -79,7 +79,7 @@ bool test_tensor_copy_semantics(IDevice* device) {
 
 bool test_tensor_move_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::SimpleShape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     auto random_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data = owned_buffer::get_as<bfloat16>(random_tensor);
@@ -145,7 +145,7 @@ bool test_tensor_move_semantics(IDevice* device) {
 
 bool test_tensor_deallocate_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::SimpleShape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
@@ -187,7 +187,7 @@ bool test_tensor_deallocate_semantics(IDevice* device) {
 
 bool test_tensor_deallocate_and_close_device(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::SimpleShape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
