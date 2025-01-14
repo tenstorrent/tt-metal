@@ -480,9 +480,10 @@ void device_module(py::module& m_device) {
            bool pad_c = false,
            bool pad_n = false,
            bool pad_h = true,
-           bool pad_w = true) -> tt::tt_metal::LegacyShape {
-            return ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                unpadded_shape, pad_c, pad_n, pad_h, pad_w);
+           bool pad_w = true) -> std::vector<uint32_t> {
+            auto result = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                ttnn::SimpleShape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
+            return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),
         py::arg("pad_c") = false,

@@ -618,8 +618,8 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }();
 
     if (legacy_output) {
-        auto shape = tt_tensor.get_legacy_shape();
-        torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
+        auto shape = tt_tensor.get_padded_shape();
+        torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
     tensor = tensor.attr("reshape")(torch_shape);
     tensor = tensor.attr("contiguous")();
