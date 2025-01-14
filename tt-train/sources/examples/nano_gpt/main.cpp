@@ -251,7 +251,7 @@ void generate(
             Layout::ROW_MAJOR));
 
         // Forward pass
-        // 'output' shape is presumably [batch=1, seq_len, vocab_size] or something similar
+        // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
         auto output = (*model)(prompt_tensor, mask_tensor);
 
         // Convert last position's logits to a std::vector
