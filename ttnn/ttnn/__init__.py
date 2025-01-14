@@ -174,6 +174,7 @@ from ttnn.device import (
     manage_device,
     synchronize_device,
     dump_device_memory_state,
+    get_memory_view,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
