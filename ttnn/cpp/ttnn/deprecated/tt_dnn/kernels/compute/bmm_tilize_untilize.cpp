@@ -32,7 +32,7 @@ inline void tilize_in(
     // UNPACK(( kernel_sleep(100) ));
     UNPACK((llk_unpack_reconfig_data_format(1, 0, 0, 0)));
     MATH((llk_math_reconfig_data_format(1, 0, 0, 0)));
-    tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -42,7 +42,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit_with_dt(0, 1);
+    tilize_uninit_with_dt(0, 1, out_cb_id);
 }  // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
