@@ -1,6 +1,6 @@
 set(DISTRIBUTED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/coordinate_translation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/distributed.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_handle.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/system_mesh.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_device_view.cpp

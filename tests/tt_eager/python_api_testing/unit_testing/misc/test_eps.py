@@ -19,7 +19,7 @@ def test_run_sfpu_eps(device):
         Arch.BLACKHOLE: 1.1920899822825959e-07,
     }
     value = eps_mapping[device.arch()]
-    assert np.isclose(value, device.sfpu_eps())
+    assert value == device.sfpu_eps()
 
 
 def test_run_sfpu_tensor(device):

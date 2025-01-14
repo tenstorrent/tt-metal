@@ -30,7 +30,6 @@ public:
     SystemMesh(SystemMesh&&) = delete;
     SystemMesh& operator=(SystemMesh&&) = delete;
 
-    // Get the shape of the logical mesh
     const MeshShape& get_shape() const;
     size_t get_num_devices() const;
 

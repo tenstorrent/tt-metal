@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "tt_metal/include/tt_metal/device.hpp"
-#include "tt_metal/distributed/mesh_handle.hpp"
 
 #include "tt_metal/distributed/mesh_config.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
@@ -25,8 +24,30 @@ class MeshSubDeviceManagerId;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
-    std::shared_ptr<IMeshHandle> mesh_handle_;
+    // Resource management class / RAII wrapper for *physical devices* of the mesh
+    class ScopedDevices {
+    private:
+        std::map<chip_id_t, IDevice*> opened_devices_;
+        std::vector<IDevice*> devices_;
 
+    public:
+        // Constructor acquires physical resources
+        ScopedDevices(
+            size_t l1_small_size,
+            size_t trace_region_size,
+            size_t num_command_queues,
+            const DispatchCoreConfig& dispatch_core_config,
+            const MeshDeviceConfig& config);
+
+        // Destructor releases physical resources
+        ~ScopedDevices();
+        ScopedDevices(const ScopedDevices&) = delete;
+        ScopedDevices& operator=(const ScopedDevices&) = delete;
+
+        const std::vector<IDevice*>& get_devices() const;
+    };
+
+    std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
     MeshShape mesh_shape_;
     MeshType type_;
@@ -43,7 +64,7 @@ private:
 
 public:
     MeshDevice(
-        std::shared_ptr<IMeshHandle> mesh_handle,
+        std::shared_ptr<ScopedDevices> mesh_handle,
         const MeshShape& mesh_shape,
         MeshType type,
         std::weak_ptr<MeshDevice> parent_mesh = {});
@@ -201,6 +222,7 @@ public:
     uint32_t get_completion_queue_reader_core() const override;
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override;
+    MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

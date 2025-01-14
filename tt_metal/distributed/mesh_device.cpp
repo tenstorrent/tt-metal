@@ -11,7 +11,7 @@
 
 #include "tt_metal/common/logger.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/distributed/mesh_handle.hpp"
+#include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/distributed/system_mesh.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
 #include "tt_metal/distributed/mesh_command_queue.hpp"
@@ -26,6 +26,33 @@ MeshDeviceID generate_unique_mesh_id() {
     return next_id++;
 }
 }
+
+MeshDevice::ScopedDevices::ScopedDevices(
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    const MeshDeviceConfig& config) {
+    auto& system_mesh = SystemMesh::instance();
+    auto physical_device_ids = system_mesh.request_available_devices(config);
+
+    opened_devices_ = tt::tt_metal::detail::CreateDevices(
+        physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+
+    for (auto physical_device_id : physical_device_ids) {
+        devices_.push_back(opened_devices_.at(physical_device_id));
+    }
+}
+
+MeshDevice::ScopedDevices::~ScopedDevices() {
+    if (not opened_devices_.empty()) {
+        tt::tt_metal::detail::CloseDevices(opened_devices_);
+        opened_devices_.clear();
+        devices_.clear();
+    }
+}
+
+const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_; }
 
 uint32_t MeshDevice::build_key() const {
     TT_FATAL(tt::tt_metal::hal.is_coordinate_virtualization_enabled(), "MeshDevice::build_key() expects coordinate virtualization to be enabled");
@@ -44,8 +71,8 @@ uint32_t MeshDevice::dram_size_per_channel() const { return reference_device()->
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-MeshDevice::MeshDevice(std::shared_ptr<IMeshHandle> mesh_handle, const MeshShape& mesh_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
-    mesh_handle_(std::move(mesh_handle)),
+MeshDevice::MeshDevice(std::shared_ptr<ScopedDevices> mesh_handle, const MeshShape& mesh_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
+    scoped_devices_(std::move(mesh_handle)),
     mesh_shape_(mesh_shape),
     type_(type),
     mesh_id_(generate_unique_mesh_id()),
@@ -58,7 +85,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config) {
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::make_shared<MeshHandle>(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
+        std::make_shared<ScopedDevices>(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
         config.mesh_shape,
         config.mesh_type);
     mesh_device->initialize();
@@ -90,7 +117,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
             mesh_shape_.num_cols);
     }
 
-    auto submesh = std::make_shared<MeshDevice>(mesh_handle_, submesh_shape, type, shared_from_this());
+    auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, type, shared_from_this());
     auto start_coordinate = Coordinate{offset.row, offset.col};
     auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
 
@@ -123,7 +150,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 }
 
 void MeshDevice::initialize() {
-    view_ = std::make_unique<MeshDeviceView>(mesh_handle_->get_devices(), mesh_shape_);
+    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
     SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
     if (this->using_fast_dispatch()) {
         mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
@@ -219,7 +246,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     }
 
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(mesh_handle_->get_devices(), mesh_shape_);
+    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
 }
 
 bool MeshDevice::close() {
@@ -227,8 +254,8 @@ bool MeshDevice::close() {
         submesh->close();
     }
     submeshes_.clear();
-    if (mesh_handle_) {
-        mesh_handle_.reset();
+    if (scoped_devices_) {
+        scoped_devices_.reset();
     }
     parent_mesh_.reset();
     view_.reset();
@@ -635,6 +662,11 @@ void MeshDevice::deallocate_buffers() { reference_device()->deallocate_buffers()
 void MeshDevice::deallocate_buffers(SubDeviceId sub_device_id) { reference_device()->deallocate_buffers(sub_device_id); }
 void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const { reference_device()->dump_memory_blocks(buffer_type, out); }
 void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const { reference_device()->dump_memory_blocks(buffer_type, out, sub_device_id); }
+
+MemoryBlockTable MeshDevice::get_memory_block_table(const BufferType& buffer_type) const {
+    TT_THROW("get_memory_block_table() is not supported on MeshDevice - use individual devices instead");
+    return reference_device()->get_memory_block_table(buffer_type);
+}
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {

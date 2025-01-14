@@ -23,6 +23,19 @@ struct MeshShape {
     size_t num_cols = 0;
 };
 
+/**
+ * @brief Defines the organization of physical devices in a user-defined MeshDevice.
+ *
+ * The mesh type imposes properties on the physical connectivity of devices:
+ *
+ * - RowMajor: Devices are arranged in a 2D grid and accessed in row-major order.
+ *             This is the default configuration for most multi-device setups.
+ *
+ * - Ring: Devices are arranged in a circular topology where each device is connected
+ *         to its neighbors, forming a ring structure.
+ *
+ * - Line: Devices are arranged linearly in a single dimension.
+ */
 enum class MeshType { RowMajor, Ring, Line };
 
 struct MeshDeviceConfig {
