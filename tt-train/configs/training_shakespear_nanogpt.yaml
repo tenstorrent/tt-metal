@@ -2,6 +2,7 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 500
+  model_path: "test.msgpack"
   batch_size: 64
   num_epochs: 1
   max_steps: 5000
@@ -20,3 +21,10 @@ training_config:
     runner_type: default
     experimental:
       use_composite_layernorm: false
+
+
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0
