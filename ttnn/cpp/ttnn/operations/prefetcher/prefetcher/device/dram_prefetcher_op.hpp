@@ -17,6 +17,10 @@
 
 namespace ttnn::operations::dram_prefetcher {
 
+using DeviceGlobalCircularBuffer = std::variant<
+    tt::tt_metal::v1::experimental::GlobalCircularBuffer,
+    ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>;
+
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
@@ -27,8 +31,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
     const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer& multi_global_cb);
 
 struct DramPrefetcher {
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
-    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_global_cb;
+    const std::optional<const DeviceGlobalCircularBuffer> global_cb;
     const uint32_t num_layers;
 
     void validate(const std::vector<Tensor>& input_tensors) const;

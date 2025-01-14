@@ -32,6 +32,7 @@ public:
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
+    GlobalCircularBuffer() = default;
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
 

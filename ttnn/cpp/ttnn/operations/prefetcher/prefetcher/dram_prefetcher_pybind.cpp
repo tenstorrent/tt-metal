@@ -36,7 +36,6 @@ void bind_dram_prefetcher_operation(py::module& module) {
             py::arg("tensors"),
             py::arg("num_layers"),
             py::arg("global_cb"),
-            py::arg("multi_global_cb"),
         });
 }
 

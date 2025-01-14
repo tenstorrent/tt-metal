@@ -18,17 +18,40 @@ namespace ttnn::operations::dram_prefetcher {
 void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() > 0, "Must have at least one input tensor");
     TT_FATAL(this->num_layers > 0, "Prefetcher must run for at least 1 layer");
-    TT_FATAL(global_cb.has_value() || multi_global_cb.has_value(), "Global circular buffer must be provided");
+    TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
-    bool is_multi = multi_global_cb.has_value();
-    const tt::tt_metal::v1::experimental::GlobalCircularBuffer* single_global_cb;
-    if (is_multi) {
-        single_global_cb = &this->multi_global_cb->global_circular_buffers[0];
-    }
+    uint32_t num_receiver_cores;
+    std::visit(
+        [&](const auto& global_cb) {
+            using GlobalCBType = std::decay_t<decltype(global_cb)>;
+            if constexpr (std::is_same_v<GlobalCBType, tt::tt_metal::v1::experimental::GlobalCircularBuffer>) {
+                num_receiver_cores = global_cb.receiver_cores().num_cores();
 
-    uint32_t num_receiver_cores =
-        is_multi ? single_global_cb->receiver_cores().num_cores() : global_cb->receiver_cores().num_cores();
+                // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
+                const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
+                for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
+                    TT_FATAL(
+                        receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
+                        "Global circular buffer must have same number of receivers for each sender core");
+                }
+            } else if (std::is_same_v<GlobalCBType, ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
+                const auto& single_global_cb = global_cb.global_circular_buffers[0];
+                num_receiver_cores = single_global_cb.receiver_cores().num_cores();
+
+                // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
+                const auto& sender_receiver_core_mapping = single_global_cb.sender_receiver_core_mapping();
+                for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
+                    TT_FATAL(
+                        receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
+                        "Global circular buffer must have same number of receivers for each sender core");
+                }
+            } else {
+                TT_THROW("Global circular buffer must either be single device or multi-device type");
+            }
+        },
+        *this->global_cb);
+
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
         // Check that all tensors are on the same device
@@ -52,15 +75,6 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             "Input tensors must be of type Bfp4_b, Bfp8_b, or Float16_b");
     }
 
-    // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
-    auto sender_receiver_core_mapping =
-        is_multi ? single_global_cb->sender_receiver_core_mapping() : global_cb->sender_receiver_core_mapping();
-    for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
-        TT_FATAL(
-            receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
-            "Global circular buffer must have same number of receivers for each sender core");
-    }
-
     TT_FATAL(
         tensor_addrs.device() == input_tensors[0].device(),
         "tensors_addrs must be on the same device as the input tensors");
@@ -81,11 +95,18 @@ std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::ve
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    if (this->multi_global_cb.has_value()) {
-        return dram_prefetcher_multi_core_multi_device(input_tensors, this->num_layers, *this->multi_global_cb);
-    } else {
-        return dram_prefetcher_multi_core(input_tensors, this->num_layers, *this->global_cb);
-    }
+    return std::visit(
+        [&](const auto& global_cb) -> operation::ProgramWithCallbacks {
+            using GlobalCBType = std::decay_t<decltype(global_cb)>;
+            if constexpr (std::is_same_v<GlobalCBType, tt::tt_metal::v1::experimental::GlobalCircularBuffer>) {
+                return dram_prefetcher_multi_core(input_tensors, this->num_layers, global_cb);
+            } else if (std::is_same_v<GlobalCBType, ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
+                return dram_prefetcher_multi_core_multi_device(input_tensors, this->num_layers, global_cb);
+            } else {
+                TT_THROW("Global circular buffer must either be single device or multi-device type");
+            }
+        },
+        *this->global_cb);
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

@@ -416,8 +416,9 @@ def run_prefetcher_mm(
         ttnn.dram_prefetcher(
             tt_tensors,
             num_layers,
-            global_cb=None if is_mesh_device else global_circular_buffer,
-            multi_global_cb=global_circular_buffer if is_mesh_device else None,
+            global_cb=global_circular_buffer,
+            # global_cb=None if is_mesh_device else global_circular_buffer,
+            # multi_global_cb=global_circular_buffer if is_mesh_device else None,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
@@ -433,6 +434,7 @@ def run_prefetcher_mm(
                     program_config=program_configs[t],
                     memory_config=output_mem_configs[t],
                     compute_kernel_config=compute_kernel_config,
+                    # device_global_cb=global_circular_buffer,
                     global_cb=None if is_mesh_device else global_circular_buffer,
                     multi_global_cb=global_circular_buffer if is_mesh_device else None,
                 )
