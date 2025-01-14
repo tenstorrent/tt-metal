@@ -600,8 +600,8 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
         uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
         // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
-        uint32_t tensor_height =
-            input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2];
+        const auto& input_shape = input_tensor.get_logical_shape();
+        uint32_t tensor_height = input_shape[0] * input_shape[1] * input_shape[2];
         uint32_t round_up_size = tt::constants::TILE_HEIGHT;
         if ((use_non_tile_height || shard_layout == TensorMemoryLayout::WIDTH_SHARDED) &&
             input_tensor_.layout() == Layout::ROW_MAJOR) {
@@ -610,10 +610,10 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
         uint32_t input_tensor_height_snapped_to_tile = tt::round_up(tensor_height, input_num_cores_nhw * round_up_size);
         TT_ASSERT(input_tensor_height_snapped_to_tile >= tensor_height);
         uint32_t input_tensor_width_snapped_to_channels_alignment =
-            tt::round_up(input_tensor.get_shape()[3], input_num_cores_c * conv_config.input_channels_alignment);
+            tt::round_up(input_shape[3], input_num_cores_c * conv_config.input_channels_alignment);
         if (is_non_tile_mul_width) {
             input_tensor_width_snapped_to_channels_alignment =
-                tt::round_up(input_tensor.get_shape()[3], conv_config.input_channels_alignment);
+                tt::round_up(input_shape[3], conv_config.input_channels_alignment);
         }
 
         auto input_padded_shape = ttnn::Shape(std::array<uint32_t, 4>{
@@ -673,27 +673,25 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
     if (needs_shard_or_reshard) {
-        if (input_tensor.get_shape()[0] != 1 or input_tensor.get_shape()[1] != 1) {
-            // reshape to [1, 1, N*H*W, C]
-            input_tensor = ttnn::reshape(
-                input_tensor,
-                ttnn::SimpleShape(std::array<uint32_t, 4>{
-                    1,
-                    1,
-                    input_tensor.get_shape()[0] * input_tensor.get_shape()[1] * input_tensor.get_shape()[2],
-                    input_tensor.get_shape()[3]}));
+        auto input_shape = input_tensor.get_logical_shape();
+        if (input_shape[0] != 1 or input_shape[1] != 1) {
+            const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
+            const uint32_t channels = input_shape[3];
+            ttnn::SimpleShape new_shape({1, 1, nhw, channels});
+            input_tensor = ttnn::reshape(input_tensor, new_shape);
+            input_shape = new_shape;
         }
 
-        uint32_t tensor_height = input_tensor.get_shape()[2];
-        uint32_t tensor_width = input_tensor.get_shape()[3];
+        uint32_t tensor_height = input_shape[2];
+        uint32_t tensor_width = input_shape[3];
 
         if (!input_tensor_on_device) {
             if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                 input_tensor = ttnn::pad(
                     input_tensor,
                     tt::tt_metal::Array4D(
-                        {input_tensor.get_shape()[0],
-                         input_tensor.get_shape()[1],
+                        {input_shape[0],
+                         input_shape[1],
                          input_padded_shape[-2],
                          input_padded_shape[-1]}),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -742,12 +740,12 @@ void validate_weight_and_bias_tensors(
     const ttnn::Tensor& weight_tensor, std::optional<const ttnn::Tensor>& bias_tensor) {
     TT_ASSERT(!ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE));
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
-    TT_ASSERT(weight_tensor.get_shape().rank() == 4);
+    TT_ASSERT(weight_tensor.get_logical_shape().rank() == 4);
     // TODO: enable this assert
     // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
-        TT_ASSERT(bias_tensor.value().get_shape().rank() == 4);
+        TT_ASSERT(bias_tensor.value().get_logical_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
         // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());

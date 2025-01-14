@@ -19,10 +19,10 @@ private:
     autograd::TensorPtr m_weight;
     autograd::TensorPtr m_bias;
 
-    void initialize_tensors(uint32_t in_features, uint32_t out_features);
+    void initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias = true);
 
 public:
-    LinearLayer(uint32_t in_features, uint32_t out_features);
+    LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias = true);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
 };
