@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "reshape_pybind.hpp"
-#include "reshape.hpp"
+#include "view_pybind.hpp"
+#include "view.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>

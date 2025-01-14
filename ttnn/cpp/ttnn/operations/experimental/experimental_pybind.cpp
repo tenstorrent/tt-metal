@@ -37,7 +37,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 
-#include "ttnn/operations/experimental/reshape/reshape_pybind.hpp"
+#include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 
 namespace ttnn::operations::experimental {
 

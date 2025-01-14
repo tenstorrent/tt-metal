@@ -4,7 +4,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
-#include "reshape.hpp"
+#include "view.hpp"
 #include "tt_metal/common/constants.hpp"
 #include <functional>
 #include <ttnn/operations/functions.hpp>

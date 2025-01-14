@@ -18,7 +18,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt::tt_metal {
 namespace {

@@ -10,7 +10,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::data_movement {
 

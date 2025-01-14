@@ -15,7 +15,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 using namespace tt;
 using namespace tt_metal;
