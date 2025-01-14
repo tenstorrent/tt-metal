@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb);
+    const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer& multi_global_cb);
 
 struct DramPrefetcher {
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
