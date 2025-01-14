@@ -149,7 +149,7 @@ jobs:
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes

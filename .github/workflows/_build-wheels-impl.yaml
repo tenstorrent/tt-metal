@@ -57,7 +57,7 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         if: ${{ inputs.from-precompiled }}
         with:
-          arch: ${{ inputs.arch }}
+          arch: "any"
           python-version: ${{ env.python-version }}
       - name: Set precompiled dir for precompile builds
         if: ${{ inputs.from-precompiled }}
@@ -69,5 +69,5 @@ jobs:
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ inputs.os }}-any
           path: dist/
