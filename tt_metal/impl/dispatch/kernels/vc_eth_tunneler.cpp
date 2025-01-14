@@ -296,16 +296,18 @@ using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
                                                          false,
                                                          false>;
 
-#define SWITCH_THRESHOLD 32
+#define SWITCH_THRESHOLD 16
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
+    if constexpr (kernel_status_buf_addr_arg) {
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 4, endpoint_id_start_index);
+    }
 
     for (uint32_t i = 0; i < tunnel_lanes; i++) {
         input_queues[i].init(
@@ -340,11 +342,15 @@ void kernel_main() {
                                      input_queue_cb_mode_sequence,
                                      output_queue_network_sequence,
                                      output_queue_cb_mode_sequence>(input_queues, output_queues, timeout_cycles)) {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        if constexpr (kernel_status_buf_addr_arg) {
+            write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
+        }
         return;
     }
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
+    if constexpr (kernel_status_buf_addr_arg) {
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
+    }
 
     bool all_outputs_finished = false;
     uint64_t data_words_sent = 0;
@@ -419,7 +425,9 @@ void kernel_main() {
     }
 
     timeout = false;
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    if constexpr (kernel_status_buf_addr_arg) {
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    }
     process_queues<output_queue_network_sequence, output_queue_cb_mode_sequence>([&]<auto network_type, auto cb_mode, auto sequence_i>(auto) -> bool {
         // inputs for this output queue
         using remote_input_networks = NetworkTypeSequence<remote_sender_network_type[sequence_i]>;
@@ -433,12 +441,15 @@ void kernel_main() {
     });
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
-    set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
+    if constexpr (kernel_status_buf_addr_arg) {
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+        set_64b_result(kernel_status, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
+        set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
+        set_64b_result(kernel_status, iter, PQ_TEST_ITER_INDEX);
+
+        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+        write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    }
 }

@@ -203,9 +203,9 @@ static_assert(remote_rx_network_type != DispatchRemoteNetworkType::ETH);
 
 static_assert(demux_input_ptr_buffer && demux_input_remote_ptr_buffer);
 static_assert(demux_output_ptr_buffers[0]);
-static_assert(demux_output_ptr_buffers[1]);
-static_assert(demux_output_ptr_buffers[2]);
-static_assert(demux_output_ptr_buffers[3]);
+static_assert(demux_fan_out < 2 || demux_output_ptr_buffers[1]);
+static_assert(demux_fan_out < 3 || demux_output_ptr_buffers[2]);
+static_assert(demux_fan_out < 4 || demux_output_ptr_buffers[3]);
 
 static_assert(output_depacketize[0] || demux_output_remote_ptr_buffers[0]);
 static_assert(output_depacketize[1] || demux_fan_out < 2 || demux_output_remote_ptr_buffers[1]);

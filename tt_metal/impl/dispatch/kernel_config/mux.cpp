@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mux.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
@@ -15,6 +16,8 @@ void MuxKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
     logical_core_ = dispatch_core_manager::instance().mux_d_core(device_->id(), channel, this->cq_id_);
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    const auto ptr_base_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PACKET_QUEUE_PTRS);
     static_config_.reserved = 0;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
     static_config_.rx_queue_size_words = ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
@@ -31,10 +34,13 @@ void MuxKernel::GenerateStaticConfigs() {
     static_config_.timeout_cycles = 0;
     static_config_.output_depacketize = 0x0;
     static_config_.output_depacketize_info = 0x0;
+    // mux output queue id == mux_fan_in
+    static_config_.mux_output_ptr_buffer = get_ptr_addr(ptr_base_addr, static_config_.mux_fan_in.value());
 
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
         static_config_.input_packetize_local_sem[idx] =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.mux_input_ptr_buffers[idx] = get_ptr_addr(ptr_base_addr, idx);
     }
 }
 
@@ -53,12 +59,20 @@ void MuxKernel::GenerateDependentConfigs() {
             dependent_config_.input_packetize_upstream_sem[idx] =
                 dispatch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.remote_rx_queue_id[idx] = 1;
+            dependent_config_.mux_input_remote_ptr_buffers[idx] = 0;
             num_upstream_dispatchers++;
         } else if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(k)) {
             // Don't need to packetize input from tunneler
             dependent_config_.input_packetize[idx] = 0x0;
             dependent_config_.input_packetize_upstream_sem[idx] = 0;
             dependent_config_.remote_rx_queue_id[idx] = tunneler_kernel->GetStaticConfig().vc_count.value() * 2 - 1;
+            // Eth tunneler output queue id is offset by tunnel_lanes
+            dependent_config_.mux_input_remote_ptr_buffers[idx] =
+                tunneler_kernel->GetStaticConfig()
+                    .vc_eth_tunneler_output_ptr_buffers
+                        [dependent_config_.remote_rx_queue_id[idx].value() -
+                         tunneler_kernel->GetStaticConfig().vc_count.value()]
+                    .value();
         } else {
             TT_FATAL(false, "Unexpected kernel type upstream of MUX");
         }
@@ -73,7 +87,7 @@ void MuxKernel::GenerateDependentConfigs() {
     TT_ASSERT(downstream_kernels_.size() == 1);
     FDKernel* ds = downstream_kernels_[0];
     auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(ds);
-    TT_ASSERT(ds);
+    TT_ASSERT(tunneler_kernel);
     dependent_config_.remote_tx_queue_start_addr_words =
         tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
         (tunneler_kernel->GetStaticConfig().vc_count.value() - 1) *
@@ -82,6 +96,11 @@ void MuxKernel::GenerateDependentConfigs() {
     dependent_config_.remote_tx_x = ds->GetVirtualCore().x;
     dependent_config_.remote_tx_y = ds->GetVirtualCore().y;
     dependent_config_.remote_tx_queue_id = tunneler_kernel->GetStaticConfig().vc_count.value() - 1;
+    // Eth tunneler input id maps directly to array index
+    dependent_config_.mux_output_remote_ptr_buffer =
+        tunneler_kernel->GetStaticConfig()
+            .vc_eth_tunneler_input_ptr_buffers[dependent_config_.remote_tx_queue_id.value()]
+            .value();
 }
 
 void MuxKernel::CreateKernel() {
@@ -110,7 +129,19 @@ void MuxKernel::CreateKernel() {
         0,
         0,  // Populate input_packetize_config after
         static_config_.input_packetize_src_endpoint.value(),
-        static_config_.input_packetize_dest_endpoint.value()};
+        static_config_.input_packetize_dest_endpoint.value(),
+        // Static checks in the kernel will make sure these are non zero if they are used
+        static_config_.mux_input_ptr_buffers[0].value_or(0),
+        static_config_.mux_input_ptr_buffers[1].value_or(0),
+        static_config_.mux_input_ptr_buffers[2].value_or(0),
+        static_config_.mux_input_ptr_buffers[3].value_or(0),
+        dependent_config_.mux_input_remote_ptr_buffers[0].value_or(0),
+        dependent_config_.mux_input_remote_ptr_buffers[1].value_or(0),
+        dependent_config_.mux_input_remote_ptr_buffers[2].value_or(0),
+        dependent_config_.mux_input_remote_ptr_buffers[3].value_or(0),
+        static_config_.mux_output_ptr_buffer.value(),
+        dependent_config_.mux_output_remote_ptr_buffer.value_or(0),
+    };
     for (int idx = 0; idx < MAX_SWITCH_FAN_IN; idx++) {
         if (dependent_config_.remote_rx_x[idx]) {
             compile_args[4 + idx] |= (dependent_config_.remote_rx_x[idx].value() & 0xFF);
@@ -127,7 +158,7 @@ void MuxKernel::CreateKernel() {
             }
         }
     }
-    TT_ASSERT(compile_args.size() == 25);
+    TT_ASSERT(compile_args.size() == 35);
     const auto& grid_size = device_->grid_size();
     std::map<string, string> defines = {
         // All of these unused, remove later

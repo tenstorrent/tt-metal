@@ -212,7 +212,12 @@ inline uint32_t get_max_queues_used() {
 
 // Return the ptr buffer address based on the queue id
 inline uint32_t get_ptr_addr(const uint32_t ptr_base_addr, const uint32_t queue_id) {
-    uint32_t offset = ptr_base_addr + (queue_id * packet_queue_ptr_buffer_size);
+    uint32_t offset = queue_id * packet_queue_ptr_buffer_size;
+    if (queue_id >= get_max_queues_used()) {
+        // invalid queue id. the maximum queue_id is as much as how many
+        // queues can be used
+        return 0;
+    }
     if (offset > get_max_queues_used() * packet_queue_ptr_buffer_size) {
         // L1[0] is an invalid address
         return 0;

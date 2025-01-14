@@ -207,8 +207,8 @@ public:
         this->shadow_remote_wptr = packet_queue_ptr_buffer_layout_t::get_shadow_remote_wptr(my_ptr_buffer_addr);
         this->shadow_remote_rptr_sent = packet_queue_ptr_buffer_layout_t::get_shadow_remote_rptr_sent(my_ptr_buffer_addr);
         this->shadow_remote_rptr_cleared = packet_queue_ptr_buffer_layout_t::get_shadow_remote_rptr_cleared(my_ptr_buffer_addr);
-        this->sent = reinterpret_cast<volatile uint32_t*>(packet_queue_ptr_buffer_layout_t::get_eth_sent(my_ptr_buffer_addr));
-        this->recv = reinterpret_cast<volatile uint32_t*>(packet_queue_ptr_buffer_layout_t::get_eth_recv(my_ptr_buffer_addr));
+        this->sent = packet_queue_ptr_buffer_layout_t::get_eth_sent(my_ptr_buffer_addr);
+        this->recv = packet_queue_ptr_buffer_layout_t::get_eth_recv(my_ptr_buffer_addr);
 
         // Reset local values
         *this->wptr = 0;
@@ -487,11 +487,7 @@ public:
     inline void handle_recv() {
         if constexpr (remote_network_type != DispatchRemoteNetworkType::ETH) {
             return;
-        } else {
-            if (!*this->recv) {
-                return;
-            }
-
+        } else if (*this->recv) {
             *this->recv = 0;
             internal_::eth_send_packet(
                 0,                            // txq

@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "eth_router.hpp"
+#include "common/logger.hpp"
+#include "dispatch/command_queue_interface.hpp"
+#include "dispatch/kernels/packet_queue_ctrl.hpp"
 #include "prefetch.hpp"
 #include "eth_tunneler.hpp"
 
@@ -12,6 +15,11 @@ using namespace tt::tt_metal;
 
 void EthRouterKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    const auto ptr_base_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PACKET_QUEUE_PTRS);
+    TT_ASSERT(
+        static_config_.vc_count.has_value(),
+        "static_config_.vc_count is not set yet. It's needed to determine the packet queue_id.");
     if (as_mux_) {
         uint16_t channel =
             tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: can be mmio
@@ -40,13 +48,20 @@ void EthRouterKernel::GenerateStaticConfigs() {
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             dependent_config_.remote_rx_queue_id[idx] = 1;
         }
+
+        for (int idx = 0; idx < static_config_.vc_count.value() /*router lanes*/; idx++) {
+            // Input to output is 1 to 1
+            static_config_.vc_packet_router_input_ptr_buffers[idx] = get_ptr_addr(ptr_base_addr, idx);
+            static_config_.vc_packet_router_output_ptr_buffers[idx] =
+                get_ptr_addr(ptr_base_addr, idx + static_config_.vc_count.value());
+        }
+
         // Mux fowrads all VCs
         static_config_.fwd_vc_count = this->static_config_.vc_count;
     } else {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
         logical_core_ = dispatch_core_manager::instance().demux_d_core(device_->id(), channel, placement_cq_id_);
-        static_config_.rx_queue_start_addr_words =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
+        static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         static_config_.rx_queue_size_words = 0x8000 >> 4;
 
         static_config_.kernel_status_buf_addr_arg = 0;
@@ -74,6 +89,11 @@ void EthRouterKernel::GenerateStaticConfigs() {
         for (int idx = 0; idx < static_config_.vc_count.value(); idx++) {
             static_config_.output_depacketize_log_page_size[idx] = dispatch_constants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
             static_config_.output_depacketize_remove_header[idx] = 0;
+
+            // Input to output is 1 to 1
+            static_config_.vc_packet_router_input_ptr_buffers[idx] = get_ptr_addr(ptr_base_addr, idx);
+            static_config_.vc_packet_router_output_ptr_buffers[idx] =
+                get_ptr_addr(ptr_base_addr, idx + static_config_.vc_count.value());
         }
     }
 }
@@ -92,15 +112,20 @@ void EthRouterKernel::GenerateDependentConfigs() {
         for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
             auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[idx]);
             TT_ASSERT(prefetch_kernel);
+            const auto tunneler_input_queue_id = idx + MAX_SWITCH_FAN_IN * router_id;
+            // vc eth tunneler output queue ids are offset by tunnel_lanes (vc_count)
             dependent_config_.remote_tx_x[idx] = tunneler_kernel->GetVirtualCore().x;
             dependent_config_.remote_tx_y[idx] = tunneler_kernel->GetVirtualCore().y;
-            dependent_config_.remote_tx_queue_id[idx] = idx + MAX_SWITCH_FAN_IN * router_id;
+            dependent_config_.remote_tx_queue_id[idx] = tunneler_input_queue_id;
             dependent_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
                 (idx + router_id * MAX_SWITCH_FAN_IN) * tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
             dependent_config_.remote_tx_queue_size_words[idx] =
                 tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
+            // input_queue maps directly to array index in eth tunneler
+            dependent_config_.vc_packet_router_output_remote_ptr_buffers[idx] =
+                tunneler_kernel->GetStaticConfig().vc_eth_tunneler_input_ptr_buffers[tunneler_input_queue_id].value();
 
             dependent_config_.remote_rx_x[idx] = prefetch_kernel->GetVirtualCore().x;
             dependent_config_.remote_rx_y[idx] = prefetch_kernel->GetVirtualCore().y;
@@ -108,6 +133,10 @@ void EthRouterKernel::GenerateDependentConfigs() {
 
             dependent_config_.input_packetize_upstream_sem[idx] =
                 prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+
+            // Prefetch kernel talks to this vc packet router with semaphores
+            // remote ptr can be set to 0
+            dependent_config_.vc_packet_router_input_remote_ptr_buffers[idx] = 0;
         }
 
         uint32_t src_id_start = 0xA1 + router_id * MAX_SWITCH_FAN_IN;
@@ -128,6 +157,12 @@ void EthRouterKernel::GenerateDependentConfigs() {
             // Queue id starts counting after the input VCs
             dependent_config_.remote_rx_queue_id[idx] = us_tunneler_kernel->GetRouterQueueIdOffset(this, false) + idx;
             dependent_config_.remote_rx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
+
+            // VC Eth Tunneler output queue ids are offset by tunnel_lanes
+            const auto tunnel_lanes = us_tunneler_kernel->GetStaticConfig().vc_count.value();
+            const auto tunneler_array_offset = dependent_config_.remote_rx_queue_id[idx].value() - tunnel_lanes;
+            dependent_config_.vc_packet_router_input_remote_ptr_buffers[idx] =
+                us_tunneler_kernel->GetStaticConfig().vc_eth_tunneler_output_ptr_buffers[tunneler_array_offset].value();
         }
 
         // Downstream, expect PREFETCH_D/US_TUNNELER_REMOTE
@@ -158,6 +193,7 @@ void EthRouterKernel::GenerateDependentConfigs() {
             dependent_config_.output_depacketize[remote_idx] = 1;
             dependent_config_.output_depacketize_downstream_sem[remote_idx] =
                 prefetch_kernel->GetStaticConfig().my_upstream_cb_sem_id;
+            dependent_config_.vc_packet_router_output_remote_ptr_buffers[remote_idx] = 0;
             remote_idx++;
         }
 
@@ -178,6 +214,13 @@ void EthRouterKernel::GenerateDependentConfigs() {
                 // Don't depacketize when sending to tunneler
                 dependent_config_.output_depacketize[remote_idx] = 0;
                 dependent_config_.output_depacketize_downstream_sem[remote_idx] = 0;
+
+                const auto tunnel_lanes = ds_tunneler_kernel->GetStaticConfig().vc_count.value();
+                // VC Eth Tunneler input queue id maps directly to the array index
+                dependent_config_.vc_packet_router_output_remote_ptr_buffers[remote_idx] =
+                    ds_tunneler_kernel->GetStaticConfig()
+                        .vc_eth_tunneler_input_ptr_buffers[dependent_config_.remote_tx_queue_id[remote_idx].value()]
+                        .value();
                 remote_idx++;
             }
         }
@@ -222,6 +265,24 @@ void EthRouterKernel::CreateKernel() {
         0,  // Populate input_packetize_* afterA
         0,  // input_packetize_src_endpoint
         0,  // input_packetize_dst_endpoint
+        static_config_.vc_packet_router_input_ptr_buffers[0].value_or(0),
+        static_config_.vc_packet_router_input_ptr_buffers[1].value_or(0),
+        static_config_.vc_packet_router_input_ptr_buffers[2].value_or(0),
+        static_config_.vc_packet_router_input_ptr_buffers[3].value_or(0),
+        // Static checks in the kernel will make sure these are non zero if they are used
+        dependent_config_.vc_packet_router_input_remote_ptr_buffers[0].value_or(0),
+        dependent_config_.vc_packet_router_input_remote_ptr_buffers[1].value_or(0),
+        dependent_config_.vc_packet_router_input_remote_ptr_buffers[2].value_or(0),
+        dependent_config_.vc_packet_router_input_remote_ptr_buffers[3].value_or(0),
+        static_config_.vc_packet_router_output_ptr_buffers[0].value_or(0),
+        static_config_.vc_packet_router_output_ptr_buffers[1].value_or(0),
+        static_config_.vc_packet_router_output_ptr_buffers[2].value_or(0),
+        static_config_.vc_packet_router_output_ptr_buffers[3].value_or(0),
+        // Static checks in the kernel will make sure these are non zero if they are used
+        dependent_config_.vc_packet_router_output_remote_ptr_buffers[0].value_or(0),
+        dependent_config_.vc_packet_router_output_remote_ptr_buffers[1].value_or(0),
+        dependent_config_.vc_packet_router_output_remote_ptr_buffers[2].value_or(0),
+        dependent_config_.vc_packet_router_output_remote_ptr_buffers[3].value_or(0),
     };
     // Some unused values, just hardcode them to match for checking purposes...
     if (!as_mux_) {
@@ -270,7 +331,7 @@ void EthRouterKernel::CreateKernel() {
             compile_args[35] |= (dependent_config_.input_packetize_dst_endpoint[idx].value() & 0xFF) << (8 * idx);
         }
     }
-    TT_ASSERT(compile_args.size() == 36);
+    TT_ASSERT(compile_args.size() == 52);
     const auto& grid_size = device_->grid_size();
     std::map<string, string> defines = {
         // All of these unused, remove later
