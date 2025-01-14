@@ -57,7 +57,7 @@ A chips is a collection of cores and I/O blocks, connected into a mesh via a NoC
 The **high BW and large capacity SRAM** in each Tensix core is a form of **near memory compute**. A Tensix core operating on its local SRAM achieves **"silicon peak"** of what current technology node allows for.
 Tensix cores are connected into a mesh via 2 NOCs, and each Tensix core can communicate with any other Tensix core in the mesh, and with off-chip DRAM, as well as Ethernet cores.
 GPU fracture SRAM across levels within the chip: large register files, small L1, and L2. SRAM is primarily used for re-use and pre-fetch on the way to off-chip DRAM, not as a primary form of Tensor storage and large parts of it not at the peak silicon speed.
-In contrast, in TT architecture, the entire SRAM is in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relaying on HBM as the primary storage to hand-off data between operations.
+In contrast, in TT architecture, the entire SRAM is in one single level, and its significant capacity allows it be used as intermediates between operations, w/o relying on HBM as the primary storage to hand-off data between operations.
 
 #### Distributed Shared Memory and In-Place Compute
 The mesh of Tensix cores architecture is the first one to efficiently implement distributed shared memory within the chip and **enable programmers and compilers to optimize both layout and movement of the data**.
@@ -66,7 +66,7 @@ Further elaboration in [Scalable Architecture](#scalable-architecture) section.
 
 #### Explicit Data Movement
 The performance and efficiency of data movement in AI and HPC application is as important as raw compute capacity of the math engines.
-In Tenix, data movement is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core, and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized and debugged separately from the compute.
+In Tensix, data movement is explicit and decoupled from compute. The data movement kernels use the data movement engine in each Tensix to bring data from neighbouring cores or off-chip DRAM to the local SRAM of the Tensix core, and trigger the compute engine to operate on the data. The data movement in TT architecture can be pre-planned, optimized and debugged separately from the compute.
 There is no caches, no global crossbars, no memory access coalescing or other complex mechanisms that are used in traditional architectures that hide the data movement from the programmer or compiler.
 For deeper insight see section [User Kernels: Explicit and Decoupled Data Movement and Compute](#user-kernels-explicit-and-decoupled-data-movement-and-compute).
 
@@ -181,7 +181,7 @@ breaks to help understanding)
 
 Among many of the options, `-DUCK_CHLKC_PACK -DNAMESPACE=chlkc_pack` specifies
 it is a "Pack kernel". `-DCOMPILE_FOR_TRISC=2` means it will use `TRISC2` among
-the tree Baby RISCVs.
+the three Baby RISCVs.
 
 Based on the information, we can try the following steps:
 * Checking the ELF file on the directory e.g.,
