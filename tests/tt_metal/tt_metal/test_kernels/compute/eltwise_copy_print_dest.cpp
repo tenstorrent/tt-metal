@@ -39,11 +39,13 @@ void MAIN {
 
     // TESTING DPRINT FOR CONFIG REIGSTERS
 
-    // UNPACK(dprint_tensix_alu_config());
-    // UNPACK(dprint_tensix_unpack_tile_descriptor());
-    // UNPACK(dprint_tensix_unpack_config());
-    // PACK(dprint_tensix_pack_config());
-    // PACK(dprint_tensix_pack_relu_config());
+    // MATH(dprint_tensix_alu_config()); //DOES NOT WORK FROM UNPACKER DUE TO LARGER STACK SIZE - MATH IS USED CAUSE IT
+    // HAS SMALLEST STACK SIZE UNPACK(dprint_tensix_unpack_tile_descriptor()); UNPACK(dprint_tensix_unpack_config());
+
+    // MATH(dprint_tensix_pack_config()); // DOES NOT WORK FROM PACKER DUE TO LARGER STACK SIZE - MATH IS USED CAUSE IT
+    // HAS SMALLEST STACK SIZE MATH(dprint_tensix_pack_relu_config()); // DOES NOT WORK FROM PACKER DUE TO LARGER STACK
+    // SIZE - MATH IS USED CAUSE IT HAS SMALLEST STACK SIZE
+
     // PACK(dprint_tensix_dest_rd_ctrl());
     // PACK(dprint_tensix_pck_edge_offset());
     // PACK(dprint_tensix_pack_counters());
