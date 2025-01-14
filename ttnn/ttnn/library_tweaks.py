@@ -85,15 +85,6 @@ def _setup_env(ttnn_package_path, cwd):
     )
 
     if is_wheel_installation:
-        arch_name_file = ttnn_package_path / ".ARCH_NAME"
-
-        assert (
-            arch_name_file.is_file()
-        ), f".ARCH_NAME is not a file, so architecture cannot be determined. Are you installing ttnn from source? If you are installing and running from source, please set the ARCH_NAME environment variable."
-
-        with open(arch_name_file) as f:
-            os.environ["ARCH_NAME"] = f.readline().strip()
-
         # Workaround: treat cwd / ttnn_links as TT_METAL_HOME and copy/symlink assets to it
         metal_home = cwd / ".ttnn_runtime_artifacts"
         prepare_dir_as_metal_home(ttnn_package_path, metal_home)
