@@ -80,7 +80,8 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1)
-        .value("L1_SMALL", BufferType::L1_SMALL);
+        .value("L1_SMALL", BufferType::L1_SMALL)
+        .value("TRACE", BufferType::TRACE);
 
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate

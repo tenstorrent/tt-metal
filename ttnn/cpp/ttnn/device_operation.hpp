@@ -33,13 +33,6 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename device_operation_t>
-concept HasComputeOutputShapes = requires(device_operation_t op,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    {op.compute_output_shapes(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::shape_return_value_t>;
-};
-
-template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(device_operation_t op,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
@@ -66,7 +59,7 @@ concept DeviceOperationConcept = requires {
             },
             program_factory);
     };
-} && (HasComputeOutputSpecs<device_operation_t> || HasComputeOutputShapes<device_operation_t>);
+} && HasComputeOutputSpecs<device_operation_t>;
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
@@ -76,6 +69,17 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         const typename device_operation_t::tensor_args_t& tensor_args) {
         { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
+
+template <typename device_operation_t>
+concept HasSkipLaunch = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    {
+        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::convertible_to<bool>;
+};
 
 namespace detail {
 template <typename... Ts>
@@ -237,6 +241,12 @@ inline void log_operation(
 template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
+
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
 
     auto& program_cache = device->get_program_cache();
 

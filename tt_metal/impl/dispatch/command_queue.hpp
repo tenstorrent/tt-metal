@@ -27,6 +27,7 @@ namespace tt::tt_metal {
 inline namespace v0 {
 
 class CommandQueue;
+class BufferRegion;
 class Event;
 class Trace;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
@@ -68,9 +69,8 @@ class Command {
 };
 
 class EnqueueReadBufferCommand : public Command {
-   private:
+private:
     SystemMemoryManager& manager;
-    void* dst;
     CoreType dispatch_core_type;
 
     virtual void add_prefetch_relay(HugepageDeviceCommand& command) = 0;
@@ -83,18 +83,19 @@ class EnqueueReadBufferCommand : public Command {
     tt::stl::Span<const SubDeviceId> sub_device_ids;
     uint32_t src_page_index;
     uint32_t pages_to_read;
+    uint32_t bank_base_address;
 
-   public:
+public:
     Buffer& buffer;
     EnqueueReadBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t bank_base_address,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt);
 
@@ -106,19 +107,19 @@ class EnqueueReadBufferCommand : public Command {
 };
 
 class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
 
-   public:
+public:
     EnqueueReadInterleavedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
+        uint32_t bank_base_address,
         uint32_t src_page_index = 0,
         std::optional<uint32_t> pages_to_read = std::nullopt) :
         EnqueueReadBufferCommand(
@@ -126,27 +127,26 @@ class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
             device,
             noc_index,
             buffer,
-            dst,
             manager,
             expected_num_workers_completed,
             sub_device_ids,
+            bank_base_address,
             src_page_index,
-            pages_to_read) {}
+            pages_to_read) {
+    }
 };
 
 class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
-   private:
+private:
     void add_prefetch_relay(HugepageDeviceCommand& command) override;
     const CoreCoord core;
-    const uint32_t bank_base_address;
 
-   public:
+public:
     EnqueueReadShardedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
         NOC noc_index,
         Buffer& buffer,
-        void* dst,
         SystemMemoryManager& manager,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids,
@@ -159,14 +159,13 @@ class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
             device,
             noc_index,
             buffer,
-            dst,
             manager,
             expected_num_workers_completed,
             sub_device_ids,
+            bank_base_address,
             src_page_index,
             pages_to_read),
-        core(core),
-        bank_base_address(bank_base_address) {}
+        core(core) {}
 };
 
 class EnqueueWriteShardedBufferCommand;
@@ -217,17 +216,20 @@ class EnqueueWriteBufferCommand : public Command {
 };
 
 class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
-   public:
+    uint32_t initial_src_addr_offset;
+
+public:
     EnqueueWriteInterleavedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
         NOC noc_index,
         const Buffer& buffer,
         const void* src,
+        const uint32_t initial_src_addr_offset,
         SystemMemoryManager& manager,
         bool issue_wait,
         tt::stl::Span<const uint32_t> expected_num_workers_completed,
@@ -250,19 +252,19 @@ class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
             padded_page_size,
             dst_page_index,
             pages_to_write) {
-        ;
+        this->initial_src_addr_offset = initial_src_addr_offset;
     }
 };
 
 class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
-   private:
+private:
     void add_dispatch_write(HugepageDeviceCommand& command) override;
     void add_buffer_data(HugepageDeviceCommand& command) override;
 
     const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping;
     const CoreCoord core;
 
-   public:
+public:
     EnqueueWriteShardedBufferCommand(
         uint32_t command_queue_id,
         IDevice* device,
@@ -294,9 +296,7 @@ class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
             dst_page_index,
             pages_to_write),
         buffer_page_mapping(buffer_page_mapping),
-        core(core) {
-        ;
-    }
+        core(core) {}
 };
 
 class EnqueueProgramCommand : public Command {
@@ -572,11 +572,30 @@ private:
     template <typename T>
     void enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids);
 
-    void enqueue_read_buffer(std::shared_ptr<Buffer>& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
-    void enqueue_read_buffer(Buffer& buffer, void* dst, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
+    void enqueue_read_buffer(
+        std::shared_ptr<Buffer>& buffer,
+        void* dst,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids={});
+    void enqueue_read_buffer(
+        Buffer& buffer,
+        void* dst,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_write_buffer(
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer, HostDataType src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
-    void enqueue_write_buffer(Buffer& buffer, const void* src, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids={});
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
+        HostDataType src,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids={});
+    void enqueue_write_buffer(
+        Buffer& buffer,
+        const void* src,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids={});
     void enqueue_program(Program& program, bool blocking);
     void enqueue_record_event(const std::shared_ptr<Event>& event, bool clear_count = false, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false);
@@ -594,11 +613,13 @@ private:
         CommandQueue& cq,
         std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
         void* dst,
+        const BufferRegion& region,
         bool blocking);
     friend void EnqueueWriteBufferImpl(
         CommandQueue& cq,
-        std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
+        const BufferRegion& region,
         bool blocking);
     friend void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer);
     friend void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids);
@@ -620,6 +641,7 @@ struct CommandInterface {
     std::optional<void*> dst;
     std::optional<std::shared_ptr<Event>> event;
     std::optional<uint32_t> trace_id;
+    std::optional<BufferRegion> region;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 

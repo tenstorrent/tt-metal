@@ -6,10 +6,18 @@ In this example, we will implement a simple TT-Metalium program to demonstrate h
 The following commands will build and execute the code for this example.
 Environment variables may be modified based on the latest
 specifications.
+Run the appropriate command for the Tenstorrent card you have installed:
+
+| Card             | Command                              |
+|------------------|--------------------------------------|
+| Grayskull        | ```export ARCH_NAME=grayskull```     |
+| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+| Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+Then run the following:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/shard_data_rm
 ```
 # Device setup

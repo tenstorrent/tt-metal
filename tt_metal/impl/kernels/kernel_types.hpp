@@ -6,9 +6,7 @@
 
 #include "common/base_types.hpp"
 #include "tt_metal/impl/kernels/data_types.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/detail/util.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
 #include <map>
 #include <vector>
 #include <string>
@@ -29,23 +27,11 @@ struct DataMovementConfig {
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
-    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch()),
-            .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = compile_args,
-            .defines = defines} {}
+    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
-    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {}) :
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch()),
-            .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = compile_args,
-            .defines = defines} {}
+    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {});
 };
 
 struct ComputeConfig {

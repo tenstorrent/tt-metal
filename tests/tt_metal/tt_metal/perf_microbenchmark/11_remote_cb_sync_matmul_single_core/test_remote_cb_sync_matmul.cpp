@@ -700,11 +700,13 @@ int main(int argc, char** argv) {
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = { { dram_reader_core_coord, l1_receiver_core } };
+        std::vector<SubDeviceId> receiver_sub_device_ids = {};
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
             SubDeviceManagerId sdm_id = device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, 0);
             device->load_sub_device_manager(sdm_id);
+            receiver_sub_device_ids.push_back(SubDeviceId{1});
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -863,8 +865,18 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            for (auto& program : programs) {
-                EnqueueProgram(device->command_queue(), program, false);
+            if (use_sub_devices) {
+                // Enqueue the sender program
+                EnqueueProgram(device->command_queue(), programs[0], false);
+                device->set_sub_device_stall_group(receiver_sub_device_ids);
+                for (uint32_t j = 1; j < programs.size(); ++j) {
+                    EnqueueProgram(device->command_queue(), programs[j], false);
+                }
+                device->reset_sub_device_stall_group();
+            } else {
+                for (auto& program : programs) {
+                    EnqueueProgram(device->command_queue(), program, false);
+                }
             }
             Finish(device->command_queue());
             for (auto& program : programs) {
