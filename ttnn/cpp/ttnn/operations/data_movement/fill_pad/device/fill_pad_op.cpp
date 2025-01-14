@@ -52,6 +52,11 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
     uint32_t tile_size_bytes_log_2 = output_stick_size_is_power_of_two
                                          ? (std::uint32_t)std::log2(tt::constants::TILE_HW * input_element_size_bytes)
                                          : 0;
+
+    uint32_t packed_fill_value = (std::uint32_t)fill_value;
+    if (input_tensor.get_dtype() == DataType::BFLOAT16) {
+        packed_fill_value = pack_two_bfloat16_into_uint32({bfloat16(fill_value), bfloat16(fill_value)});
+    }
     // create kernel
     // reader compile time args
     std::vector<uint32_t> writer_compile_time_args = {
@@ -60,7 +65,7 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
         (std::uint32_t)src_is_dram,
         (std::uint32_t)output_stick_size_is_power_of_two,
         (std::uint32_t)tile_size_bytes_log_2,
-        (std::uint32_t)fill_value,
+        (std::uint32_t)packed_fill_value,
         (std::uint32_t)input_element_size_bytes,
         (std::uint32_t)(input_element_size_bytes == 2 ? 1 : 0)};
 

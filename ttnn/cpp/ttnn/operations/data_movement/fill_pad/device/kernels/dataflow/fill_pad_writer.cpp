@@ -18,11 +18,13 @@ void print_tile(volatile tt_l1_ptr uint32_t* input_l1_ptr, const uint32_t face_s
             DPRINT << "[";
             for (uint32_t i = 0; i < face_size; i++) {
                 DPRINT << BF16(input_l1_ptr[i + r_f_offset + r_offset]) << ", ";
+                // DPRINT << input_l1_ptr[i + r_f_offset + r_offset] << ", ";
             }
             DPRINT << "] | ";
             DPRINT << "[";
             for (uint32_t i = 0; i < face_size; i++) {
                 DPRINT << BF16(input_l1_ptr[i + r_f_offset + r_offset + (face_size * face_size)]) << ", ";
+                // DPRINT << input_l1_ptr[i + r_f_offset + r_offset + (face_size * face_size)] << ", ";
             }
             DPRINT << "]" << ENDL();
             row_count++;
@@ -61,15 +63,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_1 = get_compile_time_arg_val(1);
     constexpr bool tensor_in_dram = get_compile_time_arg_val(2) == 1;
-#define BFP16 get_compile_time_arg_val(7) == 1
-#if (BFP16)
-    const uint16_t fill_value = get_compile_time_arg_val(5);
-#else
     const std::uint32_t fill_value = get_compile_time_arg_val(5);
-#endif
     const std::uint32_t element_size_bytes = get_compile_time_arg_val(6);
-
-    const auto tensor = get_interleaved_addr_gen<tensor_in_dram, 16>(tensor_buffer_src_addr);
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t cb_page_size = get_arg_val<uint32_t>(1);
@@ -102,19 +97,11 @@ void kernel_main() {
 
     // Reserve and push the fill value into the circular buffer
     cb_reserve_back(cb_id_0, 1);
-#if (BFP16)
-    uint16_t l1_write_addr = get_write_ptr(cb_id_0);
-    volatile tt_l1_ptr uint16_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-    for (uint32_t i = 0; i < cb_page_size; i++) {
-        l1_ptr[i] = fill_value;
-    }
-#else
     uint32_t l1_write_addr = get_write_ptr(cb_id_0);
     volatile tt_l1_ptr uint32_t* l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
     for (uint32_t i = 0; i < cb_page_size; i++) {
         l1_ptr[i] = fill_value;
     }
-#endif
     cb_push_back(cb_id_0, 1);  // Push the fill value to the circular buffer once
 
     cb_reserve_back(cb_id_1, 1);
@@ -178,7 +165,7 @@ void kernel_main() {
                 noc_async_read_barrier();
                 print_tile(input_l1_ptr, 16, row + 1);
                 curr_tile++;
-                face_offset -= face_size * face_size;
+                face_offset -= face_size * (face_size + 1);
             }
             DPRINT << ENDL();
         }
