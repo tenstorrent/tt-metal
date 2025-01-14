@@ -115,18 +115,6 @@ bool process_queues(F&& func) {
         std::forward<F>(func), std::make_index_sequence<NetworkTypeSequence::size>());
 }
 
-void delay(int i) {
-    while (i--) {
-        bool sleep_done = false;
-        const auto sleep_start = get_timestamp();
-        auto time_now = get_timestamp();
-        const uint64_t sleep_cycles = 1000 * 1000 * 1000;
-        while (sleep_start - time_now < sleep_cycles) {
-            time_now = get_timestamp();
-        }
-    }
-}
-
 class packet_queue_state_t;
 class packet_input_queue_state_t;
 class packet_output_queue_state_t;
