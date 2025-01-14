@@ -447,7 +447,14 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "format_output_tensor",
-        &ttnn::operations::experimental::auto_format::AutoFormat::format_output_tensor,
+        [](const Tensor& output,
+           const ttnn::SmallVector<uint32_t>& shape,
+           IDevice* device,
+           Layout target_layout,
+           std::optional<MemoryConfig> target_mem_config) {
+            return operations::experimental::auto_format::AutoFormat::format_output_tensor(
+                output, ttnn::SimpleShape(shape), device, target_layout, target_mem_config);
+        },
         py::arg("output").noconvert(),
         py::arg("shape"),
         py::arg("device").noconvert(),

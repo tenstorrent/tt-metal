@@ -459,6 +459,9 @@ std::string to_string(
     }
 
     if (tensor.get_layout() != Layout::ROW_MAJOR) {
+        if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+            return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
+        }
         return to_string<T>(
             ttnn::to_layout(tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
             dtype,
@@ -469,35 +472,6 @@ std::string to_string(
         [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
-                    // Convert to FLOAT32 tensor before printing
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data = unpack_bfp8_tiles_into_float_vec(
-                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(
-                        OwnedStorage{input_float_buffer},
-                        tensor.get_legacy_shape(),
-                        DataType::FLOAT32,
-                        tensor.get_layout(),
-                        tile);
-                    return to_string<float>(float_tensor, tensor.get_dtype());
-                }
-
-                if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
-                    // Convert to FLOAT32 tensor before printing
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data = unpack_bfp4_tiles_into_float_vec(
-                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(
-                        OwnedStorage{input_float_buffer},
-                        tensor.get_legacy_shape(),
-                        DataType::FLOAT32,
-                        tensor.get_layout(),
-                        tile);
-                    return to_string<float>(float_tensor, tensor.get_dtype());
-                }
                 const auto buffer = owned_buffer::get_as<T>(storage.buffer);
                 const auto strides = tensor.get_tensor_spec().compute_strides();
                 return detail::to_string(buffer, shape, strides, dtype, layout);

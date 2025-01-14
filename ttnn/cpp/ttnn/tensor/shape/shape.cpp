@@ -42,7 +42,7 @@ const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shape) {
-    os << "SimpleShape([";
+    os << "Shape([";
     for (size_t i = 0; i < shape.rank(); ++i) {
         if (i > 0) {
             os << ", ";
