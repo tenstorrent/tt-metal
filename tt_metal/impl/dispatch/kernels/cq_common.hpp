@@ -302,14 +302,14 @@ void cb_acquire_pages(uint32_t n) {
     // Required for trace which steals downstream credits and may make the value negative
     uint32_t heartbeat = 0;
     invalidate_l1_cache();
-    IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+    IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     while (wrap_gt(n, *sem_addr)) {
         asm("nop");
         asm("nop");
         asm("nop");
         asm("nop");
         invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat, 0);
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
     }
     WAYPOINT("DAPD");
     noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
