@@ -75,7 +75,7 @@ jobs:
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: [any]
+      arch: '["any"]'
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
