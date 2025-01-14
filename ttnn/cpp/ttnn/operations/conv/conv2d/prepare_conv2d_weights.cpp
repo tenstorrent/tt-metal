@@ -406,12 +406,7 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
     // Define output tensor shape. This is going to be channel dimension of weight tensor * num_groups - this value
     // should match number of input channels being convolved with the weight tensor
-    auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
-    ttnn::SimpleShape original_conv_weight_tensor_shape{
-        original_conv_weight_tensor_shape_test[0],
-        original_conv_weight_tensor_shape_test[1],
-        original_conv_weight_tensor_shape_test[2],
-        original_conv_weight_tensor_shape_test[3]};
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();
     ttnn::SimpleShape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         original_conv_weight_tensor_shape[1] * num_groups,
@@ -449,13 +444,8 @@ from the original weight tensor - it would be convolving act_block in conv_matri
 */
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype) {
-    auto original_conv_weight_tensor_shape_test = conv_weight_tensor.get_shape();
+    const auto& original_conv_weight_tensor_shape = conv_weight_tensor.get_logical_shape();
     uint32_t num_input_channels_to_repeat = act_block_h_ntiles * constants::TILE_HEIGHT;
-    ttnn::SimpleShape original_conv_weight_tensor_shape{
-        original_conv_weight_tensor_shape_test[0],
-        original_conv_weight_tensor_shape_test[1],
-        original_conv_weight_tensor_shape_test[2],
-        original_conv_weight_tensor_shape_test[3]};
     ttnn::SimpleShape output_conv_weight_tensor_shape{
         original_conv_weight_tensor_shape[0],
         num_input_channels_to_repeat,
@@ -489,12 +479,12 @@ void validate_weight_tensor(const ttnn::Tensor& weight_tensor) {
     TT_FATAL(
         !ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv weight should be placed on host");
     TT_FATAL(weight_tensor.get_layout() == Layout::ROW_MAJOR, "conv weight layout should be in row_major layout");
-    TT_FATAL(weight_tensor.get_shape().rank() == 4, "conv weight should be 4D tensor");
+    TT_FATAL(weight_tensor.get_logical_shape().rank() == 4, "conv weight should be 4D tensor");
 }
 
 void validate_bias_tensor(const ttnn::Tensor& bias_tensor) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
-    TT_FATAL(bias_tensor.get_shape().rank() == 4, "bias tensor should be 4D tensor");
+    TT_FATAL(bias_tensor.get_logical_shape().rank() == 4, "bias tensor should be 4D tensor");
     TT_FATAL(bias_tensor.get_layout() == Layout::ROW_MAJOR, "bias tensor layout should be in row_major layout");
 }
 
@@ -520,7 +510,7 @@ ttnn::Tensor conv_bias_layout_convert(
     ttnn::Tensor bias_tensor_ = bias_tensor;
     validate_bias_tensor(bias_tensor_);
     if (!is_non_tile_mul_width) {
-        auto bias_shape = bias_tensor_.get_shape();
+        const auto& bias_shape = bias_tensor_.get_logical_shape();
         TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
         tt::tt_metal::LegacyShape bias_channels_padded_shape = tt::tt_metal::LegacyShape(
             std::array<uint32_t, 4>({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)}));
@@ -660,7 +650,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
 
-    auto original_weights_shape = weight_tensor.get_shape();
+    const auto& original_weights_shape = weight_tensor.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
@@ -684,7 +674,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
 
-    auto weights_shape = weight_tensor_.get_shape();
+    const auto& weights_shape = weight_tensor_.get_logical_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
