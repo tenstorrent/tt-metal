@@ -24,7 +24,7 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    // uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    std::cout << "inside device_op" << std::endl;
 
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
@@ -40,6 +40,12 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
             .set_page_size(0, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(32 * 32 * input_element_size_bytes, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, 32 * 32 * input_element_size_bytes);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(tt::constants::TILE_HW);
@@ -50,29 +56,38 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
     // reader compile time args
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src1_cb_index,
         (std::uint32_t)src_is_dram,
         (std::uint32_t)output_stick_size_is_power_of_two,
         (std::uint32_t)tile_size_bytes_log_2,
-        (std::uint32_t)fill_value};
+        (std::uint32_t)fill_value,
+        (std::uint32_t)input_element_size_bytes,
+        (std::uint32_t)(input_element_size_bytes == 2 ? 1 : 0)};
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
         core,
-        // tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        // tt::tt_metal::ReaderDataMovementConfig(writer_compile_time_args));
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));  // gonna be writer only
 
+    uint32_t padded_height =
+        ((height + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    uint32_t padded_width =
+        ((width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    std::cout << "Padded height: " << padded_height << std::endl;
+    std::cout << "Padded width: " << padded_width << std::endl;
+    std::cout << "logical height: " << height << std::endl;
+    std::cout << "logical width: " << width << std::endl;
     std::vector<uint32_t> writer_runtime_args = {
         (std::uint32_t)tens_buffer->address(),
         (std::uint32_t)cb_page_size,
         (std::uint32_t)height,
         (std::uint32_t)width,
-        (std::uint32_t)(((height + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
-                        tt::constants::TILE_HEIGHT),
-        (std::uint32_t)(((width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT) *
-                        tt::constants::TILE_HEIGHT),
+        (std::uint32_t)padded_height,
+        (std::uint32_t)padded_width,
     };
-    tt::tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, {tens_buffer->address(), height, width});
+    tt::tt_metal::SetRuntimeArgs(program, binary_reader_kernel_id, core, writer_runtime_args);
 
     auto override_runtime_args_callback = [binary_reader_kernel_id](
                                               const Program& program,
@@ -93,13 +108,22 @@ operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor,
 
 void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL(input_tensor_a.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "FillPad does not currently support sharding");
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "FillPad does not currently support sharding");
+}
+
+std::vector<SimpleShape> FillPad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor.get_logical_shape()};
+}
+
+std::vector<Tensor> FillPad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    return {input_tensor};
 }
 
 operation::ProgramWithCallbacks FillPad::create_program(

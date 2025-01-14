@@ -18,6 +18,7 @@ ttnn::Tensor FillPadOperation::invoke(
     float fill_value,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
+    std::cout << "inside cpp" << std::endl;
     return operation::run_without_autoformat(
                FillPad{fill_value, output_memory_config}, {input_tensor}, {}, {}, queue_id)
         .at(0);

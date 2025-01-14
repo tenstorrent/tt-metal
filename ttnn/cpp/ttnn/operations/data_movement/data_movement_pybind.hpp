@@ -16,6 +16,7 @@
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/copy/copy_pybind.hpp"
 #include "ttnn/operations/data_movement/expand/expand_pybind.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
