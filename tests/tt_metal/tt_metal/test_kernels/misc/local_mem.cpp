@@ -4,6 +4,8 @@
 
 #include "debug/assert.h"
 
+volatile uint64_t global_eight_byte_val = 0xABCD0123ABCD0123;
+
 volatile uint32_t nonzero[4] = {
     0xAABB0000,
     0xAABB0001,
@@ -41,6 +43,11 @@ void MAIN {
     zero[1] = 0xdeadbeef;
     zero[2] = 0xdeadbeef;
     zero[3] = 0xdeadbeef;
+
+    if (global_eight_byte_val != 0xABCD0123ABCD0123) {
+        ASSERT(0);
+        while (1);
+    }
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
 }

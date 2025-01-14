@@ -14,32 +14,22 @@ class MeshDevice;
 
 inline namespace v0 {
 class CommandQueue;
-class Device;
+class IDevice;
 }  // namespace v0
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tensor_ops {
 
-Tensor tensor_to(
-    const Tensor& input_tensor,
-    Device* target_device,
-    const MemoryConfig& mem_config,
-    uint8_t cq_id,
-    const std::vector<SubDeviceId>& sub_device_ids);
+Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id);
 
 Tensor tensor_to(
-    const Tensor& input_tensor,
-    const std::vector<Device*>& workers,
-    const MemoryConfig& mem_config,
-    uint8_t cq_id,
-    const std::vector<SubDeviceId>& sub_device_ids);
+    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, Device* worker);
+Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* worker);
 
 Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 
-Tensor tensor_cpu(
-    const Tensor& input_tensor, bool blocking, uint8_t cq_id, const std::vector<SubDeviceId>& sub_device_ids);
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id);
 
 void tensor_print(const Tensor& input_tensor);
 
@@ -59,6 +49,8 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape);
 
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape);
+Tensor tensor_reshape(
+    const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape);
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
 
 }  // namespace tt::tt_metal::tensor_ops

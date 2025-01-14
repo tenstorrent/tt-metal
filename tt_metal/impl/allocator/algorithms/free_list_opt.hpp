@@ -49,6 +49,8 @@ public:
 
     void dump_blocks(std::ostream& out) const override;
 
+    MemoryBlockTable get_memory_block_table() const override;
+
     void shrink_size(DeviceAddr shrink_size, bool bottom_up = true) override;
 
     void reset_size() override;

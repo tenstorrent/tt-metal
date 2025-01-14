@@ -26,6 +26,8 @@ profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
+ARCH_NAME = os.getenv("ARCH_NAME")
+
 
 def run_moreh_single_test(test_name, test_entry):
     full_env = copy.deepcopy(os.environ)
@@ -116,7 +118,10 @@ def profile_noc_results():
 # pcie write
 def test_write_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -132,7 +137,10 @@ def test_write_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -148,7 +156,10 @@ def test_write_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_write_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -164,7 +175,10 @@ def test_write_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -181,7 +195,10 @@ def test_enqueue_write_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 # pcie read
 def test_read_device_l1(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -197,7 +214,10 @@ def test_read_device_l1(iter=1, buffer_type=0, size=2048):
 
 def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_device_dram"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -213,7 +233,10 @@ def test_read_device_dram_channel(iter=1, buffer_type=0, size=2048):
 
 def test_read_buffer(iter=1, buffer_type=0, size=2048):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_rw_buffer_old"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -229,7 +252,10 @@ def test_read_buffer(iter=1, buffer_type=0, size=2048):
 
 def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer "
+        "./build/test/tt_metal/perf_microbenchmark/old/pcie/test_enqueue_rw_buffer"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--iter "
         + str(iter)
         + " --buffer_type "
@@ -245,7 +271,10 @@ def test_enqueue_read_buffer(iter=1, buffer_type=0, size=2048, timeout=600):
 
 def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/8_dram_adjacent_core_read/test_dram_read"
+        + "_"
+        + ARCH_NAME
+        + " "
         + " --k "
         + str(k)
         + " --n "
@@ -267,7 +296,10 @@ def run_dram_read_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
 
 def run_dram_read_l1_write_cmd(k, n, num_blocks, df, num_banks, bank_start_id):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write"
+        + "_"
+        + ARCH_NAME
+        + " "
         + " --k "
         + str(k)
         + " --n "
@@ -291,7 +323,10 @@ def run_dram_read_remote_cb_sync_cmd(
     k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_mixed_df_layers, use_sub_devices
 ):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb"
+        + "_"
+        + ARCH_NAME
+        + " "
         + " --k "
         + str(k)
         + " --n "
@@ -319,7 +354,10 @@ def run_remote_cb_sync_matmul_single_core_cmd(
     m, k, n, num_blocks, cb_num_blocks, cb_padding, df, num_receivers, num_layers, use_sub_devices
 ):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul"
+        + "_"
+        + ARCH_NAME
+        + " "
         + " --m "
         + str(m)
         + " --k "
@@ -348,7 +386,10 @@ def run_remote_cb_sync_matmul_single_core_cmd(
 # noc
 def test_noc_local(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_local_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -363,7 +404,10 @@ def test_noc_local(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -379,7 +423,10 @@ def test_noc_global_type_a(r=9, c=12, nt=256, cb=1):
 
 def test_noc_global_type_b(r=9, c=12, nt=256, cb=1):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/noc/test_noc_read_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -398,7 +445,10 @@ def test_matmul_global(
     r=9, c=12, mt=72, nt=96, kt=24, per_core_mt=8, per_core_nt=8, l1_in0=0, l1_in1=0, l1_out=0, in0_block_w=4
 ):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_global_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -427,7 +477,10 @@ def test_matmul_global(
 
 def test_matmul_local(r=9, c=12, mt=72, nt=96, kt=24):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1 "
+        "./build/test/tt_metal/perf_microbenchmark/old/matmul/matmul_local_l1"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--r "
         + str(r)
         + " --c "
@@ -446,7 +499,10 @@ def test_matmul_single_core(
     m, n, k, dtype, fidel, matmul_block, num_blocks, packer_l1_acc, fp32_dest_acc, interm_cb_dtype, subblock_index
 ):
     command = (
-        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm "
+        "TT_METAL_DEVICE_PROFILER=1 ./build/test/tt_metal/perf_microbenchmark/1_compute_mm/test_compute_mm"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--m "
         + str(m)
         + " --n "
@@ -1127,7 +1183,10 @@ def test_noc_adjacent(
     record_moreh_microbenchmark_csv,
 ):
     command = (
-        "./build/test/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent "
+        "./build/test/tt_metal/perf_microbenchmark/2_noc_adjacent/test_noc_adjacent"
+        + "_"
+        + ARCH_NAME
+        + " "
         + "--cores-r "
         + str(r)
         + " --cores-c "

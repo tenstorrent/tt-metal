@@ -4,11 +4,12 @@
 
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
 #include "utils.hpp"
+#include "tt_metal/llrt/llrt.hpp"
 
 using std::vector;
 using namespace tt;
@@ -28,7 +29,7 @@ int main(int argc, char **argv) {
         constexpr uint32_t default_max_packet_size_words = 0x100;
 
         int device_id = 0;
-        tt_metal::Device *device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t default_test_result_buf_addr = l1_unreserved_base;
         constexpr uint32_t default_test_result_buf_size = 1024;

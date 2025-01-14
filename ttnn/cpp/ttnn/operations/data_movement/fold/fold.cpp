@@ -28,7 +28,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
@@ -136,8 +136,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
         .shard_spec = ShardSpec{
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}}}},
             {shard_height, shard_width},
-            orientation,
-            false}};
+            orientation}};
 
     return sharded_memory_config;
 }
@@ -154,7 +153,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     CoreCoord grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE and input.storage_type() != StorageType::MULTI_DEVICE) {

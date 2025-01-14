@@ -18,7 +18,7 @@
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::Device* device, const ttnn::SimpleShape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::SimpleShape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -100,7 +100,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        return;
+        GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
     auto tensor_layout =
@@ -108,8 +108,8 @@ TEST_P(EmptyTensorTest, Combinations) {
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape.logical_shape()) >= 650 * 1024) {
-            return;
+        if (tensor_layout.compute_page_size_bytes(shape.logical_shape()) >= 500 * 1024) {
+            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
         }
     }
 

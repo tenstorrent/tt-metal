@@ -13,8 +13,9 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
 
-// FIXME: ARCH_NAME specific include
-#include "noc/noc_parameters.h"  // DRAM_ALIGNMENT
+#include "tt_metal/experimental/hal.hpp"
+
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::operations::data_movement {
 
@@ -31,7 +32,8 @@ inline Tensor transpose_(
                                     // all the other bugs/limitations we should rewrite it
     // use device->get_allocator_alignment when the it reflects the alignment of the buffer and doesn't just default to
     // DRAM
-    auto BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? DRAM_ALIGNMENT : L1_ALIGNMENT;
+    auto BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                        : hal::get_l1_alignment();
     uint32_t W = a.get_padded_shape()[-1];
     uint32_t H = a.get_padded_shape()[-2];
     switch (transpose_dim) {
@@ -67,11 +69,11 @@ inline Tensor transpose_(
         // constraint, CN).
         if (tiled_only) {
             // convert to tiled
-            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (Device*)nullptr);
+            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr);
             // run the transpose.
             b = operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {b}).at(0);
             // back to original layout
-            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
+            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
             return b;
         }
         return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);

@@ -176,6 +176,7 @@ void kernel_main() {
     uint32_t progress_timestamp = start_timestamp & 0xFFFFFFFF;
     uint32_t heartbeat = 0;
     while (!dest_finished && !timeout) {
+        DeviceZoneScopedN("PACKET-MUX");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
         if (timeout_cycles > 0) {
@@ -232,4 +233,6 @@ void kernel_main() {
         write_test_results(test_results, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
         write_test_results(test_results, PQ_TEST_MISC_INDEX, 0xff00005);
     }
+
+    noc_async_full_barrier();
 }

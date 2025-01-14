@@ -10,10 +10,10 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-class Device;
+class IDevice;
 
 struct Event {
-    Device* device = nullptr;
+    IDevice* device = nullptr;
     uint32_t cq_id = -1;
     uint32_t event_id = -1;
     std::atomic<bool> ready = false;  // Event is ready for use.

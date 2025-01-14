@@ -137,4 +137,6 @@ void kernel_main() {
         noc_async_write(out_addr, dst_noc_addr, out_stick_size);
         noc_async_write_barrier();
     }
+
+    noc_async_atomic_barrier();
 }

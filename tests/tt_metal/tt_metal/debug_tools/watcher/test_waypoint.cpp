@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -145,7 +145,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* "
+                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   {},   X,   X,   X  rmsg:* "
                     "h_id:0 "
                     "k_id:{}",
                     device->id(),
@@ -154,6 +154,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     phys_core.x,
                     phys_core.y,
                     waypoint,
+                    (device->arch() == ARCH::BLACKHOLE) ? "W" : "X", // TODO (#15448): Uplift this when watcher device reader accounts for variable num eth riscs
                     k_id_s);
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -213,7 +214,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

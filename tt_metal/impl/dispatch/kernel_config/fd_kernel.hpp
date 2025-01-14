@@ -90,7 +90,7 @@ public:
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
     int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
-    void AddDeviceAndProgram(tt::tt_metal::Device* device, tt::tt_metal::Program* program) {
+    void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
         device_ = device;
         program_ = program;
     };
@@ -118,7 +118,7 @@ protected:
     static chip_id_t GetDownstreamDeviceId(chip_id_t device_id);
     static uint32_t GetTunnelStop(chip_id_t device_id);
 
-    tt::tt_metal::Device* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+    tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     chip_id_t device_id_;

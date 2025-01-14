@@ -16,7 +16,7 @@ Tensor DataTransferToHostOperation::invoke(const Tensor& input_tensor) {
 }
 
 Tensor DataTransferToDeviceOperation::invoke(
-    const Tensor& input_tensor, Device* device, const MemoryConfig& memory_config) {
+    const Tensor& input_tensor, IDevice* device, const MemoryConfig& memory_config) {
     TT_FATAL(device != nullptr, "Error");
 
     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
