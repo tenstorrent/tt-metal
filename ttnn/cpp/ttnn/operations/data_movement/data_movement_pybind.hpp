@@ -49,6 +49,7 @@ namespace operations {
 namespace data_movement {
 
 void py_module(py::module& module) {
+    bind_fill_pad(module);
     bind_fill_rm(module);
     bind_fold_operation(module);
     bind_non_zero_indices(module);
