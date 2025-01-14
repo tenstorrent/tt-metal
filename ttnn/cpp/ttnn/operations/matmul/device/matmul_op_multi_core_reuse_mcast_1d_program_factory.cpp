@@ -11,6 +11,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/work_split.hpp"
+#include "tt_metal/common/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -2185,8 +2186,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
 
     // Pad K, N
     if (gather_in0) {
-        Kt = (Kt + num_cores - 1) / num_cores;  // ceil division
-        Kt *= num_cores;
+        Kt = round_up(Kt, num_cores);
 
         TT_FATAL(
             Kt == (bshape[-2] / in1_tile_shape[0]),
@@ -2194,8 +2194,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
             Kt,
             (bshape[-2] / in1_tile_shape[0]));
 
-        Nt = (Nt + num_cores - 1) / num_cores;  // ceil division
-        Nt *= num_cores;
+        Nt = round_up(Nt, num_cores);
     }
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
