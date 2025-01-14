@@ -20,7 +20,7 @@ namespace ttnn::operations::dram_prefetcher {
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
-    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+    const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb);
 operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,

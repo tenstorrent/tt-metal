@@ -1746,7 +1746,7 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         auto device_id = device->id();
         for (uint32_t idx = 0; idx < multi_global_cb->global_circular_buffers.size(); idx++) {
             const auto& global_cb_ = multi_global_cb->global_circular_buffers[idx];
-            tt::tt_metal::Device* global_cb_device = global_cb_.get_device();
+            tt::tt_metal::IDevice* global_cb_device = global_cb_.get_device();
             auto global_device_id = global_cb_device->id();
             if (device_id == global_device_id) {
                 multi_global_cb_id = idx;

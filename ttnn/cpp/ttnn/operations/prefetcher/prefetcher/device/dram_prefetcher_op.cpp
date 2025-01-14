@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks DramPrefetcher::create_program(
     if (this->multi_global_cb.has_value()) {
         return dram_prefetcher_multi_core_multi_device(input_tensors, this->num_layers, this->multi_global_cb);
     } else {
-        return dram_prefetcher_multi_core(input_tensors, this->num_layers, this->global_cb);
+        return dram_prefetcher_multi_core(input_tensors, this->num_layers, *this->global_cb);
     }
 }
 

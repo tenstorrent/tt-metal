@@ -37,10 +37,10 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core_multi_device(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
     const std::optional<const ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>& multi_global_cb) {
-    tt::tt_metal::Device* device = input_tensors[0].device();
+    tt::tt_metal::IDevice* device = input_tensors[0].device();
     auto device_id = device->id();
     for (const auto& global_cb_ : multi_global_cb->global_circular_buffers) {
-        tt::tt_metal::Device* global_cb_device = global_cb_.get_device();
+        tt::tt_metal::IDevice* global_cb_device = global_cb_.get_device();
         auto global_device_id = global_cb_device->id();
         if (device_id == global_device_id) {
             return dram_prefetcher_multi_core(input_tensors, num_layers, global_cb_);
@@ -56,8 +56,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb) {
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
+    // tensors that with addresses
+    ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     std::vector<Buffer*> tensor_buffers;
+    // tensors that with actual data
+    std::vector<Tensor> tensors;
+    tensors.resize(input_tensors.size() - 1);
+    std::copy(input_tensors.begin(), input_tensors.end() - 1, tensors.begin());
     tensor_buffers.reserve(tensors.size());
     std::transform(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
@@ -272,7 +278,21 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = {}};
+    auto override_runtime_arguments_callback =
+        [tensor_addrs_cb](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            TT_ASSERT(output_tensors.size() == 1);
+
+            auto tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+            auto tensor_addrs_buffer = tensor_addrs.buffer();
+            UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn::operations::dram_prefetcher
