@@ -298,12 +298,15 @@ on:
           - eltwise.binary.logical_or.logical_or
           - eltwise.binary.logical_or.logical_or_output
           - eltwise.binary.logical_or.logical_or_forge
+          - eltwise.binary.logical_or.logical_or_sharded
           - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_xor.logical_xor_sharded
           - eltwise.binary.logical_and.logical_and_
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
+          - eltwise.binary.logical_and.logical_and_sharded
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
