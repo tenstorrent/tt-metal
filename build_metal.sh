@@ -38,6 +38,7 @@ show_help() {
 clean() {
     echo "INFO: Removing build artifacts!"
     rm -rf build_Release* build_Debug* build_RelWithDebInfo* build built
+    rm -rf ~/.cache/tenstorrent/metal-cache /tmp/tenstorrent/metal-cache
 }
 
 # Parse CLI options
