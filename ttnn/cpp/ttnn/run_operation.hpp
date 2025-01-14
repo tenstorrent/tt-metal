@@ -18,36 +18,6 @@ namespace operation {
 
 using ttnn::operations::experimental::auto_format::FormatParams;
 
-// TODO: create_output_tensors should become a fully manual path with no dependency on infra
-// - Pass output shapes directly
-// - Move default values for output_dtype and output_mem_config inside ops
-// - This function becomes just a regular helper function
-template <typename ConcreteOperation>
-auto generic_create_output_tensors(
-    const ConcreteOperation& operation,
-    const Tensors& input_tensors,
-    const std::optional<DataType> output_dtype,
-    const Layout output_layout,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tile>& tile = std::nullopt) -> ProgramOutputTensors<ConcreteOperation> {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
-
-    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    OutputTensors output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(
-            output_shape,
-            output_dtype.value_or(input_tensors.at(0).get_dtype()),
-            output_layout,
-            input_tensor.device(),
-            output_mem_config.value_or(input_tensors.at(0).memory_config()),
-            tile));
-    }
-    return output_tensors;
-}
-
 template <class OutputTensors = Tensors>
 OutputTensors run(
     DeviceOperation<OutputTensors>&& operation,

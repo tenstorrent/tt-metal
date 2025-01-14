@@ -33,13 +33,6 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename device_operation_t>
-concept HasComputeOutputShapes = requires(device_operation_t op,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    {op.compute_output_shapes(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::shape_return_value_t>;
-};
-
-template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(device_operation_t op,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
@@ -66,7 +59,7 @@ concept DeviceOperationConcept = requires {
             },
             program_factory);
     };
-} && (HasComputeOutputSpecs<device_operation_t> || HasComputeOutputShapes<device_operation_t>);
+} && HasComputeOutputSpecs<device_operation_t>;
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =

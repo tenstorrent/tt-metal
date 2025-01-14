@@ -94,7 +94,7 @@ struct OldInfraDeviceOperation {
         const operation::OptionalTensors optional_output_tensors;
     };
 
-    using shape_return_value_t = std::vector<tt::tt_metal::LegacyShape>;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
     using tensor_return_value_t = OutputTensors;
 
@@ -173,10 +173,10 @@ struct OldInfraDeviceOperation {
         validate_on_program_cache_miss(attributes, tensor_args);
     }
 
-    // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(
+    // Compute the output specs based on the operation attributes and tensor args
+    static spec_return_value_t compute_output_specs(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return attributes.compute_output_shapes(tensor_args.input_tensors);
+        return attributes.compute_output_specs(tensor_args.input_tensors);
     }
 
     // Create the output tensors based on the operation attributes and tensor args
@@ -380,7 +380,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
+    auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,
@@ -453,7 +453,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
+    auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,

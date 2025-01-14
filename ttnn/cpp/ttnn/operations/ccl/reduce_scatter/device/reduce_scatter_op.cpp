@@ -61,21 +61,18 @@ void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> ReduceScatter::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
+std::vector<ttnn::TensorSpec> ReduceScatter::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto shape = input_tensor.get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}",
         shape[this->scatter_dim],
         this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
-
-std::vector<Tensor> ReduceScatter::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    TensorSpec spec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+    return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
 operation::ProgramWithCallbacks ReduceScatter::create_program(

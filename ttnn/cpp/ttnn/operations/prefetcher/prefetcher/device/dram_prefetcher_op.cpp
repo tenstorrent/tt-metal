@@ -65,18 +65,10 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 // TODO: Remove output tensor entirely (if possible)
-std::vector<ttnn::SimpleShape> DramPrefetcher::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {ttnn::SimpleShape{32, 32}};
-}
-std::vector<Tensor> DramPrefetcher::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    auto output_tensor = create_device_tensor(
+std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    return {TensorSpec(
         ttnn::SimpleShape{32, 32},
-        input_tensors[0].dtype(),
-        input_tensors[0].layout(),
-        input_tensors[0].device(),
-        MemoryConfig{});
-    std::vector<Tensor> output_tensors = {output_tensor};
-    return output_tensors;
+        TensorLayout(input_tensors[0].get_dtype(), PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
