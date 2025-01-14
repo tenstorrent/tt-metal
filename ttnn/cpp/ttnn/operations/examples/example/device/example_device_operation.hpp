@@ -50,16 +50,16 @@ struct ExampleDeviceOperation {
         // std::tuple<std::vector<std::optional<Tensor>>, std::optional<Tensor>> some_crazy_tuple_of_tensors;
     };
 
-    // Define the TensorSpec for the output Tensor(s)
-    // Can be a single TensorSpec, std::optional<TensorSpec>, std::vector<TensorSpec>, std::tuple<TensorSpec> etc.
-    using spec_return_value_t = TensorSpec;
+    // Define the return types for the shape(s) of the operation
+    // Can be a single ttnn::Shape, std::optional<ttnn::Shape>, std::vector<ttnn::Shape>, std::tuple<ttnn::Shape> etc.
+    using shape_return_value_t = ttnn::Shape;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
     using tensor_return_value_t = Tensor;
 
-    // Note spec_return_value_t and tensor_return_value_t should follow the same pattern
-    // i.e. if spec_return_value_t is a std::vector<std::optional<TensorSpec>> then tensor_return_value_t should be
+    // Note shape_return_value_t and tensor_return_value_t should follow the same pattern
+    // i.e. if shape_return_value_t is a std::vector<std::optional<ttnn::Shape>> then tensor_return_value_t should be
     // std::vector<std::optional<Tensor>>
 
     struct SingleCore {
@@ -118,7 +118,7 @@ struct ExampleDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output shapes based on the operation attributes and tensor args
-    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
