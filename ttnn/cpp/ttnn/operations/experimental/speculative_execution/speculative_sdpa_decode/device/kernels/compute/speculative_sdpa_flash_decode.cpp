@@ -18,7 +18,7 @@
 
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/compute_common.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
 
 namespace NAMESPACE {
 

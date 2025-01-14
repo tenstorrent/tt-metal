@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_async import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_speculative_flash_decode import (
+from tests.ttnn.unit_tests.operations.speculative_execution.test_speculative_flash_decode import (
     nearest_n,
     nearest_pow_2,
     num_to_corerange,

@@ -10,7 +10,7 @@
 #include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
-namespace operations::experimental::transformer {
+namespace operations::experimental::speculative_execution {
 
 using SDPAProgramConfig = ttnn::operations::transformer::SDPAProgramConfig;
 
@@ -55,13 +55,13 @@ struct ExecuteSpeculativeScaledDotProductAttentionDecode {
             std::nullopt);
 };
 
-}  // namespace operations::experimental::transformer
+}  // namespace operations::experimental::speculative_execution
 
 namespace experimental {
 
 constexpr auto speculative_scaled_dot_product_attention_decode = ttnn::register_operation<
     "ttnn::experimental::speculative_scaled_dot_product_attention_decode",
-    ttnn::operations::experimental::transformer::ExecuteSpeculativeScaledDotProductAttentionDecode>();
+    ttnn::operations::experimental::speculative_execution::ExecuteSpeculativeScaledDotProductAttentionDecode>();
 
 }  // namespace experimental
 

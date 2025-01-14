@@ -270,11 +270,11 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/device/single_core/rotate_half_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/speculative_sdpa_decode.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/speculative_sdpa_decode_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/speculative_sdpa_decode_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/speculative_sdpa_decode_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/ccl_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/speculative_sdpa_decode.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/speculative_sdpa_decode_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/speculative_sdpa_decode_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/speculative_sdpa_decode_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/ccl_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/device/paged_cache_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_pybind.cpp
@@ -627,6 +627,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/transformer
     ttnn/operations/experimental/dropout
     ttnn/operations/experimental/reshape
+    ttnn/operations/experimental/speculative_execution
     ttnn/operations/full_like
     ttnn/operations/full
     ttnn/operations/index_fill

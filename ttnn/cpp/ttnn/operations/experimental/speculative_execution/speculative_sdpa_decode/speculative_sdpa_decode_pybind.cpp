@@ -11,7 +11,7 @@
 #include "ttnn/cpp/pybind11/decorators.hpp"
 #include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::speculative_execution {
 
 using SDPAProgramConfig = ttnn::operations::transformer::SDPAProgramConfig;
 
@@ -122,4 +122,4 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             py::arg("queue_id") = 0,
         });
 }
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::speculative_execution

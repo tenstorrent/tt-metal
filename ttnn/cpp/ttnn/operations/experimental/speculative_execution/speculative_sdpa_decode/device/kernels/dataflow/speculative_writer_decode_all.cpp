@@ -9,8 +9,8 @@
 
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/speculative_dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/dataflow/speculative_dataflow_common.hpp"
 
 #include "debug/dprint.h"  // required in all kernels using DPRINT
 

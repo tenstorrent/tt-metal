@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::speculative_execution {
 
 void SpeculativeScaledDotProductAttentionDecode::validate(
     const std::vector<Tensor>& input_tensors,
@@ -370,4 +370,4 @@ operation::Hash SpeculativeScaledDotProductAttentionDecode::compute_program_hash
         input_tensors);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::speculative_execution

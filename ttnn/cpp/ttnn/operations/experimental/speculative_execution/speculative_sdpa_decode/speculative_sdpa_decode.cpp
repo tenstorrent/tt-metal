@@ -30,7 +30,7 @@ inline uint32_t get_chunk_size(uint32_t s) {
 }
 }  // namespace
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::speculative_execution {
 
 using SDPAProgramConfig = ttnn::operations::transformer::SDPAProgramConfig;
 
@@ -215,4 +215,4 @@ ExecuteSpeculativeScaledDotProductAttentionDecode::invoke(
         multi_device_global_semaphore);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::speculative_execution

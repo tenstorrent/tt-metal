@@ -31,7 +31,7 @@
 using namespace tt::constants;
 using ttnn::ccl::LineTopology;
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::speculative_execution::detail {
 
 static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
     log_trace(tt::LogOp, "TensorSlice:");
@@ -274,4 +274,4 @@ std::tuple<KernelHandle, KernelHandle> ccl_multi_core_with_workers(
     return std::tuple{worker_sender_reader_kernel_id, worker_sender_writer_kernel_id};
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::speculative_execution::detail

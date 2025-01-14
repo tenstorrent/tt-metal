@@ -9,7 +9,7 @@
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::speculative_execution::detail {
 
 std::tuple<KernelHandle, KernelHandle> ccl_multi_core_with_workers(
     tt::tt_metal::Program& program,
@@ -59,4 +59,4 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device);
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::speculative_execution::detail

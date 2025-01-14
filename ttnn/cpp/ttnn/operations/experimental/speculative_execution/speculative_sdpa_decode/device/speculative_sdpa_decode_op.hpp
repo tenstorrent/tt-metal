@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::operations::experimental::speculative_execution {
 
 struct SpeculativeScaledDotProductAttentionDecode {
     const std::optional<float> lambda_;
@@ -49,4 +49,4 @@ struct SpeculativeScaledDotProductAttentionDecode {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::speculative_execution

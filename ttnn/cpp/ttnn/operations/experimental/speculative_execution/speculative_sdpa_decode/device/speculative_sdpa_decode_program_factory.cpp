@@ -19,7 +19,7 @@ using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::transformer::detail {
+namespace ttnn::operations::experimental::speculative_execution::detail {
 
 // implementation of softmax with optional scale/mask (see the header for input_tensor more detailed description)
 operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
@@ -741,7 +741,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Compute
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/compute/"
+        "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/compute/"
         "speculative_sdpa_flash_decode.cpp",
         core_grid,
         tt_metal::ComputeConfig{
@@ -754,7 +754,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Reader
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/dataflow/"
         "speculative_reader_decode_all.cpp",
         core_grid,
         tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common, defines));
@@ -762,7 +762,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/device/kernels/dataflow/"
         "speculative_writer_decode_all.cpp",
         core_grid,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, defines));
@@ -877,152 +877,154 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         }
     }
 
-    auto override_runtime_arguments_callback = [num_active_cores,
-                                                core_group,
-                                                reader_kernels_id,
-                                                writer_kernels_id,
-                                                compute_kernels_id,
-                                                num_cores_per_batch,
-                                                num_cores_per_head,
-                                                num_output_cores,
-                                                is_output_sharded,
-                                                cb_out4_id,
-                                                B,
-                                                use_cur_pos_tensor,
-                                                use_attention_mask,
-                                                is_paged_attention,
-                                                is_causal,
-                                                use_priority_tensor,
-                                                use_other_priority_tensor,
-                                                ccl_enabled,
-                                                ccl_reader_kernel_id,
-                                                ccl_writer_kernel_id,
-                                                ccl_core](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&
-                                                       optional_input_tensors,
-                                                   const std::vector<Tensor>& output_tensors) {
-        const auto cur_pos_ids =
-            static_cast<const ttnn::operations::experimental::transformer::SpeculativeScaledDotProductAttentionDecode*>(
-                operation)
-                ->cur_pos;
+    auto override_runtime_arguments_callback =
+        [num_active_cores,
+         core_group,
+         reader_kernels_id,
+         writer_kernels_id,
+         compute_kernels_id,
+         num_cores_per_batch,
+         num_cores_per_head,
+         num_output_cores,
+         is_output_sharded,
+         cb_out4_id,
+         B,
+         use_cur_pos_tensor,
+         use_attention_mask,
+         is_paged_attention,
+         is_causal,
+         use_priority_tensor,
+         use_other_priority_tensor,
+         ccl_enabled,
+         ccl_reader_kernel_id,
+         ccl_writer_kernel_id,
+         ccl_core](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            const auto cur_pos_ids = static_cast<const ttnn::operations::experimental::speculative_execution::
+                                                     SpeculativeScaledDotProductAttentionDecode*>(operation)
+                                         ->cur_pos;
 
-        auto q_buffer = input_tensors.at(0).buffer();
-        auto k_buffer = input_tensors.at(1).buffer();
-        auto v_buffer = input_tensors.at(2).buffer();
+            auto q_buffer = input_tensors.at(0).buffer();
+            auto k_buffer = input_tensors.at(1).buffer();
+            auto v_buffer = input_tensors.at(2).buffer();
 
-        auto out0_buffer = output_tensors.at(0).buffer();
-        auto out1_buffer = output_tensors.at(1).buffer();
-        auto l2_dist_buffer = output_tensors.at(2).buffer();
-        auto l2_norm_buffer = output_tensors.at(3).buffer();
-        uint32_t q_addr = q_buffer->address();
-        uint32_t k_addr = k_buffer->address();
-        uint32_t v_addr = v_buffer->address();
-        uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
-        uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
-        uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
-        uint32_t priority_addr = use_priority_tensor ? optional_input_tensors.at(3).value().buffer()->address() : 0;
-        uint32_t other_priority_addr =
-            use_other_priority_tensor ? optional_input_tensors.at(4).value().buffer()->address() : 0;
-        auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
-        uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
-        uint32_t out_addr = out0_buffer->address();
-        uint32_t out_spec_addr = out1_buffer->address();
-        uint32_t l2_dist_addr = l2_dist_buffer->address();
-        uint32_t l2_norm_addr = l2_norm_buffer->address();
+            auto out0_buffer = output_tensors.at(0).buffer();
+            auto out1_buffer = output_tensors.at(1).buffer();
+            auto l2_dist_buffer = output_tensors.at(2).buffer();
+            auto l2_norm_buffer = output_tensors.at(3).buffer();
+            uint32_t q_addr = q_buffer->address();
+            uint32_t k_addr = k_buffer->address();
+            uint32_t v_addr = v_buffer->address();
+            uint32_t pos_addr = use_cur_pos_tensor ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+            uint32_t page_table_addr =
+                is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
+            uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
+            uint32_t priority_addr = use_priority_tensor ? optional_input_tensors.at(3).value().buffer()->address() : 0;
+            uint32_t other_priority_addr =
+                use_other_priority_tensor ? optional_input_tensors.at(4).value().buffer()->address() : 0;
+            auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
+            uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
+            uint32_t out_addr = out0_buffer->address();
+            uint32_t out_spec_addr = out1_buffer->address();
+            uint32_t l2_dist_addr = l2_dist_buffer->address();
+            uint32_t l2_norm_addr = l2_norm_buffer->address();
 
-        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-        auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
+            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+            auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
 
-        // Set rt args
-        // flash decode
-        for (uint32_t i = 0; i < num_active_cores; ++i) {
-            CoreCoord core = core_group[i];
-            uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
-            uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
-            bool do_reduce = (worker_id_for_reduce == -1);
-            bool do_output = (worker_id_for_output == -1);
-            uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
-            uint32_t cur_batch = i / num_cores_per_batch;
-            uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
-            uint32_t core_num_in_output = i % num_cores_per_batch;
-            uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
+            // Set rt args
+            // flash decode
+            for (uint32_t i = 0; i < num_active_cores; ++i) {
+                CoreCoord core = core_group[i];
+                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
+                uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+                bool do_reduce = (worker_id_for_reduce == -1);
+                bool do_output = (worker_id_for_output == -1);
+                uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;
+                uint32_t cur_batch = i / num_cores_per_batch;
+                uint32_t core_num_in_reduce = (num_cores_per_head == 0) ? 0 : i % num_cores_per_head;
+                uint32_t core_num_in_output = i % num_cores_per_batch;
+                uint32_t cur_pos = (use_cur_pos_tensor || !is_causal) ? -1 : cur_pos_ids.at(cur_batch);
 
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-            auto& compute_args = compute_args_by_core[core.x][core.y];
+                auto& reader_args = reader_args_by_core[core.x][core.y];
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                auto& compute_args = compute_args_by_core[core.x][core.y];
 
-            // reader runtime args
-            uint32_t arg_idx = 0;
-            reader_args[arg_idx++] = q_addr;
-            reader_args[arg_idx++] = k_addr;
-            reader_args[arg_idx++] = v_addr;
-            reader_args[arg_idx++] = pos_addr;
-            reader_args[arg_idx++] = page_table_addr;
-            reader_args[arg_idx++] = attn_mask_addr;
-            reader_args[arg_idx++] = out_addr;
-            reader_args[arg_idx++] = out_spec_addr;
-            reader_args[arg_idx++] = priority_addr;
-            reader_args[arg_idx++] = other_priority_addr;
-            reader_args[arg_idx++] = page_table_stick_size;
-            reader_args[arg_idx++] = do_reduce;
-            reader_args[arg_idx++] = do_output;
-            reader_args[arg_idx++] = cur_head;
-            reader_args[arg_idx++] = cur_batch;
-            reader_args[arg_idx++] = core_num_in_reduce;
-            reader_args[arg_idx++] = core_num_in_output;
-            reader_args[arg_idx++] = cur_pos;
+                // reader runtime args
+                uint32_t arg_idx = 0;
+                reader_args[arg_idx++] = q_addr;
+                reader_args[arg_idx++] = k_addr;
+                reader_args[arg_idx++] = v_addr;
+                reader_args[arg_idx++] = pos_addr;
+                reader_args[arg_idx++] = page_table_addr;
+                reader_args[arg_idx++] = attn_mask_addr;
+                reader_args[arg_idx++] = out_addr;
+                reader_args[arg_idx++] = out_spec_addr;
+                reader_args[arg_idx++] = priority_addr;
+                reader_args[arg_idx++] = other_priority_addr;
+                reader_args[arg_idx++] = page_table_stick_size;
+                reader_args[arg_idx++] = do_reduce;
+                reader_args[arg_idx++] = do_output;
+                reader_args[arg_idx++] = cur_head;
+                reader_args[arg_idx++] = cur_batch;
+                reader_args[arg_idx++] = core_num_in_reduce;
+                reader_args[arg_idx++] = core_num_in_output;
+                reader_args[arg_idx++] = cur_pos;
 
-            // writer runtime args
-            arg_idx = 0;
-            writer_args[arg_idx++] = out_addr;
-            writer_args[arg_idx++] = out_spec_addr;
-            writer_args[arg_idx++] = l2_dist_addr;
-            writer_args[arg_idx++] = l2_norm_addr;
-            writer_args[arg_idx++] = priority_addr;
-            writer_args[arg_idx++] = other_priority_addr;
-            writer_args[arg_idx++] = worker_id_for_reduce;
-            writer_args[arg_idx++] = worker_id_for_output;
-            writer_args[arg_idx++] = do_reduce;
-            writer_args[arg_idx++] = do_output;
-            writer_args[arg_idx++] = cur_head;
-            writer_args[arg_idx++] = cur_batch;
-            writer_args[arg_idx++] = core_num_in_reduce;
-            writer_args[arg_idx++] = core_num_in_output;
-            writer_args[arg_idx++] = cur_pos;
+                // writer runtime args
+                arg_idx = 0;
+                writer_args[arg_idx++] = out_addr;
+                writer_args[arg_idx++] = out_spec_addr;
+                writer_args[arg_idx++] = l2_dist_addr;
+                writer_args[arg_idx++] = l2_norm_addr;
+                writer_args[arg_idx++] = priority_addr;
+                writer_args[arg_idx++] = other_priority_addr;
+                writer_args[arg_idx++] = worker_id_for_reduce;
+                writer_args[arg_idx++] = worker_id_for_output;
+                writer_args[arg_idx++] = do_reduce;
+                writer_args[arg_idx++] = do_output;
+                writer_args[arg_idx++] = cur_head;
+                writer_args[arg_idx++] = cur_batch;
+                writer_args[arg_idx++] = core_num_in_reduce;
+                writer_args[arg_idx++] = core_num_in_output;
+                writer_args[arg_idx++] = cur_pos;
 
-            // compute runtime args
-            arg_idx = 0;
-            compute_args[arg_idx++] = do_reduce;
-            compute_args[arg_idx++] = do_output;
-            compute_args[arg_idx++] = cur_head;
-            compute_args[arg_idx++] = cur_batch;
-            compute_args[arg_idx++] = core_num_in_reduce;
-            compute_args[arg_idx++] = core_num_in_output;
-            compute_args[arg_idx++] = cur_pos;
-        }
-        // ccl related
-        if (ccl_enabled) {
-            // Update ccl related runtime args
-            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_reader_kernel_id.value());
-            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_writer_kernel_id.value());
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
-            worker_reader_sender_runtime_args.at(0) = out_spec_addr;
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
-            worker_writer_sender_runtime_args.at(0) = out_addr;
-        }
+                // compute runtime args
+                arg_idx = 0;
+                compute_args[arg_idx++] = do_reduce;
+                compute_args[arg_idx++] = do_output;
+                compute_args[arg_idx++] = cur_head;
+                compute_args[arg_idx++] = cur_batch;
+                compute_args[arg_idx++] = core_num_in_reduce;
+                compute_args[arg_idx++] = core_num_in_output;
+                compute_args[arg_idx++] = cur_pos;
+            }
+            // ccl related
+            if (ccl_enabled) {
+                // Update ccl related runtime args
+                auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_reader_kernel_id.value());
+                auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_writer_kernel_id.value());
+                // reader
+                auto& worker_reader_sender_runtime_args =
+                    worker_reader_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
+                worker_reader_sender_runtime_args.at(0) = out_spec_addr;
+                // writer
+                auto& worker_writer_sender_runtime_args =
+                    worker_writer_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
+                worker_writer_sender_runtime_args.at(0) = out_addr;
+            }
 
-        if (is_output_sharded) {
-            UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
-        }
-    };
+            if (is_output_sharded) {
+                UpdateDynamicCircularBufferAddress(program, cb_out4_id, *out0_buffer);
+            }
+        };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace ttnn::operations::experimental::transformer::detail
+}  // namespace ttnn::operations::experimental::speculative_execution::detail
