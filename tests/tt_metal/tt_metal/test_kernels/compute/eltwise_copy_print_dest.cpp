@@ -28,7 +28,7 @@ void MAIN {
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         copy_tile(tt::CBIndex::c_0, b, b);
-        dprint_tensix_dest_reg(b);
+        // dprint_tensix_dest_reg(b);
     }
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
@@ -39,15 +39,15 @@ void MAIN {
 
     // TESTING DPRINT FOR CONFIG REIGSTERS
 
-    //dprint_tensix_alu_config();
-    //dprint_tensix_unpack_tile_descriptor();
-    //dprint_tensix_unpack_config();
-    //dprint_tensix_pack_config();
-    //dprint_tensix_pack_relu_config();
-    //dprint_tensix_dest_rd_ctrl();
-    //dprint_tensix_pck_edge_offset();
-    //dprint_tensix_pack_counters();
-    //dprint_tensix_pack_strides();
+    // UNPACK(dprint_tensix_alu_config());
+    // UNPACK(dprint_tensix_unpack_tile_descriptor());
+    // UNPACK(dprint_tensix_unpack_config());
+    // PACK(dprint_tensix_pack_config());
+    // PACK(dprint_tensix_pack_relu_config());
+    // PACK(dprint_tensix_dest_rd_ctrl());
+    // PACK(dprint_tensix_pck_edge_offset());
+    // PACK(dprint_tensix_pack_counters());
+    // PACK(dprint_tensix_pack_strides());
 
     release_dst();
 }
