@@ -272,7 +272,9 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
 {
     DPRINT << name << ": ";
     if (printDec) DPRINT << DEC();
-    else DPRINT << HEX();
+    else {
+        DPRINT << "0x" << HEX();
+    }
     DPRINT << ((word & mask) >> shamt) << ENDL();
 }
 
@@ -287,17 +289,17 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     DPRINT << "in_data_format: ";
     dprint_data_format(tile_descriptor.in_data_format);
     DPRINT << ENDL();
-    DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << ENDL();
-    DPRINT << "reserved_0: " << HEX() << tile_descriptor.reserved_0 << ENDL();
-    DPRINT << "blobs_per_xy_plane: " << tile_descriptor.blobs_per_xy_plane << ENDL();
-    DPRINT << "reserved_1: " << HEX() << tile_descriptor.reserved_1 << ENDL();
-    DPRINT << "x_dim: " << tile_descriptor.x_dim << ENDL();
-    DPRINT << "y_dim: " << tile_descriptor.y_dim << ENDL();
-    DPRINT << "z_dim: " << tile_descriptor.z_dim << ENDL();
-    DPRINT << "w_dim: " << tile_descriptor.w_dim << ENDL();
-    DPRINT << "blobs_y_start: " << tile_descriptor.blobs_y_start << ENDL();
-    DPRINT << "digest_type: " << HEX() << tile_descriptor.digest_type << ENDL();
-    DPRINT << "digest_size: " << tile_descriptor.digest_size << ENDL();
+    DPRINT << "uncompressed: 0x" << HEX() << tile_descriptor.uncompressed << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << tile_descriptor.reserved_0 << ENDL();
+    DPRINT << "blobs_per_xy_plane: " << DEC() << tile_descriptor.blobs_per_xy_plane << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << tile_descriptor.reserved_1 << ENDL();
+    DPRINT << "x_dim: " << DEC() << tile_descriptor.x_dim << ENDL();
+    DPRINT << "y_dim: " << DEC() << tile_descriptor.y_dim << ENDL();
+    DPRINT << "z_dim: " << DEC() << tile_descriptor.z_dim << ENDL();
+    DPRINT << "w_dim: " << DEC() << tile_descriptor.w_dim << ENDL();
+    DPRINT << "blobs_y_start: " << DEC() << tile_descriptor.blobs_y_start << ENDL();
+    DPRINT << "digest_type: 0x" << HEX() << tile_descriptor.digest_type << ENDL();
+    DPRINT << "digest_size: " << DEC() << tile_descriptor.digest_size << ENDL();
 }
 
 inline void dprint_tensix_unpack_config_grayskull() {
@@ -306,47 +308,48 @@ inline void dprint_tensix_unpack_config_grayskull() {
     DPRINT << "out_data_format: ";
     dprint_data_format(config.out_data_format);
     DPRINT << ENDL();
-    DPRINT << "throttle_mode: " << HEX() << config.throttle_mode << ENDL();
-    DPRINT << "context_count: " << HEX() << config.context_count << ENDL();
-    DPRINT << "haloize_mode: " << HEX() << config.haloize_mode << ENDL();
-    DPRINT << "tileize_mode: " << HEX() << config.tileize_mode << ENDL();
-    DPRINT << "force_shared_exp: " << HEX() << config.force_shared_exp << ENDL();
-    DPRINT << "reserved_0: " << HEX() << config.reserved_0 << ENDL();
-    DPRINT << "upsample_rate: " << config.upsample_rate << ENDL();
-    DPRINT << "upsamle_and_interlave: " << HEX() << config.upsamle_and_interlave << ENDL();
-    DPRINT << "shift_amount: " << config.shift_amount << ENDL();
-    DPRINT << "uncompress_cntx0_3: " << HEX() << config.uncompress_cntx0_3 << ENDL();
-    DPRINT << "reserved_1: " << HEX() << config.reserved_1 << ENDL();
-    DPRINT << "uncompress_cntx4_7: " << HEX() << config.uncompress_cntx4_7 << ENDL();
-    DPRINT << "reserved_2: " << HEX() << config.reserved_2 << ENDL();
-    DPRINT << "limit_addr: " << HEX() << config.limit_addr << ENDL();
-    DPRINT << "fifo_size: " << config.fifo_size << ENDL();
+    DPRINT << "throttle_mode: 0x" << HEX() << config.throttle_mode << ENDL();
+    DPRINT << "context_count: 0x" << HEX() << config.context_count << ENDL();
+    DPRINT << "haloize_mode: 0x" << HEX() << config.haloize_mode << ENDL();
+    DPRINT << "tileize_mode: 0x" << HEX() << config.tileize_mode << ENDL();
+    DPRINT << "force_shared_exp: 0x" << HEX() << config.force_shared_exp << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << config.reserved_0 << ENDL();
+    DPRINT << "upsample_rate: " << DEC() << config.upsample_rate << ENDL();
+    DPRINT << "upsamle_and_interlave: 0x" << HEX() << config.upsamle_and_interlave << ENDL();
+    DPRINT << "shift_amount: " << DEC() << config.shift_amount << ENDL();
+    DPRINT << "uncompress_cntx0_3: 0x" << HEX() << config.uncompress_cntx0_3 << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << config.reserved_1 << ENDL();
+    DPRINT << "uncompress_cntx4_7: 0x" << HEX() << config.uncompress_cntx4_7 << ENDL();
+    DPRINT << "reserved_2: 0x" << HEX() << config.reserved_2 << ENDL();
+    DPRINT << "limit_addr: 0x" << HEX() << config.limit_addr << ENDL();
+    DPRINT << "fifo_size: " << DEC() << config.fifo_size << ENDL();
 }
 
 inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
     ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
 
-    DPRINT << "row_ptr_section_size: " << config.row_ptr_section_size << ENDL();
-    DPRINT << "exp_section_size: " << config.exp_section_size << ENDL();
-    DPRINT << "l1_dest_addr: " << HEX() << config.l1_dest_addr << ENDL();
-    DPRINT << "uncompress: " << HEX() << config.uncompress << ENDL();
-    DPRINT << "add_l1_dest_addr_offset: " << HEX() << config.add_l1_dest_addr_offset << ENDL();
-    DPRINT << "reserved_0: " << HEX() << config.reserved_0 << ENDL();
+    DPRINT << "row_ptr_section_size: " << DEC() << config.row_ptr_section_size << ENDL();
+    DPRINT << "exp_section_size: " << DEC() << config.exp_section_size << ENDL();
+    DPRINT << "l1_dest_addr: 0x" << HEX() << config.l1_dest_addr << ENDL();
+    DPRINT << "uncompress: 0x" << HEX() << config.uncompress << ENDL();
+    DPRINT << "add_l1_dest_addr_offset: 0x" << HEX() << config.add_l1_dest_addr_offset << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << config.reserved_0 << ENDL();
+    DPRINT << "out_data_format: ";
     dprint_data_format(config.out_data_format);
     DPRINT << ENDL();
     DPRINT << "in_data_format: ";
     dprint_data_format(config.in_data_format);
     DPRINT << ENDL();
-    DPRINT << "reserved_1: " << HEX() << config.reserved_1 << ENDL();
-    DPRINT << "src_if_sel: " << HEX() << config.src_if_sel << ENDL();
-    DPRINT << "pack_per_xy_plane: " << config.pack_per_xy_plane << ENDL();
-    DPRINT << "l1_src_addr: " << HEX() << config.l1_src_addr << ENDL();
-    DPRINT << "downsample_mask: " << HEX() << config.downsample_mask << ENDL();
-    DPRINT << "downsample_shift_count: " << config.downsample_shift_count << ENDL();
-    DPRINT << "read_mode: " << HEX() << config.read_mode << ENDL();
-    DPRINT << "exp_threshold_en: " << HEX() << config.exp_threshold_en << ENDL();
-    DPRINT << "reserved_2: " << HEX() << config.reserved_2 << ENDL();
-    DPRINT << "exp_threshold: " << config.exp_threshold << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << config.reserved_1 << ENDL();
+    DPRINT << "src_if_sel: 0x" << HEX() << config.src_if_sel << ENDL();
+    DPRINT << "pack_per_xy_plane: " << DEC() << config.pack_per_xy_plane << ENDL();
+    DPRINT << "l1_src_addr: 0x" << HEX() << config.l1_src_addr << ENDL();
+    DPRINT << "downsample_mask: 0x" << HEX() << config.downsample_mask << ENDL();
+    DPRINT << "downsample_shift_count: " << DEC() << config.downsample_shift_count << ENDL();
+    DPRINT << "read_mode: 0x" << HEX() << config.read_mode << ENDL();
+    DPRINT << "exp_threshold_en: 0x" << HEX() << config.exp_threshold_en << ENDL();
+    DPRINT << "reserved_2: 0x" << HEX() << config.reserved_2 << ENDL();
+    DPRINT << "exp_threshold: " << DEC() << config.exp_threshold << ENDL();
 }
 #else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
 inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
@@ -355,18 +358,18 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     DPRINT << "in_data_format: ";
     dprint_data_format(tile_descriptor.in_data_format);
     DPRINT << ENDL();
-    DPRINT << "uncompressed: " << HEX() << tile_descriptor.uncompressed << ENDL();
-    DPRINT << "reserved_0: " << HEX() << tile_descriptor.reserved_0 << ENDL();
-    DPRINT << "blobs_per_xy_plane: " << tile_descriptor.blobs_per_xy_plane << ENDL();
-    DPRINT << "reserved_1: " << HEX() << tile_descriptor.reserved_1 << ENDL();
-    DPRINT << "x_dim: " << tile_descriptor.x_dim << ENDL();
-    DPRINT << "y_dim: " << tile_descriptor.y_dim << ENDL();
-    DPRINT << "z_dim: " << tile_descriptor.z_dim << ENDL();
-    DPRINT << "w_dim: " << tile_descriptor.w_dim << ENDL();
-    DPRINT << "blobs_y_start: " << ((tile_descriptor.blobs_y_start_hi << 16) | tile_descriptor.blobs_y_start_lo)
-           << ENDL();
-    DPRINT << "digest_type: " << HEX() << tile_descriptor.digest_type << ENDL();
-    DPRINT << "digest_size: " << tile_descriptor.digest_size << ENDL();
+    DPRINT << "uncompressed: 0x" << HEX() << tile_descriptor.uncompressed << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << tile_descriptor.reserved_0 << ENDL();
+    DPRINT << "blobs_per_xy_plane: " << DEC() << tile_descriptor.blobs_per_xy_plane << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << tile_descriptor.reserved_1 << ENDL();
+    DPRINT << "x_dim: " << DEC() << tile_descriptor.x_dim << ENDL();
+    DPRINT << "y_dim: " << DEC() << tile_descriptor.y_dim << ENDL();
+    DPRINT << "z_dim: " << DEC() << tile_descriptor.z_dim << ENDL();
+    DPRINT << "w_dim: " << DEC() << tile_descriptor.w_dim << ENDL();
+    DPRINT << "blobs_y_start: " << DEC()
+           << ((tile_descriptor.blobs_y_start_hi << 16) | tile_descriptor.blobs_y_start_lo) << ENDL();
+    DPRINT << "digest_type: 0x" << HEX() << tile_descriptor.digest_type << ENDL();
+    DPRINT << "digest_size: " << DEC() << tile_descriptor.digest_size << ENDL();
 }
 
 inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
@@ -375,56 +378,56 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
     DPRINT << "out_data_format: ";
     dprint_data_format(config.out_data_format);
     DPRINT << ENDL();
-    DPRINT << "throttle_mode: " << HEX() << config.throttle_mode << ENDL();
-    DPRINT << "context_count: " << HEX() << config.context_count << ENDL();
-    DPRINT << "haloize_mode: " << HEX() << config.haloize_mode << ENDL();
-    DPRINT << "tileize_mode: " << HEX() << config.tileize_mode << ENDL();
-    DPRINT << "unpack_src_reg_set_update: " << HEX() << config.unpack_src_reg_set_update << ENDL();
-    DPRINT << "unpack_if_sel: " << HEX() << config.unpack_if_sel << ENDL();
-    DPRINT << "upsample_rate: " << HEX() << config.upsample_rate << ENDL();
-    DPRINT << "reserved_1: " << HEX() << config.reserved_1 << ENDL();
-    DPRINT << "upsamle_and_interlave: " << config.upsamle_and_interlave << ENDL();
-    DPRINT << "shift_amount: " << config.shift_amount << ENDL();
-    DPRINT << "uncompress_cntx0_3: " << HEX() << config.uncompress_cntx0_3 << ENDL();
-    DPRINT << "unpack_if_sel_cntx0_3: " << HEX() << config.unpack_if_sel_cntx0_3 << ENDL();
-    DPRINT << "force_shared_exp: " << HEX() << config.force_shared_exp << ENDL();
-    DPRINT << "reserved_2: " << HEX() << config.reserved_2 << ENDL();
-    DPRINT << "uncompress_cntx4_7: " << HEX() << config.uncompress_cntx4_7 << ENDL();
-    DPRINT << "unpack_if_sel_cntx4_7: " << HEX() << config.unpack_if_sel_cntx4_7 << ENDL();
-    DPRINT << "reserved_3: " << HEX() << config.reserved_3 << ENDL();
-    DPRINT << "limit_addr: " << HEX() << config.limit_addr << ENDL();
-    DPRINT << "reserved_4: " << HEX() << config.reserved_4 << ENDL();
-    DPRINT << "fifo_size: " << config.fifo_size << ENDL();
-    DPRINT << "reserved_5: " << HEX() << config.reserved_5 << ENDL();
+    DPRINT << "throttle_mode: 0x" << HEX() << config.throttle_mode << ENDL();
+    DPRINT << "context_count: 0x" << HEX() << config.context_count << ENDL();
+    DPRINT << "haloize_mode: 0x" << HEX() << config.haloize_mode << ENDL();
+    DPRINT << "tileize_mode: 0x" << HEX() << config.tileize_mode << ENDL();
+    DPRINT << "unpack_src_reg_set_update: 0x" << HEX() << config.unpack_src_reg_set_update << ENDL();
+    DPRINT << "unpack_if_sel: 0x" << HEX() << config.unpack_if_sel << ENDL();
+    DPRINT << "upsample_rate: 0x" << HEX() << config.upsample_rate << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << config.reserved_1 << ENDL();
+    DPRINT << "upsamle_and_interlave: 0x" << HEX() << config.upsamle_and_interlave << ENDL();
+    DPRINT << "shift_amount: " << DEC() << config.shift_amount << ENDL();
+    DPRINT << "uncompress_cntx0_3: 0x" << HEX() << config.uncompress_cntx0_3 << ENDL();
+    DPRINT << "unpack_if_sel_cntx0_3: 0x" << HEX() << config.unpack_if_sel_cntx0_3 << ENDL();
+    DPRINT << "force_shared_exp: 0x" << HEX() << config.force_shared_exp << ENDL();
+    DPRINT << "reserved_2: 0x" << HEX() << config.reserved_2 << ENDL();
+    DPRINT << "uncompress_cntx4_7: 0x" << HEX() << config.uncompress_cntx4_7 << ENDL();
+    DPRINT << "unpack_if_sel_cntx4_7: 0x" << HEX() << config.unpack_if_sel_cntx4_7 << ENDL();
+    DPRINT << "reserved_3: 0x" << HEX() << config.reserved_3 << ENDL();
+    DPRINT << "limit_addr: 0x" << HEX() << config.limit_addr << ENDL();
+    DPRINT << "reserved_4: 0x" << HEX() << config.reserved_4 << ENDL();
+    DPRINT << "fifo_size: " << DEC() << config.fifo_size << ENDL();
+    DPRINT << "reserved_5: 0x" << HEX() << config.reserved_5 << ENDL();
 }
 
 #ifdef ARCH_WORMHOLE
 inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
     ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
 
-    DPRINT << "row_ptr_section_size: " << config.row_ptr_section_size << ENDL();
-    DPRINT << "exp_section_size: " << config.exp_section_size << ENDL();
-    DPRINT << "l1_dest_addr: " << HEX() << config.l1_dest_addr << ENDL();
-    DPRINT << "uncompress: " << HEX() << config.uncompress << ENDL();
-    DPRINT << "add_l1_dest_addr_offset: " << HEX() << config.add_l1_dest_addr_offset << ENDL();
-    DPRINT << "reserved_0: " << HEX() << config.reserved_0 << ENDL();
+    DPRINT << "row_ptr_section_size: " << DEC() << config.row_ptr_section_size << ENDL();
+    DPRINT << "exp_section_size: " << DEC() << config.exp_section_size << ENDL();
+    DPRINT << "l1_dest_addr: 0x" << HEX() << config.l1_dest_addr << ENDL();
+    DPRINT << "uncompress: 0x" << HEX() << config.uncompress << ENDL();
+    DPRINT << "add_l1_dest_addr_offset: 0x" << HEX() << config.add_l1_dest_addr_offset << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << config.reserved_0 << ENDL();
     DPRINT << "out_data_format: ";
     dprint_data_format(config.out_data_format);
     DPRINT << ENDL();
     DPRINT << "in_data_format: ";
     dprint_data_format(config.in_data_format);
     DPRINT << ENDL();
-    DPRINT << "reserved_1: " << HEX() << config.reserved_1 << ENDL();
-    DPRINT << "src_if_sel: " << HEX() << config.src_if_sel << ENDL();
-    DPRINT << "pack_per_xy_plane: " << config.pack_per_xy_plane << ENDL();
-    DPRINT << "l1_src_addr: " << HEX() << config.l1_src_addr << ENDL();
-    DPRINT << "downsample_mask: " << HEX() << config.downsample_mask << ENDL();
-    DPRINT << "downsample_shift_count: " << config.downsample_shift_count << ENDL();
-    DPRINT << "read_mode: " << HEX() << config.read_mode << ENDL();
-    DPRINT << "exp_threshold_en: " << HEX() << config.exp_threshold_en << ENDL();
-    DPRINT << "pack_l1_acc_disable_pack_zero_flag: " << HEX() << config.pack_l1_acc_disable_pack_zero_flag << ENDL();
-    DPRINT << "reserved_2: " << HEX() << config.reserved_2 << ENDL();
-    DPRINT << "exp_threshold: " << config.exp_threshold << ENDL();
+    DPRINT << "reserved_1: 0x" << HEX() << config.reserved_1 << ENDL();
+    DPRINT << "src_if_sel: 0x" << HEX() << config.src_if_sel << ENDL();
+    DPRINT << "pack_per_xy_plane: " << DEC() << config.pack_per_xy_plane << ENDL();
+    DPRINT << "l1_src_addr: 0x" << HEX() << config.l1_src_addr << ENDL();
+    DPRINT << "downsample_mask: 0x" << HEX() << config.downsample_mask << ENDL();
+    DPRINT << "downsample_shift_count: " << DEC() << config.downsample_shift_count << ENDL();
+    DPRINT << "read_mode: 0x" << HEX() << config.read_mode << ENDL();
+    DPRINT << "exp_threshold_en: 0x" << HEX() << config.exp_threshold_en << ENDL();
+    DPRINT << "pack_l1_acc_disable_pack_zero_flag: 0x" << HEX() << config.pack_l1_acc_disable_pack_zero_flag << ENDL();
+    DPRINT << "reserved_2: 0x" << HEX() << config.reserved_2 << ENDL();
+    DPRINT << "exp_threshold: " << DEC() << config.exp_threshold << ENDL();
 }
 #endif  // ARCH_WORMHOLE
 
@@ -432,31 +435,34 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
 inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
     ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
 
-    DPRINT << "row_ptr_section_size: " << HEX() << config.row_ptr_section_size << ENDL();
-    DPRINT << "exp_section_size: " << HEX() << config.exp_section_size << ENDL();
-    DPRINT << "l1_dest_addr: " << HEX() << config.l1_dest_addr << ENDL();
-    DPRINT << "uncompress: " << HEX() << config.uncompress << ENDL();
-    DPRINT << "add_l1_dest_addr_offset: " << HEX() << config.add_l1_dest_addr_offset << ENDL();
-    DPRINT << "disable_pack_zero_flag: " << HEX() << config.disable_pack_zero_flag << ENDL();
-    DPRINT << "reserved_0: " << HEX() << config.reserved_0 << ENDL();
+    DPRINT << "row_ptr_section_size: " << DEC() << config.row_ptr_section_size << ENDL();
+    DPRINT << "exp_section_size: " << DEC() << config.exp_section_size << ENDL();
+    DPRINT << "l1_dest_addr: 0x" << HEX() << config.l1_dest_addr << ENDL();
+    DPRINT << "uncompress: 0x" << HEX() << config.uncompress << ENDL();
+    DPRINT << "add_l1_dest_addr_offset: 0x" << HEX() << config.add_l1_dest_addr_offset << ENDL();
+    DPRINT << "disable_pack_zero_flag: 0x" << HEX() << config.disable_pack_zero_flag << ENDL();
+    DPRINT << "reserved_0: 0x" << HEX() << config.reserved_0 << ENDL();
     DPRINT << "out_data_format: ";
     dprint_data_format(config.out_data_format);
     DPRINT << ENDL();
     DPRINT << "in_data_format: ";
     dprint_data_format(config.in_data_format);
     DPRINT << ENDL();
-    DPRINT << "dis_shared_exp_assembler: " << HEX() << config.dis_shared_exp_assembler << ENDL();
-    DPRINT << "auto_set_last_pacr_intf_sel: " << HEX() << config.auto_set_last_pacr_intf_sel << ENDL();
-    DPRINT << "enable_out_fifo: " << HEX() << config.enable_out_fifo << ENDL();
-    DPRINT << "sub_l1_tile_header_size: " << config.sub_l1_tile_header_size << ENDL();
-    DPRINT << "src_if_sel: " << HEX() << config.src_if_sel << ENDL();
-    DPRINT << "pack_start_intf_pos: " << HEX() << config.pack_start_intf_pos << ENDL();
-    DPRINT << "all_pack_disable_zero_compress_ovrd: " << HEX() << config.all_pack_disable_zero_compress_ovrd << ENDL();
-    DPRINT << "add_tile_header_size: " << config.add_tile_header_size << ENDL();
-    DPRINT << "pack_dis_y_pos_start_offset: " << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
-    DPRINT << "l1_src_addr: " << HEX() << config.l1_src_addr << ENDL();
+    DPRINT << "dis_shared_exp_assembler: 0x" << HEX() << config.dis_shared_exp_assembler << ENDL();
+    DPRINT << "auto_set_last_pacr_intf_sel: 0x" << HEX() << config.auto_set_last_pacr_intf_sel << ENDL();
+    DPRINT << "enable_out_fifo: 0x" << HEX() << config.enable_out_fifo << ENDL();
+    DPRINT << "sub_l1_tile_header_size: " << DEC() << config.sub_l1_tile_header_size << ENDL();
+    DPRINT << "src_if_sel: 0x" << HEX() << config.src_if_sel << ENDL();
+    DPRINT << "pack_start_intf_pos: 0x" << HEX() << config.pack_start_intf_pos << ENDL();
+    DPRINT << "all_pack_disable_zero_compress_ovrd: 0x" << HEX() << config.all_pack_disable_zero_compress_ovrd
+           << ENDL();
+    DPRINT << "add_tile_header_size: " << DEC() << config.add_tile_header_size << ENDL();
+    DPRINT << "pack_dis_y_pos_start_offset: 0x" << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
+    DPRINT << "l1_src_addr: 0x" << HEX() << config.l1_src_addr << ENDL();
 }
 #endif  // ARCH_BLACKHOLE
+
+// HELPER FUNCTIONS
 
 // Choose what register you want printed with reg_id (1-4)
 inline void dprint_tensix_pack_config_helper(uint reg_id) {
@@ -496,16 +502,14 @@ inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uin
 
     ckernel::packer::pck_edge_offset_t edge = ckernel::packer::read_pck_edge_offset(reg_addr, cfg);
 
-    DPRINT << "mask: " << HEX() << edge.mask << ENDL();
-    DPRINT << "mode: " << HEX() << edge.mode << ENDL();
-    DPRINT << "tile_row_set_select_pack0: " << HEX() << edge.tile_row_set_select_pack0 << ENDL();
-    DPRINT << "tile_row_set_select_pack1: " << HEX() << edge.tile_row_set_select_pack1 << ENDL();
-    DPRINT << "tile_row_set_select_pack2: " << HEX() << edge.tile_row_set_select_pack2 << ENDL();
-    DPRINT << "tile_row_set_select_pack3: " << HEX() << edge.tile_row_set_select_pack3 << ENDL();
-    DPRINT << "reserved: " << HEX() << edge.reserved << ENDL();
+    DPRINT << "mask: 0x" << HEX() << edge.mask << ENDL();
+    DPRINT << "mode: 0x" << HEX() << edge.mode << ENDL();
+    DPRINT << "tile_row_set_select_pack0: 0x" << HEX() << edge.tile_row_set_select_pack0 << ENDL();
+    DPRINT << "tile_row_set_select_pack1: 0x" << HEX() << edge.tile_row_set_select_pack1 << ENDL();
+    DPRINT << "tile_row_set_select_pack2: 0x" << HEX() << edge.tile_row_set_select_pack2 << ENDL();
+    DPRINT << "tile_row_set_select_pack3: 0x" << HEX() << edge.tile_row_set_select_pack3 << ENDL();
+    DPRINT << "reserved: 0x" << HEX() << edge.reserved << ENDL();
 }
-
-// HELPER FUNCTIONS
 
 // Printing packer counters
 inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
@@ -520,11 +524,11 @@ inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint 
 
     ckernel::packer::pack_counters_t counters = ckernel::packer::read_pack_counters(reg_addr, cfg);
 
-    DPRINT << "pack_per_xy_plane: " << counters.pack_per_xy_plane << ENDL();
-    DPRINT << "pack_reads_per_xy_plane: " << counters.pack_reads_per_xy_plane << ENDL();
-    DPRINT << "pack_xys_per_til: " << counters.pack_xys_per_til << ENDL();
-    DPRINT << "pack_yz_transposed: " << HEX() << counters.pack_yz_transposed << ENDL();
-    DPRINT << "pack_per_xy_plane_offset: " << counters.pack_per_xy_plane_offset << ENDL();
+    DPRINT << "pack_per_xy_plane: " << DEC() << counters.pack_per_xy_plane << ENDL();
+    DPRINT << "pack_reads_per_xy_plane: " << DEC() << counters.pack_reads_per_xy_plane << ENDL();
+    DPRINT << "pack_xys_per_til: " << DEC() << counters.pack_xys_per_til << ENDL();
+    DPRINT << "pack_yz_transposed: 0x" << HEX() << counters.pack_yz_transposed << ENDL();
+    DPRINT << "pack_per_xy_plane_offset: " << DEC() << counters.pack_per_xy_plane_offset << ENDL();
 }
 
 // Printing packer strides
@@ -553,43 +557,45 @@ inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint t
 inline void dprint_tensix_alu_config() {
     ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
-    DPRINT << "ALU_ROUNDING_MODE_Fpu_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << ENDL();
-    DPRINT << "ALU_ROUNDING_MODE_Gasket_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Gasket_srnd_en << ENDL();
-    DPRINT << "ALU_ROUNDING_MODE_Packer_srnd_en: " << HEX() << config.ALU_ROUNDING_MODE_Packer_srnd_en << ENDL();
-    DPRINT << "ALU_ROUNDING_MODE_Padding: " << HEX() << config.ALU_ROUNDING_MODE_Padding << ENDL();
-    DPRINT << "ALU_ROUNDING_MODE_GS_LF: " << HEX() << config.ALU_ROUNDING_MODE_GS_LF << ENDL();
-    DPRINT << "ALU_ROUNDING_MODE_Bfp8_HF: " << HEX() << config.ALU_ROUNDING_MODE_Bfp8_HF << ENDL();
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcAUnsigned: " << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << ENDL();
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcBUnsigned: " << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << ENDL();
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcA: ";  // << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcA << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_Fpu_srnd_en: 0x" << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_Gasket_srnd_en: 0x" << HEX() << config.ALU_ROUNDING_MODE_Gasket_srnd_en << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_Packer_srnd_en: 0x" << HEX() << config.ALU_ROUNDING_MODE_Packer_srnd_en << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_Padding: 0x" << HEX() << config.ALU_ROUNDING_MODE_Padding << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_GS_LF: 0x" << HEX() << config.ALU_ROUNDING_MODE_GS_LF << ENDL();
+    DPRINT << "ALU_ROUNDING_MODE_Bfp8_HF: 0x" << HEX() << config.ALU_ROUNDING_MODE_Bfp8_HF << ENDL();
+    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcAUnsigned: 0x" << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned << ENDL();
+    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcBUnsigned: 0x" << HEX() << config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned << ENDL();
+    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcA: ";
     dprint_data_format(config.ALU_FORMAT_SPEC_REG0_SrcA);
     DPRINT << ENDL();
-    DPRINT << "ALU_FORMAT_SPEC_REG1_SrcB: ";  // << HEX() << config.ALU_FORMAT_SPEC_REG1_SrcB << ENDL();
+    DPRINT << "ALU_FORMAT_SPEC_REG1_SrcB: ";
     dprint_data_format(config.ALU_FORMAT_SPEC_REG1_SrcB);
     DPRINT << ENDL();
-    DPRINT << "ALU_FORMAT_SPEC_REG2_Dstacc: ";  // << HEX() << config.ALU_FORMAT_SPEC_REG2_Dstacc << ENDL();
+    DPRINT << "ALU_FORMAT_SPEC_REG2_Dstacc: ";
     dprint_data_format(config.ALU_FORMAT_SPEC_REG2_Dstacc);
     DPRINT << ENDL();
-    DPRINT << "ALU_ACC_CTRL_Fp32_enabled: " << HEX() << config.ALU_ACC_CTRL_Fp32_enabled << ENDL();
-    DPRINT << "ALU_ACC_CTRL_SFPU_Fp32_enabled: " << HEX() << config.ALU_ACC_CTRL_SFPU_Fp32_enabled << ENDL();
-    DPRINT << "ALU_ACC_CTRL_INT8_math_enabled: " << HEX() << config.ALU_ACC_CTRL_INT8_math_enabled << ENDL();
+    DPRINT << "ALU_ACC_CTRL_Fp32_enabled: 0x" << HEX() << config.ALU_ACC_CTRL_Fp32_enabled << ENDL();
+    DPRINT << "ALU_ACC_CTRL_SFPU_Fp32_enabled: 0x" << HEX() << config.ALU_ACC_CTRL_SFPU_Fp32_enabled << ENDL();
+    DPRINT << "ALU_ACC_CTRL_INT8_math_enabled: 0x" << HEX() << config.ALU_ACC_CTRL_INT8_math_enabled << ENDL();
 }
 
 inline void dprint_tensix_pack_relu_config() {
     ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
 
-    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_src: " << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_src << ENDL();
-    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_dst: " << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_dst << ENDL();
-    DPRINT << "STACC_RELU_ApplyRelu: " << HEX() << config.STACC_RELU_ApplyRelu << ENDL();
-    DPRINT << "STACC_RELU_ReluThreshold: " << config.STACC_RELU_ReluThreshold << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_main: " << HEX() << config.DISABLE_RISC_BP_Disable_main << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_trisc: " << HEX() << config.DISABLE_RISC_BP_Disable_trisc << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_ncrisc: " << HEX() << config.DISABLE_RISC_BP_Disable_ncrisc << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_main: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_main
+    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_src: 0x" << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_src
            << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_trisc: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_trisc
+    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_dst: 0x" << HEX() << config.ALU_ACC_CTRL_Zero_Flag_disabled_dst
            << ENDL();
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc: " << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc
+    DPRINT << "STACC_RELU_ApplyRelu: 0x" << HEX() << config.STACC_RELU_ApplyRelu << ENDL();
+    DPRINT << "STACC_RELU_ReluThreshold: " << DEC() << config.STACC_RELU_ReluThreshold << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_main: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_main << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_trisc: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_trisc << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_ncrisc: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_ncrisc << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_main: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_main
+           << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_trisc: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_trisc
+           << ENDL();
+    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc: 0x" << HEX() << config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc
            << ENDL();
 }
 
@@ -597,11 +603,11 @@ inline void dprint_tensix_pack_relu_config() {
 inline void dprint_tensix_dest_rd_ctrl() {
     ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
 
-    DPRINT << "PCK_DEST_RD_CTRL_Read_32b_data: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << "; " << ENDL();
-    DPRINT << "PCK_DEST_RD_CTRL_Read_unsigned: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << "; " << ENDL();
-    DPRINT << "PCK_DEST_RD_CTRL_Read_int8: " << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << "; " << ENDL();
-    DPRINT << "PCK_DEST_RD_CTRL_Round_10b_mant: " << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << "; " << ENDL();
-    DPRINT << "PCK_DEST_RD_CTRL_Reserved: " << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << "; " << ENDL();
+    DPRINT << "PCK_DEST_RD_CTRL_Read_32b_data: 0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << "; " << ENDL();
+    DPRINT << "PCK_DEST_RD_CTRL_Read_unsigned: 0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << "; " << ENDL();
+    DPRINT << "PCK_DEST_RD_CTRL_Read_int8: 0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << "; " << ENDL();
+    DPRINT << "PCK_DEST_RD_CTRL_Round_10b_mant: 0x" << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << "; " << ENDL();
+    DPRINT << "PCK_DEST_RD_CTRL_Reserved: 0x" << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << "; " << ENDL();
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
@@ -617,6 +623,9 @@ inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
         for (uint i = 1; i < 5; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_pck_edge_offset_helper(i, cfg);
+            if (i != 4) {
+                DPRINT << ENDL();
+            }
         }
     }
 }
@@ -635,6 +644,9 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
         for (uint i = 1; i < 5; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_pack_counters_helper(i, cfg);
+            if (i != 4) {
+                DPRINT << ENDL();
+            }
         }
     }
 }
@@ -661,10 +673,12 @@ inline void dprint_tensix_pack_config(uint reg_id = 0) {
     if (reg_id) {
         dprint_tensix_pack_config_helper(reg_id);
     } else {
-        dprint_tensix_pack_config_helper(1);
-        dprint_tensix_pack_config_helper(2);
-        dprint_tensix_pack_config_helper(3);
-        dprint_tensix_pack_config_helper(4);
+        for (uint i = 1; i < 5; i++) {
+            dprint_tensix_pack_config_helper(i);
+            if (i != 4) {
+                DPRINT << ENDL();
+            }
+        }
     }
 }
 
@@ -683,6 +697,9 @@ inline void dprint_tensix_pack_strides(uint reg_id = 0) {
         for (uint i = 1; i < 3; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_pack_strides_helper(i, cfg);
+            if (i != 2) {
+                DPRINT << ENDL();
+            }
         }
     }
 }
