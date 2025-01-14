@@ -2,7 +2,6 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 500
-  model_path: "test.msgpack"
   batch_size: 64
   num_epochs: 1
   max_steps: 5000
