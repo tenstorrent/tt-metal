@@ -199,8 +199,8 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
     uint32_t fifo_aligned_num_pages =
         (fifo_limit_page_aligned - fifo_start_addr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
 
-    uint32_t pages_acked = *pages_acked_ptr;
-    uint32_t pages_sent = *pages_sent_ptr;
+    // uint32_t pages_acked = *pages_acked_ptr;
+    // uint32_t pages_sent = *pages_sent_ptr;
 
     for (uint32_t i = 0; i < num_receivers; ++i) {
         do {
@@ -208,14 +208,43 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
             uint32_t pages_sent = *pages_sent_ptr;
             uint32_t sent_minus_ack = pages_sent - pages_acked;
             free_pages = fifo_aligned_num_pages >= sent_minus_ack ? (fifo_aligned_num_pages - sent_minus_ack) : 0;
-            // DPRINT  << "free_pages " << free_pages << " pages_sent " <<pages_sent << " pages_acked " <<pages_acked<<
-            // ENDL();
+            // DPRINT  << "free_pages " << free_pages << " pages_sent " <<pages_sent << " pages_acked "
+            // <<pages_acked<<ENDL();
         } while (free_pages < num_pages_wait);
         pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
     }
 
     WAYPOINT("RCRD");
+}
+
+FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
+    WAYPOINT("RCBW");
+    RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(cb_id);
+
+    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
+
+    uint32_t num_receivers = remote_cb.num_receivers;
+
+    // uint32_t pages_acked = *pages_acked_ptr;
+    // uint32_t pages_sent = *pages_sent_ptr;
+
+    // DPRINT  << "num_receivers "<< num_receivers << " pages_sent " <<pages_sent << " pages_acked "
+    // <<pages_acked<<ENDL();
+
+    for (uint32_t i = 0; i < num_receivers; ++i) {
+        do {
+            // for (volatile int i=0; i<10000; ++i){}
+            DPRINT << "num_receivers " << num_receivers << " pages_sent " << *pages_acked_ptr << " pages_acked "
+                   << *pages_acked_ptr << ENDL();
+        } while (*pages_acked_ptr != *pages_acked_ptr);
+        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+    }
+    WAYPOINT("RCBD");
 }
 
 FORCE_INLINE void remote_cb_push_back_and_write_pages(
