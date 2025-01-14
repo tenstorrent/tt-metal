@@ -844,7 +844,7 @@ def run_llama3_demo(
     # Save benchmark data for CI dashboard
     if is_ci_env:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.prep_csvs(
+        benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
             ml_model_name=llama_model_name,

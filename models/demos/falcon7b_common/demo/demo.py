@@ -543,7 +543,7 @@ def run_falcon_demo_kv(
 
     # Save benchmark data
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, csv_perf_targets)
-    benchmark_data.prep_csvs(
+    benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip",
         ml_model_name=model_version,
