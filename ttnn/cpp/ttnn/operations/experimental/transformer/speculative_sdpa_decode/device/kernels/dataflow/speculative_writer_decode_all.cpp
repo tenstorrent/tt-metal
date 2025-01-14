@@ -10,6 +10,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/speculative_dataflow_common.hpp"
 
 #include "debug/dprint.h"  // required in all kernels using DPRINT
 
@@ -36,11 +37,21 @@ void kernel_main() {
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(19);
     constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
 
+    // speculative flash decode related args
     constexpr uint32_t Spec_chunk_t =
         get_compile_time_arg_val(21);  // speculative chunk size (in tiles), for the first and last chunk
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
     constexpr bool use_priority_tensor = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t lambda_val = get_compile_time_arg_val(23);
+    // ccl related args
+    constexpr bool ccl_enabled = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t ccl_core_x = get_compile_time_arg_val(25);
+    constexpr uint32_t ccl_core_y = get_compile_time_arg_val(26);
+    uint32_t local_spec_result_input_ready_semaphore_addr = get_semaphore(get_compile_time_arg_val(27));
+    uint32_t ccl_result_ready_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
+    constexpr uint32_t priority_stick_size = get_compile_time_arg_val(29);
+    const uint64_t ccl_semaphore_noc_addr =
+        get_noc_addr(ccl_core_x, ccl_core_y, local_spec_result_input_ready_semaphore_addr);
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -48,6 +59,7 @@ void kernel_main() {
     const uint32_t l2_dist_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t l2_norm_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t priority_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t other_priority_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id_for_output = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
@@ -58,10 +70,50 @@ void kernel_main() {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
+    constexpr bool is_dram = true;
+
     // idle core
     if (out_addr == 0) {
         return;
     }
+
+    // Compare priority and decide if this device is sender or receiver
+    if constexpr (ccl_enabled) {
+        constexpr uint32_t cb_scratch_id = tt::CBIndex::c_9;
+        auto [max_priority, max_other_priority] =
+            read_max_priority_from_scratch<cb_scratch_id, B, priority_stick_size>();
+        DPRINT << "max_priority: " << max_priority << ENDL();
+        DPRINT << "max_other_priority: " << max_other_priority << ENDL();
+        if (max_priority < max_other_priority) {
+            // this device is the receiver, hence reader does nothing
+            if (!is_worker) {
+                noc_semaphore_inc(ccl_semaphore_noc_addr, 1);  // signal ccl core to progress on garbage data
+            }
+
+            if (do_output) {
+                // set priority tensor to 1
+                uint32_t priority_val = 1;
+                DPRINT << "set priority val: " << priority_val << ENDL();
+                // write priority to a local cb, in this case, cb_out_l
+                constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
+                volatile tt_l1_ptr uint32_t* priority_val_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_out_l));
+                priority_val_ptr[0] = priority_val;
+
+                // write priority to memory
+                constexpr uint32_t priority_scalar_bytes = 4;  // 4 bytes for uint32_t
+                const InterleavedAddrGen<is_dram> s_out_priority = {
+                    .bank_base_address = priority_addr, .page_size = priority_scalar_bytes};
+                uint64_t priority_noc_addr = get_noc_addr(cur_batch, s_out_priority);
+                noc_async_write(get_read_ptr(cb_out_l), priority_noc_addr, priority_scalar_bytes);
+                noc_async_write_barrier();
+            }
+
+            DPRINT << "receiver exit early" << ENDL();
+            return;
+        }
+    }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -137,7 +189,6 @@ void kernel_main() {
     num_cores_to_wait += 1;  // add 1 for speculative compute (specific to this kernel)
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_20;
     constexpr uint32_t cb_intermed_out =
         tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
@@ -213,6 +264,9 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_out, out_chunk_tiles);
         noc_semaphore_inc(output_semaphore_noc_addr, 1);  // signal speculative output is ready
+        if constexpr (ccl_enabled) {
+            noc_semaphore_inc(ccl_semaphore_noc_addr, 1);  // signal speculative output is ready for ccl core
+        }
         DPRINT << "done spec_compute" << ENDL();
     }
 
@@ -301,6 +355,15 @@ void kernel_main() {
         cb_wait_front(cb_out, out_chunk_tiles);
 
         DPRINT << "start write out" << ENDL();
+
+        if constexpr (ccl_enabled) {
+            // wait for ccl write to finish before writing to memory to avoid race condition
+            // note that this does not work if output is sharded as it writes directly to cb_out
+            // TODO: support sharded output case once we get more available cbs
+            volatile tt_l1_ptr uint32_t* ccl_result_ready_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ccl_result_ready_semaphore_addr);
+            noc_semaphore_wait(ccl_result_ready_semaphore_addr_ptr, 1);
+        }
 
         if constexpr (num_kv_heads > 1) {
             // if gqa, we will need to write partial outputs for each head
@@ -391,7 +454,9 @@ void kernel_main() {
             // we can square both sides to get dist_val <= lambda^2 * norm_val
             bool is_speculation_correct =
                 converted_dist_val <= (lambda_val_float * lambda_val_float) * converted_norm_val;
-            uint32_t priority_val = is_speculation_correct ? 2 : 0;
+            uint32_t priority_val = is_speculation_correct ? 0 : 2;
+            DPRINT << "lambda*lambda: " << lambda_val_float * lambda_val_float << ENDL();
+            DPRINT << "l^2*norm_val: " << lambda_val_float * lambda_val_float * converted_norm_val << ENDL();
             DPRINT << "priority val: " << priority_val << ENDL();
             // write priority to a local cb, in this case, cb_out_l
             volatile tt_l1_ptr uint32_t* priority_val_ptr =

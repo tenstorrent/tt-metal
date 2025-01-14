@@ -51,6 +51,8 @@ void MAIN {
         get_compile_time_arg_val(22);  // speculative chunk size (in tiles), for the first and last chunk
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
     constexpr uint32_t num_q_heads = get_compile_time_arg_val(23);
+    constexpr bool ccl_enabled = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t B = get_compile_time_arg_val(25);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -99,6 +101,52 @@ void MAIN {
     // an idle_core
     if (get_arg_val<uint32_t>(0) == 65) {
         return;
+    }
+
+    // Compare priority and decide if this device is sender or receiver
+    if constexpr (ccl_enabled) {
+        constexpr uint32_t cb_scratch_id = tt::CBIndex::c_9;
+
+        uint32_t cum_wait = 0;
+        uint32_t max_priority = 0;
+        for (uint32_t i = 0; i < B; i++) {
+            cum_wait += 1;
+            cb_wait_front(cb_scratch_id, cum_wait);
+
+            volatile uint32_t* index_addr_ptr;
+            cb_get_tile(cb_scratch_id, i, &index_addr_ptr);
+            uint32_t cur_priority = index_addr_ptr[4];
+            cb_release_tile(cb_scratch_id);
+
+            DPRINT_PACK(DPRINT << "cur_priority: " << cur_priority << ENDL());
+            if (cur_priority > max_priority) {
+                max_priority = cur_priority;
+            }
+        }
+
+        uint32_t max_other_priority = 0;
+        for (uint32_t i = 0; i < B; i++) {
+            cum_wait += 1;
+            cb_wait_front(cb_scratch_id, cum_wait);
+
+            volatile uint32_t* index_addr_ptr;
+            cb_get_tile(cb_scratch_id, i + B, &index_addr_ptr);
+            uint32_t cur_other_priority = index_addr_ptr[4];
+            cb_release_tile(cb_scratch_id);
+
+            DPRINT_PACK(DPRINT << "cur_other_priority: " << cur_other_priority << ENDL());
+            if (cur_other_priority > max_other_priority) {
+                max_other_priority = cur_other_priority;
+            }
+        }
+
+        DPRINT_PACK(DPRINT << "max_priority: " << max_priority << ENDL());
+        DPRINT_PACK(DPRINT << "max_other_priority: " << max_other_priority << ENDL());
+        if (max_priority < max_other_priority) {
+            // this device is the receiver, hence reader does nothing
+            DPRINT_PACK(DPRINT << "receiver exit early" << ENDL());
+            return;
+        }
     }
 
     // Get cur_pos

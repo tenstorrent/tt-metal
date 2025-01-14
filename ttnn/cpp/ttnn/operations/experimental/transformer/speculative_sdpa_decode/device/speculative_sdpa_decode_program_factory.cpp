@@ -13,6 +13,7 @@
 #include "tt_metal/detail/util.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -29,6 +30,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
     std::optional<const Tensor> priority_tensor,
+    std::optional<const Tensor> other_priority_tensor,
     const Tensor& full_output_tensor,
     const Tensor& speculated_output_tensor,
     const Tensor& l2_dist_tensor,
@@ -41,7 +43,15 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     std::optional<SDPAProgramConfig> program_config,
     const uint32_t k_chunk_size,
     const uint32_t speculative_chunk_size,
-    std::optional<bool> share_cache) {
+    std::optional<bool> share_cache,
+    // ccl related
+    bool ccl_enabled,
+    uint32_t num_devices,
+    uint32_t device_index,
+    ttnn::ccl::Topology topology,
+    std::optional<GlobalSemaphore> global_semaphore,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device) {
     /*
     Q: 1 x B x PNH x DH
     K: 1 x B x S x DH
@@ -127,24 +137,27 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
     bool use_priority_tensor = priority_tensor.has_value();
+    bool use_other_priority_tensor = other_priority_tensor.has_value();
 
     log_debug("use_cur_pos_tensor: {}", use_cur_pos_tensor);
     log_debug("use_attention_mask: {}", use_attention_mask);
     log_debug("use_priority_tensor: {}", use_priority_tensor);
+    log_debug("use_other_priority_tensor: {}", use_other_priority_tensor);
 
     // Parallelization scheme
     // We will assign cores to batches
     // Split to cores
     CoreCoord device_grid_size = device->compute_with_storage_grid_size();
     TT_FATAL(device_grid_size.y >= 2, "Speculative SDPA decode requires at least 2 columns in devicecompute grid size");
-    CoreCoord ccl_core = CoreCoord(device_grid_size.x, device_grid_size.y);  // dedicate the last column for ccl
+    CoreCoord ccl_core = {
+        (std::size_t)device_grid_size.x - 1, (std::size_t)device_grid_size.y - 1};  // dedicate the last column for ccl
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : CoreCoord(device_grid_size.x, device_grid_size.y - 1);
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     log_info("device_grid_size: {}", device_grid_size);
     log_info("grid_size: {}", grid_size);
     log_info("ccl_core: {}", ccl_core);
-
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    log_info("core_grid: {}", core_grid);
     uint32_t num_cores_available = grid_size.x * grid_size.y;
 
     uint32_t num_cores_in_grid =
@@ -360,6 +373,9 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t page_table_tile_size = 0;
     uint32_t log2_page_table_page_size = 0;
     uint32_t page_table_stick_size = 0;
+    uint32_t priority_tensor_tile_size = 0;
+    uint32_t priority_stick_size = 0;
+    TT_FATAL(!is_paged_attention, "paged attention is not supported for speculative flash decode");
     if (is_paged_attention) {
         auto page_table_buffer = page_table_tensor.value().buffer();
         tt::DataFormat page_table_df =
@@ -370,6 +386,18 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         // cb page_table
         auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}})
                                 .set_page_size(CBIndex::c_9, page_table_tile_size);
+        auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
+    } else if (ccl_enabled) {
+        // use the page table cb for now. TODO: use a separate cb for priority when more cbs are available
+        auto priority_buffer = priority_tensor.value().buffer();
+        tt::DataFormat priority_df = tt_metal::datatype_to_dataformat_converter(priority_tensor.value().get_dtype());
+        priority_tensor_tile_size = tt_metal::detail::TileSize(priority_df);
+        priority_stick_size = priority_buffer->aligned_page_size();
+        log_info("priority_stick_size: {}", priority_stick_size);
+
+        // priority cb
+        auto c_in9_config = CircularBufferConfig(priority_stick_size * 2 * B, {{CBIndex::c_9, priority_df}})
+                                .set_page_size(CBIndex::c_9, priority_stick_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
@@ -589,6 +617,30 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     // Common Compile time Args
     auto reducer_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
     auto output_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
+    auto local_spec_result_input_ready_semaphore_id = tt_metal::CreateSemaphore(program, ccl_core, 0);
+    auto ccl_result_ready_semaphore_id = tt_metal::CreateSemaphore(program, core_grid, 0);
+    // launch ccl reader and writer kernels
+    std::optional<KernelHandle> ccl_reader_kernel_id, ccl_writer_kernel_id;
+    if (ccl_enabled) {
+        uint32_t local_spec_result_input_ready_semaphore_wait_count = num_kv_heads * B;
+        std::tie(ccl_reader_kernel_id, ccl_writer_kernel_id) = ccl_multi_core_with_workers(
+            program,
+            speculated_output_tensor,                            // input tensor
+            forward_device,                                      // forward device
+            backward_device,                                     // backward device
+            full_output_tensor,                                  // output tensor
+            num_devices,                                         // ring size
+            device_index,                                        // ring index
+            topology,                                            // topology
+            ccl_core,                                            // ccl core
+            local_spec_result_input_ready_semaphore_id,          // local spec result input ready semaphore
+            local_spec_result_input_ready_semaphore_wait_count,  // local spec result input ready semaphore wait count
+            global_semaphore.value(),                            // global semaphore handle
+            ccl_result_ready_semaphore_id,                       // ccl result ready semaphore, set on reducer cores
+            reduce_core_physical_xs,                             // reducer core physical xs
+            reduce_core_physical_ys);                            // reducer core physical ys
+    }
+    auto ccl_core_physical = device->worker_core_from_logical_core(ccl_core);
 
     std::vector<uint32_t> reader_compile_time_args_common = {
         B,
@@ -612,7 +664,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         use_attention_mask,
         Spec_chunk_t,
         output_semaphore_id,
-        is_output_sharded};
+        is_output_sharded,
+        ccl_enabled};
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -638,7 +691,13 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         is_causal,
         Spec_chunk_t,
         use_priority_tensor,
-        lambda_union.u};
+        lambda_union.u,
+        ccl_enabled,
+        ccl_core_physical.x,
+        ccl_core_physical.y,
+        local_spec_result_input_ready_semaphore_id,
+        ccl_result_ready_semaphore_id,
+        priority_stick_size};
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -664,7 +723,9 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         is_causal,
         use_attention_mask,
         Spec_chunk_t,
-        num_q_heads};
+        num_q_heads,
+        ccl_enabled,
+        B};
 
     std::map<string, string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -713,6 +774,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
     uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
     uint32_t priority_addr = use_priority_tensor ? priority_tensor.value().buffer()->address() : 0;
+    uint32_t other_priority_addr = use_other_priority_tensor ? other_priority_tensor.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
     uint32_t out_spec_addr = out1_buffer->address();
     uint32_t l2_dist_addr = l2_dist_buffer->address();
@@ -754,6 +816,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             attn_mask_addr,
             out_addr,
             out_spec_addr,
+            priority_addr,
+            other_priority_addr,
             page_table_stick_size,
             do_reduce,
             do_output,
@@ -772,6 +836,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             l2_dist_addr,
             l2_norm_addr,
             priority_addr,
+            other_priority_addr,
             worker_id_for_reduce,
             worker_id_for_output,
             do_reduce,
@@ -827,7 +892,12 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
                                                 use_attention_mask,
                                                 is_paged_attention,
                                                 is_causal,
-                                                use_priority_tensor](
+                                                use_priority_tensor,
+                                                use_other_priority_tensor,
+                                                ccl_enabled,
+                                                ccl_reader_kernel_id,
+                                                ccl_writer_kernel_id,
+                                                ccl_core](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -854,6 +924,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         uint32_t page_table_addr = is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
         uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
         uint32_t priority_addr = use_priority_tensor ? optional_input_tensors.at(3).value().buffer()->address() : 0;
+        uint32_t other_priority_addr =
+            use_other_priority_tensor ? optional_input_tensors.at(4).value().buffer()->address() : 0;
         auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
         uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
         uint32_t out_addr = out0_buffer->address();
@@ -866,6 +938,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
         auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
 
         // Set rt args
+        // flash decode
         for (uint32_t i = 0; i < num_active_cores; ++i) {
             CoreCoord core = core_group[i];
             uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
@@ -892,6 +965,8 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             reader_args[arg_idx++] = attn_mask_addr;
             reader_args[arg_idx++] = out_addr;
             reader_args[arg_idx++] = out_spec_addr;
+            reader_args[arg_idx++] = priority_addr;
+            reader_args[arg_idx++] = other_priority_addr;
             reader_args[arg_idx++] = page_table_stick_size;
             reader_args[arg_idx++] = do_reduce;
             reader_args[arg_idx++] = do_output;
@@ -908,6 +983,7 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             writer_args[arg_idx++] = l2_dist_addr;
             writer_args[arg_idx++] = l2_norm_addr;
             writer_args[arg_idx++] = priority_addr;
+            writer_args[arg_idx++] = other_priority_addr;
             writer_args[arg_idx++] = worker_id_for_reduce;
             writer_args[arg_idx++] = worker_id_for_output;
             writer_args[arg_idx++] = do_reduce;
@@ -927,6 +1003,18 @@ operation::ProgramWithCallbacks speculative_sdpa_decode_multi_core(
             compute_args[arg_idx++] = core_num_in_reduce;
             compute_args[arg_idx++] = core_num_in_output;
             compute_args[arg_idx++] = cur_pos;
+        }
+        // ccl related
+        if (ccl_enabled) {
+            // Update ccl related runtime args
+            auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_reader_kernel_id.value());
+            auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, ccl_writer_kernel_id.value());
+            // reader
+            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
+            worker_reader_sender_runtime_args.at(0) = out_spec_addr;
+            // writer
+            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[ccl_core.x][ccl_core.y];
+            worker_writer_sender_runtime_args.at(0) = out_addr;
         }
 
         if (is_output_sharded) {

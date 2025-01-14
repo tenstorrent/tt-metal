@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/speculative_common.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/transformer/speculative_sdpa_decode/device/kernels/dataflow/speculative_dataflow_common.hpp"
 
 #include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "debug/assert.h"
@@ -44,6 +45,7 @@ void kernel_main() {
     constexpr uint32_t speculative_chunk_size = Spec_chunk_t * tt::constants::TILE_HEIGHT;
     uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(20));  // semaphore for output ready
     constexpr bool is_output_sharded = get_compile_time_arg_val(21) == 1;
+    constexpr bool ccl_enabled = get_compile_time_arg_val(22) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -54,6 +56,8 @@ void kernel_main() {
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t out_spec_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t priority_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t other_priority_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -63,10 +67,28 @@ void kernel_main() {
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
+    constexpr bool is_dram = true;
+
     // idle core
     if (q_addr == 0) {
         return;
     }
+
+    // Compare priority and decide if this device is sender or receiver
+    if constexpr (ccl_enabled) {
+        constexpr uint32_t cb_scratch_id = tt::CBIndex::c_9;
+        auto [max_priority, max_other_priority] =
+            get_max_priority<is_dram, 4 /*priority_scalar_bytes*/, B, cb_scratch_id>(
+                priority_addr, other_priority_addr);
+        DPRINT << "max_priority: " << max_priority << ENDL();
+        DPRINT << "max_other_priority: " << max_other_priority << ENDL();
+        if (max_priority < max_other_priority) {
+            // this device is the receiver, hence reader does nothing
+            DPRINT << "receiver exit early" << ENDL();
+            return;
+        }
+    }
+
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
@@ -158,8 +180,6 @@ void kernel_main() {
     constexpr uint32_t spec_chunk_tiles = Spec_chunk_t * DHt;
     constexpr uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t;
     constexpr uint32_t spec_mask_chunk_tiles = PNHt * Spec_chunk_t;
-
-    constexpr bool is_dram = true;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;

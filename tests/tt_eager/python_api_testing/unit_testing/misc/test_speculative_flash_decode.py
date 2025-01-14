@@ -678,7 +678,8 @@ def run_test_sdpa_decode_single_device_priority_tensor(
         lambda_,
     )
     passing = torch.all(lp_distance <= lambda_ * lp_norm_x)
-    priority_tensor[0, 0, :, 0] = (lp_distance <= lambda_ * lp_norm_x).to(torch.int32) * 2
+    # set priority tensor to 0 if speculation is correct, 2 otherwise
+    priority_tensor[0, 0, :, 0] = (1 - (lp_distance <= lambda_ * lp_norm_x).to(torch.int32)) * 2
     logger.debug(f"gt speculation passing: {passing}")
 
     ##########################################

@@ -9,6 +9,7 @@
 
 #include "speculative_sdpa_decode.hpp"
 #include "ttnn/cpp/pybind11/decorators.hpp"
+#include "ttnn/cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -24,6 +25,8 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
 
         Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension.
         When priority_tensor is provided, for each batch, sender device sets p = 2 if verification fails and otherwise p = 0. Receiver always sets p = 1.
+        other_priority_tensor contains the priority tensor of the other device.
+        If input tensors are multi-device tensors and ccl is enabled, then priority_tensor and other_priority_tensor are required arguments.
 
         Args:
             input_tensor_q (ttnn.Tensor): the input tensor [1 x b x nh x dh]
@@ -42,6 +45,9 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             priority_tensor (ttnn.Tensor, optional): [1 x 1 x b x 1] tensor of integers of length b. Defaults to `None`. If provided, the op will inplace update the priority tensor with verification results.
+            other_priority_tensor (ttnn.Tensor, optional): [1 x 1 x b x 1] tensor of integers of length b. Defaults to `None`.
+            ccl_enabled (bool, optional): whether ccl is enabled where sender sends speculative results to the receiver device. Defaults to `False`.
+            multi_device_global_semaphore (ttnn.MultiDeviceGlobalSemaphore, optional): the global semaphore handles for ccl. Defaults to `None`. Required if ccl is enabled.
 
         Returns:
             ttnn.Tensor: the full output tensor [1 x b x pnh x dh].
@@ -73,6 +79,9 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<Tensor>& priority_tensor,
+               const std::optional<Tensor>& other_priority_tensor,
+               const bool ccl_enabled,
+               const std::optional<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
                uint8_t queue_id) {
                 return self(
                     queue_id,
@@ -88,7 +97,10 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
                     memory_config,
                     program_config,
                     compute_kernel_config,
-                    priority_tensor);
+                    priority_tensor,
+                    other_priority_tensor,
+                    ccl_enabled,
+                    multi_device_global_semaphore);
             },
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
@@ -104,6 +116,9 @@ void py_bind_speculative_sdpa_decode(py::module& module) {
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
             py::arg("priority_tensor").noconvert() = std::nullopt,
+            py::arg("other_priority_tensor").noconvert() = std::nullopt,
+            py::arg("ccl_enabled").noconvert() = false,
+            py::arg("multi_device_global_semaphore").noconvert() = std::nullopt,
             py::arg("queue_id") = 0,
         });
 }
