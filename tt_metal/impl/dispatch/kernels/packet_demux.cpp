@@ -231,7 +231,7 @@ void kernel_main() {
         DeviceZoneScopedN("PACKET-DEMUX");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
-        if (timeout_cycles > 0) {
+        if constexpr (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
                 timeout = true;
@@ -261,8 +261,10 @@ void kernel_main() {
                     break;
             }
             data_words_sent += words_sent;
-            if ((words_sent > 0) && (timeout_cycles > 0)) {
-                progress_timestamp = get_timestamp_32b();
+            if constexpr (timeout_cycles > 0) {
+                if (words_sent > 0) {
+                    progress_timestamp = get_timestamp_32b();
+                }
             }
         }
         all_outputs_finished = true;

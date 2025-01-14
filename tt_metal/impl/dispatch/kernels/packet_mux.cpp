@@ -187,7 +187,7 @@ void kernel_main() {
         DeviceZoneScopedN("PACKET-MUX");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         iter++;
-        if (timeout_cycles > 0) {
+        if constexpr (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
                 timeout = true;
@@ -202,8 +202,10 @@ void kernel_main() {
                 bool full_packet_sent;
                 uint32_t words_sent = output_queue.template forward_data_from_input<tx_network_type, output_depacketize, input_network_type, input_cb_mode>(sequence_i, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
                 data_words_sent += words_sent;
-                if ((words_sent > 0) && (timeout_cycles > 0)) {
-                    progress_timestamp = get_timestamp_32b();
+                if constexpr (timeout_cycles > 0) {
+                    if (words_sent > 0) {
+                        progress_timestamp = get_timestamp_32b();
+                    }
                 }
                 curr_input_partial_packet_sent = !full_packet_sent;
             }

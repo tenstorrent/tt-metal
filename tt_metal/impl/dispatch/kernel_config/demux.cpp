@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "demux.hpp"
-#include "common/logger.hpp"
 #include "dispatch.hpp"
 #include "eth_tunneler.hpp"
 
