@@ -219,7 +219,7 @@ using output_queue_cb_mode_sequence = CBModeTypeSequence<false,
                                                          false,
                                                          false>;
 
-#define SWITCH_THRESHOLD 32
+#define SWITCH_THRESHOLD 16
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 

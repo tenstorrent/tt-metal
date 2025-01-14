@@ -27,7 +27,7 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         logical_core_ = dispatch_core_manager::instance().us_tunneler_core_local(device_->id(), channel, cq_id_);
     }
     static_config_.endpoint_id_start_index = 0xDACADACA;
-    static_config_.in_queue_start_addr_words = 0x19000 >> 4;
+    static_config_.in_queue_start_addr_words = 0x19A00 >> 4;
     static_config_.in_queue_size_words = 0x4000 >> 4;
     static_config_.kernel_status_buf_addr_arg = 0x39000;
     static_config_.kernel_status_buf_size_bytes = 0x7000;

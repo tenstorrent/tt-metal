@@ -264,8 +264,10 @@ void kernel_main() {
                 bool full_packet_sent;
                 const auto words_sent = output_queues[sequence_i].template forward_data_from_input<remote_tx_network_type[sequence_i], output_depacketize[sequence_i], remote_rx_network_type[sequence_i], input_packetize[sequence_i]>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
                 data_words_sent += words_sent;
-                if ((words_sent > 0) && (timeout_cycles > 0)) {
-                    progress_timestamp = get_timestamp_32b();
+                if constexpr (timeout_cycles > 0) {
+                    if (words_sent > 0) {
+                        progress_timestamp = get_timestamp_32b();
+                    }
                 }
             }
 
