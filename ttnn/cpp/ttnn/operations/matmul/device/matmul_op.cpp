@@ -1856,11 +1856,11 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
                 if (!gather_in0) {
                     TT_FATAL(
-                        (input_tensor_a.get_logical_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                        (input_tensor_a.get_padded_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
                         "Kt must be divisible by in0_block_w");
                 } else {
                     TT_FATAL(
-                        (input_tensor_b.get_logical_shape()[-2] / in1_tile_shape[0]) % program_config.in0_block_w == 0,
+                        (input_tensor_b.get_padded_shape()[-2] / in1_tile_shape[0]) % program_config.in0_block_w == 0,
                         "Kt (derived from in1) must be divisible by in0_block_w");
                 }
                 TT_FATAL(
