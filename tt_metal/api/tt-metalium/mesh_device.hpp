@@ -77,6 +77,10 @@ public:
     MeshDevice(MeshDevice&&) = delete;
     MeshDevice& operator=(MeshDevice&&) = delete;
 
+    void set_speculation_state(bool state, uint32_t p_tensor_addr) override;
+    std::pair<bool, uint32_t> get_speculation_state() const override;
+    void set_speculation_states(std::vector<bool> states, uint32_t p_tensor_addr) override;
+
     // IDevice interface implementation
     tt::ARCH arch() const override;
     MeshDeviceID id() const override;

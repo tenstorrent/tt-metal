@@ -91,6 +91,12 @@ class TtModelArgs:
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
+
+        self.use_sfd = os.getenv("USE_SFD") == "1"
+        logger.info(f"Using SFD: {self.use_sfd}")
+        if self.use_sfd:
+            self.num_devices = self.num_devices // 2
+
         self.mesh_device = mesh_device
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
@@ -221,6 +227,12 @@ class TtModelArgs:
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
+
+        # Set shape for config derivations
+        if self.use_sfd:
+            self.cluster_shape[1] = self.cluster_shape[1] // 2
+        self.cluster_shape_ = self.cluster_shape
+
         self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -352,15 +364,15 @@ class TtModelArgs:
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
-                k=self.dim // self.cluster_shape[0],
-                n=self.hidden_dim // self.cluster_shape[1],
+                k=self.dim // self.cluster_shape_[0],
+                n=self.hidden_dim // self.cluster_shape_[1],
                 grid_size=(8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
                 else ((8, 8) if seq_len >= 1024 else (8, 4)),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                k=self.hidden_dim // (self.cluster_shape_[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=(8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -369,8 +381,8 @@ class TtModelArgs:
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024 if self.is_galaxy else 2048),
-                k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
-                n=self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim,
+                k=self.dim // self.cluster_shape_[0] if self.is_galaxy else self.dim,
+                n=self.dim // self.cluster_shape_[1] if self.is_galaxy else self.dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
@@ -401,7 +413,7 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape_[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
@@ -411,7 +423,7 @@ class TtModelArgs:
                 per_core_M=max(
                     1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
+                per_core_N=math.ceil(self.qkv_size / self.cluster_shape_[1] / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
                 fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
@@ -419,7 +431,7 @@ class TtModelArgs:
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+                (((self.n_kv_heads // self.cluster_shape_[1]) * seq_len // (8 * 8)), self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
                 ttnn.ShardStrategy.HEIGHT,
                 ttnn.ShardOrientation.ROW_MAJOR,
@@ -844,6 +856,18 @@ class TtModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
+            # Reset cluster shape
+            self.cluster_shape = list(self.mesh_device.shape)
+
+    def fracture_scheme(self, *args, **kwargs):
+        args = list(args)
+        if self.use_sfd:
+            return ttnn.ReplicateTensorToMesh(args[0])
+        elif len(args) + len(kwargs) == 2:
+            return ttnn.ShardTensorToMesh(*args, **kwargs)
+        else:
+            return ttnn.ShardTensor2dMesh(*args, **kwargs)
+
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
@@ -866,7 +890,7 @@ class TtModelArgs:
         x: (batch, seq, dim)
         """
         dims = (None, None) if force_replicated else (None, -1)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = self.fracture_scheme(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         if len(x.shape) == 3:
             batch = x.shape[0]
@@ -919,7 +943,7 @@ class TtModelArgs:
         x_1BSH = x_bsh.unsqueeze(0)
         dims = (None, None) if force_replicated else (None, -1)
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        mesh_mapper = self.fracture_scheme(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
 
         # input goes to DRAM
         xs_1BSH = ttnn.from_torch(

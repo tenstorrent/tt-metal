@@ -1070,7 +1070,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 
 void Device::push_work(std::function<void()> work, bool blocking) {
     if (not this->initialized_) {
-        log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+        // log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
         return;
     }
     this->work_executor_.push_work(std::move(work), blocking);
@@ -1177,6 +1177,19 @@ CoreCoord Device::logical_grid_size() const {
 
 CoreCoord Device::dram_grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_grid_size();
+}
+
+std::pair<bool, uint32_t> Device::get_speculation_state() const {
+    return {this->waiting_for_speculation_, this->p_tensor_addr_};
+}
+
+void Device::set_speculation_state(bool state, uint32_t p_tensor_addr) {
+    this->waiting_for_speculation_ = state;
+    this->p_tensor_addr_ = p_tensor_addr;
+}
+
+void Device::set_speculation_states(std::vector<bool> states, uint32_t p_tensor_addr) {
+    set_speculation_state(states[0], p_tensor_addr);    // Only one device is supported for now
 }
 
 CoreCoord Device::compute_with_storage_grid_size() const {

@@ -44,6 +44,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
+#include "ttnn/operations/copy_tensor/copy_tensor_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;
@@ -135,6 +136,9 @@ void py_module(py::module& module) {
 
     auto m_prefetcher = module.def_submodule("prefetcher", "prefetcher operations");
     prefetcher::py_module(m_prefetcher);
+
+    auto m_copy_tensor = module.def_submodule("copy_tensor", "copy_tensor operations");
+    copy_tensor::py_module(m_copy_tensor);
 
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);

@@ -35,7 +35,7 @@ class TtLlamaMLP(LightweightModule):
             torch_weight(name[:2]),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
+            mesh_mapper=args.fracture_scheme(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG
             if args.is_galaxy
@@ -209,6 +209,7 @@ class TtLlamaMLP(LightweightModule):
             else ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
+            use_sfd=self.args.use_sfd,
         )
 
         # Ensure dim 0 and 1 are 1

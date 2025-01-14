@@ -42,12 +42,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False,
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention",
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -80,7 +80,7 @@ def test_llama_model_inference(
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = False  # Flag to measure KV cache PCC for all layers
+    cache_pcc = True  # Flag to measure KV cache PCC for all layers
 
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
@@ -291,7 +291,7 @@ def test_llama_model_inference(
                             for cache in tt_model.layers[l].attention.layer_past
                         ]
                     else:
-                        for layer_past in tt_model.layers[i].attention.layer_past_list[0]:
+                        for layer_past in tt_model.layers[i].attention.layer_past:
                             tt_layer_present.append(
                                 ttnn.to_torch(
                                     layer_past,
@@ -300,7 +300,7 @@ def test_llama_model_inference(
                                         dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
-                                )
+                                )[:batch_size, : model_args.n_kv_heads, :, :]
                             )
 
                     for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):

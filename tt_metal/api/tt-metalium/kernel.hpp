@@ -120,6 +120,7 @@ class Kernel : public JitBuildSettings {
     void set_full_name(const string& s) { kernel_full_name_ = s; }
     const string& get_full_kernel_name() const override;
     void add_defines(const std::map<std::string, std::string>& defines);
+    void remove_define(const std::string& define);
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
     void process_compile_time_args(const std::function<void (int i, uint32_t value)>) const override;
 

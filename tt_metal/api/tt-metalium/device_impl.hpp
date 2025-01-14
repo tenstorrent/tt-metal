@@ -70,7 +70,9 @@ public:
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
     CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const override;
-
+    void set_speculation_states(std::vector<bool> states, uint32_t p_tensor_addr) override;
+    void set_speculation_state(bool state, uint32_t p_tensor_addr) override;
+    std::pair<bool, uint32_t> get_speculation_state() const override;
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
@@ -198,6 +200,8 @@ public:
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
+    bool waiting_for_speculation_ = false;
+    uint32_t p_tensor_addr_ = 0;
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     void initialize_cluster();

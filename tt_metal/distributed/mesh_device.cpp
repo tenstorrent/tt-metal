@@ -246,6 +246,22 @@ tt::ARCH MeshDevice::arch() const {
         scoped_devices_->get_devices(), [](const auto& device) { return device->arch(); });
 }
 
+void MeshDevice::set_speculation_states(std::vector<bool> states, uint32_t p_tensor_addr) {
+    for (size_t i = 0; i < this->num_devices(); i++) {
+        scoped_devices_->get_devices()[i]->set_speculation_state(states[i], p_tensor_addr);
+    }
+}
+
+std::pair<bool, uint32_t> MeshDevice::get_speculation_state() const {
+    return scoped_devices_->get_devices()[0]->get_speculation_state();
+}
+
+void MeshDevice::set_speculation_state(bool state, uint32_t p_tensor_addr) {
+    for (auto device : this->get_devices()) {
+        device->set_speculation_state(state, p_tensor_addr);
+    }
+}
+
 size_t MeshDevice::num_rows() const { return mesh_shape_.num_rows; }
 
 size_t MeshDevice::num_cols() const { return mesh_shape_.num_cols; }

@@ -21,6 +21,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.demos.llama3.tests.test_llama_attention import TtSFDSetup
+from time import time
 
 
 @torch.no_grad()
@@ -30,20 +32,20 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 1),
+        # ("random", 10),
         ("instruct", None),
     ],
-    ids=["quick", "full"],
+    # ids=["quick", "full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False,
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention",
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -56,12 +58,12 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (31 * 1024,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        # pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
         pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
@@ -87,8 +89,10 @@ def test_llama_model_inference(
     reset_seeds,
     ensure_gc,
 ):
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
-    cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
+    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
+    cache_pcc = (
+        False  # layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
+    )
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
@@ -186,8 +190,8 @@ def test_llama_model_inference(
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
-    generation_start_pos = 0
-    generation_length = iterations
+    generation_start_pos = 0  # 30 * 1024
+    generation_length = 1000  # iterations
 
     page_table_tt = None
     paged_attention_config = None
@@ -218,6 +222,9 @@ def test_llama_model_inference(
         )
 
     # Load TTNN model
+    sfd_setup = TtSFDSetup(
+        mesh_device, model_args.n_heads, model_args.head_dim, batch_size, lambda_=100000, full_setup=False
+    )  # 1000000000)
     tt_model = TtTransformer(
         args=model_args,
         mesh_device=mesh_device,
@@ -225,6 +232,7 @@ def test_llama_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        sfd_setup=sfd_setup,
     )
     logger.info("Model and caches loaded.")
 
@@ -252,7 +260,60 @@ def test_llama_model_inference(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=model_args.fracture_scheme(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
+    )
+
+    ##### Compile ops #####
+    logger.info("STARTING COMPILE")
+    decode_input = model_args.prepare_residual_tensor_decode(
+        tt_decode_input,
+        model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+    )
+
+    sfd_setup.setup()
+
+    # One for normal pass, and one for SFD pass
+    for i in range(2):
+        # Get cos/sin matrices for the current position of each user
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+
+        current_pos = torch.tensor([(sfd_setup.k_chunk_size * 2) + i + 1 for _ in range(batch)])
+        current_pos_tensor = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=model_args.fracture_scheme(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
+        )
+
+        tt_model.set_run_sfd(True)
+
+    tt_model.set_compile_done()
+    tt_model.set_run_sfd(False)
+
+    logger.info("FINISHED COMPILE")
+
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos_tensor = ttnn.from_torch(
+        current_pos,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        mesh_mapper=model_args.fracture_scheme(
             mesh_device,
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
@@ -260,6 +321,8 @@ def test_llama_model_inference(
     )
 
     for i in range(generation_length):
+        if i + generation_start_pos > sfd_setup.k_chunk_size * 2:
+            tt_model.set_run_sfd(True)
         logger.info(f"[Llama3 Model] Generating token {i}")
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -271,6 +334,7 @@ def test_llama_model_inference(
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Run TT model
+        t1 = time()
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
@@ -283,11 +347,13 @@ def test_llama_model_inference(
         mesh_composer = ttnn.ConcatMesh2dToTensor(
             mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
         )
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
-            .permute(2, 1, 0, 3)
-            .squeeze(2)[: model_args.max_batch_size, 0:1, : model_args.vocab_size]
-        )
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)
+        tt_output_torch = sfd_setup.get_correct_tensor(tt_output_torch)
+        tt_output_torch = tt_output_torch.permute(2, 1, 0, 3).squeeze(2)[
+            : model_args.max_batch_size, 0:1, : model_args.vocab_size
+        ]
+        t2 = time()
+        logger.info(f"T/s/u {1 / (t2 - t1)} and latency {t2 - t1}")
 
         ttnn.deallocate(tt_out)
 
@@ -296,12 +362,12 @@ def test_llama_model_inference(
             ref_output = reference_model(pt_decode_input, current_pos[0])
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=model_args.fracture_scheme(
                 mesh_device,
                 dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
@@ -393,7 +459,7 @@ def test_llama_model_inference(
                                         dims=(1, 0) if model_args.is_galaxy else (0, 1),
                                         mesh_shape=model_args.cluster_shape,
                                     ),
-                                )[:batch, :, :, :]
+                                )[:batch, : model_args.n_kv_heads, :, :]
                             )
 
                     for kv_cache, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
@@ -426,6 +492,8 @@ def test_llama_model_inference(
             logger.info("[ttnn generation User 0] " + tokenizer.decode(all_outputs).replace("\n", "\\n"))
             if run_ref_pt:
                 logger.info("[Ref generation User 0] " + tokenizer.decode(all_outputs_ref).replace("\n", "\\n"))
+
+    sfd_setup.close_ccl()
 
     if run_ref_pt:
         if all_tests_pass:

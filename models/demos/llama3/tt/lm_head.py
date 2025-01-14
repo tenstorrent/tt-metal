@@ -4,6 +4,7 @@
 
 import math
 import torch
+from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce
@@ -19,6 +20,7 @@ class LMHead(LightweightModule):
         state_dict_prefix,
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        sfd_setup=None,
     ):
         super().__init__()
         self.args = args
@@ -27,6 +29,8 @@ class LMHead(LightweightModule):
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
+        self.sfd_setup = sfd_setup
+        self.done_compile = False
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -80,18 +84,19 @@ class LMHead(LightweightModule):
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
 
-                memory_config = args.create_dram_sharded_mem_config(
-                    k=args.dim, n=combined_split.shape[-1] // self.num_devices
-                )
+                memory_config = ttnn.DRAM_MEMORY_CONFIG
+                # args.create_dram_sharded_mem_config(
+                #     k=args.dim, n=combined_split.shape[-1] // self.num_devices
+                # )
                 self.output_weights.append(
                     ttnn.as_tensor(
                         combined_split,
                         device=mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        mesh_mapper=args.fracture_scheme(mesh_device, dim=-1),
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config,
-                        cache_file_name=cache_file_name,
+                        # cache_file_name=cache_file_name,
                     )
                 )
 
@@ -125,13 +130,15 @@ class LMHead(LightweightModule):
             ]
 
     def forward(self, x: ttnn.Tensor):
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             output = ttnn.linear(
                 x,
                 weight,
+                core_grid=ttnn.CoreGrid(y=4, x=8),
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=pc,
+                # program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
@@ -151,6 +158,7 @@ class LMHead(LightweightModule):
             dtype=self.args.ccl_dtype,
             sharded=False,
             use_composite=True,
+            use_sfd=self.args.use_sfd,
         )
 
         return output

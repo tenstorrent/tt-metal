@@ -110,6 +110,8 @@ void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
 }
 
+void Kernel::remove_define(const std::string& define) { this->defines_.erase(define); }
+
 void Kernel::process_defines(const std::function<void(const string &define, const string &value)> callback) const {
     for (const auto &[define, value] : this->defines_) {
         callback(define, value);

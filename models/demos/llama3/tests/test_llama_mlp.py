@@ -79,7 +79,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=model_args.fracture_scheme(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
@@ -101,7 +101,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
 
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+    tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

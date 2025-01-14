@@ -28,7 +28,7 @@ class TtLlamaEmbedding(LightweightModule):
             torch_weight,
             dtype=dtype,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(None, 3), mesh_shape=args.cluster_shape),
+            mesh_mapper=args.fracture_scheme(mesh_device, dims=(None, 3), mesh_shape=args.cluster_shape),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=args.get_model_config()["EMB_WEIGHTS_MEMCFG"],
             cache_file_name=cache_name,

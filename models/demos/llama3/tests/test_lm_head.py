@@ -69,7 +69,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=model_args.fracture_scheme(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
         ),
         dtype=ttnn.bfloat8_b,

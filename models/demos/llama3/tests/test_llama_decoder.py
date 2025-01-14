@@ -19,6 +19,7 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from models.demos.llama3.tests.test_llama_attention import TtSFDSetup
 
 
 @torch.no_grad()
@@ -35,12 +36,12 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "paged_attention",
     (
-        True,
-        # False
+        # True,
+        False,
     ),
     ids=(
-        "paged_attention",
-        # "default_attention"
+        # "paged_attention",
+        "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -53,7 +54,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (16 * 1024,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_llama_decoder_inference(
     max_seq_len,
@@ -69,7 +70,7 @@ def test_llama_decoder_inference(
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    model_args.n_layers = 1
+    model_args.n_layers = 32
 
     state_dict = model_args.load_state_dict()
 
@@ -81,7 +82,7 @@ def test_llama_decoder_inference(
     reference_model = TransformerBlock(layer_id=0, args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    generation_start_pos = 0
+    generation_start_pos = 1000
     generation_length = 10
     all_tests_pass = True
 
@@ -126,6 +127,7 @@ def test_llama_decoder_inference(
         )
 
     # Initialize TT model
+    sfd_setup = TtSFDSetup(mesh_device, model_args.n_heads, model_args.head_dim, batch_size)
     tt_model = TtTransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
@@ -135,6 +137,7 @@ def test_llama_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        sfd_setup=sfd_setup,
     )
 
     seqlen = 1
@@ -154,7 +157,7 @@ def test_llama_decoder_inference(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
+        mesh_mapper=model_args.fracture_scheme(
             mesh_device,
             dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
@@ -213,13 +216,14 @@ def test_llama_decoder_inference(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=model_args.fracture_scheme(
                 mesh_device,
                 dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
         )
 
+    sfd_setup.close_ccl()
     if all_tests_pass:
         logger.info(f"All {generation_length} Llama decode iterations Passed!")
     else:

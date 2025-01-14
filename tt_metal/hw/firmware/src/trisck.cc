@@ -18,6 +18,7 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/dprint.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -26,6 +27,21 @@ uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
 
+bool skip_kernel() {
+#ifdef SKIP_KERNEL
+    volatile tt_l1_ptr uint32_t* p_tensor = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(P_TENSOR_ADDR);
+    uint32_t p_tensor_data = *p_tensor;
+    DPRINT << "ADDR: " << P_TENSOR_ADDR << " TRISC: " << p_tensor_data << ENDL();
+
+    if (p_tensor_data == 0) {
+        DPRINT << "Skipping TRISC kernel" << ENDL();
+        return true;
+    }
+    return false;
+#else
+    return false;
+#endif
+}
 namespace ckernel
 {
 volatile tt_reg_ptr uint * regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
@@ -59,6 +75,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
     wait_for_go_message();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
-    run_kernel();
+    if (!skip_kernel()) {
+        run_kernel();
+    }
 #endif
 }

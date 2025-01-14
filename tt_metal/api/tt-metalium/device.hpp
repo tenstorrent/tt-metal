@@ -83,6 +83,10 @@ public:
     virtual CoreCoord dram_grid_size() const = 0;
     virtual CoreType core_type_from_virtual_core(const CoreCoord& virtual_coord) const = 0;
 
+    virtual void set_speculation_states(std::vector<bool> states, uint32_t p_tensor_addr) = 0;
+    virtual void set_speculation_state(bool state, uint32_t p_tensor_addr) = 0;
+    virtual std::pair<bool, uint32_t> get_speculation_state() const = 0;
+
     // Given a Virtual coordinate in noc_index space, get the equivalent coordinate in Virtual NOC0 space
     virtual CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space

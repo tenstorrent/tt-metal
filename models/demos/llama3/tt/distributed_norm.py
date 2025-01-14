@@ -56,6 +56,7 @@ class DistributedNorm(LightweightModule):
                     ln_sharded_input_memcfg=self.gather_in_mem_cfg,
                     ln_sharded_progcfg=self.ln_prg_cfg,
                     ln_sharded_stats_memcfg=self.ln_sharded_stats_memcfg,
+                    use_sfd=self.args.use_sfd,
                 )
             else:
                 return tt_distributed_rmsnorm(
@@ -64,6 +65,7 @@ class DistributedNorm(LightweightModule):
                     gamma=self.norm.weight_distributed,
                     mesh_device=self.args.mesh_device,
                     compute_kernel_config=self.ln_cfg,
+                    use_sfd=self.args.use_sfd,
                 )
 
         input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG

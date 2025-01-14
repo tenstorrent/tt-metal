@@ -22,6 +22,23 @@
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "remote_circular_buffer_api.h"
 #endif
+#include "debug/dprint.h"
+
+bool skip_kernel() {
+#ifdef SKIP_KERNEL
+    volatile tt_l1_ptr uint32_t* p_tensor = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(P_TENSOR_ADDR);
+    uint32_t p_tensor_data = *p_tensor;
+    DPRINT << "ADDR: " << P_TENSOR_ADDR << " NCRISC: " << p_tensor_data << ENDL();
+
+    if (p_tensor_data == 0) {
+        DPRINT << "Skipping NCRISC kernel" << ENDL();
+        return true;
+    }
+    return false;
+#else
+    return false;
+#endif
+}
 
 uint32_t noc_reads_num_issued[NUM_NOCS];
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS];
@@ -51,7 +68,9 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
     wait_for_go_message();
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
-    kernel_main();
+    if (!skip_kernel()) {
+        kernel_main();
+    }
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");
         // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the NOC

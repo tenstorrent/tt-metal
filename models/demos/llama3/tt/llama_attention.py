@@ -22,6 +22,7 @@ class TtLlamaAttention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        sfd_setup=None,
     ):
         super().__init__()
 
@@ -41,6 +42,10 @@ class TtLlamaAttention(LightweightModule):
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
         self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
+        self.use_sfd = configuration.use_sfd
+        self.run_sfd = False
+        self.sfd_setup = sfd_setup
+        self.done_compile = False
 
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
@@ -138,7 +143,7 @@ class TtLlamaAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=configuration.fracture_scheme(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
             cache_file_name=cache_name("wqkv_sharded_2d"),
@@ -158,7 +163,7 @@ class TtLlamaAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_mapper=configuration.fracture_scheme(
                 self.mesh_device,
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
@@ -263,6 +268,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
+            use_sfd=self.use_sfd,
         )
 
         if self.TG:
@@ -324,6 +330,7 @@ class TtLlamaAttention(LightweightModule):
             values = self.layer_past[1]
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
+
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
@@ -350,18 +357,31 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
-            )
+            if self.run_sfd and self.use_sfd:  # and cur_pos_int > self.sfd_setup.k_chunk_size * 2:
+                attn_output_1G4D = self.sfd_setup.run_speculative_flash_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    cur_pos_tensor=current_pos,
+                )
+            else:
+                attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                    q_heads_1BQD,
+                    keys,
+                    values,
+                    cur_pos_tensor=current_pos,
+                    scale=self.scale,
+                    program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                    compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+                )
 
         ttnn.deallocate(q_heads_1BQD)
+
+        self.sfd_setup.set_skip_tensor()
+
+        if not self.done_compile:
+            self.sfd_setup.enable_speculation()
 
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
@@ -403,6 +423,7 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                use_sfd=self.use_sfd,
             )
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
@@ -447,6 +468,7 @@ class TtLlamaAttention(LightweightModule):
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
+                use_sfd=self.use_sfd,
             )
 
             if not self.TG:
@@ -495,6 +517,7 @@ class TtLlamaAttention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
+            use_sfd=self.use_sfd,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -679,6 +702,7 @@ class TtLlamaAttention(LightweightModule):
                 num_all_gather_links=self.num_all_gather_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                use_sfd=self.use_sfd,
             )
 
         return output_11SH

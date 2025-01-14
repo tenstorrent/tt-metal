@@ -21,6 +21,7 @@ class TtTransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        sfd_setup=None,
     ):
         super().__init__()
 
@@ -37,6 +38,8 @@ class TtTransformerBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
+        self.sfd_setup = sfd_setup
+        self.done_compile = False
 
         self.layer_num = layer_num
 
@@ -50,6 +53,7 @@ class TtTransformerBlock(LightweightModule):
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
+            sfd_setup=sfd_setup,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
@@ -105,6 +109,19 @@ class TtTransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
+        if mode == "decode":
+            if not self.done_compile:
+                self.sfd_setup.disable_speculation()
+
+            self.sfd_setup.tt_gathered_priority_tensors = ttnn.experimental.swap_tensor(
+                self.sfd_setup.tt_priority_tensors,
+                multi_device_global_semaphore=self.sfd_setup.swap_semaphore_handles,
+                num_links=1,
+            )
+            x_new = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_new = self.sfd_setup.consolidate_tensor(x_new)
+            x = ttnn.to_memory_config(x_new, memory_config=x.memory_config())
+
         TG = self.args.is_galaxy
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
