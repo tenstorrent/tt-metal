@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp"
 
 /* All Gather Matmul fusion includes */
 #include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
@@ -56,11 +57,8 @@ void AllGatherMatmul::validate(
 
     const auto& all_gather_output_tensor_shard_spec = all_gather_output_tensor.shard_spec();
     if (all_gather_output_tensor_shard_spec.has_value()) {
-        auto const& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
-        auto const& shard_grid_start = shard_grid.start_coord;
-        auto const& shard_grid_end = shard_grid.end_coord;
         const uint32_t num_all_gather_output_shards =
-            (shard_grid_end.y - shard_grid_start.y + 1) * (shard_grid_end.x - shard_grid_start.x + 1);
+            shard_pf_builder::get_sharding_core_count(all_gather_output_tensor);
         TT_FATAL(
             this->all_gather_struct.ring_size == num_all_gather_output_shards,
             "AllGatherMatmul requires number of tensor slices to equal the number of output shards of the all_gather.");

@@ -498,6 +498,10 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         {
                             ttnn.CoreRange(
                                 ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(3, 0),
+                            ),
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(4, 0),
                                 ttnn.CoreCoord(7, 0),
                             ),
                         }
@@ -518,6 +522,10 @@ def test_all_gather_matmul_1d_on_t3000_post_commit(
                         {
                             ttnn.CoreRange(
                                 ttnn.CoreCoord(0, 0),
+                                ttnn.CoreCoord(3, 0),
+                            ),
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(4, 0),
                                 ttnn.CoreCoord(7, 0),
                             ),
                         }
