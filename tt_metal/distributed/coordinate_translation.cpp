@@ -66,7 +66,7 @@ MeshShape get_system_mesh_shape(size_t system_num_devices) {
 
 std::pair<CoordinateTranslationMap, MeshShape> get_system_mesh_coordinate_translation_map() {
     static const auto* cached_translation_map = new std::pair<CoordinateTranslationMap, MeshShape>([] {
-        auto system_num_devices = tt::Cluster::instance().number_of_devices();
+        auto system_num_devices = tt::Cluster::instance().number_of_user_devices();
 
         std::string galaxy_mesh_descriptor = "TG.json";
         if (tt::Cluster::instance().number_of_pci_devices() == system_num_devices) {
