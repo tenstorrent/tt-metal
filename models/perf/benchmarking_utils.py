@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import csv
-import json
 from datetime import datetime
 import pytz
 from loguru import logger

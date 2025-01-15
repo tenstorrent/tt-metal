@@ -147,7 +147,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: create dummy
+      - name: create dummy partial benchmark JSON
         shell: bash
         run: |
           mkdir -p generated/benchmark_data
@@ -159,7 +159,7 @@ jobs:
           cache-dependency-path: 'infra/requirements-infra.txt'
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
-      - name: Create environment CSV test
+      - name: Create complete benchmark JSON test
         env:
           PYTHONPATH: ${{ github.workspace }}
           ARCH_NAME: grayskull

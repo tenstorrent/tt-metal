@@ -15,22 +15,6 @@ from infra.data_collection.models import InfraErrorV1
 from models.perf.benchmarking_utils import CompleteBenchmarkRun
 
 
-def assert_all_fieldnames_exist(fieldnames, row):
-    assert set(row.keys()) == set(fieldnames)
-
-
-def create_csv(filename, fieldnames, rows):
-    with open(filename, "w", newline="") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for row in rows:
-            assert_all_fieldnames_exist(fieldnames, row)
-            writer.writerow(row)
-
-    logger.info(f"Finished writing to file {filename}")
-
-
 def get_datetime_from_github_datetime(github_datetime):
     return datetime.strptime(github_datetime, "%Y-%m-%dT%H:%M:%SZ")
 
