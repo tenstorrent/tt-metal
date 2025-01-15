@@ -227,7 +227,7 @@ static bool shard_grid_is_transposed(Tensor const& t) {
     return shard_grid_transposed;
 }
 
-static void emit_sharded_tensor_kernel_ct_args(Device* d, const Tensor& tensor, std::vector<uint32_t>& args) {
+static void emit_sharded_tensor_kernel_ct_args(IDevice* d, const Tensor& tensor, std::vector<uint32_t>& args) {
     std::ranges::copy(
         std::vector<uint32_t>{static_cast<uint32_t>(tensor.memory_config().memory_layout)}, std::back_inserter(args));
     std::ranges::copy(ShardedAddrGenArgBuilder::emit_ct_args(tensor), std::back_inserter(args));

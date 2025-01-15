@@ -50,9 +50,9 @@ args_list_t emit_compile_time(Shape4D<T> const& shape) {
 args_list_t emit_address_generator_runtime_args(
     tt::tt_metal::IDevice const* const d, tt::tt_metal::Tensor const& tensor);
 args_list_t new_addrgen_emit_address_generator_runtime_args(
-    const tt::tt_metal::Device* const d, const tt::tt_metal::Tensor& tensor);
+    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& tensor);
 args_list_t new_addrgen_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& tensor);
-    
+
 args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& tensor);
 
 std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const tt::tt_metal::ShardSpec& shard_spec);

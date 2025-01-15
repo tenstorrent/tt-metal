@@ -80,12 +80,12 @@ std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::Device* device, 
     return args;
 }
 
-static void add_sharding_rt_to_existing_rt(const Device* d, const Tensor& t, std::vector<uint32_t>& args) {
+static void add_sharding_rt_to_existing_rt(const IDevice* d, const Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = get_linear_shard_list(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::Device* device, const Tensor& t) {
+std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const Tensor& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
@@ -116,7 +116,7 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::Device* devi
     return args;
 }
 
-static void add_sharding_ct_to_existing_ct(const Device* d, const Tensor& t, std::vector<uint32_t>& args) {
+static void add_sharding_ct_to_existing_ct(const IDevice* d, const Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = sharding_ct_table_builder(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }

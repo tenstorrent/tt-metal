@@ -26,9 +26,8 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
 
-
 args_list_t new_addrgen_emit_address_generator_runtime_args(
-    const tt::tt_metal::Device* const d, const tt::tt_metal::Tensor& t) {
+    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -56,8 +55,7 @@ args_list_t new_addrgen_emit_address_generator_runtime_args(
     };
 }
 
-
-args_list_t emit_address_generator_runtime_args(tt::tt_metal::IDevice const* const d, tt::tt_metal::Tensor const& t) 
+args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
