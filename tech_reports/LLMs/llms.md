@@ -77,7 +77,7 @@ k_heads = ttnn.experimental.rotary_embedding_llama(
 )
 ```
 
-#### Setting up inputs to RoPE
+#### 2.2.1 Setting up inputs to RoPE
 
 Fused operation uses a different parallelization scheme internally depending on if the model is in *prefill* or *decode* mode. The following table describes various shapes and memory configurations for *prefill* and *decode* modes:
 
@@ -90,7 +90,7 @@ Fused operation uses a different parallelization scheme internally depending on 
 *Note: (TH, TW) = (TILE_HEIGHT, TILE_WIDTH)*
 
 
-#### Decode mode specifics
+#### 2.2.2 Decode mode specifics
 The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `TtLlamaRotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
 
 The following code sample shows how `TtLlamaRotarySetup` can be used in decode mode:
@@ -139,7 +139,7 @@ out = ttnn.experimental.rotary_embedding_llama(
 
 Normalization is a critical operation in Large Language Models (LLMs), ensuring stable training and efficient inference. Two widely adopted normalization techniques in modern LLMs, **LayerNorm** and **RMSNorm**, are fully supported in TT-NN.
 
-#### Implementations of Normalization Operations
+#### 2.3.1 Implementations of Normalization Operations
 
 TT-NN includes two primary implementations of normalization operations to handle diverse activation layouts efficiently:
 
@@ -147,7 +147,7 @@ TT-NN includes two primary implementations of normalization operations to handle
 2. **Distributed Norm**
 
 
-#### 1. Non-Distributed Norm
+#### 2.3.1.1 Non-Distributed Norm
 
 **Non-Distributed Norm** refers to the standard implementation of normalization operations applied to activations that are not distributed across multiple devices. This type of normalization is suitable for setups where the entire activation or embedding is available locally on a single device or is replicated identically across multiple devices in a data-parallel setup.  This implementation supports both sharded and interleaved inputs.
 
@@ -205,14 +205,11 @@ ttnn_gamma_rm = ttnn.as_tensor(
 )
 ```
 
-
-
-
-#### 2. Distributed Norm
+#### 2.3.1.2 Distributed Norm
 
 The distributed implementation is designed for cases where activations are **sharded along the embedding dimension** across multiple devices. It ensures the correct computation of mean and variance across shards by leveraging cross-device communication. Both interleaved and width-sharded inputs are supported.
 
-#### Steps to Perform Distributed Normalization on TT-Devices
+##### 2.3.2.2.1 Steps to Perform Distributed Normalization on TT-Devices
 
 1. **Compute Local Statistics** - Each device computes the required statistics (e.g., \(E[x]\), \(E[x^2]\)) locally on its shard of the input tensor.
    - For **RMSNorm**, only \(E[x^2]\) is required.
@@ -258,7 +255,6 @@ The distributed implementation is designed for cases where activations are **sha
    ```
    - **Output**: A tensor of shape `[1, 1, batch, embedding_dim // num_devices]`.
 
-
 > [!NOTE]
 > The following inputs are valid for both implementations.
 > - **Interleaved Inputs**:
@@ -268,8 +264,7 @@ The distributed implementation is designed for cases where activations are **sha
   For width-sharded inputs, the kernel splits the work across the embedding dimension.
   This design is more **optimal for decode cases**, where the sequence length is typically `seq_len=1`.
 
-
-#### References
+#### 2.3.1.3 References
 - Non-Distributed Norm Op Code [[1]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm) [[2]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm)
 - Distributed Norm Op Code [[3]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/layernorm_distributed) [[4]](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed)
 - Non-Distributed Norms Unit Tests [[5]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm_sharded.py) [[6]](https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_eager/python_api_testing/unit_testing/misc/test_layernorm.py)
@@ -544,7 +539,7 @@ y = FF2(w2_in)
 
 Let's dive into our implementation of MLP, and discuss what makes it performant across different WH systems.
 
-#### 1. Setup
+#### 2.5.1 Setup
 When used in the model by the `TtLlamaDecoder` module class, the MLP class is initialized at the start, where the weights for `w1`, `w2`, and `w3` are loaded and fractured across devices in specific schemes, as outlined in the [Multi-Device](#33-multi-device) section. Specifically, in n300 and T3000 systems the weights are 1D column fractured, and in TG systems the weights are 2D fractured.
 
 ```py
@@ -559,7 +554,7 @@ self.feed_forward = TtLlamaMLP(
 )
 ```
 
-#### 2. Inputs
+#### 2.5.2 Inputs
 At runtime, the `forward` function of `TtLlamaMLP` is called with either *'prefill'* or *'decode'* mode, with inputs replicated across devices, for all WH system configurations.
 > [!NOTE]
 > In the actual model, the input `ff_in` is the output of the `norm` step prior to MLP.
@@ -597,9 +592,7 @@ ff_in_memory_config = ttnn.DRAM_MEMORY_CONFIG
 >     ff_in = ttnn.reshape(ff_in, [1, seq_len // 1024, 1024, -1])
 > ```
 
-
-
-#### 2. Setting Up Program Configurations For Matmuls
+#### 2.5.3 Setting Up Program Configurations For Matmuls
 Depending on the mode of operation, the `forward` function of `TtLlamaMLP` instantiates different program configs for matmuls of FF1/FF3, and FF2.
 
 **Decode mode**
@@ -661,7 +654,6 @@ def matmul_config(
         fuse_batch=fuse_batch,
     )
 
-
 _, _, m, k = ff_in.shape
 n = hidden_dim // num_devices
 pc1 = matmul_config(
@@ -674,8 +666,7 @@ pc1 = matmul_config(
 )
 ```
 
-
-#### 3. FF1/FF3 Matmul
+#### 2.5.4 FF1/FF3 Matmul
 The first set of operations in the MLP are:
 ```py
 w1_out = FF1(x)
@@ -712,7 +703,7 @@ w3_out = ttnn.linear(
 )
 ```
 
-#### 3.1 FF1/FF3 Matmul With 2D Weight Fracturing
+#### 2.5.5 FF1/FF3 Matmul With 2D Weight Fracturing
 
 In the case of TG systems, where we have access to a 2D device mesh, we can leverage 2D weight fracturing. For a weight tensor with shape `[1, 1, K, N]`, using 2D weight fracturing on a `(8, 4)` device mesh, the resulting shape on each device would be: `[1, 1, K / 4, N / 8]`. In other words, the inner dimension (K) of the matmul is spread out across four devices, and to complete the entire matmul operation, a reduction step across the partials is necessary. We do this using an all-reduce operation along the four devices in `cluster_axis=1` of the device mesh.
 ```py
@@ -734,7 +725,7 @@ In the case of TG systems, where we have access to a 2D device mesh, we can leve
   )
 ```
 
-#### 4. Multiply + Fused SiLU Activation
+#### 2.5.6 Multiply + Fused SiLU Activation
 
 The output of the FF1/FF3 matmuls are column fractured tensors (the extra all-reduce operation for TG systems ensures this). The next operation is:
 ```py
@@ -757,7 +748,7 @@ w2_in = ttnn.multiply(
 
 Following our pattern mentioned before, the outputs are L1 sharded in `decode` mode and DRAM interleaved in `prefill` mode.
 
-#### 5. FF2 Matmul
+#### 2.5.7 FF2 Matmul
 The last computation in MLP is:
 ```py
 y = FF2(w2_in)
@@ -784,7 +775,7 @@ if seq_len >= 1024:  # Reshape back to intended shape
     w2_out = ttnn.reshape(w2_out, [1, 1, seq_len, -1])
 ```
 
-###### 5.1 Accumulating the partial outputs of FF2
+###### 2.5.7.1 Accumulating the partial outputs of FF2
 
 Since the output of FF2 is the correct shape but only a partial on each device, the output of the MLP module is required to be fractured where each device has fully accumulated the inner dim of the matmul, but only has a fraction of the outer dim. There are two different ways to handle this, depending on if the WH system has a 1D or 2D device mesh.
 
@@ -972,7 +963,6 @@ def forward(self, x: ttnn.Tensor):
     return output
 ```
 
-
 ### 2.8 Model
 
 <div align="center">
@@ -1028,7 +1018,7 @@ def forward(
 
 Almost every LLM generates text in the same manner: Given a prompt from the user, the LLM predicts the next token. Then, the LLM takes that new token and uses it as context to predict the following token. This process repeats until the LLM generates a token that indicates the end of the sequence, or until the user decides to stop the generation. The process is called "autoregressive generation" because each new token is used to predict the next token.
 
-#### Model Inputs and Outputs
+#### 3.1.1 Model Inputs and Outputs
 Inputs to the model for generative decoding are generally:
 - tokens: produced by the tokenizer
 - position ids: the position of the tokens in the sequence
@@ -1044,13 +1034,13 @@ The logits are unnormalized probabilities over the vocabulary. Given these proba
 - Greedy decoding (argmax of the logits, picks the most likely next token)
 - Top-p/top-k sampling (restricts the logits according to p and k values, then samples according to the remaining probabilities)
 
-#### KV cache
+#### 3.1.2 KV cache
 The KV cache is an inference optimization. It allows us to cache some intermediate values during the first inference step which are reused in later steps.
 On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
 
 The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.
 
-#### Batching
+#### 3.1.3 Batching
 LLMs use batching to process multiple sequences in parallel. There are a few reasons why batching is useful:
 - Real-world LLM services need to handle multiple concurrent requests.
 - LLM inference is bound by time to read model weights from DRAM. Batching allows model weight reuse across multiple sequences.
@@ -1060,7 +1050,7 @@ However, there are tradeoffs with batching. In decode mode, latency scales subli
 
 It is typical to use different batch sizes for different use cases, depending on the goal of the system.
 
-#### Performance Metrics
+#### 3.1.4 Performance Metrics
 **Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity.
 
 **Total throughput (tokens per second)** tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
@@ -1078,11 +1068,11 @@ In our LLM implementations, the prefill phase is done sequentially for each user
 
 The decode phase is parallel-computed for all users, but sequential for each token within a batch of users. Each new token can only be generated after the previous one, as the model must maintain causality in attention computations.
 
-#### **Technical Implementation Differences**
+#### 3.2.1 Technical Implementation Differences
 
 The intermediate activations in prefill mode are kept in DRAM, due to the large size of the tensors which contain the entire sequence length. In decode mode, the intermediate activations are kept in L1 memory instead, since in this mode the sequence length to compute is just 1 (one token at the time), reducing latency.
 
-##### 1. Reshaping for Large Matrix Multiplications
+##### 3.2.1.1 Reshaping for Large Matrix Multiplications
 
 Please see the [attention source code](../../models/demos/llama3/tt/llama_attention.py) for reference.
 
@@ -1104,7 +1094,7 @@ xqkv_fused = ttnn.linear(
 
 This reshaping is not needed for decode mode because it only processes one token at a time. Instead, the parallelization for decode mode is done over user batches, which currently only goes up to 32.
 
-##### 2. KV Cache Management
+##### 3.2.1.2 KV Cache Management
 
 The KV-cache is filled during prefill using the `ttnn.experimental.paged_fill_cache` operation. This supports page tables, which enables the hot-swapping of new users when the full model is deployed.
 
@@ -1130,8 +1120,8 @@ ttnn.experimental.paged_update_cache(
 )
 ```
 
-##### 3. Attention Computation
-###### Prefill:
+##### 3.2.1.3 Attention Computation
+###### 3.2.1.3.1 Prefill:
 ```python
 # Split q_heads into num_groups and kv_heads for parallel group computation for grouped query attention (GQA)
 q_heads_84SD_8b = ttnn.reshape(
@@ -1149,7 +1139,7 @@ attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
 )
 ```
 
-###### Decode:
+###### 3.2.1.3.2 Decode:
 ```python
 # Decode uses cached states instead of recomputing
 attn_output_11BH = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -1160,14 +1150,14 @@ attn_output_11BH = ttnn.transformer.scaled_dot_product_attention_decode(
 )
 ```
 
-##### 4. Slicing Before the LM Head
+##### 3.2.1.4 Slicing Before the LM Head
 At the end of prefill, the model should generate the first decoded token, then signaling the start of the decode phase. To this end, the model slices the output of the last decoder layer to the last tile before computing the LM head. This is necessary because only last token from prefill is needed to start the autoregressive decoding.
 
 ```python
 x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 ```
 
-#### **Prefill vs. Decode: Comparison Summary**
+#### 3.2.2 Prefill vs. Decode: Comparison Summary
 
 |  | Prefill Mode | Decode Mode |
 | --- | --- | --- |
@@ -1234,7 +1224,7 @@ The second key concept to scaling a model to multiple devices are Collective Com
 
 See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage about CCL and their implementation details. Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
-#### AllGather
+#### 3.3.1 AllGather
 The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).
 
 - Supported Topologies: Ring, Linear
@@ -1264,7 +1254,7 @@ output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=1)
 output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
 ```
 
-#### ReduceScatter
+#### 3.3.2 ReduceScatter
 The ReduceScatter operation reduces the data across all devices and shards the result of the reduction over a specified dimension across all devices.
 
 - Supported Topologies: Ring, Linear
@@ -1292,12 +1282,12 @@ output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1)
 output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1, cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
 ```
 
-#### AllReduce
+#### 3.3.3 AllReduce
 The AllReduce operation reduces data across all devices and stores the entire tensor on each device (replication). It is performed using an AllGather followed by a ReduceScatter.
 
 A fused version of AllReduce is planned, but currently only the composite of AllGather+ReduceScatter is supported.
 
-#### Sharding schemes for decode
+#### 3.3.4 Sharding schemes for decode
 In decode mode, activations are generally stored in L1 memory, while weights, which are too large, need to be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
 
 The activations in decode mode are so small because they contain the batch size (=users) in the height dimension while sequence length is 1.
@@ -1306,20 +1296,20 @@ Activations are not sharded in the height dimension; however, depending on the o
 
 Matmul weights on the other hand can be sharded in width, height or both. Sharding weights across multiple devices significantly reduces DRAM pressure per device, resulting in notable latency improvements. Below is a summary of useful sharding schemes for sharding weights in decode mode. Which scheme to use will depend on the shape and size of the model weights and the target device topology.
 
-##### **1D Column parallel**
+##### 3.3.5 1D Column parallel
 
 Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations need to be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. An AllGather operation is used on dim=3 to gather (i.e., replicate) activations.
 
 <img src="images/column_parallel.png" style="width:500px;"/>
 
-##### **1D Row parallel**
+##### 3.3.6 1D Row parallel
 
 Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations need to be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, a ReduceScatter operation is used to compute the reduced result across all devices and shard the result along a specified dimension.
 Additionally an AllGather operation is used (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
 
 <img src="images/row_parallel.png" style="width:500px;"/>
 
-##### **1D Column parallel followed by row parallel (1D weight sharding) **
+##### 3.3.7 1D Column parallel followed by row parallel (1D weight sharding)
 
 1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. We need an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
 
@@ -1331,7 +1321,7 @@ If instead, we use the 1D weight sharding scheme and thus move the CCL operation
 
 <img src="images/column_parallel_then_row_parallel.png" style="width:700px;"/>
 
-##### **2D Weight Sharding**
+##### 3.3.8 2D Weight Sharding
 
 In 2D Weight Sharding on a 2D cluster, weights are sharded both in width and height, such that each device contains a block of the weights.
 For this scheme the activations are width-sharded along `cluster_axis=0` and are replicated along `cluster_axis=1`, and the weights are block-sharded. Thus, each device processes a width-shard of the activation, and a block of the weights where the activations are replicated over one axis but the weights are not.
@@ -1340,7 +1330,7 @@ Typically an AllReduce (ReduceScatter+AllGather) is used to first reduce along `
 
 <img src="images/block_sharded.png" style="width:1000px;"/>
 
-##### **Optimal strategy**
+##### 3.3.9 Optimal strategy
 
 The optimal usage strategy of different parallelisation schemes depends on the specific shapes and model architecture, as well as the target device topology. To select the best parallelisation strategy, the overall data movement for each scheme can be computed; selecting the parallelisation stratgy with the lowest overall data movement will generally result in the best performance.
 
@@ -1362,9 +1352,7 @@ The overall data movement (DM) is then computed using:
 
 where K and N are height and width of the weight tensor, DF is the data format multiplyer (number of bytes per datum) and D is the number of devices along the axis that the CCL operation is performed on. Ring topology is more optimised and results in less overall data movement.
 
-
-
-##### **Examplary parallelisation scheme: Llama3**
+##### 3.3.10 Examplary parallelisation scheme: Llama3
 
 For our [Llama3 family of models](../../models/demos/llama3) we are using the following sharding schemes in our multi-device architectures:
 
@@ -1404,22 +1392,22 @@ Implementing continuous batching requires that the serving code track data for e
 
 ### 3.5 vLLM Integration
 
-#### Overview
+#### 3.5.1 Overview
 vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). We use vLLM to serve our models in production because of the features it enables. On the serving side, vLLM supports continuous batching and [paged attention](https://arxiv.org/pdf/2309.06180). In addition, vLLM provides an OpenAI-compatible server which is useful for deployment.
 
 Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models on Tenstorrent hardware. The [README](https://github.com/tenstorrent/vllm/tree/dev/tt_metal/README.md) has instructions for setting up the environment.
 
-#### Implementation Requirements
+#### 3.5.2 Implementation Requirements
 In order to add vLLM support to a new model, the model must conform to a certain interface. An example of the interface is the [Llama2-70b generation code](../../models/demos/t3000/llama2_70b/tt/llama_generation.py), which implements `prefill_forward`, `decode_forward`, and `initialize_vllm_model`.
 Beyond implementing the functionality needed for continuous batching, a model must also implement paged attention. For an example, see [Llama2-70b attention](../../models/demos/t3000/llama2_70b/tt/llama_attention_optimized.py).
 
-#### vLLM modifications
+#### 3.5.3 vLLM modifications
 On the vLLM side there may be additional changes needed to support the new model.
 
 - Modify [`tt_loader.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/model_executor/model_loader/tt_loader.py) if the model requires a different initialization.
 - Modify [`tt_model_runner.py`](https://github.com/tenstorrent/vllm/blob/dev/vllm/worker/tt_model_runner.py) if it is missing functionality for the new model.
 
-#### Testing
+#### 3.5.4 Testing
 Finally, test the new model through vLLM. Register the new model as seen in [`offline_inference_tt.py`](https://github.com/tenstorrent/vllm/blob/dev/examples/offline_inference_tt.py).
 
 ```python
@@ -1476,7 +1464,7 @@ output = ttnn.linear(
 When you don't pass memory configs or program configs the operation will choose default values. These defaults are often sub-optimal. `memory_config` typically defaults to a DRAM interleaved configuration, while `program_config` defaults to something reasonable but still sub-optimal.
 See [Matrix Engine](../matrix_engine/matrix_engine.md) for background on `compute_kernel_config`.
 
-#### Memory Configs
+#### 4.4.1 Memory Configs
 For the LLM context, memory configs are not as important in prefill mode, where activations are large (due to the long sequence lengths) and thus should generally be DRAM interleaved (otherwise wouldn't fit on L1). In prefill mode, each op should consume DRAM interleaved inputs and produce DRAM interleaved output(s).
 
 Memory configs are most important in decode mode. For some operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic and get better performance. The Llama3 codebase has examples of how to create a width-sharded memory config (see [Llama3 model config](../../models/demos/llama3/tt/model_config.py)).
@@ -1504,12 +1492,12 @@ As always, you should try running your `ttnn` op in a unit test with whichever s
 
 Be careful when your memory config creates shards that require padding (i.e, the shard shape does not divide evenly into 32x32 tiles). Padded shards and padded ops are under active development and can be sources of bugs. When your memory config requires padding, you probably want to instead find a core grid which divides evenly into the tensor shape.
 
-#### Program Configs and Picking the Right Matmul
+#### 4.4.2 Program Configs and Picking the Right Matmul
 Each `ttnn` operation has its own unique program config class. In general, program configs configure the op with hyperparameters that affects their functionality and performance. There are too many ops and program configs to cover in detail. We will focus on `ttnn.matmul` since it has multiple variants and it usually requires the most care.
 
 Picking a matmul variant is a key decision in optimizing a model. The choice depends on the shapes of the inputs and outputs and how the matmul fits into the rest of the model. You choose a variant by providing a specific `program_config` to `ttnn.matmul`. The following presents three matmul variants that are commonly used in LLMs.
 
-##### Matmul 2D
+##### 4.4.3 Matmul 2D
 Matmul 2D gets its name because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are large (usually >= 256). Rule of thumb: use matmul 2D for all matmuls in prefill mode. Generally, inputs and output to matmul 2D will be interleaved in DRAM because these matmuls should be compute bound rather than memory bound and the inputs may be too large to fit in L1. NOTE: the weights can be DRAM sharded and still work with matmul 2D.
 
 The following is a description of the program config for matmul 2D.
@@ -1557,7 +1545,7 @@ fuse_batch=False,
 
 Since we use matmul 2D for large matmuls, there may be some issues where we run out of L1 just to store intermediate values in the kernel. When this happens, try reducing `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
 
-##### DRAM-Sharded Matmul
+##### 4.4.4 DRAM-Sharded Matmul
 DRAM-Sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in op performance. This matmul gets its name because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. See the [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) writeup for details on the implementation.
 
 We use DRAM-Sharded matmul for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights are width-sharded in DRAM.
@@ -1595,7 +1583,7 @@ output = ttnn.linear(
 
 Be careful that the core grid evenly divides both the activations and the output. Padding functionality is not yet implemented for DRAM-Sharded matmuls.
 
-#### Matmul 1D
+#### 4.4.5 Matmul 1D
 Matmul 1D is the final variant to cover. Before ttnn implemented DRAM-Sharded matmul, this was the matmul of choice for decode mode. Now that DRAM-Sharded matmul exists and is much faster, matmul 1D is less often used.
 Matmul 1D gets its name because it only parallelizes over the N dimension. The activation and output(s) should be width-sharded in L1. Weights should be DRAM interleaved.
 
@@ -1623,7 +1611,7 @@ When creating a matmul 1D program config, maximize the `in0_block_w` and `out_su
 
 While we work on maximizing the performance of large language models on Tenstorrent hardware, we must also ensure that the models are functionally correct and that they produce outputs of the expected quality. The subsections below will describe our methods for evaluating the accuracy (also referred to as functionality or correctness for our purposes) of a given model and how to debug issues pertaining to this.
 
-#### Accuracy Testing
+#### 4.5.1 Accuracy Testing
 
 Below is a list of metrics that are used when evaluating accuracy:
 - **Pearson Correlation Coefficient (PCC)**: A measure of the linear relationship between two variables, where a PCC of 1 indicates a perfect positive correlation, and a PCC of 0 indicates no linear correlation.
@@ -1637,7 +1625,7 @@ In order to thoroughly test the accuracy of a model, a bottom up approach is tak
 - **Model-level unit tests**: In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [llama3 model test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_model.py) runs 1 or many layers of the model over multiple iterations and checks the PCC against the reference model. A rule of thumb is that the full model PCC should be approximately ~0.99.
 - **Dataset evaluation**: Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be comparable (e.g. within a couple percentage points of difference) to those obtained from running the evaluation with the reference model on CPU / GPU.
 
-#### Debugging Accuracy
+#### 4.5.2 Debugging Accuracy
 
 If during model bringup or optimization it is observed that the model outputs do not seem reasonable or any of the evaluations above are failing, the following steps can be taken to debug the accuracy:
 1. Locate the smallest module test that is failing. The fewer the number of operations that could be causing the issue, the easier it will be to debug the root cause. In most cases, the issue should be able to be found using a 1 layer or submodule test.
@@ -1658,7 +1646,7 @@ In some cases, it may be possible that the issue is not with the model and that 
 
 ### 4.6 Performance Analysis
 
-ttnn performance has five components:
+TT-NN performance has five components:
 
 ![Performance components overview](images/4.6-overview.png)
 
@@ -1670,9 +1658,10 @@ ttnn performance has five components:
 
 Further detail will be provided. It is important to confirm that Tracing has been enabled. For more inforation see [4.1 Tracing](#41-tracing) for more details, tracing should be used for decode mode but not prefill mode.
 
-**This means that for decode mode you won’t have to worry about 1-3 but for prefill mode you will.**
+> [!NOTE]
+> This means that for decode mode you won’t have to worry about 1-3 but for prefill mode you will.
 
-#### 1. Main Python Thread
+#### 4.6.1 Main Python Thread
 
 Implement the main python thread if you are not tracing. The main python thread is not important if you are using tracing. The Metal Profiler/Tracy can also show python performance but for pure python analysis Viztracer is a recommended tool. [viztracer](https://github.com/gaogaotiantian/viztracer):
 
@@ -1704,11 +1693,11 @@ Top tips:
 * Generate shard spec and compute kernel config objects once (e.g. in a constructor) instead of recreating them every time you run the forward pass. Keep the forward pass clean.
 * Make sure Metal is compiled in Release mode (default) and you are using ttnn’s async mode (see above).
 
-#### 2. Host API
+#### 4.6.2 Host API
 
 Any overhead here is outside your control and in our experience is minimal. Use a C++ profiler or [Metal Profiler/Tracy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/MetalProfiler/metal-profiler.md) with host stack traces enabled to see this time.
 
-#### 3. Host-device communications
+#### 4.6.3 Host-device communications
 
 As little communication as possible between the host and the device is preferred. For LLMs this means:
 
@@ -1734,7 +1723,7 @@ Looking at host-device communications in a python profiler like `viztracer` is p
 
 If you want to measure calls this way, turn async mode off. The time your main python thread spends in `to_torch` will not include any time spent waiting for the device and will be a closer approximation the measures above.
 
-#### 4+5. Device dispatch and op performance
+#### 4.6.4 Device dispatch and OP performance
 
 This is the fun bit, but we need to do a little prep to get started. First, metal must be compiled with `-p` to enable device profiling:
 
@@ -1762,7 +1751,7 @@ python models/perf/perf_report.py OPS_CSV_FILE
 
 For device performance we recommend looking at a single layer. You can do this by using `--id-range` or by changing your test to run only a single layer of the model. For more information see: [Performance Report Analysis Tool](https://github.com/tenstorrent/tt-metal/tree/main/models/perf). The Performance Report Analysis Tool document describes how to select specific ranges of OPs.
 
-##### What makes a good performance test?
+**What makes a good performance test?**
 
 Ideally you should run your model in as close to end-user form as possible, simplifying it as much as possible. In practice this means:
 
@@ -1771,7 +1760,7 @@ Ideally you should run your model in as close to end-user form as possible, simp
 * Run a single layer of the model - but be aware of which OPs are run for every layer and which ones are only run at the start and end (e.g. embedding, final norm and LM head).
 * Add a tracy signpost e.g. `tracy.signpost("Performance pass")` before the part you want to record - this will be focused on by default by `perf_report.py`, saving you some work.
 
-##### What does such a report look like?
+**What does such a report look like?**
 
 Here is an example without tracing enabled. You can instantly see that more time (756us) is spent in between OPs (op-to-op gap) than running OPs on device (362us)!
 
@@ -1799,7 +1788,7 @@ There are many individual tips, let’s start with overall advice:
 
 The perfect OP runs on the entire core grid using sharded inputs from L1. Let’s look more at data movement first, then specific tips.
 
-#### Data movement
+#### 4.7.1 Data movement
 
 OPs can read data from:
 
@@ -1816,7 +1805,7 @@ Activations are placed in L1 and weights placed in DRAM.
 
 See the [op config section](#44-op-configs) for more details on writing shard specs in your code.
 
-#### Specific tips
+#### 4.7.2 Specific tips
 
 Situation: OPs are reading from the fastest memory they can, sharded if possible. What might still make things slow?
 
@@ -1863,7 +1852,7 @@ self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
 As always, do not recreate these every single forward pass if you want your python thread to be fast (which you do).
 ### 4.8 Module Tests
 
-#### Llama3 Module and Test Differences
+#### 4.8.1 Llama3 Module and Test Differences
 
 In our current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
 To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
