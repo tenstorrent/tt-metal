@@ -1055,12 +1055,29 @@ class resnet50:
         xshape = x.shape
         x = ttnn.slice(x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1))
 
-        layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
-
         reshard = False
         height_shard = False
         if is_first_run:
             reshard = True
+
+        # ## 104
+        # core_range_set = ttnn.CoreRangeSet(
+        #     {
+        #         ttnn.CoreRange(
+        #             ttnn.CoreCoord(0, 0),
+        #             ttnn.CoreCoord(12, 7),
+        #         ),
+        #     }
+        # )
+        # layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
+        # mem_config = ttnn.create_sharded_memory_config_(
+        #     layer4_module1_input_shape,
+        #     core_range_set,
+        #     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        #     ttnn.ShardOrientation.COL_MAJOR,
+        #     tile_layout=True,
+        # )
+        # x = ttnn.to_memory_config(x, mem_config)
 
         logger.debug(f"==== Running layer 4 module 1")
         x, x_height, x_width = self.layer4_module1(
@@ -1121,7 +1138,7 @@ class resnet50:
             x.volume() // x.shape.with_tile_padding()[-1],
             x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
