@@ -4,9 +4,9 @@
 
 #include <gtest/gtest.h>
 
-#include <autograd/auto_context.hpp>
 #include <memory>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/module_base.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
@@ -79,17 +79,15 @@ TEST_F(WeightTyingTest, ModelFC) {
 TEST_F(WeightTyingTest, LanguageModel) {
     auto model = LanguageModel();
     auto params = model.parameters();
-    assert(params.size() == 3U);
+    assert(params.size() == 2U);
 
     std::vector<std::string> names;
     names.reserve(params.size());
-
     for (const auto& [name, tensor] : params) {
         names.push_back(name);
     }
-
     std::sort(names.begin(), names.end());
-    EXPECT_EQ(names[0], "LanguageModel/fc1/bias");
-    EXPECT_EQ(names[1], "LanguageModel/fc1/weight");
-    EXPECT_EQ(names[2], "LanguageModel/emb/weight");
+
+    EXPECT_EQ(names[0], "LanguageModel/emb/weight");
+    EXPECT_EQ(names[1], "LanguageModel/fc1/bias");
 };
