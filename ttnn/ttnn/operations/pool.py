@@ -4,35 +4,38 @@
 
 import ttnn
 
+from typing import Tuple
+
 
 def golden_maxpool2d(
-    _input_tensor: ttnn.Tensor,
-    in_n: int,
-    in_h: int,
-    in_w: int,
-    kernel_h: int,
-    kernel_w: int,
-    stride_h: int,
-    stride_w: int,
-    pad_h: int,
-    pad_w: int,
-    dilation_h: int,
-    dilation_w: int,
-    *,
-    memory_config: ttnn.MemoryConfig,
-    nblocks: int,
-    use_multicore: bool,
+    input_tensor: ttnn.Tensor,
+    batch_size: int,
+    input_h: int,
+    input_w: int,
+    channels: int,
+    kernel_size: Tuple[int, int],
+    stride: Tuple[int, int],
+    padding: Tuple[int, int],
+    dilation: Tuple[int, int],
+    **_,
 ):
     import torch
 
-    kernel_size = (kernel_h, kernel_w)
-    stride = (stride_h, stride_w)
-    padding = (pad_h, pad_w)
-    dilation = (dilation_h, dilation_w)
+    input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
+        0, 3, 1, 2
+    )  # 1, 1, NHW, C -> N, C, H, W
 
-    return torch.nn.functional.max_pool2d(
-        _input_tensor, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation
+    output_tensor = torch.nn.functional.max_pool2d(
+        input_tensor, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation
     )
+
+    N, C, H, W = output_tensor.shape
+    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+
+    return output_tensor
+
+
+ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
 def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
