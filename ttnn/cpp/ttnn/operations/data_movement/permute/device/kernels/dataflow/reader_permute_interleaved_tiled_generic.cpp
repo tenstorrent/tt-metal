@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "tt_metal/hw/inc/debug/dprint_pages.h"
 template <uint32_t N>
 void dprint_array(const uint32_t* arr, const char* name) {
     DPRINT << name << ": ";
@@ -23,6 +24,20 @@ void kernel_main() {
     constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(5);
     constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(6);
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(7);
+    constexpr uint32_t x_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t X = get_compile_time_arg_val(9);
+    constexpr uint32_t W = get_compile_time_arg_val(10);
+    constexpr uint32_t H = get_compile_time_arg_val(11);
+    constexpr uint32_t X_p = get_compile_time_arg_val(12);
+    constexpr uint32_t W_p = get_compile_time_arg_val(13);
+    constexpr uint32_t H_p = get_compile_time_arg_val(14);
+    constexpr uint32_t H_t = get_compile_time_arg_val(15);
+    constexpr uint32_t W_t = get_compile_time_arg_val(16);
+    constexpr uint32_t final_tile_real_w = get_compile_time_arg_val(17);
+    constexpr uint32_t final_tile_real_faces_w = get_compile_time_arg_val(18);
+    constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
 
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t FACE_HW = FACE_HEIGHT * FACE_WIDTH;
@@ -31,6 +46,8 @@ void kernel_main() {
     constexpr uint32_t TILE_LINE_BYTES = TILE_WIDTH * element_size;
     constexpr uint32_t NUM_FACES_W = TILE_WIDTH / FACE_WIDTH;
     constexpr uint32_t NUM_FACES_H = TILE_HEIGHT / FACE_HEIGHT;
+    constexpr uint32_t x_block_size = TILE_HEIGHT;
+    constexpr uint32_t w_block_size = TILE_WIDTH;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t start_block = get_arg_val<uint32_t>(1);
@@ -43,40 +60,6 @@ void kernel_main() {
         input_shape[i] = get_arg_val<uint32_t>(i + 3);
         dims[i] = get_arg_val<uint32_t>(i + N + 3);
     }
-
-    start_block = 0;
-    end_block = 1;
-    uint32_t x_dim = dims[N - 1];
-    uint32_t x = input_shape[x_dim];
-    uint32_t w = input_shape[N - 1];
-
-    uint32_t X_p = TILE_HEIGHT * ((x + TILE_HEIGHT - 1) / TILE_HEIGHT);
-    uint32_t W_p = TILE_WIDTH * ((w + TILE_WIDTH - 1) / TILE_WIDTH);
-    uint32_t H_p = TILE_HEIGHT * ((input_shape[N - 2] + TILE_HEIGHT - 1) / TILE_HEIGHT);
-    uint32_t H_t = H_p / TILE_HEIGHT;
-    uint32_t W_t = W_p / TILE_WIDTH;
-
-    // Faces with real data in the final tile along the width dimension, divided up
-    uint32_t final_tile_real_w = w % TILE_WIDTH;
-    uint32_t final_tile_real_faces_w =
-        w % TILE_WIDTH == 0 ? NUM_FACES_W : ((final_tile_real_w + FACE_WIDTH - 1) / FACE_WIDTH);
-
-    uint32_t padded_xw_volume = X_p * W_p;
-    for (uint32_t i = 0; i < N - 1; i++) {
-        if (i == x_dim) {
-            continue;
-        }
-        padded_xw_volume *= input_shape[i];
-    }
-
-    uint32_t xw_blocks = padded_xw_volume / (TILE_HEIGHT * TILE_WIDTH);
-    end_block = xw_blocks;
-
-    constexpr uint32_t x_block_size = TILE_HEIGHT;
-    constexpr uint32_t w_block_size = TILE_WIDTH;
-
-    uint32_t w_blocks = W_p / w_block_size;
-    uint32_t x_blocks = X_p / x_block_size;
 
     // ------------------------------------------------------------------------
     // 4) Build padded and tiled shapes
@@ -112,6 +95,8 @@ void kernel_main() {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
 
+    DPRINT << "start_block: " << start_block << ENDL();
+    DPRINT << "end_block: " << end_block << ENDL();
     DPRINT << "N: " << N << ENDL();
     DPRINT << "input_cb_page_size: " << input_cb_page_size << ENDL();
     DPRINT << "element_size: " << element_size << ENDL();
@@ -123,11 +108,10 @@ void kernel_main() {
     DPRINT << "start_block: " << start_block << ENDL();
     DPRINT << "end_block: " << end_block << ENDL();
     DPRINT << "x_dim: " << x_dim << ENDL();
-    DPRINT << "x: " << x << ENDL();
-    DPRINT << "w: " << w << ENDL();
+    DPRINT << "X: " << X << ENDL();
+    DPRINT << "W: " << W << ENDL();
     DPRINT << "X_p: " << X_p << ENDL();
     DPRINT << "W_p: " << W_p << ENDL();
-    DPRINT << "padded_xw_volume: " << padded_xw_volume << ENDL();
     DPRINT << "xw_blocks: " << xw_blocks << ENDL();
     DPRINT << "x_block_size: " << x_block_size << ENDL();
     DPRINT << "w_block_size: " << w_block_size << ENDL();
@@ -155,7 +139,6 @@ void kernel_main() {
      */
 
     // x_dim is the dimension along which we are reading the tensor, as it's the new W dimension in the output tensor
-    uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_padded_strides[x_dim];
     uint32_t X_stride_tile = src_tiled_strides[x_dim];
     constexpr uint32_t tile_bytes = TILE_HEIGHT * TILE_WIDTH * element_size;
@@ -233,13 +216,14 @@ void kernel_main() {
         DPRINT << "base_tile_offset: " << base_tile_offset << ENDL();
 
         // Reserve space in the circular buffer for the X-block length
-        // cb_reserve_back(tt::CBIndex::c_0, 1);
+        cb_reserve_back(tt::CBIndex::c_0, 1);
         uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
 
         // We read in 'x_block_len' chunks along the X dimension
         // Read along the X dimension
         // DPRINT << "Reading along the X dimension" << ENDL();
         uint32_t real_faces_w = w_block != W_t - 1 ? NUM_FACES_W : final_tile_real_faces_w;
+        DPRINT << "real_faces_w: " << real_faces_w << ENDL();
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint32_t tile = base_tile_offset + x * X_stride_tile;
             DPRINT << "x: " << x << ENDL();
@@ -253,15 +237,18 @@ void kernel_main() {
                 uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
                 DPRINT << "w_offset: " << w_offset << ENDL();
                 DPRINT << "cb_w_offset: " << cb_w_offset << ENDL();
-                // noc_async_read(src_noc_addr + w_offset, src_buffer_l1_addr + page_offset + cb_w_offset,
+                noc_async_read(
+                    src_noc_addr + w_offset, src_buffer_l1_addr + page_offset + cb_w_offset, SUBTILE_LINE_BYTES);
                 // SUBTILE_LINE_BYTES);
             }
         }
         // DPRINT << "DONE READING ALONG X DIM" << ENDL();
         // Wait for all async reads to complete before proceeding
-        // noc_async_read_barrier();
+        noc_async_read_barrier();
+
         // Push the filled block into the circular buffer
-        // cb_push_back(tt::CBIndex::c_0, 1);
+        tt::data_movement::common::print_bf16_pages(src_buffer_l1_addr, 32, X);
+        cb_push_back(tt::CBIndex::c_0, 1);
         DPRINT << ENDL();
     }
 }

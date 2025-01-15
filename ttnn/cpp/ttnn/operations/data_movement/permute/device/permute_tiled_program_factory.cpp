@@ -477,6 +477,45 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     auto dst_buffer = output_tensor.buffer();
 
     tt::tt_metal::Program program{};
+    uint32_t logical_volume = input_shape.volume();
+    uint32_t num_rows = logical_volume / input_shape[N - 1];
+    uint32_t y_dim = dims[N - 2];
+
+    uint32_t x_dim = dims[N - 1];
+    uint32_t x = input_shape[x_dim];
+    uint32_t w = input_shape[N - 1];
+
+    // X is the new width so we need to pad it to the target tile_shape[1]
+    uint32_t x_block_size = tile_shape[1];
+    uint32_t w_block_size = tile_shape[1];
+
+    uint32_t element_size = input_tensor.element_size();
+    uint32_t X_p = x_block_size * ((x + x_block_size - 1) / x_block_size);
+    uint32_t W_p = tile_shape[1] * ((w + tile_shape[1] - 1) / tile_shape[1]);
+    uint32_t H_p = tile_shape[0] * ((input_shape[N - 2] + tile_shape[0] - 1) / tile_shape[0]);
+    uint32_t H_t = H_p / tile_shape[0];
+    uint32_t W_t = W_p / tile_shape[1];
+
+    uint32_t w_blocks = W_p / w_block_size;
+    uint32_t x_blocks = X_p / x_block_size;
+
+    uint32_t num_faces_w = tile_shape[1] / face_shape[1];
+    uint32_t num_faces_h = tile_shape[0] / face_shape[0];
+
+    // Faces with real data in the final tile along the width dimension, divided up
+    uint32_t final_tile_real_w = w % tile_shape[1];
+    uint32_t final_tile_real_faces_w =
+        w % tile_shape[1] == 0 ? num_faces_w : ((final_tile_real_w + face_shape[1] - 1) / face_shape[1]);
+
+    uint32_t padded_xw_volume = X_p * W_p;
+    for (uint32_t i = 0; i < N - 1; i++) {
+        if (i == x_dim) {
+            continue;
+        }
+        padded_xw_volume *= input_shape[i];
+    }
+
+    uint32_t xw_blocks = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_page_size = detail::tile_size(tensor_return_value);
@@ -499,8 +538,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     // auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     CoreCoord compute_with_storage_grid_size = {1u, 1u};
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
@@ -520,12 +559,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t logical_volume = input_shape.volume();
-    uint32_t num_rows = logical_volume / input_shape[N - 1];
-    uint32_t y_dim = dims[N - 1];
-    uint32_t x_dim = dims[N - 2];
-    uint32_t element_size = input_tensor.element_size();
-
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram,
         N,
@@ -535,6 +568,20 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         tile_shape[1],
         face_shape[0],
         face_shape[1],
+        x_dim,
+        x,
+        w,
+        input_shape[N - 2],
+        X_p,
+        W_p,
+        H_p,
+        H_t,
+        W_t,
+        final_tile_real_w,
+        final_tile_real_faces_w,
+        xw_blocks,
+        x_blocks,
+        w_blocks,
     };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -544,7 +591,12 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args = {N};
+    std::vector<uint32_t> compute_kernel_args = {
+        N,
+        x_blocks,
+        w_blocks,
+        input_shape[N - 2],
+    };
 
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
@@ -574,41 +626,39 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     reader_runtime_args.insert(reader_runtime_args.end(), dims.begin(), dims.end());
 
     std::vector<uint32_t> compute_runtime_args = {0, 0};
-    compute_runtime_args.insert(compute_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    compute_runtime_args.insert(compute_runtime_args.end(), dims.begin(), dims.end());
 
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
     writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
     writer_runtime_args.insert(writer_runtime_args.end(), dims.begin(), dims.end());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-    uint32_t start_tile = 0;
-    uint32_t num_tiles_per_core = 0;
+    uint32_t start_block = 0;
+    uint32_t num_blocks_per_core = 0;
     for (const auto& core : cores) {
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_blocks_per_core = num_blocks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_blocks_per_core = num_blocks_per_core_group_2;
         } else {
             // no-op
-            num_tiles_per_core = 0;
+            num_blocks_per_core = 0;
         }
 
-        uint32_t end_tile = start_tile + num_tiles_per_core;
-        reader_runtime_args[1] = num_tiles_per_core;
-        reader_runtime_args[2] = start_tile;
+        uint32_t end_block = start_block + num_blocks_per_core;
+        reader_runtime_args[1] = start_block;
+        reader_runtime_args[2] = end_block;
 
-        compute_runtime_args[0] = start_tile;
-        compute_runtime_args[1] = end_tile;
+        compute_runtime_args[0] = start_block;
+        compute_runtime_args[1] = end_block;
 
-        writer_runtime_args[1] = start_tile;  // for some reason num_tiles comes first in writer unary
-        writer_runtime_args[2] = end_tile;    // start tile is second in writer unary
+        writer_runtime_args[1] = start_block;
+        writer_runtime_args[2] = end_block;
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
-        start_tile = end_tile;
+        start_block = end_block;
     }
 
     return {
