@@ -1218,10 +1218,10 @@ Tensor unpad(
     ttnn::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
-        TT_ASSERT(output_tensor_start[i] < input_shape[i]);
+        TT_ASSERT(output_tensor_start[i] <= input_shape[i]);
         TT_ASSERT(output_tensor_end[i] <= input_shape[i]);
         // Check if start shape is < end shape
-        TT_ASSERT(output_tensor_start[i] < output_tensor_end[i]);
+        TT_ASSERT(output_tensor_start[i] <= output_tensor_end[i]);
         // Figure out output tensor shape
         output_shape.push_back(output_tensor_end[i] - output_tensor_start[i]);
     }
