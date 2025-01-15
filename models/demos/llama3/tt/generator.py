@@ -25,6 +25,8 @@ from models.demos.llama3.tt.llama_common import (
     get_max_prefill_chunk_size,
 )
 
+from time import time
+
 
 class LlamaGenerator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
@@ -205,7 +207,6 @@ class LlamaGenerator:
         tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
-
         tt_logits = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
@@ -258,13 +259,16 @@ class LlamaGenerator:
         Executes the trace for the decode_forward method but does not read back outputs.
         """
         host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-
         device_inputs = copy_host_to_device(
             host_tensors=host_inputs,
             device_tensors=device_inputs,
         )
 
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        start_time = time()
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
+        logger.info(
+            f"Miguel Trace execution time: {1000*(time() - start_time)}ms @ {1/(time() - start_time)} tok/s/user"
+        )
 
         return tt_out_trace
 
@@ -718,7 +722,7 @@ class LlamaGenerator:
             ),
         )
 
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
 
         return trace_logits_rm
 
