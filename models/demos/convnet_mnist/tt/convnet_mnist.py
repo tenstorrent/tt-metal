@@ -57,7 +57,7 @@ def convnet_mnist(
         tt_weight = ttnn.prepare_conv_weights(
             weight_tensor=tt_weight,
             weights_format="OIHW",
-            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_memory_config=x.memory_config(),
             input_layout=x.get_layout(),
             **conv_kwargs,
         )
@@ -118,7 +118,7 @@ def convnet_mnist(
         tt_weight = ttnn.prepare_conv_weights(
             weight_tensor=tt_weight,
             weights_format="OIHW",
-            input_memory_config=ttnn.L1_MEMORY_CONFIG,
+            input_memory_config=x.memory_config(),
             input_layout=x.get_layout(),
             **conv_kwargs,
         )
