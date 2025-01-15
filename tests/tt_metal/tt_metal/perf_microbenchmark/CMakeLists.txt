@@ -71,6 +71,9 @@ foreach(arch ${ARCHITECTURES})
                 yaml-cpp::yaml-cpp
                 tt_fabric
         )
+        if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
+            target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        endif()
         target_include_directories(
             ${TEST_TARGET}
             BEFORE
@@ -92,7 +95,5 @@ foreach(arch ${ARCHITECTURES})
         list(APPEND PERF_MICROBENCH_TEST_TARGETS ${TEST_TARGET})
     endforeach()
 endforeach()
-
-target_link_libraries(test_pgm_dispatch PRIVATE benchmark::benchmark)
 
 add_custom_target(metal_perf_microbenchmark_tests DEPENDS ${PERF_MICROBENCH_TEST_TARGETS})
