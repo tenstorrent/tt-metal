@@ -454,7 +454,7 @@ std::string to_string(
             layout);
     }
 
-    if (is_tensor_on_device_or_multidevice(tensor)) {
+    if (is_tensor_on_device(tensor)) {
         return to_string<T>(tensor.cpu(), dtype, layout);
     }
 
@@ -471,14 +471,26 @@ std::string to_string(
     return std::visit(
         [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                const auto buffer = owned_buffer::get_as<T>(storage.buffer);
+            if constexpr (std::is_same_v<StorageType, OwnedStorage> || std::is_same_v<StorageType, BorrowedStorage>) {
+                if (tensor.get_layout() != Layout::ROW_MAJOR) {
+                    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+                        return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
+                    }
+                    return to_string<T>(
+                        ttnn::to_layout(
+                            tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
+                        dtype,
+                        layout);
+                }
+
                 const auto strides = tensor.get_tensor_spec().compute_strides();
-                return detail::to_string(buffer, shape, strides, dtype, layout);
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
-                const auto strides = tensor.get_tensor_spec().compute_strides();
-                return detail::to_string(buffer, shape, strides, dtype, layout);
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    const auto buffer = owned_buffer::get_as<T>(storage.buffer);
+                    return detail::to_string(buffer, shape, strides, dtype, layout);
+                } else {
+                    const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
+                    return detail::to_string(buffer, shape, strides, dtype, layout);
+                }
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
