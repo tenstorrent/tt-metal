@@ -1,10 +1,10 @@
 from infra.data_collection.github.utils import (
-    get_github_benchmark_environment_csv_filenames,
-    create_csv_for_github_benchmark_environment,
+    get_github_partial_benchmark_json_filenames,
+    create_json_with_github_benchmark_environment,
 )
 
 if __name__ == "__main__":
-    github_benchmark_environment_csv_filenames = get_github_benchmark_environment_csv_filenames()
+    github_partial_benchmark_json_filenames = get_github_partial_benchmark_json_filenames()
 
-    for csv_filename in github_benchmark_environment_csv_filenames:
-        create_csv_for_github_benchmark_environment(csv_filename)
+    for json_filename in github_partial_benchmark_json_filenames:
+        create_json_with_github_benchmark_environment(json_filename)

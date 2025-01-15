@@ -7,26 +7,13 @@ import csv
 import pathlib
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Union
 
 from loguru import logger
 
 from infra.data_collection.models import InfraErrorV1
-
-BENCHMARK_ENVIRONMENT_CSV_FIELDS = (
-    "git_repo_name",
-    "git_commit_hash",
-    "git_commit_ts",
-    "git_branch_name",
-    "github_pipeline_id",
-    "github_pipeline_link",
-    "github_job_id",
-    "user_name",
-    "docker_image",
-    "device_hostname",
-    "device_ip",
-    "device_info",
-)
+from models.perf.benchmarking_utils import CompleteBenchmarkRun
 
 
 def assert_all_fieldnames_exist(fieldnames, row):
@@ -264,7 +251,7 @@ def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
     return list(map(get_job_row_from_github_job, github_jobs_json["jobs"]))
 
 
-def get_github_benchmark_environment_csv_filenames():
+def get_github_partial_benchmark_json_filenames():
     logger.info("We are assuming generated/benchmark_data exists from previous passing test")
 
     current_utils_path = pathlib.Path(__file__)
@@ -272,21 +259,15 @@ def get_github_benchmark_environment_csv_filenames():
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
-    measurement_csv_paths = list(benchmark_data_dir.glob("measurement_*.csv"))
+    benchmark_json_paths = list(benchmark_data_dir.glob("partial_run_*.json"))
     assert len(
-        measurement_csv_paths
-    ), f"There needs to be at least one measurement csv since we're making an environment CSV for each one"
-    timestamp_strs = list(
-        map(
-            lambda csv_path_: str(csv_path_.name).replace("measurement_", "").replace(".csv", ""), measurement_csv_paths
-        )
-    )
+        benchmark_json_paths
+    ), f"There needs to be at least one benchmark data json since we're completing the environment data for each one"
 
-    csv_filenames = list(
-        map(lambda timestamp_str_: str(benchmark_data_dir / f"environment_{timestamp_str_}.csv"), timestamp_strs)
+    logger.info(
+        f"The following partial benchmark data JSONs should be completed with environment data: {benchmark_json_paths}"
     )
-    logger.info(f"The following environment CSVs should be created: {csv_filenames}")
-    return csv_filenames
+    return benchmark_json_paths
 
 
 def get_github_runner_environment():
@@ -298,7 +279,7 @@ def get_github_runner_environment():
     }
 
 
-def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv_filename):
+def create_json_with_github_benchmark_environment(github_partial_benchmark_json_filename):
     assert "GITHUB_REPOSITORY" in os.environ
     git_repo_name = os.environ["GITHUB_REPOSITORY"]
 
@@ -345,19 +326,26 @@ def create_csv_for_github_benchmark_environment(github_benchmark_environment_csv
         }
     )
 
-    benchmark_environment_row = {
-        "git_repo_name": git_repo_name,
-        "git_commit_hash": git_commit_hash,
-        "git_commit_ts": git_commit_ts,
-        "git_branch_name": git_branch_name,
-        "github_pipeline_id": github_pipeline_id,
-        "github_pipeline_link": github_pipeline_link,
-        "github_job_id": github_job_id,
-        "user_name": user_name,
-        "docker_image": docker_image,
-        "device_hostname": device_hostname,
-        "device_ip": device_ip,
-        "device_info": device_info,
-    }
+    with open(github_partial_benchmark_json_filename, "r") as f:
+        partial_benchmark_data = json.load(f)
 
-    create_csv(github_benchmark_environment_csv_filename, BENCHMARK_ENVIRONMENT_CSV_FIELDS, [benchmark_environment_row])
+    partial_benchmark_data["git_repo_name"] = git_repo_name
+    partial_benchmark_data["git_commit_hash"] = git_commit_hash
+    partial_benchmark_data["git_commit_ts"] = git_commit_ts
+    partial_benchmark_data["git_branch_name"] = git_branch_name
+    partial_benchmark_data["github_pipeline_id"] = github_pipeline_id
+    partial_benchmark_data["github_pipeline_link"] = github_pipeline_link
+    partial_benchmark_data["github_job_id"] = github_job_id
+    partial_benchmark_data["user_name"] = user_name
+    partial_benchmark_data["docker_image"] = docker_image
+    partial_benchmark_data["device_hostname"] = device_hostname
+    partial_benchmark_data["device_ip"] = device_ip
+    partial_benchmark_data["device_info"] = device_info
+
+    complete_benchmark_run = CompleteBenchmarkRun(**partial_benchmark_data)
+
+    json_data = complete_benchmark_run.model_dump_json()
+
+    output_path = Path(str(github_partial_benchmark_json_filename).replace("partial_run_", "complete_run_"))
+    with open(output_path, "w") as f:
+        f.write(json_data)
