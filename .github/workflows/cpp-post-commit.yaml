@@ -84,6 +84,8 @@ jobs:
         with:
           arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
+        #GH Issue 16167
+        if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
