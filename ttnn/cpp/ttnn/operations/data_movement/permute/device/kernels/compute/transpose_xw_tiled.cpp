@@ -22,51 +22,60 @@ void dprint_array(const uint32_t* arr, const char* name) {
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t N = get_compile_time_arg_val(0);
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(1);
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(2);
+    constexpr uint32_t H = get_compile_time_arg_val(3);
+
     uint32_t start_block = get_arg_val<uint32_t>(0);
     uint32_t end_block = get_arg_val<uint32_t>(1);
-    uint32_t input_shape[N], dims[N];
-    for (uint32_t i = 0; i < N; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(i + 2);
-        dims[i] = get_arg_val<uint32_t>(i + N + 2);
-    }
 
-    constexpr uint32_t TILE_HEIGHT = 32;
-    constexpr uint32_t TILE_WIDTH = 32;
+    UNPACK(DPRINT << "N: " << N << ENDL());
+    UNPACK(DPRINT << "start_block: " << start_block << ENDL());
+    UNPACK(DPRINT << "end_block: " << end_block << ENDL());
+    UNPACK(DPRINT << "x_blocks: " << x_blocks << ENDL());
+    UNPACK(DPRINT << "w_blocks: " << w_blocks << ENDL());
+    UNPACK(DPRINT << "H: " << H << ENDL());
 
-    uint32_t x_dim = dims[N - 1];
-    uint32_t x = input_shape[x_dim];
-    uint32_t w = input_shape[N - 1];
+    // uint32_t input_shape[N], dims[N];
+    // for (uint32_t i = 0; i < N; i++) {
+    //     input_shape[i] = get_arg_val<uint32_t>(i + 2);
+    //     dims[i] = get_arg_val<uint32_t>(i + N + 2);
+    // }
 
-    uint32_t X_p = TILE_HEIGHT * ((x + TILE_HEIGHT - 1) / TILE_HEIGHT);
-    uint32_t W_p = TILE_WIDTH * ((w + TILE_WIDTH - 1) / TILE_WIDTH);
+    // constexpr uint32_t TILE_HEIGHT = 32;
+    // constexpr uint32_t TILE_WIDTH = 32;
 
-    uint32_t padded_xw_volume = X_p * W_p;
-    for (uint32_t i = 0; i < N - 1; i++) {
-        if (i == x_dim) {
-            continue;
-        }
-        padded_xw_volume *= input_shape[i];
-    }
+    // uint32_t x_dim = dims[N - 1];
+    // uint32_t x = input_shape[x_dim];
+    // uint32_t w = input_shape[N - 1];
 
-    uint32_t xw_blocks = padded_xw_volume / (TILE_HEIGHT * TILE_WIDTH);
-    end_block = xw_blocks;
+    // uint32_t X_p = TILE_HEIGHT * ((x + TILE_HEIGHT - 1) / TILE_HEIGHT);
+    // uint32_t W_p = TILE_WIDTH * ((w + TILE_WIDTH - 1) / TILE_WIDTH);
 
-    constexpr uint32_t x_block_size = TILE_HEIGHT;
-    constexpr uint32_t w_block_size = TILE_WIDTH;
+    // uint32_t padded_xw_volume = X_p * W_p;
+    // for (uint32_t i = 0; i < N - 1; i++) {
+    //     if (i == x_dim) {
+    //         continue;
+    //     }
+    //     padded_xw_volume *= input_shape[i];
+    // }
 
-    uint32_t w_blocks = W_p / w_block_size;
-    uint32_t x_blocks = X_p / x_block_size;
+    // uint32_t xw_blocks = padded_xw_volume / (TILE_HEIGHT * TILE_WIDTH);
+    // end_block = xw_blocks;
+
+    // constexpr uint32_t x_block_size = TILE_HEIGHT;
+    // constexpr uint32_t w_block_size = TILE_WIDTH;
+
+    // uint32_t w_blocks = W_p / w_block_size;
+    // uint32_t x_blocks = X_p / x_block_size;
 
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_tilize = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
     // unary_op_init_common(cb_in, cb_out);
-    UNPACK(DPRINT << "N: " << N << ENDL());
-    UNPACK(DPRINT << "start_block: " << start_block << ENDL());
-    UNPACK(DPRINT << "end_block: " << end_block << ENDL());
-    UNPACK(dprint_array<N>(input_shape, "input_shape"));
-    UNPACK(dprint_array<N>(dims, "dims"));
+    // UNPACK(dprint_array<N>(input_shape, "input_shape"));
+    // UNPACK(dprint_array<N>(dims, "dims"));
 
     for (uint32_t block = start_block; block < end_block; block++) {
         // Decompose block into w_block, x_block, and xw_block indices
@@ -77,7 +86,7 @@ void MAIN {
         uint32_t x_block = rem % x_blocks;  // Which X block?
         rem /= x_blocks;
 
-        uint32_t h = rem % input_shape[N - 2];
+        uint32_t h = rem % H;
         UNPACK(DPRINT << "h: " << h << ENDL());
         // tilize input via unpack and then pack
         // tilize_init_short(cb_in, 1, cb_tilize);
