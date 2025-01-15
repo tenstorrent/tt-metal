@@ -7,6 +7,7 @@
 
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"
+#include "umd/device/tt_simulation_device.h"
 
 #include <string>
 
@@ -41,7 +42,8 @@ inline std::string get_env_arch_name() {
 inline std::string get_umd_arch_name() {
 
     if(std::getenv("TT_METAL_SIMULATOR")) {
-        return get_env_arch_name();
+        tt_SimulationDeviceInit init(std::getenv("TT_METAL_SIMULATOR"));
+        return tt::arch_to_str(init.get_arch_name());
     }
 
     auto cluster_desc = tt_ClusterDescriptor::create();

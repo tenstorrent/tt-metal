@@ -10,6 +10,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "umd/device/pci_device.hpp"
 #include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_simulation_device.h"
 
 namespace tt::tt_metal {
 
@@ -53,9 +54,8 @@ namespace tt::tt_metal {
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
     if (std::getenv("TT_METAL_SIMULATOR")) {
-        auto arch_env = std::getenv("ARCH_NAME");
-        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
-        arch = tt::get_arch_from_string(arch_env);
+        tt_SimulationDeviceInit init(std::getenv("TT_METAL_SIMULATOR"));
+        arch = init.get_arch_name();
     } else {
         // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
         // This map holds PCI info for each mmio chip.

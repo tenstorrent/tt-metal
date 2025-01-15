@@ -22,6 +22,8 @@ Hal::Hal() : arch_(get_platform_architecture()) {
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
+        case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
+
         case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }
 }
