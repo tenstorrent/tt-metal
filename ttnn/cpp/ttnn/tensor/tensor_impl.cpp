@@ -458,16 +458,6 @@ std::string to_string(
         return to_string<T>(tensor.cpu(), dtype, layout);
     }
 
-    if (tensor.get_layout() != Layout::ROW_MAJOR) {
-        if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
-            return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
-        }
-        return to_string<T>(
-            ttnn::to_layout(tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
-            dtype,
-            layout);
-    }
-
     return std::visit(
         [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
