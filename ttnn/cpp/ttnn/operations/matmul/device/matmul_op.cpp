@@ -2109,95 +2109,52 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> single_device_global_cb =
+                    std::nullopt;
+                std::optional<ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_deivce_global_cb =
+                    std::nullopt;
                 if (this->global_cb.has_value()) {
-                    return std::visit(
-                        [&](const auto& global_cb) -> operation::ProgramWithCallbacks {
+                    std::visit(
+                        [&](auto&& global_cb) {
                             using GlobalCBType = std::decay_t<decltype(global_cb)>;
                             if constexpr (std::is_same_v<
                                               GlobalCBType,
                                               tt::tt_metal::v1::experimental::GlobalCircularBuffer>) {
-                                return matmul_multi_core_reuse_mcast_1d_optimized(
-                                    input_tensor_a,
-                                    input_tensor_b,
-                                    bias,
-                                    output_tensor,
-                                    broadcast_batch,
-                                    program_config.compute_with_storage_grid_size,
-                                    this->compute_kernel_config.value(),
-                                    program_config.in0_block_w,
-                                    program_config.out_subblock_h,
-                                    program_config.out_subblock_w,
-                                    program_config.out_block_h,
-                                    program_config.out_block_w,
-                                    program_config.per_core_M,
-                                    program_config.per_core_N,
-                                    program_config.fuse_batch,
-                                    program_config.fused_activation,
-                                    program_config.mcast_in0,
-                                    program_config.gather_in0,
-                                    program_config.hop_cores,
-                                    this->untilize_out,
-                                    global_cb,
-                                    std::nullopt,
-                                    program_config.num_global_cb_receivers);
-                            } else if (std::is_same_v<
-                                           GlobalCBType,
-                                           ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
-                                return matmul_multi_core_reuse_mcast_1d_optimized(
-                                    input_tensor_a,
-                                    input_tensor_b,
-                                    bias,
-                                    output_tensor,
-                                    broadcast_batch,
-                                    program_config.compute_with_storage_grid_size,
-                                    this->compute_kernel_config.value(),
-                                    program_config.in0_block_w,
-                                    program_config.out_subblock_h,
-                                    program_config.out_subblock_w,
-                                    program_config.out_block_h,
-                                    program_config.out_block_w,
-                                    program_config.per_core_M,
-                                    program_config.per_core_N,
-                                    program_config.fuse_batch,
-                                    program_config.fused_activation,
-                                    program_config.mcast_in0,
-                                    program_config.gather_in0,
-                                    program_config.hop_cores,
-                                    this->untilize_out,
-                                    std::nullopt,
-                                    global_cb,
-                                    program_config.num_global_cb_receivers);
+                                single_device_global_cb = global_cb;
+                            } else if constexpr (std::is_same_v<
+                                                     GlobalCBType,
+                                                     ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
+                                multi_deivce_global_cb = global_cb;
                             } else {
-                                TT_THROW("Global circular buffer must either be single device or multi-device type");
+                                TT_THROW("Global circular buffer must be single-device or multi-device type");
                             }
                         },
                         *this->global_cb);
-                } else {
-                    return matmul_multi_core_reuse_mcast_1d_optimized(
-                        input_tensor_a,
-                        input_tensor_b,
-                        bias,
-                        output_tensor,
-                        broadcast_batch,
-                        program_config.compute_with_storage_grid_size,
-                        this->compute_kernel_config.value(),
-                        program_config.in0_block_w,
-                        program_config.out_subblock_h,
-                        program_config.out_subblock_w,
-                        program_config.out_block_h,
-                        program_config.out_block_w,
-                        program_config.per_core_M,
-                        program_config.per_core_N,
-                        program_config.fuse_batch,
-                        program_config.fused_activation,
-                        program_config.mcast_in0,
-                        program_config.gather_in0,
-                        program_config.hop_cores,
-                        this->untilize_out,
-                        std::nullopt,
-                        std::nullopt,
-                        program_config.num_global_cb_receivers);
                 }
+                return matmul_multi_core_reuse_mcast_1d_optimized(
+                    input_tensor_a,
+                    input_tensor_b,
+                    bias,
+                    output_tensor,
+                    broadcast_batch,
+                    program_config.compute_with_storage_grid_size,
+                    this->compute_kernel_config.value(),
+                    program_config.in0_block_w,
+                    program_config.out_subblock_h,
+                    program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
+                    program_config.per_core_M,
+                    program_config.per_core_N,
+                    program_config.fuse_batch,
+                    program_config.fused_activation,
+                    program_config.mcast_in0,
+                    program_config.gather_in0,
+                    program_config.hop_cores,
+                    this->untilize_out,
+                    single_device_global_cb,
+                    multi_deivce_global_cb,
+                    program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {

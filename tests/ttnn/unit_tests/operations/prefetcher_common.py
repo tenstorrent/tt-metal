@@ -25,9 +25,9 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
 
 def get_buffer_address(tensor):
     addr = []
-    for i, ten in enumerate(ttnn.get_device_tensors(tensor)):
-        addr.append(ten.buffer_address())
-        if len(addr) > 0:
+    for i, tensor_per_device in enumerate(ttnn.get_device_tensors(tensor)):
+        addr.append(tensor_per_device.buffer_address())
+        if len(addr) > 1:
             assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
     return addr[0]
 
