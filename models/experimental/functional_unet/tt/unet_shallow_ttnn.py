@@ -77,6 +77,13 @@ def concatenate(inputs: List, dim=-1, groups=2):
     return ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=groups)
 
 
+def is_valid_device_for_unet(device):
+    if isinstance(device, ttnn.MeshDevice):
+        return all([is_valid_device_for_unet(d) for d in device.get_devices()])
+    else:
+        return 8 == device.core_grid.x and 8 == device.core_grid.y
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -91,6 +98,8 @@ class UNetConv2D:
         reshard_if_not_optimal=False,
         mesh_mapper=None,
     ):
+        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+
         self.device = device
         self.batch_size = conv.batch_size
         self.input_height = conv.input_height
@@ -473,7 +482,6 @@ class UNet:
         ttnn.deallocate(c4_residual)
         x = self.upblock2(x, c3_residual)
         ttnn.deallocate(c3_residual)
-        c2_residual = ttnn.to_memory_config(c2_residual, ttnn.L1_MEMORY_CONFIG)
         x = self.upblock3(x, c2_residual)
         ttnn.deallocate(c2_residual)
         x = self.upblock4(x, c1_residual)
