@@ -14,7 +14,7 @@ namespace tt::tt_metal::experimental::hal {
  *
  * @return Name
  */
-std::string get_arch();
+std::string get_arch_name();
 
 /**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific L1 Size
