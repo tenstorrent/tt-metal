@@ -39,7 +39,6 @@ jobs:
       matrix:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
         # The full 22.04 flow can be tested without precompiled
-        arch: [any]
         os: [ubuntu-20.04]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
@@ -68,14 +67,12 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      arch: '["any"]'
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '["any"]'
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
