@@ -8,6 +8,7 @@
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
@@ -359,25 +360,25 @@ constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strle
 static constexpr auto TAB = "    ";
 static constexpr auto TAB_MINUS_1 = "   ";
 
-template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
+template <typename BufferType>
 void to_string_row_major(
     std::stringstream& ss,
     const BufferType& buffer,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
+    const tt::tt_metal::Strides& strides,
     std::size_t outer_index,
-    const std::size_t buffer_offset) {
-    auto stride = 1;
-    for (auto index = Dim + 1; index < shape.rank(); index++) {
-        stride *= shape[index];
-    }
+    const std::size_t buffer_offset,
+    int64_t rank,
+    int64_t dim = 0) {
+    auto stride = strides[dim];
 
-    std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + Dim, ' ');
+    std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
     std::string before;
     std::string after;
-    if constexpr (Rank == 1) {
+    if (rank == 1) {
         before = " ";
         after = " ";
-    } else if constexpr (Rank == 2) {
+    } else if (rank == 2) {
         before = spaces + " ";
         after = "\n";
     } else {
@@ -385,81 +386,49 @@ void to_string_row_major(
         after = "\n\n";
     }
 
-    if (Dim > 0 and outer_index > 0) {
+    if (dim > 0 and outer_index > 0) {
         ss << spaces;
     }
     ss << "[";
-    auto dimension_shortener = get_dimension_shortener(shape[-Rank]);
+    auto dimension_shortener = get_dimension_shortener(shape[-rank]);
     for (std::size_t index = 0;
          dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
              ss, index, before, after);
          index++) {
         std::string after_comma;
-        if constexpr (Rank == 1) {
+        if (rank == 1) {
             after_comma = " ";
-        } else if constexpr (Rank == 2) {
+        } else if (rank == 2) {
             after_comma = "\n";
         } else {
             after_comma = after;
         }
 
-        if constexpr (Rank > 1) {
-            to_string_row_major<BufferType, Rank - 1, Dim + 1>(
-                ss, buffer, shape, index, buffer_offset + index * stride);
+        if (rank > 1) {
+            to_string_row_major<BufferType>(
+                ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1);
         } else {
             print_datum(ss, buffer[buffer_offset + index]);
         }
-        print_trailing_comma(ss, index, shape[-Rank], after_comma);
+        print_trailing_comma(ss, index, shape[-rank], after_comma);
     }
     ss << "]";
 }
 
-template <typename BufferType, std::int64_t Rank, std::int64_t Dim = 0>
-void to_string_tile(
-    std::stringstream& ss,
-    const BufferType& buffer,
-    const tt::tt_metal::LegacyShape& shape,
-    std::size_t outer_index,
-    const std::size_t buffer_offset) {
-    // For now, print it the same way as row-major
-    return to_string_row_major<BufferType, Rank, Dim>(ss, buffer, shape, outer_index, buffer_offset);
-}
-
 template <typename BufferType>
-std::string to_string(const BufferType& buffer, const tt::tt_metal::LegacyShape& shape, DataType dtype, Layout layout) {
+std::string to_string(
+    const BufferType& buffer,
+    const ttnn::SimpleShape& shape,
+    const tt::tt_metal::Strides& strides,
+    DataType dtype,
+    Layout layout) {
     std::stringstream ss;
     ss << TENSOR_TYPE_STRING << "(";
 
     if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
         ss << "...";
-    } else if (layout == Layout::ROW_MAJOR) {
-        switch (shape.rank()) {
-            case 0: to_string_row_major<BufferType, 0>(ss, buffer, shape, 0, 0); break;
-            case 1: to_string_row_major<BufferType, 1>(ss, buffer, shape, 0, 0); break;
-            case 2: to_string_row_major<BufferType, 2>(ss, buffer, shape, 0, 0); break;
-            case 3: to_string_row_major<BufferType, 3>(ss, buffer, shape, 0, 0); break;
-            case 4: to_string_row_major<BufferType, 4>(ss, buffer, shape, 0, 0); break;
-            case 5: to_string_row_major<BufferType, 5>(ss, buffer, shape, 0, 0); break;
-            case 6: to_string_row_major<BufferType, 6>(ss, buffer, shape, 0, 0); break;
-            case 7: to_string_row_major<BufferType, 7>(ss, buffer, shape, 0, 0); break;
-            case 8: to_string_row_major<BufferType, 8>(ss, buffer, shape, 0, 0); break;
-            default: TT_THROW("Unsupported Rank for printing tensor with ROW_MAJOR_LAYOUT!"); break;
-        }
-    } else if (layout == Layout::TILE) {
-        switch (shape.rank()) {
-            case 0: print_datum(ss, buffer[0]); break;
-            case 1: ss << "Unsupported Rank (1) for printing tensor with TILE_LAYOUT!";
-            case 2: to_string_tile<BufferType, 2>(ss, buffer, shape, 0, 0); break;
-            case 3: to_string_tile<BufferType, 3>(ss, buffer, shape, 0, 0); break;
-            case 4: to_string_tile<BufferType, 4>(ss, buffer, shape, 0, 0); break;
-            case 5: to_string_tile<BufferType, 5>(ss, buffer, shape, 0, 0); break;
-            case 6: to_string_tile<BufferType, 6>(ss, buffer, shape, 0, 0); break;
-            case 7: to_string_tile<BufferType, 7>(ss, buffer, shape, 0, 0); break;
-            case 8: to_string_tile<BufferType, 8>(ss, buffer, shape, 0, 0); break;
-            default: TT_THROW("Unsupported Rank for printing tensor with TILE_LAYOUT!"); break;
-        }
     } else {
-        TT_THROW("Unsupported Layout for printing tensor!");
+        to_string_row_major<BufferType>(ss, buffer, shape, strides, 0, 0, shape.rank());
     }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
@@ -469,11 +438,12 @@ std::string to_string(const BufferType& buffer, const tt::tt_metal::LegacyShape&
 }  // namespace detail
 
 template <typename T>
-std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype) {
+std::string to_string(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
     const auto tile = tensor.get_tensor_spec().tile();
-    const auto shape = tensor.get_legacy_shape();
+    const auto shape = tensor.get_logical_shape();
     const auto dtype = original_dtype.value_or(tensor.get_dtype());
-    const auto layout = tensor.get_layout();
+    const auto layout = original_layout.value_or(tensor.get_layout());
 
     if (not tensor.is_allocated()) {
         return fmt::format(
@@ -485,47 +455,32 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
     }
 
     if (is_tensor_on_device(tensor)) {
-        return to_string<T>(tensor.cpu());
+        return to_string<T>(tensor.cpu(), dtype, layout);
     }
 
     return std::visit(
         [&](auto&& storage) -> std::string {
             using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                if (dtype == DataType::BFLOAT8_B and original_dtype == std::nullopt) {
-                    // Convert to FLOAT32 tensor before printing
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data = unpack_bfp8_tiles_into_float_vec(
-                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(
-                        OwnedStorage{input_float_buffer},
-                        tensor.get_legacy_shape(),
-                        DataType::FLOAT32,
-                        tensor.get_layout(),
-                        tile);
-                    return to_string<float>(float_tensor, tensor.get_dtype());
+            if constexpr (std::is_same_v<StorageType, OwnedStorage> || std::is_same_v<StorageType, BorrowedStorage>) {
+                if (tensor.get_layout() != Layout::ROW_MAJOR) {
+                    if (tensor.get_dtype() == DataType::BFLOAT8_B || tensor.get_dtype() == DataType::BFLOAT4_B) {
+                        return to_string<float>(ttnn::to_dtype(tensor, DataType::FLOAT32), dtype, layout);
+                    }
+                    return to_string<T>(
+                        ttnn::to_layout(
+                            tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, static_cast<IDevice*>(nullptr)),
+                        dtype,
+                        layout);
                 }
 
-                if (dtype == DataType::BFLOAT4_B and original_dtype == std::nullopt) {
-                    // Convert to FLOAT32 tensor before printing
-                    auto input_packed_data = owned_buffer::get_as<uint32_t>(tensor).get();
-                    auto input_float_data = unpack_bfp4_tiles_into_float_vec(
-                        input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-                    auto float_tensor = Tensor(
-                        OwnedStorage{input_float_buffer},
-                        tensor.get_legacy_shape(),
-                        DataType::FLOAT32,
-                        tensor.get_layout(),
-                        tile);
-                    return to_string<float>(float_tensor, tensor.get_dtype());
+                const auto strides = tensor.get_tensor_spec().compute_strides();
+                if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                    const auto buffer = owned_buffer::get_as<T>(storage.buffer);
+                    return detail::to_string(buffer, shape, strides, dtype, layout);
+                } else {
+                    const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
+                    return detail::to_string(buffer, shape, strides, dtype, layout);
                 }
-                const auto buffer = owned_buffer::get_as<T>(storage.buffer);
-                return detail::to_string(buffer, shape, dtype, layout);
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                const auto buffer = borrowed_buffer::get_as<T>(storage.buffer);
-                return detail::to_string(buffer, shape, dtype, layout);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Cannot print a device tensor!");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
@@ -549,20 +504,28 @@ std::string to_string(const Tensor& tensor, std::optional<DataType> original_dty
         tensor.get_storage());
 }
 
-template std::string to_string<bfloat16>(const Tensor& tensor, std::optional<DataType> original_dtype);
-template std::string to_string<float>(const Tensor& tensor, std::optional<DataType> original_dtype);
-template std::string to_string<int32_t>(const Tensor& tensor, std::optional<DataType> original_dtype);
-template std::string to_string<uint32_t>(const Tensor& tensor, std::optional<DataType> original_dtype);
-template std::string to_string<uint16_t>(const Tensor& tensor, std::optional<DataType> original_dtype);
-template std::string to_string<uint8_t>(const Tensor& tensor, std::optional<DataType> original_dtype);
+template std::string to_string<bfloat16>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<float>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<int32_t>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<uint32_t>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<uint16_t>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
+template std::string to_string<uint8_t>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout);
 
 template <>
-std::string to_string<bfloat8_b>(const Tensor& tensor, std::optional<DataType> original_dtype) {
+std::string to_string<bfloat8_b>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
     return to_string<uint32_t>(tensor, original_dtype);
 }
 
 template <>
-std::string to_string<bfloat4_b>(const Tensor& tensor, std::optional<DataType> original_dtype) {
+std::string to_string<bfloat4_b>(
+    const Tensor& tensor, std::optional<DataType> original_dtype, std::optional<Layout> original_layout) {
     return to_string<uint32_t>(tensor, original_dtype);
 }
 

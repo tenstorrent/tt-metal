@@ -13,13 +13,13 @@
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/tt_stl/overloaded.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
@@ -618,8 +618,8 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
     }();
 
     if (legacy_output) {
-        auto shape = tt_tensor.get_legacy_shape();
-        torch_shape = std::vector<std::uint32_t>(std::begin(shape), std::end(shape));
+        auto shape = tt_tensor.get_padded_shape();
+        torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
     tensor = tensor.attr("reshape")(torch_shape);
     tensor = tensor.attr("contiguous")();
