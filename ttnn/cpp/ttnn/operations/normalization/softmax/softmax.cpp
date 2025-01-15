@@ -24,6 +24,17 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     if (dim < 0) {
         dim = rank + dim;
     }
+    if (rank > 4) {
+        auto output_tensor = ttnn::prim::moreh_softmax(
+            input_tensor,
+            dim,
+            std::nullopt,
+            MorehSoftmaxOp::SOFTMAX,
+            MorehSoftmaxOpParallelizationStrategy::NONE,
+            memory_config.value_or(input_tensor.memory_config()),
+            compute_kernel_config);
+        return ttnn::reshape(output_tensor, input_shape);
+    }
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     if (dim == rank - 1) {
