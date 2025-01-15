@@ -24,7 +24,7 @@ void ModuleBase::override_tensor(const TensorPtr& tensor_ptr, const std::string&
     if (auto it = m_named_tensors.find(name); it != m_named_tensors.end()) {
         it->second = tensor_ptr;
     } else {
-        throw std::logic_error("Tensor with such name does not exist");
+        throw std::logic_error(fmt::format("Tensor with such name does not exist. Name {}", name));
     }
 }
 
@@ -32,7 +32,7 @@ void ModuleBase::override_module(const ModuleBasePtr& module_ptr, const std::str
     if (auto it = m_named_modules.find(name); it != m_named_modules.end()) {
         it->second = module_ptr;
     } else {
-        throw std::logic_error("Module with such name does not exist");
+        throw std::logic_error(fmt::format("Module with such name does not exist. Name {}", name));
     }
 }
 

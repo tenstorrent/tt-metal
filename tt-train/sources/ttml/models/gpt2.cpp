@@ -84,6 +84,7 @@ Transformer::Transformer(const TransformerConfig& config) {
         position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
+    fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -132,7 +133,7 @@ Transformer::Transformer(const TransformerConfig& config) {
 
     if (config.weight_tying == WeightTyingType::Enabled) {
         // tie weights between embedding and fc
-        fc->set_weight(tok_emb->get_weight());
+        tok_emb->set_weight(fc->get_weight());
     }
 }
 
