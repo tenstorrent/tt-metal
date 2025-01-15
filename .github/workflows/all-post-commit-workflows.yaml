@@ -43,7 +43,6 @@ jobs:
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: true
     secrets: inherit
   test-wheels:
