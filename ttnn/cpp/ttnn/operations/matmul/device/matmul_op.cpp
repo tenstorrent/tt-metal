@@ -2109,27 +2109,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> single_device_global_cb =
-                    std::nullopt;
-                std::optional<ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer> multi_deivce_global_cb =
-                    std::nullopt;
+                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
                 if (this->global_cb.has_value()) {
-                    std::visit(
-                        [&](auto&& global_cb) {
-                            using GlobalCBType = std::decay_t<decltype(global_cb)>;
-                            if constexpr (std::is_same_v<
-                                              GlobalCBType,
-                                              tt::tt_metal::v1::experimental::GlobalCircularBuffer>) {
-                                single_device_global_cb = global_cb;
-                            } else if constexpr (std::is_same_v<
-                                                     GlobalCBType,
-                                                     ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
-                                multi_deivce_global_cb = global_cb;
-                            } else {
-                                TT_THROW("Global circular buffer must be single-device or multi-device type");
-                            }
-                        },
-                        *this->global_cb);
+                    global_cb = get_global_circular_buffer(*this->global_cb, input_tensor_a.device()->id());
                 }
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
@@ -2152,8 +2134,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.gather_in0,
                     program_config.hop_cores,
                     this->untilize_out,
-                    single_device_global_cb,
-                    multi_deivce_global_cb,
+                    global_cb,
                     program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

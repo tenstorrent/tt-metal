@@ -209,6 +209,8 @@ def run_prefetcher_mm(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
+    mesh_mapper = ReplicateTensorToMesh(device) if is_mesh_device else None
+
     pt_tensors = []
     for l in range(num_layers):
         for t in range(num_tensors):
@@ -233,16 +235,13 @@ def run_prefetcher_mm(
             dtype=dtypes[tid % num_tensors],
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=mesh_mapper,
         )
         tt_tensors_all.append(tt_tensor)
     tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    if is_mesh_device:
-        tensor_addrs = torch.tensor([get_buffer_address(x) for x in tt_tensors_all])
-    else:
-        tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
+    tensor_addrs = torch.tensor([get_buffer_address(x) for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -258,7 +257,7 @@ def run_prefetcher_mm(
         device=device,
         dtype=ttnn.uint32,
         memory_config=tensor_addrs_mem_config,
-        mesh_mapper=ReplicateTensorToMesh(device) if is_mesh_device else None,
+        mesh_mapper=mesh_mapper,
     )
     tt_tensors.append(tt_tensor_addrs)
 
@@ -378,7 +377,7 @@ def run_prefetcher_mm(
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=in0_sharded_mem_config,
-            mesh_mapper=ReplicateTensorToMesh(device) if is_mesh_device else None,
+            mesh_mapper=mesh_mapper,
         )
         in0_t_tensors.append(in0_t)
 
