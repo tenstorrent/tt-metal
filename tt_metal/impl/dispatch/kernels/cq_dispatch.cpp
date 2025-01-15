@@ -874,10 +874,16 @@ static void process_wait() {
     uint32_t heartbeat = 0;
     if (wait) {
         DPRINT << " DISPATCH WAIT " << HEX() << addr << DEC() << " count " << count << ENDL();
-        do {
+        invalidate_l1_cache();
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+        while (!wrap_ge(*sem_addr, count)) {
             invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        } while (!wrap_ge(*sem_addr, count));
+            asm("nop");
+            asm("nop");
+            asm("nop");
+            asm("nop");
+        }
     }
     WAYPOINT("PWD");
 
@@ -917,6 +923,10 @@ void process_go_signal_mcast_cmd() {
 
     while (*worker_sem_addr < cmd->mcast.wait_count) {
         invalidate_l1_cache();
+        asm("nop");
+        asm("nop");
+        asm("nop");
+        asm("nop");
     }
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here

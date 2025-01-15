@@ -13,6 +13,10 @@
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
+
+const uint8_t thread_id = COMPILE_FOR_TRISC;
+const uint8_t done_value = 1 << thread_id;
+
 namespace NAMESPACE {
 void MAIN {
 #endif
@@ -49,6 +53,8 @@ void MAIN {
 #if defined(TRISC0) or defined(TRISC1) or defined(TRISC2)
 #define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
+    if (a == b)
+        increment_stream_register(STREAM_CHANNEL, -done_value);
     volatile tt_l1_ptr uint8_t * const trisc_run = &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
     *trisc_run = RUN_SYNC_MSG_DONE;
 #endif
