@@ -10,11 +10,12 @@
 
 #include "tt_metal/impl/device/program_cache.hpp"
 #include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_metal/graph/graph_tracking.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
 
