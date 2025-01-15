@@ -14,6 +14,7 @@
 #include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
 #include "tt_metal/host_api.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "tt_metal/impl/trace/trace.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
@@ -614,6 +615,11 @@ void device_module(py::module& m_device) {
         | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+
+    m_device.def(
+        "get_arch",
+        []() -> std::string { return tt::tt_metal::experimental::hal::get_arch(); },
+        "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);
