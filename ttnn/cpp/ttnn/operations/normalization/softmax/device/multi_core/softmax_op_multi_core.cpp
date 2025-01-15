@@ -46,7 +46,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     bool mask_padded_data = false;
     uint32_t num_datum_padded = 0;
-    const auto shape_unpadded = input_tensor.get_shape();
+    const auto& shape_unpadded = input_tensor.get_logical_shape();
     uint32_t W_unpadded = shape_unpadded[-1];
     if (W > W_unpadded) {
         mask_padded_data = true;
@@ -395,7 +395,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
             bool mask_padded_data = false;
             uint32_t num_datum_padded = 0;
-            const auto shape_unpadded = input_tensors.at(0).get_shape();
+            const auto& shape_unpadded = input_tensors.at(0).get_logical_shape();
             uint32_t W_unpadded = shape_unpadded[-1];
             if (W > W_unpadded) {
                 mask_padded_data = true;

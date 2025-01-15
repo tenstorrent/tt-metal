@@ -51,22 +51,21 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Unsupported memory layout: Input tensor must be width-sharded, but it is not. (memory_layout={})",
         input_tensor.memory_config().memory_layout);
 
+    const auto& input_shape = input_tensor.get_logical_shape();
     TT_FATAL(
-        input_tensor.get_shape().rank() == 4,
-        "Invalid tensor shape: Input tensor must have rank 4. (rank={})",
-        input_tensor.get_shape().rank());
+        input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());
 
     TT_FATAL(
-        input_tensor.get_shape()[-1] % num_groups == 0,
+        input_shape[-1] % num_groups == 0,
         "Invalid channel configuration: Number of channels ({}) must be divisible by the number of groups ({}).",
-        input_tensor.get_shape()[-1],
+        input_shape[-1],
         num_groups);
 
-    const auto& ts = input_tensor.get_shape();
+    const auto nhw = input_shape[0] * input_shape[1] * input_shape[2];
     TT_FATAL(
-        (ts[0] * ts[1] * ts[2]) % ttnn::types::TILE_SIZE == 0,
+        (nhw % ttnn::types::TILE_SIZE) == 0,
         "Invalid tensor dimensions: The product of NHW dimensions ({}) must be divisible by the tile size ({}).",
-        ts[0] * ts[1] * ts[2],
+        nhw,
         ttnn::types::TILE_SIZE);
 
     const auto output_dtype = dtype.value_or(input_tensor.get_dtype());

@@ -88,9 +88,10 @@ ttnn::Tensor transpose_nd(
     const uint32_t dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
+    const auto rank = input_tensor.get_logical_shape().rank();
     ttnn::SmallVector<int64_t> permutation;
-    permutation.reserve(input_tensor.get_shape().rank());
-    for (uint32_t i = 0; i < input_tensor.get_shape().rank(); ++i) {
+    permutation.reserve(rank);
+    for (uint32_t i = 0; i < rank; ++i) {
         permutation.push_back(i);
     }
     std::swap(permutation[dim1], permutation[dim2]);
@@ -106,11 +107,12 @@ ttnn::Tensor ExecuteTranspose::invoke(
     const int64_t& dim2,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<float>& pad_value) {
-    uint32_t normalized_dim1 = input_tensor.get_shape().get_normalized_index(dim1);
-    uint32_t normalized_dim2 = input_tensor.get_shape().get_normalized_index(dim2);
+    const auto& input_shape = input_tensor.get_logical_shape();
+    uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
+    uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
 
     Tensor input_unsqueezed = input_tensor;
-    uint32_t initial_rank = input_tensor.get_logical_shape().rank();
+    uint32_t initial_rank = input_shape.rank();
     if (initial_rank < 4) {
         input_unsqueezed = ttnn::unsqueeze_to_4D(input_tensor);
         uint32_t rank_diff = 4 - initial_rank;

@@ -33,7 +33,7 @@ void validate(
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Expand: Input tensor need to be allocated in buffers on device");
     if (output.has_value()) {
         TT_FATAL(
-            output->get_shape().logical_shape() == operation_attributes.output_shape,
+            output->get_logical_shape() == operation_attributes.output_shape,
             "Expand: Output shape must match operation attributes");
         TT_FATAL(input.get_layout() == output->get_layout(), "Expand: Input and output must have same layout");
         TT_FATAL(input.get_dtype() == output->get_dtype(), "Expand: Input and output must have same dtype");

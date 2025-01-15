@@ -111,12 +111,12 @@ auto preprocess_inputs(const Tensor& input_tensor_a_arg, const Tensor& input_ten
 
     // TODO: #7731 (Remove calls to repeat )
     auto repeat_smaller = [](const auto& first, auto& second) {
-        const auto first_shape = first.get_shape();
-        const auto second_shape = second.get_shape();
+        const auto& first_shape = first.get_logical_shape();
+        const auto& second_shape = second.get_logical_shape();
         // repeats second if it is smaller
         if (first_shape.rank() == 4 and second_shape.rank() == 4 and first_shape[0] > second_shape[0]) {
             TT_FATAL(second_shape[0] == 1, "Dimension trying to broadcast is not equal to 1");
-            Shape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
+            SimpleShape repeats(std::array<uint32_t, 4>{first_shape[0], 1, 1, 1});
             second = ttnn::repeat(second, repeats);
         }
         // repeats second if it is smaller
@@ -125,7 +125,7 @@ auto preprocess_inputs(const Tensor& input_tensor_a_arg, const Tensor& input_ten
             int rank_a = first_shape.rank();
             std::vector<uint32_t> repeat_dim(rank_a, 1);
             repeat_dim[rank_a - 3] = first_shape[rank_a - 3];
-            Shape repeats(repeat_dim);
+            SimpleShape repeats(repeat_dim);
             second = ttnn::repeat(second, repeats);
         }
     };

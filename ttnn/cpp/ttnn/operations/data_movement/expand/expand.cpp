@@ -14,17 +14,17 @@
 namespace ttnn::operations::expand {
 
 auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
-    auto input_shape = input.get_shape();
+    const auto& input_shape = input.get_logical_shape();
     auto output_shape = SmallVector<uint32_t>(sizes.size());
     TT_FATAL(
-        input_shape.size() <= sizes.size(),
+        input_shape.rank() <= sizes.size(),
         "Input tensor shape {}({}) must be at least as large as the expansion size {}({}), which it is not",
         input_shape,
-        input_shape.size(),
+        input_shape.rank(),
         sizes,
         sizes.size());
 
-    int in_idx = static_cast<int>(input_shape.size()) - 1;
+    int in_idx = static_cast<int>(input_shape.rank()) - 1;
     for (int i = static_cast<int>(output_shape.size()) - 1; i >= 0; --i) {
         if (in_idx >= 0) {
             TT_FATAL(

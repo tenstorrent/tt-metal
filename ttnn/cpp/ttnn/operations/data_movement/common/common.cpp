@@ -29,7 +29,7 @@ ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) {
 }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
-    auto shape = tensor.get_shape();
+    auto shape = tensor.get_logical_shape();
     auto rank = shape.rank();
     TT_FATAL(shape.rank() >= 4, "Tensor has to be of rank larger than 4! Instead is {}", shape.rank());
     if (rank == 4) {
@@ -41,7 +41,7 @@ ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
         auto squeezed = tensor;
         while (rank > 4 && shape[i] == 1) {
             squeezed = ttnn::squeeze(squeezed, 0);
-            rank = squeezed.get_shape().rank();
+            rank = squeezed.get_logical_shape().rank();
             i++;
         }
         if (rank <= 4) {
@@ -60,7 +60,7 @@ ttnn::Tensor pad_to_tile_vol(
     const std::optional<MemoryConfig>& memory_config) {
     auto logical_shape = tensor.get_logical_shape();
     auto padded_shape = tensor.get_padded_shape();
-    auto rank = tensor.get_shape().rank();
+    auto rank = logical_shape.rank();
     if (padded_shape[-1] % tt::constants::TILE_WIDTH != 0 || padded_shape[-2] % tt::constants::TILE_HEIGHT != 0) {
         TT_ASSERT(rank >= 2, "rank of tensor to pad to tile must be at least 2.");
 

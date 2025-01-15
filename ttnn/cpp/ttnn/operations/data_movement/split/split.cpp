@@ -20,11 +20,11 @@ std::vector<Tensor> split_dim_n_chunks_rm(
     const Tensor& input_tensor, int dim, int num_splits, const MemoryConfig& mem_config) {
     TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.split only supports row major tensors.");
     TT_FATAL(
-        input_tensor.get_shape()[dim] % num_splits == 0,
+        input_tensor.get_logical_shape()[dim] % num_splits == 0,
         "Split dimension {} must be divisible by num_splits {}.",
-        input_tensor.get_shape()[dim],
+        input_tensor.get_logical_shape()[dim],
         num_splits);
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
     auto input_rank = input_shape.size();
 
     const bool on_host =
@@ -38,7 +38,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
         preprocessed = preprocessed.cpu();  // bf16 tensors must be handled on host due to limitations in slice
     }
 
-    auto preproc_shape = preprocessed.get_shape();
+    const auto& preproc_shape = preprocessed.get_logical_shape();
 
     auto chunk_len = preproc_shape[dim] / num_splits;
 
