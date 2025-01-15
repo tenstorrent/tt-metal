@@ -16,6 +16,26 @@
 int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
+
+void print_all_tiles(uint32_t input_transposed_cb_index) {
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK(DPRINT << "for iter i/p1 " << (int)r << " : " << TSLICE(input_transposed_cb_index, 0, sr) << ENDL());
+    }
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK(DPRINT << "for iter i/p2 " << (int)r << " : " << TSLICE(input_transposed_cb_index, 1, sr) << ENDL());
+    }
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK(DPRINT << "for iter i/p3 " << (int)r << " : " << TSLICE(input_transposed_cb_index, 2, sr) << ENDL());
+    }
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        UNPACK(DPRINT << "for iter i/p4 " << (int)r << " : " << TSLICE(input_transposed_cb_index, 3, sr) << ENDL());
+    }
+}
+
 void MAIN {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
@@ -30,8 +50,6 @@ void MAIN {
     constexpr uint32_t logWt = get_compile_time_arg_val(10);
     constexpr uint32_t largest = get_compile_time_arg_val(11);
     constexpr uint32_t sorted = get_compile_time_arg_val(12);
-
-    SliceRange sr = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -49,6 +67,7 @@ void MAIN {
 
     bool ascending = !largest;
     bool switch_dir = (K == 64);
+    int target_tiles = (Wt * Ht == 1 || ((Wt == 1) && (tiles_per_seq == 1))) ? 1 : 2;
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         cb_reserve_back(input_transposed_cb_index, Wt);
@@ -60,7 +79,6 @@ void MAIN {
             // local sort into k groups
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
-            // UNPACK(DPRINT << "INPUT VALUES ARE " << TSLICE(input_cb_index, 0, sr) << ENDL());
 
             reconfig_data_format_srca(input_cb_index);
             transpose_wh_init_short(input_cb_index);
@@ -102,15 +120,13 @@ void MAIN {
             bool a = !largest;
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
-            // UNPACK(DPRINT << "input_transposed_cb_index VALUES ARE " << TSLICE(input_transposed_cb_index, 0, sr) <<
-            // ENDL());
+            // print_all_tiles(input_transposed_cb_index);
 
-            int target_tiles = (Wt == 1 || tiles_per_seq == 1) ? 1 : 2;
-
-            for (uint32_t left_iter = 0; left_iter < Wt - (1 << m_iter); left_iter += 2 << m_iter) {
-                for (uint32_t t = 0; t < tiles_per_seq; t++) {
+            for (uint32_t left_iter = 0; left_iter < Wt - (1 << m_iter);
+                 left_iter += 2 << m_iter) {  // this should be tiles_per_seq << m_iter
+                for (uint32_t t = 0; t < (int)tiles_per_seq; t++) {
                     uint32_t left_ind = left_iter + t;
-                    uint32_t right_ind = left_ind + (1 << m_iter);
+                    uint32_t right_ind = left_ind + (1 << m_iter) * tiles_per_seq;
                     if (right_ind >= Wt) {
                         break;
                     }
@@ -134,16 +150,13 @@ void MAIN {
                     // for topk, which was in input_dest_start
                     pack_reconfig_data_format(input_transposed_cb_index);
                     pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
-                    pack_tile<true>(input_dest_end, input_transposed_cb_index, right_ind);
 
                     // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values
                     // for topk, which was in index_dest_start
                     pack_reconfig_data_format(index_transposed_cb_index);
                     pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
-                    pack_tile<true>(index_dest_end, index_transposed_cb_index, right_ind);
                     release_dst();
                 }
-                a = !a;
             }
             cb_reserve_back(input_transposed_cb_index, Wt);
             cb_reserve_back(index_transposed_cb_index, Wt);
@@ -153,6 +166,61 @@ void MAIN {
 
             cb_push_back(input_transposed_cb_index, Wt);
             cb_push_back(index_transposed_cb_index, Wt);
+            print_all_tiles(input_transposed_cb_index);
+
+            uint32_t updated_Wt = Wt >> 1;
+
+            cb_wait_front(input_transposed_cb_index, Wt);
+            cb_wait_front(index_transposed_cb_index, Wt);
+
+#if 0
+            int sel_tile_id[2];
+            int sel_tile_id_ptr = 0;
+
+            for (uint32_t left_iter = 0; left_iter < Wt; left_iter += (1 << (m_iter+1))) {
+                for (int t=0; t<(int)tiles_per_seq; t++) {
+                    int left_ind = left_iter + t;
+                    if (left_ind >= (int)Wt) {
+                        break;
+                    }
+                    sel_tile_id[sel_tile_id_ptr] = left_ind;
+                    sel_tile_id_ptr++;
+                    if (sel_tile_id_ptr == target_tiles) {
+                        acquire_dst();
+
+                        copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
+                        copy_tile(input_transposed_cb_index, sel_tile_id[0], input_dest_start);
+                        if (target_tiles == 2)
+                            copy_tile(input_transposed_cb_index, sel_tile_id[1], input_dest_end);
+
+                        // unpack indices into dest
+                        copy_tile_to_dst_init_short_with_dt(input_transposed_cb_index, index_transposed_cb_index);
+                        copy_tile(index_transposed_cb_index, sel_tile_id[0], index_dest_start);
+                        if (target_tiles == 2)
+                            copy_tile(index_transposed_cb_index, sel_tile_id[1], index_dest_end);
+
+                        ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, target_tiles == 1);
+                        // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values
+                        // for topk, which was in input_dest_start
+                        pack_reconfig_data_format(input_transposed_cb_index);
+                        pack_tile<true>(input_dest_start, input_transposed_cb_index, sel_tile_id[0]);
+                        if (target_tiles == 2)
+                            pack_tile<true>(input_dest_end, input_transposed_cb_index, sel_tile_id[1]);
+
+                        // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values
+                        // for topk, which was in index_dest_start
+                        pack_reconfig_data_format(index_transposed_cb_index);
+                        pack_tile<true>(index_dest_start, index_transposed_cb_index, sel_tile_id[0]);
+                        if (target_tiles == 2)
+                            pack_tile<true>(index_dest_end, index_transposed_cb_index, sel_tile_id[1]);
+                        release_dst();
+
+                        sel_tile_id_ptr = 0;
+                        a = switch_dir ? !a : a;
+                    }
+                }
+            }
+#endif
         }
 
         constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
