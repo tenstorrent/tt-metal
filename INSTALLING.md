@@ -48,21 +48,13 @@ sudo ./install_dependencies.sh
 > If you do not want to use the models or follow the tutorials and want to
 > immediately start using the API, you may install just the wheel or get the release Docker container.
 
-1. Install git and git-lfs.
-
-```sh
-sudo apt install git git-lfs
-```
-
-2. Clone the repo.
+1. Clone the repo.
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
-cd tt-metal
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-3. Install either from source, or from our release wheel. Note that if you are
+2. Install either from source, or from our release wheel. Note that if you are
 going to try using the model demos, we highly recommend you install from
 source.
 

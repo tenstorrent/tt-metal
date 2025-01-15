@@ -54,7 +54,6 @@ ub_package_list()
 {
     UB_LIST=(\
      git \
-     git-lfs \
      build-essential \
      cmake \
      software-properties-common \
