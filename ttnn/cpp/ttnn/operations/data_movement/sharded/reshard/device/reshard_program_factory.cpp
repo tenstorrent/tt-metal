@@ -9,9 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
-#include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
-#include "ttnn/operations/math.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -320,7 +317,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto remote_cores = corerange_to_cores(
         remote_shard_spec.grid, std::nullopt, remote_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    uint32_t total_size, unit_size, local_units_per_shard, remote_units_per_shard;
+    uint32_t unit_size, local_units_per_shard, remote_units_per_shard;
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.get_dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
@@ -328,14 +325,12 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         unit_size = tt::tt_metal::detail::TileSize(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
-        total_size = remote_units_per_shard * unit_size;
     } else {
         unit_size = local_shard_spec.shape[1] * local_tensor.element_size();
         local_units_per_shard = local_shard_spec.shape[0];
         remote_units_per_shard = remote_shard_spec.shape[0];
-        total_size = remote_units_per_shard * unit_size;
     }
-
+    const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
     const std::string kernel_name =
         is_reader
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
