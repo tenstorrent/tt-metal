@@ -454,7 +454,7 @@ std::string to_string(
             layout);
     }
 
-    if (is_tensor_on_device(tensor)) {
+    if (is_tensor_on_device_or_multidevice(tensor)) {
         return to_string<T>(tensor.cpu(), dtype, layout);
     }
 
