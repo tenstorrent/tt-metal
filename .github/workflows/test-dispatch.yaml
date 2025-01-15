@@ -52,7 +52,6 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '[ "${{ inputs.arch }}" ]'
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
     secrets: inherit
