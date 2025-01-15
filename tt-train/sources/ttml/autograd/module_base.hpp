@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
-#include <unordered_map>
 
 #include "serialization/serializable.hpp"
 #include "tensor.hpp"
@@ -22,13 +22,19 @@ private:
     std::string m_name;
     RunMode m_run_mode = RunMode::TRAIN;
 
-    std::unordered_map<std::string, TensorPtr> m_named_tensors;
-    std::unordered_map<std::string, ModuleBasePtr> m_named_modules;
+    // Do not change map to unordered_map, as we need to keep order of iteration for serialization
+    // special case for weight tying in transformers
+    // for model save and load we need to make sure that stored/loaded name is the same between different runs
+    // unordered_map does not guarantee the order of iteration
+    std::map<std::string, TensorPtr> m_named_tensors;
+    std::map<std::string, ModuleBasePtr> m_named_modules;
 
 protected:
     void create_name(const std::string& name);
     void register_tensor(const TensorPtr& tensor_ptr, const std::string& name);
     void register_module(const ModuleBasePtr& module_ptr, const std::string& name);
+    void override_tensor(const TensorPtr& tensor_ptr, const std::string& name);
+    void override_module(const ModuleBasePtr& module_ptr, const std::string& name);
 
 public:
     ModuleBase() = default;
