@@ -185,13 +185,13 @@ Tensor concat_impl(
                 for (const auto& input_tensor : input_tensors) {
                     if (target_layout == Layout::ROW_MAJOR) {
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = input_tensor.get_legacy_shape(),
+                            .pad_shape = input_tensor.get_padded_shape(),
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        tt::tt_metal::LegacyShape pad_shape =
+                        ttnn::SimpleShape pad_shape =
                             ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                                input_tensor.get_legacy_shape());
+                                input_tensor.get_padded_shape());
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
                             .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }

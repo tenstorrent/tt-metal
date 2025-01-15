@@ -1837,7 +1837,7 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-            temp.get_legacy_shape(), false, false, true, true);
+            temp.get_padded_shape(), false, false, true, true);
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                 temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);

@@ -155,7 +155,6 @@ check_and_build_tt_metal() {
     if [[ ! -d "python_env" ]]; then
         git checkout "${TT_METAL_COMMIT_SHA_OR_TAG}"
         git submodule update --init --recursive
-        git submodule foreach 'git lfs fetch --all && git lfs pull'
         ./build_metal.sh
         ./create_venv.sh
         source python_env/bin/activate

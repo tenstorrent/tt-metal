@@ -36,6 +36,8 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(this->value_); }
 
+    std::array<uint32_t, 4> to_array_4D() const;
+
     friend std::ostream& operator<<(std::ostream& os, const SimpleShape& shape);
 };
 
