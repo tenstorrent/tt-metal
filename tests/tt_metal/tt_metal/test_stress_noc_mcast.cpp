@@ -48,6 +48,7 @@ uint32_t mcast_from_n_eth_g;
 bool mcast_from_eth_g;
 bool rnd_delay_g = false;
 bool rnd_coord_g = true;
+tt_metal::NOC noc_g = tt_metal::NOC::NOC_0;
 
 void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -66,6 +67,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, "     -m: mcast packet size");
         log_info(LogTest, "     -u: ucast packet size");
         log_info(LogTest, "-rdelay: insert random delay between noc transactions");
+        log_info(LogTest, "     -n: noc to use (default 0)");
         log_info(LogTest, "     -s: seed random number generator");
         exit(0);
     }
@@ -83,6 +85,8 @@ void init(int argc, char** argv) {
     ucast_size_g = test_args::get_command_option_uint32(input_args, "-u", 8192);
     mcast_from_eth_g = (mcast_from_n_eth_g != 0xffff);
     rnd_delay_g = test_args::has_command_option(input_args, "-rdelay");
+    uint32_t noc = test_args::get_command_option_uint32(input_args, "-n", 0);
+    noc_g = (noc == 0) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
     uint32_t seed = test_args::get_command_option_uint32(input_args, "-s", 0);
     srand(seed);
 
@@ -148,7 +152,7 @@ int main(int argc, char** argv) {
         workers_logical,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
+            .noc = noc_g,
             .compile_args = compile_args,
         });
 
@@ -178,7 +182,7 @@ int main(int argc, char** argv) {
             mcast_logical,
             tt_metal::EthernetConfig{
                 .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0,
+                .noc = noc_g,
                 .compile_args = compile_args,
             });
     } else {
@@ -188,7 +192,7 @@ int main(int argc, char** argv) {
             mcast_logical,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
+                .noc = noc_g,
                 .compile_args = compile_args,
             });
     }
@@ -225,6 +229,8 @@ int main(int argc, char** argv) {
     } else {
         log_info("Non-random ucast noc write destinations TBD");
     }
+
+    log_info("Using NOC {}", (noc_g == tt_metal::NOC::NOC_0) ? 0 : 1);
 
     if (rnd_delay_g) {
         log_info("Randomizing delay");
