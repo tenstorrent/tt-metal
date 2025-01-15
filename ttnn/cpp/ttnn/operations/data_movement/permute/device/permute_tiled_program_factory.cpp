@@ -102,8 +102,8 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
 
-    uint32_t N = operation_attributes.dims.size();
-    bool swap_hw = operation_attributes.dims[N - 2] == N - 1 && operation_attributes.dims[N - 1] == N - 2;
+    uint32_t rank = operation_attributes.dims.size();
+    bool swap_hw = operation_attributes.dims[rank - 2] == rank - 1 && operation_attributes.dims[rank - 1] == rank - 2;
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -126,7 +126,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     }
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, N, input_page_size, num_tiles};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, rank, input_page_size, num_tiles};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -272,11 +272,11 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     uint32_t num_input_pages_to_read = 2;
 
-    uint32_t N = operation_attributes.dims.size();
+    uint32_t rank = operation_attributes.dims.size();
 
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
 
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[N - 2] /
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[rank - 2] /
                                                            tile_shape[0]);  // only last row of Xt should have padding
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -301,13 +301,13 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t X = input_shape[dims[N - 2]];
+    uint32_t output_H = input_shape[dims[rank - 2]];
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t element_size = input_tensor.element_size();
 
     const auto& face_shape = input_tensor.get_tensor_spec().tile().get_face_shape();
 
-    bool needs_padding = (X % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
     if (needs_padding) {
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
@@ -317,7 +317,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t padding_val_packed = 0;
     uint32_t num_writes = 0;
     if (pad_value.has_value()) {
-        if (X % tile_shape[1] != 0) {
+        if (output_H % tile_shape[1] != 0) {
             uint32_t num_packed_values = sizeof(uint32_t) / element_size;
             num_writes = face_shape[1] / num_packed_values;
             if (input_tensor.get_dtype() == DataType::BFLOAT16) {
@@ -333,8 +333,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     }
 
     uint32_t h_in_dest = 0;
-    for (uint32_t i = 0; i < N; i++) {
-        if (dims[i] == N - 2) {
+    for (uint32_t i = 0; i < rank; i++) {
+        if (dims[i] == rank - 2) {
             h_in_dest = i;
             break;
         }
@@ -354,15 +354,15 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         (std::uint32_t)dst_is_dram,
         element_size,
         output_cb_index,
-        X,
-        input_shape[N - 2],
-        input_shape[N - 1],
+        output_H,
+        input_shape[rank - 2],
+        input_shape[rank - 1],
         tile_shape[0],
         tile_shape[1],
         face_shape[0],
         face_shape[1],
         (uint32_t)needs_padding,
-        N,
+        rank,
         h_in_dest};
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(

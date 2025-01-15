@@ -73,6 +73,9 @@ struct PermuteDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
+
+    // Implementation for when the tile is not broken apart (either dims = {..., rank - 2, rank - 1} or {..., rank - 1,
+    // rank - 2})
     struct MultiCoreTileInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
@@ -95,6 +98,8 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    // Implemention for when the height dimension (rank - 2) is swapped with another dimension (dims = {..., rank - 2,
+    // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
