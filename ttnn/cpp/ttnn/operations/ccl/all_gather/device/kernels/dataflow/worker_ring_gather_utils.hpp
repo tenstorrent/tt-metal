@@ -594,6 +594,16 @@ FORCE_INLINE void read_wrapped_chunk_from_output_tensor(
 }
 
 
+template <typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, size_t> new_addrgen_get_noc_addr_and_contiguous_pages(
+    uint32_t curr_page_idx,
+    const AddrGen& address_generator,
+    uint8_t noc_id = noc_index) {
+        static constexpr uint32_t offset = 0;
+        return get_contiguous_noc_addr(curr_page_idx,address_generator,offset,noc_id);
+}
+
+
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
 FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
@@ -629,6 +639,14 @@ FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
             return {dst_noc_addr, contig_pages};
         }
     }
+}
+
+template <typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, uint16_t> new_addrgen_get_noc_addr_and_contiguous_pages_for_fabric_write(
+    uint32_t curr_page_idx,
+    const AddrGen& address_generator) {
+    return new_addrgen_get_noc_addr_and_contiguous_pages<AddrGen>(
+        curr_page_idx, address_generator, 0);
 }
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>

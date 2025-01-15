@@ -5,6 +5,28 @@
 #pragma once
 
 #include "dataflow_api_declarations.h"
+#include "debug/dprint.h"
+
+template <
+    uint32_t SHARD_TYPE,
+    uint32_t NUMBER_OF_CORES,
+    uint32_t PAGE_SIZE_JUMP,
+    uint32_t PAGES_PER_TENSOR_ROW,
+    uint32_t CONTIGUITY,
+    uint32_t PAGES_PER_SHARD_WIDTH,
+    uint32_t ROWS_PER_SHARD_HEIGHT>
+class Sharded_Info {
+public:
+    // The isX types are correctly templated shard_grid_info class objects containing the information of the respective
+    // grid
+    constexpr static uint32_t shard_type = SHARD_TYPE;
+    constexpr static uint32_t number_of_cores = NUMBER_OF_CORES;
+    constexpr static uint32_t page_size_jump = PAGE_SIZE_JUMP;
+    constexpr static uint32_t pages_per_tensor_row = PAGES_PER_TENSOR_ROW;
+    constexpr static uint32_t contiguity = CONTIGUITY;
+    constexpr static uint32_t pages_per_shard_width = PAGES_PER_SHARD_WIDTH;
+    constexpr static uint32_t rows_per_shard_height = ROWS_PER_SHARD_HEIGHT;
+};
 
 namespace interleaved_addr_gen {
 
@@ -107,135 +129,13 @@ std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
 
 namespace shard_addr_gen_utils {
 
-template <uint32_t start_x, uint32_t start_y, uint32_t width, uint32_t height>
-struct shard_grid_info {
-    constexpr static uint32_t x = start_x;
-    constexpr static uint32_t y = start_y;
-    constexpr static uint32_t w = width;
-    constexpr static uint32_t h = height;
-    constexpr static uint32_t volume = width * height;
-};
-
-template <bool transposed, typename info_struct>
-FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_within_grid(uint32_t linear_core_id, const info_struct grid_info) {
-    uint32_t outer_offset = linear_core_id / grid_info.w;                   // Unavoidable division to get the offset
-    uint32_t inner_offset = linear_core_id - linear_core_id * grid_info.w;  // linear_core_id % width;
-    if constexpr (transposed) {
-        std::pair<uint32_t, uint32_t> coordinates(outer_offset + grid_info.x, inner_offset + grid_info.y);
-        return coordinates;
-    } else {
-        std::pair<uint32_t, uint32_t> coordinates(inner_offset + grid_info.x, outer_offset + grid_info.y);
-        return coordinates;
-    }
-}
-
-template <
-    bool transposed,
-    uint32_t num_shard_grids,
-    typename is0,
-    typename is1,
-    typename is2,
-    typename is3,
-    typename is4,
-    typename is5,
-    typename is6,
-    typename is7>
-FORCE_INLINE std::pair<uint32_t, uint32_t> resolve_core_grid(
-    uint32_t linear_core_id,
-    const is0 grid0,
-    const is1 grid1,
-    const is2 grid2,
-    const is3 grid3,
-    const is4 grid4,
-    const is5 grid5,
-    const is6 grid6,
-    const is7 grid7) {
-    constexpr struct shard_grid_info<0, 0, 0, 0> grid_null{};
-    // Finds the logical core ID given the nth core is wanted
-    if constexpr (num_shard_grids == 1) {
-        return resolve_within_grid<transposed>(linear_core_id, grid0);
-    } else {
-        constexpr uint32_t halfway_volume = grid0.volume + ((num_shard_grids > 3) ? grid1.volume : 0) +
-                                            ((num_shard_grids > 5) ? grid2.volume : 0) +
-                                            ((num_shard_grids > 7) ? grid3.volume : 0);
-        if constexpr (num_shard_grids == 8) {
-            // 8 grids, halfway covers grids 0-3
-            if (linear_core_id >= halfway_volume) {
-                return resolve_core_grid<transposed, num_shard_grids - 4>(
-                    linear_core_id - halfway_volume,
-                    grid4,
-                    grid5,
-                    grid6,
-                    grid7,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null);
-            } else {
-                return resolve_core_grid<transposed, 4>(
-                    linear_core_id, grid0, grid1, grid2, grid3, grid_null, grid_null, grid_null, grid_null);
-            }
-        } else if constexpr (num_shard_grids > 5) {
-            // 6 or 7 grids, halfway covers grids 0-2
-            if (linear_core_id >= halfway_volume) {
-                return resolve_core_grid<transposed, num_shard_grids - 3>(
-                    linear_core_id - halfway_volume,
-                    grid3,
-                    grid4,
-                    grid5,
-                    grid6,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null);
-            } else {
-                return resolve_core_grid<transposed, 3>(
-                    linear_core_id, grid0, grid1, grid2, grid_null, grid_null, grid_null, grid_null, grid_null);
-            }
-        } else if constexpr (num_shard_grids > 3) {
-            // 4 or 5 grids halfway covers grids 0-1
-            if (linear_core_id >= halfway_volume) {
-                return resolve_core_grid<transposed, num_shard_grids - 2>(
-                    linear_core_id - halfway_volume,
-                    grid2,
-                    grid3,
-                    grid4,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null);
-            } else {
-                return resolve_core_grid<transposed, 2>(
-                    linear_core_id, grid0, grid1, grid_null, grid_null, grid_null, grid_null, grid_null, grid_null);
-            }
-        } else {
-            // 2 or 3 grids halfway covers grid 0
-            if (linear_core_id >= halfway_volume) {
-                return resolve_core_grid<transposed, num_shard_grids - 1>(
-                    linear_core_id - halfway_volume,
-                    grid1,
-                    grid2,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null,
-                    grid_null);
-            } else {
-                return resolve_within_grid<transposed>(linear_core_id, grid0);
-            }
-        }
-    }
-}
-
 struct shard_coord_info {
     uint32_t core_num;
     uint32_t page_num;
     uint32_t num_contiguous_pages;
 };
 
-template <uint32_t page_size, uint32_t columns_per_shard, uint32_t total_pages_last_dim>
+template <uint32_t columns_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
 struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
@@ -245,27 +145,40 @@ struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     coord_info.core_num = w_core_id;
     coord_info.page_num = page_row * columns_per_shard + w_offset;
-    coord_info.num_contiguous_pages = columns_per_shard - w_offset;
+    if constexpr (contiguity != 0) {
+        uint32_t space_left_in_shard = columns_per_shard - w_offset;
+        uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
+        coord_info.num_contiguous_pages =
+            space_left_in_shard < space_left_in_tensor ? space_left_in_shard : space_left_in_tensor;
+    } else {
+        coord_info.num_contiguous_pages = 1;
+    }
     return coord_info;
 }
 
-template <uint32_t page_size, uint32_t rows_per_shard, uint32_t total_pages_last_dim>
+template <uint32_t rows_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
 struct shard_coord_info get_height_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
     constexpr uint32_t num_pages_per_core = total_pages_last_dim * rows_per_shard;
     coord_info.core_num = page_num / num_pages_per_core;
     coord_info.page_num = page_num - coord_info.core_num * num_pages_per_core;
-    coord_info.num_contiguous_pages = num_pages_per_core - coord_info.page_num;
+    if constexpr (contiguity == 0) {
+        coord_info.num_contiguous_pages = 1;
+    } else if constexpr (contiguity == 1) {
+        coord_info.num_contiguous_pages = total_pages_last_dim - page_num % total_pages_last_dim;
+    } else {
+        coord_info.num_contiguous_pages = num_pages_per_core - coord_info.page_num;
+    }
     return coord_info;
 }
 
-template <uint32_t page_size, uint32_t columns_per_shard, uint32_t rows_per_shard, uint32_t total_pages_last_dim>
-struct shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
+template <uint32_t columns_per_shard, uint32_t rows_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
+shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     // Calculate how many cores are in the sharding grid
     constexpr uint32_t cores_per_block_row = (total_pages_last_dim - 1) / columns_per_shard + 1;
-    struct shard_coord_info coord_info;
+    shard_addr_gen_utils::shard_coord_info coord_info;
     // Get row and column ID of this page
     uint32_t page_row = page_num / total_pages_last_dim;
     uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_col = page_num%total_pages_last_dim;
@@ -278,59 +191,44 @@ struct shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
     // Find the coord_info
     coord_info.core_num = w_core_id + h_core_id * cores_per_block_row;
     coord_info.page_num = w_offset + h_offset * columns_per_shard;
-    coord_info.num_contiguous_pages = columns_per_shard - w_offset;
+    if constexpr (contiguity != 0) {
+        uint32_t space_left_in_shard = columns_per_shard - w_offset;
+        uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
+        coord_info.num_contiguous_pages =
+            space_left_in_shard < space_left_in_tensor ? space_left_in_shard : space_left_in_tensor;
+    } else {
+        coord_info.num_contiguous_pages = 1;
+    }
     return coord_info;
 }
-
+template <uint32_t number_of_cores>
 std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_address) {
-    uint32_t elements = get_arg_val<uint32_t>(rt_address++);
+    // Gets the shard_array from the runtime arguments
     const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_address));
-    return std::pair<const uint32_t* const, uint32_t>(map, rt_address + elements);
+    constexpr uint32_t incrementation = (number_of_cores - 1) / 2 + 1;
+    return std::pair<const uint32_t* const, uint32_t>(map, rt_address + incrementation);
 }
 
 }  // namespace shard_addr_gen_utils
 
-template <
-    bool transposed,
-    uint32_t shard_type,
-    uint32_t num_shard_grids,
-    uint32_t page_size,
-    uint32_t pages_per_shard_x,
-    uint32_t pages_per_shard_y,
-    uint32_t pages_last_shard_dim,
-    typename is0,
-    typename is1,
-    typename is2,
-    typename is3,
-    typename is4,
-    typename is5,
-    typename is6,
-    typename is7>
+template <typename SHARDING_INFO_OBJECT>
 struct ShardedAddrGen {
+    constexpr static SHARDING_INFO_OBJECT CONSTANT_ARGS{};
+    // Sharded Info Class is a Sharded Info object that is appropriately templated including all the compile time
+    // parameters
     uint32_t bank_base_address;
-    const static is0 grid0;
-    const static is1 grid1;
-    const static is2 grid2;
-    const static is3 grid3;
-    const static is4 grid4;
-    const static is5 grid5;
-    const static is6 grid6;
-    const static is7 grid7;
-    constexpr static uint32_t num_cores =
-        grid0.volume + ((num_shard_grids > 1) ? grid1.volume : 0) + ((num_shard_grids > 2) ? grid2.volume : 0) +
-        ((num_shard_grids > 3) ? grid3.volume : 0) + ((num_shard_grids > 4) ? grid4.volume : 0) +
-        ((num_shard_grids > 5) ? grid5.volume : 0) + ((num_shard_grids > 6) ? grid6.volume : 0) +
-        ((num_shard_grids > 7) ? grid7.volume : 0);
+    const uint32_t* const shard_array;
     FORCE_INLINE
-    std::uint64_t get_addr(
-        const uint32_t logx,
-        const uint32_t logy,
-        const uint32_t core_page,
-        const uint32_t offset,
-        const uint32_t noc = noc_index) {
-        const uint32_t address = this->bank_base_address + (core_page * page_size) + offset;
+    std::uint64_t get_sharded_addr(
+        const uint32_t l1_addr, const uint32_t sharding_coordinates, const uint32_t noc = noc_index) const {
+        return NOC_XY_ADDR(
+            DYNAMIC_NOC_X(noc, ((sharding_coordinates >> 8) & 0xFF)),
+            DYNAMIC_NOC_Y(noc, (sharding_coordinates & 0xFF)),
+            l1_addr);
+    }
 
-        return get_noc_addr(logx, logy, address, noc);
+    std::uint32_t get_sharded_l1_addr(const uint32_t core_page, const uint32_t offset = 0) const {
+        return this->bank_base_address + (core_page * CONSTANT_ARGS.page_size_jump) + offset;
     }
 
     FORCE_INLINE
@@ -342,34 +240,38 @@ struct ShardedAddrGen {
         const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         // Returns the noc address AND the number of contiguous pages after.
         // Resolve linear core id and the page num within that core
-        struct shard_coord_info sharding_coordinates;
-        if constexpr (shard_type == 0) {
-            sharding_coordinates =
-                shard_addr_gen_utils::get_width_sharded_coordinates<page_size, pages_per_shard_x, pages_last_shard_dim>(
-                    id);
-        } else if constexpr (shard_type == 1) {
-            sharding_coordinates = shard_addr_gen_utils::
-                get_height_sharded_coordinates<page_size, pages_per_shard_y, pages_last_shard_dim>(id);
+        shard_addr_gen_utils::shard_coord_info sharding_coordinates{};
+        if constexpr (CONSTANT_ARGS.shard_type == 0) {
+            sharding_coordinates = shard_addr_gen_utils::get_width_sharded_coordinates<
+                CONSTANT_ARGS.pages_per_shard_width,
+                CONSTANT_ARGS.pages_per_tensor_row,
+                CONSTANT_ARGS.contiguity>(id);
+        } else if constexpr (CONSTANT_ARGS.shard_type == 1) {
+            sharding_coordinates = shard_addr_gen_utils::get_height_sharded_coordinates<
+                CONSTANT_ARGS.rows_per_shard_height,
+                CONSTANT_ARGS.pages_per_tensor_row,
+                CONSTANT_ARGS.contiguity>(id);
         } else {
-            sharding_coordinates = shard_addr_gen_utils::
-                get_block_sharded_coordinates<page_size, pages_per_shard_x, pages_per_shard_y, pages_last_shard_dim>(
-                    id);
+            sharding_coordinates = shard_addr_gen_utils::get_block_sharded_coordinates<
+                CONSTANT_ARGS.pages_per_shard_width,
+                CONSTANT_ARGS.rows_per_shard_height,
+                CONSTANT_ARGS.pages_per_tensor_row,
+                CONSTANT_ARGS.contiguity>(id);
         }
-        uint32_t linear_core_id = 0;
-        uint32_t page_num = 0;
-        std::pair<uint32_t, uint32_t> core_index = shard_addr_gen_utils::resolve_core_grid<transposed, num_shard_grids>(
-            sharding_coordinates.core_num, grid0, grid1, grid2, grid3, grid4, grid5, grid6, grid7);
         // return get_addr
-        std::pair<uint64_t, uint32_t> return_val(
-            get_addr(core_index.first, core_index.second, sharding_coordinates.page_num, offset, noc),
-            sharding_coordinates.num_contiguous_pages);
+        uint32_t sharding_coordinate_value =
+            (shard_array[(sharding_coordinates.core_num) >> 1] >> ((sharding_coordinates.core_num & 1) == 1 ? 0 : 16)) &
+            0xFFFF;
+        auto resolved_l1_addr = get_sharded_l1_addr(sharding_coordinates.page_num, offset);
+        auto resolved_sharded_addr = get_sharded_addr(resolved_l1_addr, sharding_coordinate_value, noc);
+        std::pair<uint64_t, uint32_t> return_val(resolved_sharded_addr, sharding_coordinates.num_contiguous_pages);
         return return_val;
     }
 
     FORCE_INLINE
     void noc_async_read_page(
         const uint32_t id, const uint32_t dest_addr, const uint32_t offset = 0, uint8_t noc = noc_index) const {
-        noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
+        noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
 
@@ -667,42 +569,9 @@ struct InterleavedPow2AddrGenFast {
     }
 };
 
-template <
-    bool transposed,
-    uint32_t shard_type,
-    uint32_t num_shard_grids,
-    uint32_t page_size,
-    uint32_t pages_per_shard_x,
-    uint32_t pages_per_shard_y,
-    uint32_t pages_last_shard_dim,
-    typename is0,
-    typename is1,
-    typename is2,
-    typename is3,
-    typename is4,
-    typename is5,
-    typename is6,
-    typename is7>
+template <typename SIC>
 FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id,
-    const ShardedAddrGen<
-        transposed,
-        shard_type,
-        num_shard_grids,
-        page_size,
-        pages_per_shard_x,
-        pages_per_shard_y,
-        pages_last_shard_dim,
-        is0,
-        is1,
-        is2,
-        is3,
-        is4,
-        is5,
-        is6,
-        is7>& s,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
+    const uint32_t id, const ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     return s.get_noc_addr(id, offset, noc);
 }
 
@@ -774,42 +643,9 @@ FORCE_INLINE std::uint64_t get_noc_addr(
     return s.get_noc_addr(id, offset, noc);
 }
 
-template <
-    bool transposed,
-    uint32_t shard_type,
-    uint32_t num_shard_grids,
-    uint32_t page_size,
-    uint32_t pages_per_shard_x,
-    uint32_t pages_per_shard_y,
-    uint32_t pages_last_shard_dim,
-    typename is0,
-    typename is1,
-    typename is2,
-    typename is3,
-    typename is4,
-    typename is5,
-    typename is6,
-    typename is7>
+template <typename SIC>
 FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
-    const uint32_t id,
-    const ShardedAddrGen<
-        transposed,
-        shard_type,
-        num_shard_grids,
-        page_size,
-        pages_per_shard_x,
-        pages_per_shard_y,
-        pages_last_shard_dim,
-        is0,
-        is1,
-        is2,
-        is3,
-        is4,
-        is5,
-        is6,
-        is7>& s,
-    uint32_t offset = 0,
-    uint8_t noc = noc_index) {
+    const uint32_t id, const ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     return s.get_contiguous_noc_addr(id, offset, noc);
 }
 

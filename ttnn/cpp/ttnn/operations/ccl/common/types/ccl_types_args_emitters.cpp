@@ -7,7 +7,7 @@
 #include "ttnn/cpp/ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tt_metal/impl/device/device.hpp"
-
+#include "ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp"
 using namespace tt::tt_metal;
 
 namespace ttnn {
@@ -23,6 +23,35 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 }
 
 args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
+
+args_list_t new_addrgen_emit_address_generator_runtime_args(
+    const tt::tt_metal::Device* const d, const tt::tt_metal::Tensor& t) {
+    args_list_t args;
+    switch (t.buffer()->buffer_layout()) {
+        case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
+        case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
+            return shard_pf_builder::get_linear_shard_list(d, t);
+            break;
+
+        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
+            TT_ASSERT(t.buffer()->page_size() != 1024);
+            // For now we won't emit args for interleaved here... assume these are passed in elsewhere
+            // This is during some transitionary period
+            return {};
+
+            break;
+
+        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
+        default:
+            TT_ASSERT(
+                false,
+                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
+                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
+                t.buffer()->buffer_layout());
+            return {};
+    };
+}
 
 args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& t) {
     args_list_t args;
@@ -50,6 +79,28 @@ args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* cons
                 t.buffer()->buffer_layout());
             return {};
     };
+}
+
+args_list_t new_addrgen_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
+    switch (t.buffer()->buffer_layout()) {
+        case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
+        case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
+            return shard_pf_builder::sharding_ct_table_builder(t.device(), t);
+            break;
+
+        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
+
+        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
+        default:
+            TT_ASSERT(
+                false,
+                "Tried emitting address generator args for an unsupported type{}. Consider adding the missing support "
+                "or using a supported tensor memory layout (width sharded, height sharded, block sharded, interleaved",
+                t.buffer()->buffer_layout());
+            return {};
+    }
+    TT_ASSERT(false);
 }
 
 args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& t) {

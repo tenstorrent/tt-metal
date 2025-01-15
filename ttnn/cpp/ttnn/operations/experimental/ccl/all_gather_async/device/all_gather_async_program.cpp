@@ -210,11 +210,6 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     );
 
     // KERNEL CREATION
-    const auto& worker_defines = op_config.emit_worker_defines();
-    static const std::string& sender_kernel_reader_path =
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader.cpp";
-    static const std::string& sender_kernel_writer_path =
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_writer.cpp";
 
     KernelHandle worker_sender_reader_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(

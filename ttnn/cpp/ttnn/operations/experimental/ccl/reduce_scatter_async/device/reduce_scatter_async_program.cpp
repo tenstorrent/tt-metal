@@ -566,9 +566,6 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     //  - Second CB: to math (local input)
     //  - Third CB: to math (remote input)
 
-    static std::string const& receiver_kernel_path =
-        "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_reader_two_input.cpp";
-    static std::string const& forward_sender_kernel_path = receiver_kernel_path;
     static std::string const& reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
 

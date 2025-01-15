@@ -47,7 +47,10 @@ args_list_t emit_compile_time(Shape4D<T> const& shape) {
 
 args_list_t emit_address_generator_runtime_args(
     tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& tensor);
-args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const& tensor);
+args_list_t new_addrgen_emit_address_generator_runtime_args(
+    const tt::tt_metal::Device* const d, const tt::tt_metal::Tensor& tensor);
+args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& tensor);  // Todo delete this
+args_list_t new_addrgen_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& tensor);
 
 struct ShardedAddrGenArgBuilder {
     static bool shard_grid_is_transposed(tt::tt_metal::Tensor const& t);

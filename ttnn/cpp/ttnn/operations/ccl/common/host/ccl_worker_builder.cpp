@@ -829,7 +829,7 @@ KernelHandle generate_multi_command_stream_kernel_ct_args(
         }
         for (size_t i = 0; i < tensors.size(); i++) {
             std::ranges::copy(
-                ttnn::ccl::emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
+                ttnn::ccl::new_addrgen_emit_address_generator_compile_time_args(*tensors[i]), std::back_inserter(ct_args));
         }
 
         datamovement_kernel_config.compile_args = ct_args;
@@ -1059,11 +1059,11 @@ void generate_multi_input_command_stream_kernel_rt_args(
             if (tensor_device_override.has_value() and
                 tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
                 std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
+                    ttnn::ccl::new_addrgen_emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
                     std::back_inserter(rt_args));
             } else {
                 std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
+                    ttnn::ccl::new_addrgen_emit_address_generator_runtime_args(t->buffer()->device(), *t),
                     std::back_inserter(rt_args));
             }
         }

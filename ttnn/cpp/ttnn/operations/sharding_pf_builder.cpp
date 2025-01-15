@@ -2,44 +2,90 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 // non-transposed - always row-major layout
-
+#include "tt_metal/host_api.hpp"
 namespace shard_pf_builder {
 
-static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores(
-    const Device* d, const ShardSpec& shard_spec) {
-    TT_ASSERT(d != nullptr);
-    // Bounding box encompases all the shard cord range sets
-    const auto& core_range = shard_spec.grid.bounding_box();
-    std::vector<uint32_t> logical_to_noc_row_map;
-    std::vector<uint32_t> logical_to_noc_col_map;
-    for (uint32_t y = 0; y <= core_range.end_coord.y; y++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), CoreType::WORKER);
-        logical_to_noc_row_map.push_back(noc_core.y);
+uint32_t get_sharding_core_count(const Tensor t) {
+    uint32_t core_count = 0;
+    const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
+    for (uint32_t cr = 0; cr < core_ranges.size(); cr++) {
+        TT_FATAL(
+            core_ranges.at(cr).start_coord.x <= core_ranges.at(cr).end_coord.x,
+            "end coordinates left of start coordinates in shard");
+        TT_FATAL(
+            core_ranges.at(cr).start_coord.y <= core_ranges.at(cr).end_coord.y,
+            "end coordinates above of start coordinates in shard");
+        core_count += (core_ranges.at(cr).end_coord.x - core_ranges.at(cr).start_coord.x + 1) *
+                      (core_ranges.at(cr).end_coord.y - core_ranges.at(cr).start_coord.y + 1);
     }
-    for (uint32_t x = 0; x <= core_range.end_coord.x; x++) {
-        CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(x, 0), CoreType::WORKER);
-        logical_to_noc_col_map.push_back(noc_core.x);
-    }
-
-    return {logical_to_noc_row_map, logical_to_noc_col_map};
+    return core_count;
 }
-
-std::vector<uint32_t> sharding_rt_table_builder(const Device* d, const Tensor& t) {
+std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::Device* device, const Tensor& t) {
     std::vector<uint32_t> args;
-    const auto& [row_map, col_map] = shard_noc_cores(d, t.shard_spec().value());
-    args.push_back(row_map.size());
-    for (uint32_t i = 0; i < row_map.size(); i++) {
-        args.push_back(row_map.at(i));
+    struct ShardSpec shard_spec = t.shard_spec().value();
+    const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
+    bool shard_grid_transposed =
+        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+          shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
+         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
+          shard_spec.orientation == ShardOrientation::COL_MAJOR));
+    bool last = false;
+    uint32_t held_value = 0;
+    uint32_t concatenated_core = 0;
+    for (uint32_t cr = 0; cr < core_ranges.size(); cr++) {
+        TT_FATAL(
+            core_ranges.at(cr).start_coord.x <= core_ranges.at(cr).end_coord.x,
+            "end coordinates left of start coordinates in shard");
+        TT_FATAL(core_ranges.at(cr).end_coord.x <= 0xFF, "sharding coordinates out of range");
+        TT_FATAL(
+            core_ranges.at(cr).start_coord.y <= core_ranges.at(cr).end_coord.y,
+            "end coordinates above of start coordinates in shard");
+        TT_FATAL(core_ranges.at(cr).end_coord.y <= 0xFF, "sharding coordinates out of range");
+        if (shard_grid_transposed) {
+            for (uint32_t x_index = core_ranges.at(cr).start_coord.x; x_index <= core_ranges.at(cr).end_coord.x;
+                 x_index++) {
+                for (uint32_t y_index = core_ranges.at(cr).start_coord.y; y_index <= core_ranges.at(cr).end_coord.y;
+                     y_index++) {
+                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    concatenated_core = (noc_core.x & 0xFF) << 8 | (noc_core.y & 0xFF);
+                    if (last) {
+                        args.push_back(concatenated_core | (held_value << 16));
+                    } else {
+                        held_value = concatenated_core;
+                    }
+                    last = !last;
+                }
+            }
+        } else {
+            for (uint32_t y_index = core_ranges.at(cr).start_coord.y; y_index <= core_ranges.at(cr).end_coord.y;
+                 y_index++) {
+                for (uint32_t x_index = core_ranges.at(cr).start_coord.x; x_index <= core_ranges.at(cr).end_coord.x;
+                     x_index++) {
+                    CoreCoord noc_core = device->worker_core_from_logical_core(CoreCoord(x_index, y_index));
+                    concatenated_core = (noc_core.x & 0xFF) << 8 | (noc_core.y & 0xFF);
+                    if (last) {
+                        args.push_back(concatenated_core | (held_value << 16));
+                    } else {
+                        held_value = concatenated_core;
+                    }
+                    last = !last;
+                }
+            }
+        }
     }
-    args.push_back(col_map.size());
-    for (uint32_t i = 0; i < col_map.size(); i++) {
-        args.push_back(col_map.at(i));
+    if (last) {
+        args.push_back((held_value << 16));
     }
-
     return args;
 }
 
-std::vector<uint32_t> sharding_ct_table_builder(const Tensor& t) {
+static void add_sharding_rt_to_existing_rt(const Device* d, const Tensor& t, std::vector<uint32_t>& args) {
+    const auto& new_args = get_linear_shard_list(d, t);
+    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
+}
+
+std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::Device* device, const Tensor& t) {
     std::vector<uint32_t> args;
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
@@ -52,54 +98,27 @@ std::vector<uint32_t> sharding_ct_table_builder(const Tensor& t) {
     struct ShardSpec shard_spec = t.shard_spec().value();
     struct ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
-    // This takes a floor division of page_shape[0] and page_shape[1] from tensor_shard_spec.shape[0] and
-    // tensor_shard_spec.shape[1] respectively Shouldn't it be a roof division?
-    const auto core_ranges = buf_shard_spec.grid().ranges();
-    const auto num_core_range = core_ranges.size();
-    bool shard_grid_transposed =
-        ((t.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-          shard_spec.orientation == ShardOrientation::ROW_MAJOR) ||
-         ((t.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-           t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) &&
-          shard_spec.orientation == ShardOrientation::COL_MAJOR));
-
-    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
-    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));
-    args.push_back(static_cast<uint32_t>(num_core_range));
-    args.push_back(static_cast<uint32_t>(t.buffer()->page_size()));
+    // contiguity is 0 if there is padding between unaligned page, 1 if there is padding in the rightmost shard, and 2
+    // otherwise
+    uint32_t contiguity = (t.buffer()->aligned_page_size() != t.buffer()->page_size())                             ? 0
+                          : (buf_shard_spec.tensor2d_shape[1] == (pages_per_shard_x * get_sharding_core_count(t))) ? 2
+                                                                                                                   : 1;
+    args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
+    args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
+    args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
+    TT_FATAL(t.buffer()->aligned_page_size() > 0, "algined page size is 0");
+    args.push_back(static_cast<uint32_t>(
+        buf_shard_spec.tensor2d_shape[1]));  // The number of pages in each sharding row not including padding pages
+    TT_FATAL(buf_shard_spec.tensor2d_shape[1], "the page is empty");
+    args.push_back(static_cast<uint32_t>(contiguity));  // This defines times when contiguous pages can't be calculated
     args.push_back(pages_per_shard_x);
     args.push_back(pages_per_shard_y);
-    // Todo figure out how many pages in total are in the last shard dimension not including padding pages
-    // Push this back (pages_last_shard_dim)
-    // CCL had the concept of a virtual NOC address ? Where they added VIRTUAL_TENSIX_START_X/Y to the start of the page
-    // Push back a 1 if this is the case
-    for (int i = 0; i < num_core_range; i++) {
-        args.push_back(static_cast<uint32_t>(worker_core_from_logical_core(core_ranges.at(i).start_coord.x)));
-        args.push_back(static_cast<uint32_t>(worker_core_from_logical_core(core_ranges.at(i).start_coord.y)));
-        args.push_back(static_cast<uint32_t>(core_ranges.at(i).end_coord.x - core_ranges.at(i).start_coord.x));
-        args.push_back(static_cast<uint32_t>(core_ranges.at(i).end_coord.y - core_ranges.at(i).start_coord.y));
-    }
-    /*
-    // shard_grid_height (cores)
-    args.push_back(shard_grid_end.y - shard_grid_start.y + 1);
-    TT_FATAL(args.back() > 0, "Passed shard_grid height == 0 to sharded addrgen, which is invalid");
-    // shard_grid_width (cores)
-    args.push_back(shard_grid_end.x - shard_grid_start.x + 1);
-    TT_FATAL(args.back() > 0, "Passed shard_grid width == 0 to sharded addrgen, which is invalid");
-    // shard_grid_start_y
-    args.push_back(shard_grid_start.y);
-    // shard_grid_start_x
-    args.push_back(shard_grid_start.x);
-    // pages_per_shard_y
-    args.push_back(pages_per_shard_y);
-    TT_FATAL(args.back() > 0, "Passed pages per shard y == 0 to sharded addrgen, which is invalid");
-    // pages_per_shard_x
-    args.push_back(pages_per_shard_x);
-    TT_FATAL(args.back() > 0, "Passed pages per shard x == 0 to sharded addrgen, which is invalid");
-    // transposed grid
-    args.push_back(static_cast<uint32_t>(shard_grid_transposed));
-    */
     return args;
+}
+
+static void add_sharding_ct_to_existing_ct(const Device* d, const Tensor& t, std::vector<uint32_t>& args) {
+    const auto& new_args = sharding_ct_table_builder(d, t);
+    std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
 }  // namespace shard_pf_builder
