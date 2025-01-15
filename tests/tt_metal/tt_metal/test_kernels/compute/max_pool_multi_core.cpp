@@ -49,7 +49,7 @@ inline void tilize(
     uint32_t in_ntiles_hwc,
     uint32_t window_hw_padded,
     uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_ntiles_hwc);
+    tilize_init_short(in_cb_id, in_ntiles_hwc, out_cb_id);
     for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++out_elem_i) {
         cb_wait_front(in_cb_id, 1);
         cb_reserve_back(out_cb_id, in_ntiles_hwc);
@@ -63,7 +63,7 @@ inline void tilize(
         cb_push_back(out_cb_id, in_ntiles_hwc);
         cb_pop_front(in_cb_id, 1);
     }
-    tilize_uninit(in_cb_id);
+    tilize_uninit(in_cb_id, out_cb_id);
 }
 
 inline void reduce_h(
