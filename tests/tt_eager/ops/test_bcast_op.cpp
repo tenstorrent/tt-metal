@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
             ttnn::SimpleShape({1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4})};
 
         auto run_operations = [&shapes, device] {
-            for (const auto shape : shapes) {
+            for (const auto& shape : shapes) {
                 for (auto bcast_dim : magic_enum::enum_values<ttnn::BcastOpDim>()) {
                     auto input_shape_a = shape;
                     if (bcast_dim == ttnn::BcastOpDim::H) {

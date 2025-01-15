@@ -15,7 +15,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
 
-void run_fold(IDevice* device, ttnn::SimpleShape shape) {
+void run_fold(IDevice* device, const ttnn::SimpleShape& shape) {
     Tensor input_tensor = ttnn::random::random(shape).to(Layout::ROW_MAJOR).to(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
