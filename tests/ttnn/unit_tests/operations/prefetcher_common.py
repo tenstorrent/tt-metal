@@ -212,10 +212,7 @@ def run_prefetcher_mm(
     pt_tensors = []
     for l in range(num_layers):
         for t in range(num_tensors):
-            if t == 2:
-                pt_tensors.append(torch.randn(input_shapes[t]))
-            else:
-                pt_tensors.append(torch.randn(input_shapes[t]))
+            pt_tensors.append(torch.randn(input_shapes[t]))
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):
@@ -417,8 +414,6 @@ def run_prefetcher_mm(
             tt_tensors,
             num_layers,
             global_cb=global_circular_buffer,
-            # global_cb=None if is_mesh_device else global_circular_buffer,
-            # multi_global_cb=global_circular_buffer if is_mesh_device else None,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
@@ -435,15 +430,8 @@ def run_prefetcher_mm(
                     memory_config=output_mem_configs[t],
                     compute_kernel_config=compute_kernel_config,
                     global_cb=global_circular_buffer,
-                    # global_cb=None if is_mesh_device else global_circular_buffer,
-                    # multi_global_cb=global_circular_buffer if is_mesh_device else None,
                 )
                 outputs_l1.append(output_t)
-
-                # print(output_t.shape)
-                # print(output_t.memory_config())
-                # tt_out = ttnn.to_torch(output_t)
-                # print(tt_out[0][0][0][:])
 
             # Send outputs to DRAM to so that we don't run out of L1 memory when testing for large number of layers
             for t in range(num_tensors):
@@ -479,15 +467,6 @@ def run_prefetcher_mm(
                 else None,
             )[:1, :1, ...]
             pt_out = in0_tensors[t] @ pt_tensors[idx]
-
-            # print(pt_out)
-            # index = 0
-            # print(tt_out[0][0][0][:])
-            # for ele in tt_out[0][0][0][:]:
-            #     if ele != 32.0:
-            #         break
-            #     index+=1
-            # print(index)
 
             dtype = dtypes[t]
             if dtype == ttnn.bfloat4_b:

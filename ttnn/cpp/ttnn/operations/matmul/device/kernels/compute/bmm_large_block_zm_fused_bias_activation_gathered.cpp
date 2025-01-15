@@ -180,13 +180,6 @@ void MAIN {
     UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
 
     UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
-
-    // DPRINT_UNPACK({ DPRINT  << "in1_tensor_split " << (uint)in1_tensor_split << ENDL(); });
-    // DPRINT_UNPACK({ DPRINT  << "in1_rd_ptr_start_addr " << (uint)in1_rd_ptr_start_addr << ENDL(); });
-    // DPRINT_UNPACK({ DPRINT  << "in1_tensor_size_bytes " << (uint)(in1_tensor_size_bytes) << ENDL(); });
-    // DPRINT_UNPACK({ DPRINT  << "in1_rd_ptr_end_addr " << (uint)(in1_rd_ptr_start_addr + in1_tensor_size_bytes / 16)
-    // << ENDL(); }); DPRINT_UNPACK({ DPRINT  << "in1_cb_start_addr " << (uint)in1_cb_start_addr << ENDL(); });
-    // DPRINT_UNPACK({ DPRINT  << "curr_in1_block_index " << (uint)curr_in1_block_index << ENDL(); });
 #endif
 
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -221,15 +214,6 @@ void MAIN {
         // Wait to receive in1
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
-
-        // DPRINT_UNPACK({ DPRINT  << "num_blocks " << num_blocks << ENDL(); });
-        // DPRINT_UNPACK({ DPRINT  << "in1_block_num_tiles " << in1_block_num_tiles << ENDL(); });
-        // for (uint32_t i=0; i<in1_block_num_tiles; ++i) {
-        //     DPRINT_UNPACK({ DPRINT  << "i " << i << ENDL(); });
-        //     for (uint32_t j=0; j<32; ++j)
-        //         DPRINT_UNPACK({ DPRINT  << TSLICE(in1_cb_id, i, SliceRange{.h0 = uint8_t(j), .h1 = uint8_t(j+1), .hs
-        //         = 1, .w0 = 0, .w1 = 32, .ws = 1}) << ENDL(); });
-        // }
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
@@ -323,13 +307,6 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
-#ifdef ENABLE_GLOBAL_CB
-                        // Release in1
-                        // cb_reserve_back(sync_cb, 1);
-                        // cb_push_back(sync_cb, 1);
-
-#endif
-
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
@@ -344,17 +321,6 @@ void MAIN {
 
                         tile_regs_release();
                         cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
-
-                        // DPRINT_UNPACK({ DPRINT  << "out_subblock_num_tilesi " << out_subblock_num_tiles << ENDL();
-                        // });
-
-                        // cb_wait_front(mm_out_cb_id, out_subblock_num_tiles);
-                        // for (uint32_t i=0; i<out_subblock_num_tiles; ++i) {
-                        //     DPRINT_UNPACK({ DPRINT  << "i " << i << ENDL(); });
-                        //     for (uint32_t j=0; j<1; ++j)
-                        //         DPRINT_UNPACK({ DPRINT  << TSLICE(mm_out_cb_id, i, SliceRange{.h0 = uint8_t(j), .h1 =
-                        //         uint8_t(j+1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1}) << ENDL(); });
-                        // }
 
                     } else if (spill) {
                         tile_regs_commit();

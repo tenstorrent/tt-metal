@@ -52,19 +52,6 @@ void kernel_main() {
                 {
                     cb_wait_front(local_cb_id, max_block_num_tiles);
 
-                    // DPRINT  << "block " << block << ENDL();
-                    // for (volatile int i = 0; i < 10000; ++i) {
-                    // }
-                    // for (uint32_t i=0; i<16; ++i) {
-                    //     DPRINT  << "i " << i << ENDL();
-                    // for (uint32_t j=0; j<32; ++j)
-                    //     DPRINT  << TSLICE(local_cb_id, 0, SliceRange{.h0 = uint8_t(j), .h1 = uint8_t(j+1), .hs = 1,
-                    //     .w0 = 0, .w1 = 32, .ws = 1}, true, true) << ENDL();
-                    // }
-
-                    // RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(remote_cb_id);
-                    // DPRINT  << "cb_id_in1_addr : " << (uint)(remote_cb.fifo_wr_ptr / 16) << ENDL();
-
                     uint32_t local_cb_addr = get_read_ptr(local_cb_id);
                     experimental::remote_cb_push_back_and_write_pages(
                         remote_cb_id,
@@ -75,17 +62,12 @@ void kernel_main() {
                         curr_coalesced_page_size,
                         noc);
 
-                    RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(remote_cb_id);
-                    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
-                    DPRINT << "pages send : " << (uint)(*pages_sent_ptr) << ENDL();
-
                     cb_pop_front(local_cb_id, max_block_num_tiles);
                 }
             }
         }
     }
-    // for (volatile int i=0; i<1000000; ++i){}
+
     experimental::remote_cb_sender_barrier(remote_cb_id);
 
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
