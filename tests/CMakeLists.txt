@@ -1,12 +1,3 @@
-if(NOT DEFINED ENV{ARCH_NAME})
-    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
-endif(NOT DEFINED ENV{ARCH_NAME})
-
-set(currentArch "$ENV{ARCH_NAME}")
-string(REPLACE "wormhole_b0" "wormhole" currentArch "${currentArch}")
-
-include_directories(${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${currentArch})
-
 enable_testing()
 include(GoogleTest)
 add_library(test_common_libs INTERFACE)

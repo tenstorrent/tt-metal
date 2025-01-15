@@ -833,12 +833,12 @@ const ttnn::SimpleShape Tensor::strides() const {
     return ttnn::SimpleShape(tt::tt_metal::compute_strides(this->get_padded_shape()));
 }
 
-uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
+uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
 
 uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 
 bool Tensor::is_scalar() const {
-    const ttnn::SimpleShape logical_shape = this->get_shape().logical_shape();
+    const ttnn::SimpleShape logical_shape = this->get_logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
