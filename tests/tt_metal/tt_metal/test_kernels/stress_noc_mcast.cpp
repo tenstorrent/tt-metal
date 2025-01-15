@@ -41,7 +41,9 @@ void kernel_main() {
 
             if (mcaster) {
                 uint64_t dst_noc_multicast_addr =
-                    get_noc_multicast_addr(tlx, tly, tlx + width - 1, tly + height - 1, ucast_l1_addr);
+                    (NOC_INDEX == 0)
+                        ? get_noc_multicast_addr(tlx, tly, tlx + width - 1, tly + height - 1, ucast_l1_addr)
+                        : get_noc_multicast_addr(tlx + width - 1, tly + height - 1, tlx, tly, ucast_l1_addr);
                 noc_async_write_multicast(mcast_l1_addr, dst_noc_multicast_addr, mcast_size, width * height, false);
             } else {
                 uint32_t dst_x, dst_y;
