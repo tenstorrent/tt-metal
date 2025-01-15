@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
 #include "tt_metal/common/bfloat16.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/cpp/ttnn/operations/copy.hpp"
@@ -65,7 +66,7 @@ Tensor _addalpha(
 
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = input_a.device()->sfpu_eps();
+    const float eps = tt::tt_metal::experimental::hal::get_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);

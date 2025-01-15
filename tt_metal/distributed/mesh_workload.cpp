@@ -44,10 +44,10 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
     auto mesh_device = mesh_cq.device();
     if (this->program_binary_status.size()) {
         TT_FATAL(
-            this->program_binary_status.find(mesh_device->get_mesh_id()) != this->program_binary_status.end(),
+            this->program_binary_status.find(mesh_device->id()) != this->program_binary_status.end(),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
         TT_FATAL(
-            this->program_binary_status.at(mesh_device->get_mesh_id()) == ProgramBinaryStatus::Committed,
+            this->program_binary_status.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
             "Expected Program Biinaries to be committed to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure
@@ -105,7 +105,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 }
             }
         }
-        this->program_binary_status[mesh_device->get_mesh_id()] = ProgramBinaryStatus::InFlight;
+        this->program_binary_status[mesh_device->id()] = ProgramBinaryStatus::InFlight;
     }
 }
 

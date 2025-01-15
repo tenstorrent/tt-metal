@@ -17,7 +17,7 @@ protected:
 };
 
 TEST_F(DistributedTest, TestSystemMeshTearDownWithoutClose) {
-    auto& sys = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& sys = SystemMesh::instance();
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 

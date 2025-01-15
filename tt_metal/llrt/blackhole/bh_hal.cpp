@@ -22,6 +22,10 @@ constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
 
+static constexpr float EPS_BH = 1.19209e-7f;
+static constexpr float NAN_BH = 7.0040e+19;
+static constexpr float INF_BH = 1.7014e+38;
+
 namespace tt {
 
 namespace tt_metal {
@@ -110,6 +114,10 @@ void Hal::initialize_bh() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+
+    this->eps_ = EPS_BH;
+    this->nan_ = NAN_BH;
+    this->inf_ = INF_BH;
 }
 
 }  // namespace tt_metal

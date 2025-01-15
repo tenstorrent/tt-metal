@@ -67,7 +67,7 @@ protected:
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}, MeshType::Ring));
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}, .mesh_type = MeshType::Ring});
     }
 
     void TearDown() override {
@@ -75,7 +75,7 @@ protected:
             return;
         }
 
-        mesh_device_->close_devices();
+        mesh_device_->close();
         mesh_device_.reset();
     }
     std::shared_ptr<MeshDevice> mesh_device_;

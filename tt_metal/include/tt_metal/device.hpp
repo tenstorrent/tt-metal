@@ -48,19 +48,6 @@ class JitBuildEnv;
 class HWCommandQueue;
 class TraceBuffer;
 
-// TODO: These should be moved into arch specific host files that get exported here
-static constexpr float  EPS_GS = 0.001953125f;
-static constexpr float  EPS_WHB0 = 1.19209e-7f;
-static constexpr float  EPS_BH = EPS_WHB0;
-
-static constexpr float  NAN_GS = 6.9752e19;
-static constexpr float  NAN_WHB0 = 7.0040e+19;
-static constexpr float  NAN_BH = NAN_WHB0;
-
-static constexpr float  INF_GS = 1.6948e38;
-static constexpr float  INF_WHB0 = 1.7014e+38;
-static constexpr float  INF_BH = INF_WHB0;
-
 inline namespace v0 {
 
 class IDevice {
@@ -179,10 +166,6 @@ public:
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
-
-    virtual float sfpu_eps() const = 0;
-    virtual float sfpu_nan() const = 0;
-    virtual float sfpu_inf() const = 0;
 
     virtual const JitBuildEnv& build_env() const = 0;
     virtual const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;

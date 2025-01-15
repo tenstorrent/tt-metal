@@ -159,6 +159,10 @@ private:
     uint32_t virtual_worker_start_x_;
     uint32_t virtual_worker_start_y_;
 
+    float eps_ = 0.0f;
+    float nan_ = 0.0f;
+    float inf_ = 0.0f;
+
     void initialize_gs();
     void initialize_wh();
     void initialize_bh();
@@ -194,6 +198,10 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_start_reg_index() const {
         return noc_stream_remote_dest_buf_start_reg_index_;
     }
+
+    float get_eps() const { return eps_; }
+    float get_nan() const { return nan_; }
+    float get_inf() const { return inf_; }
 
     template <typename IndexType, typename SizeType, typename CoordType>
     auto noc_coordinate(IndexType noc_index, SizeType noc_size, CoordType coord) const

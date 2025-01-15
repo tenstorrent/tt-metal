@@ -50,7 +50,7 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
+            mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
 
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
@@ -65,7 +65,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        mesh_device_->close_devices();
+        mesh_device_->close();
     }
 
     tt::ARCH arch_;

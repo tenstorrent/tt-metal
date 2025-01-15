@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/distributed/distributed_fixture.hpp"
+#include "tt_metal/distributed/system_mesh.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -15,13 +16,12 @@ TEST_F(MeshDevice_T3000, SimpleMeshDeviceTest) {
 TEST(MeshDeviceSuite, Test1x1SystemMeshInitialize) {
     auto& sys = tt::tt_metal::distributed::SystemMesh::instance();
 
-    auto config =
-        tt::tt_metal::distributed::MeshDeviceConfig(MeshShape(1, 1), MeshOffset(0, 0), {}, MeshType::RowMajor);
+    auto config = tt::tt_metal::distributed::MeshDeviceConfig{.mesh_shape = MeshShape(1, 1)};
 
     EXPECT_NO_THROW({
         auto mesh = tt::tt_metal::distributed::MeshDevice::create(
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-        mesh->close_devices();
+        mesh->close();
     });
 }
 

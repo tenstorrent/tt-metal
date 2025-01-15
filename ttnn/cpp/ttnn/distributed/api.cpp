@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "tt_metal/distributed/mesh_device.hpp"
+#include "tt_metal/distributed/system_mesh.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;
@@ -26,11 +27,12 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     MeshType mesh_type,
     const MeshOffset& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config = MeshDeviceConfig(mesh_shape, offset, physical_device_ids, mesh_type);
+    auto config = MeshDeviceConfig{
+        .mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids, .mesh_type = mesh_type};
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
-void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close_devices(); }
+void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
     if (std::holds_alternative<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage())) {
@@ -141,7 +143,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
     auto physical_device_ids =
-        instance.get_mapped_physical_device_ids(MeshDeviceConfig(MeshShape{1, 8}, MeshOffset{0, 0}));
+        instance.get_mapped_physical_device_ids(MeshDeviceConfig{MeshShape{1, 8}, MeshOffset{0, 0}});
     return physical_device_ids;
 }
 

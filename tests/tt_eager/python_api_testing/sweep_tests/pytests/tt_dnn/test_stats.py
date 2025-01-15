@@ -82,14 +82,3 @@ class TestStats:
         run_single_pytorch_test(
             f"stats-{fn_kind}", input_shapes, datagen_func, comparison_func, device, test_args, ttnn_op=is_ttnn_op
         )
-
-
-class TestEPS:
-    def test_basic_gs(self):
-        assert ttnn.device.EPS_GS == 0.001953125
-
-    def test_basic_whb0(self):
-        assert np.isclose(ttnn.device.EPS_WHB0, 1.19209e-07)
-
-    def test_basic_bh(self):
-        assert np.isclose(ttnn.device.EPS_BH, 1.19209e-07)
