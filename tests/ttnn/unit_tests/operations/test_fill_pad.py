@@ -90,7 +90,42 @@ ttnn_dtype_to_torch_dtype = {
 }
 
 
-@pytest.mark.parametrize("shape", [(2, 32, 300, 256)])
+# @pytest.mark.parametrize("shape", [(2, 32, 300, 256)])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # 2D shapes with edge cases for fill_pad
+        (32, 32),
+        (32, 1),
+        (31, 32),
+        (1, 32),
+        # Same as above, but with larger dimensions for multiple pages of writing
+        (64, 63),
+        (64, 1),
+        (63, 64),
+        (1, 64),
+        # Same as above, but with 3D where higher dim is not 1
+        (5, 32, 31),
+        (5, 32, 1),
+        (5, 31, 32),
+        (5, 1, 32),
+        # Same as above, but using a prime number like 13 for the highest dimension
+        (13, 32, 31),
+        (13, 32, 1),
+        (13, 31, 32),
+        (13, 1, 32),
+        (29, 13, 32, 31),
+        (11, 13, 32, 1),
+        (7, 13, 31, 32),
+        (1, 13, 1, 32),
+        (1, 1, 1, 13),
+        (1, 2, 7, 73),
+        (1, 2, 3, 5, 89),
+        (1, 2, 3, 2, 7, 97),
+        (1, 2, 3, 2, 1, 13, 253),
+        (1, 2, 3, 2, 1, 2, 7, 1707),
+    ],
+)
 @pytest.mark.parametrize("fill_value", [1])
 @pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])

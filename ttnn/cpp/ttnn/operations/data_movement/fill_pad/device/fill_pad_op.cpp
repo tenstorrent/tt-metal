@@ -18,7 +18,7 @@ using uint32_t = uint32_t;
 bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
 operation::ProgramWithCallbacks fill_pad_single_core(const Tensor& input_tensor, float fill_value) {
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
@@ -141,9 +141,11 @@ void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
         "FillPad does not currently support sharding");
 }
 
-std::vector<SimpleShape> FillPad::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> FillPad::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_logical_shape()};
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(TILE_LAYOUT), this->output_mem_config))};
 }
 
 std::vector<Tensor> FillPad::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
