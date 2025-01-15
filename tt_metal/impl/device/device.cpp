@@ -23,6 +23,7 @@
 #include "tt_metal/detail/persistent_kernel_cache.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "llrt/hal.hpp"
+#include "tt_metal/experimental/hal.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
@@ -1466,44 +1467,6 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Sp
     }
 }
 
-float Device::sfpu_eps() const {
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL: return tt::tt_metal::EPS_GS;
-        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::EPS_WHB0;
-        case tt::ARCH::BLACKHOLE: return tt::tt_metal::EPS_BH;
-        default: return std::numeric_limits<float>::epsilon();
-    }
-
-    return std::numeric_limits<float>::epsilon();
-}
-
-float Device::sfpu_nan() const {
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL: return tt::tt_metal::NAN_GS;
-        case tt::ARCH::WORMHOLE_B0: return tt::tt_metal::NAN_WHB0;
-        case tt::ARCH::BLACKHOLE: return tt::tt_metal::NAN_BH;
-        default: return std::numeric_limits<float>::quiet_NaN();
-    }
-
-    return std::numeric_limits<float>::quiet_NaN();
-}
-
-// machine inf
-float Device::sfpu_inf() const{
-
-    switch (arch()) {
-        case tt::ARCH::GRAYSKULL:
-            return tt::tt_metal::INF_GS;
-        case tt::ARCH::WORMHOLE_B0:
-            return tt::tt_metal::INF_WHB0;
-        case tt::ARCH::BLACKHOLE:
-            return tt::tt_metal::INF_BH;
-        default:
-            return std::numeric_limits<float>::infinity();
-    }
-    return std::numeric_limits<float>::infinity();
-}
-
 std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
     TT_ASSERT(programmable_core < this->build_state_indices_.size(),
         "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
@@ -1973,11 +1936,11 @@ tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
     return device->bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
-float v1::GetSfpuEps(IDevice* device) { return device->sfpu_eps(); }
+float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }
 
-float v1::GetSfpuNan(IDevice* device) { return device->sfpu_nan(); }
+float v1::GetSfpuNan(IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); }
 
-float v1::GetSfpuInf(IDevice* device) { return device->sfpu_inf(); }
+float v1::GetSfpuInf(IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); }
 
 std::size_t v1::GetNumProgramCacheEntries(IDevice* device) { return device->num_program_cache_entries(); }
 

@@ -441,7 +441,7 @@ An end-to-end example of the decode attention module is in the `models/demos/lla
    - We split the fused QKV tensor into individual Q, K, V tensors using `ttnn.experimental.nlp_create_qkv_heads_decode`.
 > [!NOTE]
 >  This is a different OP than `ttnn.experimental.nlp_create_qkv_heads` used in prefill mode. For example:
-> 
+>
      ```python
      Q, K, V = ttnn.experimental.nlp_create_qkv_heads_decode(
       xqkv_fused,
