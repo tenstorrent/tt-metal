@@ -634,8 +634,12 @@ std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
 
 // Allocator methods
 // Memory statistics and buffer management
-uint32_t MeshDevice::get_allocator_alignment() const { return reference_device()->get_allocator_alignment(); }
-uint32_t MeshDevice::get_allocator_alignment(SubDeviceId sub_device_id) const { return reference_device()->get_allocator_alignment(sub_device_id); }
+uint32_t MeshDevice::get_allocator_alignment(const BufferType& buffer_type) const {
+    return reference_device()->get_allocator_alignment(buffer_type);
+}
+uint32_t MeshDevice::get_allocator_alignment(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
+    return reference_device()->get_allocator_alignment(buffer_type, sub_device_id);
+}
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const { return reference_device()->lowest_occupied_compute_l1_address(); }
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const { return reference_device()->lowest_occupied_compute_l1_address(sub_device_ids); }
 size_t MeshDevice::get_l1_small_size() const { return reference_device()->get_l1_small_size(); }

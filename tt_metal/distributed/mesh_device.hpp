@@ -134,8 +134,8 @@ public:
     const std::vector<uint32_t>& bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const override;
     allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type) const override;
     allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t get_allocator_alignment() const override;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const override;
+    uint32_t get_allocator_alignment(const BufferType& buffer_type) const override;
+    uint32_t get_allocator_alignment(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
     size_t get_l1_small_size() const override;
