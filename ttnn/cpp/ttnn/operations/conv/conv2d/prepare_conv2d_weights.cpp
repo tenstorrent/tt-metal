@@ -658,11 +658,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
 
-    //const auto& original_weights_shape = weight_tensor.get_logical_shape();
-    std::cout << weight_block_h_ntiles << " " << weight_block_w_ntiles << " " << act_block_h_ntiles << std::endl;
-    std::cout << "parallel config -> " << parallel_config.grid.num_cores() << " " << (int)parallel_config.shard_scheme
-              << " " << (int)parallel_config.shard_orientation << std::endl;
-
     const auto& original_weights_shape = weight_tensor.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];

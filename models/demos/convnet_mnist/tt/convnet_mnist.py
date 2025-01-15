@@ -66,6 +66,7 @@ def convnet_mnist(
     x = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
         **conv_kwargs,
         compute_config=compute_config,
         conv_op_cache={},
@@ -126,6 +127,7 @@ def convnet_mnist(
     x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
         **conv_kwargs,
         conv_op_cache={},
         debug=False,

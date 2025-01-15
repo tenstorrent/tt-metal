@@ -811,10 +811,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
         conv_config.shard_layout.has_value()) {
         return conv_config_;
-        /*if(input_memory_config.has_value() && input_memory_config.value().is_sharded() && !conv_config.reshard_if_not_optimal) {
-            conv_config.shard_layout = input_memory_config.value().memory_layout;
-        }
-        return;*/
     }
 
     ShardOrientation shard_orientation =

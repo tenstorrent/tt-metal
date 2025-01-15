@@ -202,20 +202,14 @@ class resnet50Bottleneck:
                     **conv_kwargs,
                 )
 
-                self.ds_conv_bias_tensor = (
-                    ttnn.prepare_conv_bias(
-                        bias_tensor=self.ds_conv_bias_tensor,
-                        input_memory_config=x.memory_config(),
-                        input_layout=x.get_layout(),
-                        **conv_kwargs,
-                    )
-                    if self.ds_conv_bias_tensor is not None
-                    else None
+                self.ds_conv_bias_tensor = ttnn.prepare_conv_bias(
+                    bias_tensor=self.ds_conv_bias_tensor,
+                    input_memory_config=x.memory_config(),
+                    input_layout=x.get_layout(),
+                    **conv_kwargs,
                 )
                 self.ds_conv_weight_tensor = ttnn.to_device(self.ds_conv_weight_tensor, device)
-                self.ds_conv_bias_tensor = (
-                    ttnn.to_device(self.ds_conv_bias_tensor, device) if self.ds_conv_bias_tensor else None
-                )
+                self.ds_conv_bias_tensor = ttnn.to_device(self.ds_conv_bias_tensor, device)
 
             ds_out = ttnn.conv2d(
                 input_tensor=x,
@@ -291,19 +285,15 @@ class resnet50Bottleneck:
                 input_layout=x.get_layout(),
                 **conv_kwargs_1,
             )
-            self.conv1_bias_tensor = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.conv1_bias_tensor,
-                    input_memory_config=x.memory_config(),
-                    input_layout=x.get_layout(),
-                    **conv_kwargs_1,
-                )
-                if self.conv1_bias_tensor is not None
-                else None
+            self.conv1_bias_tensor = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv1_bias_tensor,
+                input_memory_config=x.memory_config(),
+                input_layout=x.get_layout(),
+                **conv_kwargs_1,
             )
 
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
-            self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device) if self.conv1_bias_tensor else None
+            self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
 
         out, [input_height, input_width] = ttnn.conv2d(
             input_tensor=x,
@@ -373,7 +363,7 @@ class resnet50Bottleneck:
 
         reallocate_halo_output = batch_size == 20
         logger.debug(f"Running conv2")
-        conv2_kwargs = {
+        conv_kwargs_2 = {
             "in_channels": self.conv2_input_channels,
             "out_channels": self.conv2_output_channels,
             "batch_size": batch_size,
@@ -410,26 +400,22 @@ class resnet50Bottleneck:
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
                 input_layout=out.get_layout(),
-                **conv2_kwargs,
+                **conv_kwargs_2,
             )
-            self.conv2_bias_tensor = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.conv2_bias_tensor,
-                    input_memory_config=x.memory_config(),
-                    input_layout=out.get_layout(),
-                    **conv2_kwargs,
-                )
-                if self.conv2_bias_tensor is not None
-                else None
+            self.conv2_bias_tensor = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv2_bias_tensor,
+                input_memory_config=x.memory_config(),
+                input_layout=out.get_layout(),
+                **conv_kwargs_2,
             )
             self.conv2_weight_tensor = ttnn.to_device(self.conv2_weight_tensor, device)
-            self.conv2_bias_tensor = ttnn.to_device(self.conv2_bias_tensor, device) if self.conv2_bias_tensor else None
+            self.conv2_bias_tensor = ttnn.to_device(self.conv2_bias_tensor, device)
 
         out, [input_height, input_width] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
             bias_tensor=self.conv2_bias_tensor,
-            **conv2_kwargs,
+            **conv_kwargs_2,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -456,7 +442,7 @@ class resnet50Bottleneck:
 
         # conv3 is 1x1 conv
         logger.debug(f"Running conv3")
-        conv3_kwargs = {
+        conv_kwargs_3 = {
             "in_channels": self.conv3_input_channels,
             "out_channels": self.conv3_output_channels,
             "batch_size": batch_size,
@@ -485,25 +471,21 @@ class resnet50Bottleneck:
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
                 input_layout=out.get_layout(),
-                **conv3_kwargs,
+                **conv_kwargs_3,
             )
-            self.conv3_bias_tensor = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.conv3_bias_tensor,
-                    input_memory_config=x.memory_config(),
-                    input_layout=out.get_layout(),
-                    **conv3_kwargs,
-                )
-                if self.conv2_bias_tensor is not None
-                else None
+            self.conv3_bias_tensor = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv3_bias_tensor,
+                input_memory_config=x.memory_config(),
+                input_layout=out.get_layout(),
+                **conv_kwargs_3,
             )
             self.conv3_weight_tensor = ttnn.to_device(self.conv3_weight_tensor, device)
-            self.conv3_bias_tensor = ttnn.to_device(self.conv3_bias_tensor, device) if self.conv3_bias_tensor else None
+            self.conv3_bias_tensor = ttnn.to_device(self.conv3_bias_tensor, device)
         out = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
             bias_tensor=self.conv3_bias_tensor,
-            **conv3_kwargs,
+            **conv_kwargs_3,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=self.model_config["MATH_FIDELITY"],
@@ -873,18 +855,14 @@ class resnet50:
                 **conv_kwargs,
             )
 
-            self.conv1_bias_tensor = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.conv1_bias_tensor,
-                    input_memory_config=fold_output_tensor.memory_config(),
-                    input_layout=fold_output_tensor.get_layout(),
-                    **conv_kwargs,
-                )
-                if self.conv1_bias_tensor is not None
-                else None
+            self.conv1_bias_tensor = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv1_bias_tensor,
+                input_memory_config=fold_output_tensor.memory_config(),
+                input_layout=fold_output_tensor.get_layout(),
+                **conv_kwargs,
             )
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
-            self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device) if self.conv1_bias_tensor else None
+            self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
         x, [x_height, x_width] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,

@@ -169,15 +169,11 @@ class downsample_2d:
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs,
             )
-            self.conv_bias = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.conv_bias,
-                    input_memory_config=hidden_states.memory_config(),
-                    input_layout=hidden_states.get_layout(),
-                    **conv_kwargs,
-                )
-                if self.conv_bias is not None
-                else None
+            self.conv_bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv_bias,
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                **conv_kwargs,
             )
             self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
             self.conv_bias = ttnn.to_device(self.conv_bias, self.device)

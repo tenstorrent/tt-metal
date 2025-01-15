@@ -140,19 +140,15 @@ def ttnn_vgg16(
                     **conv_kwargs,
                 )
 
-                tt_bias = (
-                    ttnn.prepare_conv_bias(
-                        bias_tensor=tt_bias,
-                        input_memory_config=ttnn.L1_MEMORY_CONFIG,
-                        input_layout=tt_x.get_layout(),
-                        **conv_kwargs,
-                    )
-                    if tt_bias is not None
-                    else None
+                tt_bias = ttnn.prepare_conv_bias(
+                    bias_tensor=tt_bias,
+                    input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    input_layout=tt_x.get_layout(),
+                    **conv_kwargs,
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
-                tt_bias = ttnn.to_device(tt_bias, device) if tt_bias else None
+                tt_bias = ttnn.to_device(tt_bias, device)
             # Call ttnn.conv
             conv_op_cache = {}
             tt_output_tensor_on_device = ttnn.conv2d(
@@ -296,19 +292,15 @@ def ttnn_vgg11(
                     **conv_kwargs,
                 )
 
-                tt_bias = (
-                    ttnn.prepare_conv_bias(
-                        bias_tensor=tt_bias,
-                        input_memory_config=ttnn.L1_MEMORY_CONFIG,
-                        input_layout=tt_x.get_layout(),
-                        **conv_kwargs,
-                    )
-                    if tt_bias is not None
-                    else None
+                tt_bias = ttnn.prepare_conv_bias(
+                    bias_tensor=tt_bias,
+                    input_memory_config=ttnn.L1_MEMORY_CONFIG,
+                    input_layout=tt_x.get_layout(),
+                    **conv_kwargs,
                 )
 
                 tt_weight = ttnn.to_device(tt_weight, device)
-                tt_bias = ttnn.to_device(tt_bias, device) if tt_bias else None
+                tt_bias = ttnn.to_device(tt_bias, device)
 
             # Call ttnn.conv
             conv_op_cache = {}

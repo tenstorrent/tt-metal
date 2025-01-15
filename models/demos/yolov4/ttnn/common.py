@@ -126,19 +126,15 @@ class Conv:
                 **conv_kwargs,
             )
 
-            self.bias = (
-                ttnn.prepare_conv_bias(
-                    bias_tensor=self.bias,
-                    input_memory_config=input_tensor.memory_config(),
-                    input_layout=input_tensor.get_layout(),
-                    **conv_kwargs,
-                )
-                if self.bias is not None
-                else None
+            self.bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.bias,
+                input_memory_config=input_tensor.memory_config(),
+                input_layout=input_tensor.get_layout(),
+                **conv_kwargs,
             )
 
             self.weights = ttnn.to_device(self.weights, device)
-            self.bias = ttnn.to_device(self.bias, device) if self.bias else None
+            self.bias = ttnn.to_device(self.bias, device)
 
         output_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
