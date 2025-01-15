@@ -119,7 +119,7 @@ Transformer::Transformer(const TransformerConfig& config) {
             std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size);
+    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
