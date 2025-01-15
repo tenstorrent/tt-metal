@@ -7,6 +7,7 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
@@ -21,12 +22,23 @@ TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape, DataType dtype) {
     return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
+TEST_F(TensorDistributionTest, DistributeToDevice) {
+    Tensor input_tensor = Tensor::from_vector(
+        std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32));
+
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+
+    // If no device is provided, the tensor is kept on host.
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper).storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(distribute_tensor(input_tensor, *mapper, *mesh_device_).storage_type() == StorageType::MULTI_DEVICE);
+}
+
 TEST_F(TensorDistributionTest, Replication) {
     Tensor input_tensor = Tensor::from_vector(
         std::vector<float>{42.F, 13.F, -99.F}, get_tensor_spec(ttnn::SimpleShape{1, 1, 1, 3}, DataType::FLOAT32));
 
     auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
-    Tensor replicated_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -43,12 +55,12 @@ TEST_F(TensorDistributionTest, Shard1DInvalidDim) {
 
     EXPECT_ANY_THROW({
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
-        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 
     EXPECT_ANY_THROW({
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 4);
-        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 }
 
@@ -60,7 +72,7 @@ TEST_F(TensorDistributionTest, Shard1DTooFewShards) {
 
     EXPECT_ANY_THROW({
         auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 3);
-        Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+        Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     });
 }
 
@@ -74,7 +86,7 @@ TEST_F(TensorDistributionTest, Shard1D) {
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::SimpleShape{1, num_devices, 3, 1}, DataType::FLOAT32));
 
     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -127,7 +139,7 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
         Shard2dConfig{
             .row_dim = 1,
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
     sharded_tensor.print();
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
@@ -162,7 +174,7 @@ TEST_F(TensorDistributionTest, Shard2D) {
             .row_dim = 1,
             .col_dim = 2,
         });
-    Tensor sharded_tensor = distribute_tensor(input_tensor, *mesh_device_, *mapper);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
