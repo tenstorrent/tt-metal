@@ -194,14 +194,14 @@ void kernel_main() {
         // === parse packet payload ===
         uint32_t curr_packet_payload_words = curr_packet_size_words-1;
         if constexpr (!disable_data_check) {
-            uint32_t words_before_wrap = input_queue->get_queue_words_before_rptr_cleared_wrap();
+            uint32_t words_before_wrap = input_queue->get_queue_words_before_rptr_cleared_wrap<true>();
             uint32_t words_after_wrap = 0;
             if (words_before_wrap < curr_packet_payload_words) {
                 words_after_wrap = curr_packet_payload_words - words_before_wrap;
             } else {
                 words_before_wrap = curr_packet_payload_words;
             }
-            if (!check_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(input_queue->get_queue_rptr_cleared_addr_bytes()),
+            if (!check_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(input_queue->get_queue_rptr_cleared_addr_bytes<true>()),
                                    words_before_wrap,
                                    (curr_packet_tag & 0xFFFF0000)+1,
                                    mismatch_addr, mismatch_val, expected_val)) {
@@ -214,7 +214,7 @@ void kernel_main() {
             input_queue->input_queue_advance_words_cleared<rx_rptr_update_network_type, false>(words_before_wrap);
             words_cleared += words_before_wrap;
             if (words_after_wrap > 0) {
-                if (!check_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(input_queue->get_queue_rptr_cleared_addr_bytes()),
+                if (!check_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(input_queue->get_queue_rptr_cleared_addr_bytes<true>()),
                                        words_after_wrap,
                                        (curr_packet_tag & 0xFFFF0000) + 1 + words_before_wrap,
                                        mismatch_addr, mismatch_val, expected_val)) {

@@ -80,15 +80,15 @@ inline bool input_queue_handler() {
         return true;
     }
 
-    uint32_t free_words = input_queue_ptr->get_queue_data_num_words_free();
+    uint32_t free_words = input_queue_ptr->get_queue_data_num_words_free<true>();
     if (free_words == 0) {
         return false;
     }
 
     // Each call to input_queue_handler initializes only up to the end
     // of the queue buffer, so we don't need to handle wrapping.
-    uint32_t byte_wr_addr = input_queue_ptr->get_queue_wptr_addr_bytes();
-    uint32_t words_to_init = std::min(free_words, input_queue_ptr->get_queue_words_before_wptr_wrap());
+    uint32_t byte_wr_addr = input_queue_ptr->get_queue_wptr_addr_bytes<true>();
+    uint32_t words_to_init = std::min(free_words, input_queue_ptr->get_queue_words_before_wptr_wrap<true>());
     uint32_t words_initialized = 0;
 
     while (words_initialized < words_to_init) {
