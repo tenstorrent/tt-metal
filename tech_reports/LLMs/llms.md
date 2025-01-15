@@ -425,38 +425,39 @@ The attention module in decode mode expects input shape `(1, seqlen=1, bsz, hidd
 
 An end-to-end example of the decode attention module is in the `models/demos/llama3/tt/llama_attention.py` file, under the `forward_decode` method. The decode mode is broken down into the following steps:
 
-1. QKV projections matmuls.
+1. **QKV Projections Matmuls**
    - This works the same as in prefill mode, using `ttnn.linear`. Note that the input shape is `(1, 1, bsz, dim)` instead of `(1, 1, seqlen, dim)`.
    - Input/Output shapes:
       ```python
       (1, 1, bsz, dim) -> (1, 1, bsz, (n_q_heads+2*n_kv_heads)*head_dim)
       ```
 
-2. Reshape Q, K, V to match the expected input shape for scaled dot product attention.
+2. **Reshape QKV**
+   - Reshape Q, K, and V to match the expected input shape for scaled dot product attention.
    - We split the fused QKV tensor into individual Q, K, V tensors using `ttnn.experimental.nlp_create_qkv_heads_decode`.
 > [!NOTE]
 >  This is a different OP than `ttnn.experimental.nlp_create_qkv_heads` used in prefill mode. For example:
->
-     ```python
-     Q, K, V = ttnn.experimental.nlp_create_qkv_heads_decode(
-      xqkv_fused,
-      num_heads=n_q_heads,
-      num_kv_heads=n_kv_heads,
-      memory_config=ttnn.MemoryConfig(
-          ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
-      )
-     )
-     ```
+> ```python
+> Q, K, V = ttnn.experimental.nlp_create_qkv_heads_decode(
+>  xqkv_fused,
+>  num_heads=n_q_heads,
+>  num_kv_heads=n_kv_heads,
+>  memory_config=ttnn.MemoryConfig(
+>     ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1
+>  )
+> )
+> ```
+
    - **Input/Output Shapes**: The output is height sharded across the batch dimension on `bsz` number of cores.
       ```python
       (1, 1, bsz, (n_q_heads+2*n_kv_heads)*head_dim) -> (1, bsz, n_q_heads, head_dim), (1, bsz, n_kv_heads, head_dim), (1, bsz, n_kv_heads, head_dim)
       ```
 
-3. Apply RoPE to Q and K
-   - Again, apply the RoPE transformation to Q and K using the rotary embedding op outlined in [2.2 RoPE](#22-rope). The input/output shapes remain the same as in step 2.
+3. **Apply RoPE to Q and K**
+   - Again, apply the RoPE transformation to Q and K using the rotary embedding OP outlined in [2.2 RoPE](#22-rope). The input/output shapes remain the same as in step 2.
 
-4. Cache K and V
-   - Populate the KV cache at `cur_pos` for all batches with the current K and V tensors using the `ttnn.experimental.paged_update_cache` op. This OP takes in an optional `page_table` argument to support paged KV cache updates. Example:
+4. **Cache K and V**
+   - Populate the KV cache at `cur_pos` for all batches with the current K and V tensors using the `ttnn.experimental.paged_update_cache` OP. This OP takes in an optional `page_table` argument to support paged KV cache updates. Example:
      ```python
      ttnn.experimental.paged_update_cache(keys, K, update_idxs=cur_pos, page_table=page_table)
      ttnn.experimental.paged_update_cache(values, V, update_idxs=cur_pos, page_table=page_table)
@@ -466,13 +467,13 @@ An end-to-end example of the decode attention module is in the `models/demos/lla
      ttnn.experimental.paged_update_cache(keys, K, update_idxs_tensor=cur_pos_tensor, page_table=page_table)
      ```
 
-5. Scaled Dot Product Attention Decode
+5. **Scaled Dot Product Attention Decode**
    - Perform scaled dot product attention using custom flash attention kernel optimized for decode mode, `ttnn.transformer.scaled_dot_product_attention_decode` and `ttnn.transformer.paged_scaled_dot_product_attention_decode` for paged KV cache.
    - `ttnn.transformer.scaled_dot_product_attention_decode` considers the following arguments:
      - `q`: Query tensor of shape `(1, bsz, n_q_heads, head_dim)`.
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
-     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking.
+     - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
      - `attn_mask`: Optional attention mask tensor. Defaults to `None` and only used if `is_causal=False`.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
@@ -490,7 +491,7 @@ An end-to-end example of the decode attention module is in the `models/demos/lla
      attn_output = ttnn.transformer.paged_scaled_dot_product_at tention_decode(Q, K, V, attn_mask=mask, is_causal=False)
      ```
 
-6. Output Reshape and Output Matmul
+6. **Output Reshape and Output Matmul**
    - Finally, use `ttnn.experimental.nlp_concat_heads_decode` to reshape the output of the attention OP, followed by a standard `ttnn.linear` to do the output projection. For example:
      ```python
      attn_output = ttnn.experimental.nlp_concat_heads_decode(attn_output, num_heads=n_q_heads)
@@ -506,8 +507,7 @@ Flash attention and flash decode are the major OPs for attention. They are optim
 
 Here are some useful details regarding attention OPs for efficient and bug-free code writing:
 
-1. **Program Configs** in flash attention (and flash decode) OPs:
-   The Program config has the following parameters:
+1. Program Configs in flash attention (and flash decode) OPs. The Program config has the following parameters:
    - `compute_with_storage_grid_size`: The grid size.
    - `q_chunk_size`: The size of a chunk to process at a time for Q.
    - `k_chunk_size`: The size of a chunk to process at a time for K and V.
@@ -520,9 +520,9 @@ Flash decode processes the entire Q (since query in decode mode is small) and K/
 
 Finally, the `exp_approx_mode` field is to set the exponential approximation mode for softmax in flash attention and flash decode. We recommend setting this to `true` for small `seqlen/chunk_size` values. For large `seqlen/chunk_size` values, the error introduced by the exponential approximation can accumulate through chunk accumulation, causing major degradation in pcc. For example in Llama3 models, we use `q_chunk_size` and `k_chunk_size` of 512, and `exp_approx_mode` set to `false` for long sequence lengths greater than 16K.
 
-2. **Current Position Tensor** for flash decode and kv cache OPs:
+2. Current Position Tensor for flash decode and kv cache OPs:
 
-In decode mode provide a list of current positions or a tensor. The tensor version can be more efficient because it supports **tracing**. For more information about tracing, see: [4.1 Tracing](#41-tracing). Tracing requires the traced variables to be statically known at the compile time. If you provide a list of current positions, you cannot modify it for the next token generation. However, if you provide a tensor, the position values are stored in device memory and can be updated using binary addition op, e.g. `ttnn.add`.
+In decode mode provide a list of current positions or a tensor. The tensor version can be more efficient because it supports tracing**. For more information about tracing, see: [4.1 Tracing](#41-tracing). Tracing requires the traced variables to be statically known at the compile time. If you provide a list of current positions, you cannot modify it for the next token generation. However, if you provide a tensor, the position values are stored in device memory and can be updated using binary addition op, e.g. `ttnn.add`.
 
 ### 2.5 MLP
 
@@ -803,19 +803,23 @@ Since the output of FF2 is the correct shape but only a partial on each device, 
     ```
 
 ### 2.6 Decoder
-<div align="center">
-<img src="images/2.6-decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
-</div>
 When the components explained in previous sections (MLP, Attention, RMSNorm) are implemented, bringing up the decoder is relatively straightforward. According to the diagram (based on the Llama3.1 example), the components are stacked sequentially during the forward pass. The only consideration is whether addition of MLP and Attention outputs should be stored in L1 or in DRAM.
 
 <br>
 
-The Decode forward pass implementation below follows the diagram above. To optimize memory usage, we recommend you deallocate tensors after usage, which is crucial under tighter memory constraints.
+The Decode forward pass implementation below follows the accompanying diagram. To optimize memory usage, we recommend you deallocate tensors after usage, which is crucial under tighter memory constraints.
+
 <br>
 
 To optimize performance in decode mode, we maintain the residual stream in L1 and shard it across cores and devices. However, determining the optimal number of cores for sharding can be challenging, especially for operations like DRAM-sharded matmuls. Here is the [code](https://github.com/tenstorrent/tt-metal/blob/53c32c0c0da926f97bd0eb042e70fd54c2866f44/models/demos/llama3/tt/model_config.py#L931) in Llama model config, that produces the core grid that will divide the N and K dims of a matmul evenly.
 When it’s not feasible to keep the streams sharded, we use  the TT-NN OP: `interleave_to_sharded`, and conversely, switch back as needed.
 In our implementation of Llama3.1, there are some OPs that require interleaved tensors and resharding.
+
+<br>
+
+<div align="center">
+<img src="images/2.6-decoder.png" alt="Decoder Diagram" title="Decoder Title" width="350" height="400">
+</div>
 
 <br>
 
@@ -869,7 +873,7 @@ As a result, the `LMHead` has a large `last_dim` in its weight matrix. Given the
 
 The number of iterations required depends on the size of the weights and the number of devices available, ranging from 1 to several iterations. For example, in Llama 3.1’s decode mode, the LMHead matrix multiplication involves shapes of ```(32, 8K) x (8K, 128K)```.
 
-Below is an illustration of how the LMHead weights are partitioned across two devices, followed by its implementation. For ilustrative purposes it uses 128K for the `vocab_size` instead of the real Llama3.1 value of `128256`.
+Below is an illustration of how the LMHead weights are partitioned across two devices, followed by its implementation. For illustrative purposes it uses 128K for the `vocab_size` instead of the real Llama3.1 value of `128256`.
 
 <div align="center">
 <img src="images/2.7-lm-head.png" alt="LM Head Diagram" title="LM_Head" width="650" height="350">
@@ -920,7 +924,7 @@ for i, split_size in enumerate(split_sizes):
 
 We use DRAM-sharded matmul for LMHead with `program_config` and `memory_config` generated by the code below.
 For more information check [Section: Op Configs](#44-op-configs).
-The primary reason for having multiple `program_configs` is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matrix multiplication.
+The primary reason for having multiple `program_configs` is that the weight shapes may result in unequal split sizes. This variability means the same configuration cannot be used for every matmul.
 
 ```py
 # Generate dram-sharded memory_config
@@ -941,7 +945,7 @@ self.program_configs = [
 Once weights are pushed to the devices and the decoders are executed, the `LMHead` forward pass needs to be executed in iterations.
 The code below shows that after each iteration outputs are converted from sharded to interleaved tensors. Once all iterations are completed, the final output is produced by concatenation over the last dim and returned as `output`.
 
-When executing the model, it is essential to ensure that the output of the last decoder is already replicated across tensors. Since this replication is enforced earlier, no additional code is required in the `LMHead` forward pass to handle it.
+When executing the model, you must ensure that the output of the last decoder is already replicated across tensors. Since this replication is enforced earlier, no additional code is required in the `LMHead` forward pass to handle it.
 
 ```py
 def forward(self, x: ttnn.Tensor):
@@ -969,12 +973,12 @@ def forward(self, x: ttnn.Tensor):
 <img src="images/2.8-llama-model.png" alt="Llama model" title="Llama model" width="350" height="350">
 </div> <br>
 
-Once the model components (discussed in previous sections) are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in [Section 2.1 Embedding](#21-embedding).
+Once the previous model components are implemented, there isn’t much left to finalize. In our implementation, embeddings are managed outside the model class, as explained in [Section 2.1 Embedding](#21-embedding).
 
-The model’s constructor initializes N decoders (e.g. 80 for Llama3.1-70b), the `RMSNorm` and the `LMHead`, ensuring that weights for all components are loaded onto the appropriate devices.
+The model’s constructor initializes N decoders, for example 80 for Llama3.1-70b, the `RMSNorm` and the `LMHead`, ensuring that weights for all components are loaded onto the appropriate devices.
 
-During the forward pass, the decoders are executed sequentially, followed by normalization and the `LMHead` computation at the end.
-A specific optimization is applied for the prefill mode: since only the last token is relevant, the `LMHead` is executed only on the final tile in this mode.
+During the forward pass, decoders are executed sequentially, followed by normalization and `LMHead` computation at the end.
+A specific optimization is applied for the prefill mode; only the last token is relevant, the `LMHead` is executed only on the final tile.
 
 In prefill mode, the RMSNorm output is interleaved, but the LMHead requires a sharded tensor. To accommodate this, the `interleaved_to_sharded` function is used to prepare the output accordingly.
 
@@ -1020,25 +1024,25 @@ Almost every LLM generates text in the same manner: Given a prompt from the user
 
 #### 3.1.1 Model Inputs and Outputs
 Inputs to the model for generative decoding are generally:
-- tokens: produced by the tokenizer
-- position ids: the position of the tokens in the sequence
-- KV cache: an inference optimization that caches intermediate values
+- **Tokens:** Produced by the tokenizer.
+- **Position IDs:** Position of the tokens in the sequence.
+- **KV Cache:** Inference optimization that caches intermediate values.
 
-In the model, tokens are embedded from the vocabulary space to the embedding space. Position ids are necessary for updating the KV cache and for positional embeddings like RoPE.
+In the model, tokens are embedded from the vocabulary space to the embedding space. Position IDs are necessary for updating the KV cache and for positional embeddings like RoPE.
 
 The model outputs:
-- logits for the next token
-- an updated KV cache
+- Logits for the next token
+- Updated KV Cache
 
-The logits are unnormalized probabilities over the vocabulary. Given these probabilities, the sampler must decide which of these tokens in the vocabulary will be chosen. There are a few sampling methods that are commonly used to pick the next token:
-- Greedy decoding (argmax of the logits, picks the most likely next token)
-- Top-p/top-k sampling (restricts the logits according to p and k values, then samples according to the remaining probabilities)
+The logits are unnormalized probabilities over the vocabulary. Given these probabilities, the sampler must decide which of these tokens in the vocabulary are chosen. There are a few sampling methods that are commonly used to pick the next token:
+- **Greedy Decoding:** Argmax of the logits, picks the most likely next token.
+- **Top-p/top-k Sampling:** Restricts the logits according to P and K values, then samples according to the remaining probabilities.
 
 #### 3.1.2 KV cache
-The KV cache is an inference optimization. It allows us to cache some intermediate values during the first inference step which are reused in later steps.
+The KV cache is an inference optimization. It allows us to cache intermediate values during the first inference step for reuse in later steps.
 On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
 
-The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it can be necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.
+The size of the KV cache depends on the batch size and sequence length. Since accelerators have finite memory, it is necessary to tradeoff batch size and sequence length to allow the KV cache to fit in memory.
 
 #### 3.1.3 Batching
 LLMs use batching to process multiple sequences in parallel. There are a few reasons why batching is useful:
@@ -1051,14 +1055,14 @@ However, there are tradeoffs with batching. In decode mode, latency scales subli
 It is typical to use different batch sizes for different use cases, depending on the goal of the system.
 
 #### 3.1.4 Performance Metrics
-**Time to first token (TTFT)** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity.
+**Time to First Token (TTFT):** measures the latency to generate the first token of the sequence. This is the time to prefill a prompt and generate the first token. It is a measure of interactivity.
 
-**Total throughput (tokens per second)** tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
+**Total Throughput (Tokens per Second):** tells us the total number of tokens that the model can generate per second. `total throughput = batch size / decode step latency`. Total throughput is important for cost-sensitive systems or offline processing, where interactivity is less important than throughput. Generally, increasing batch size will increase total throughput.
 
-**User throughput (tokens per second per user)** is calculated as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput.
+**User Throughput (Tokens per Second per User):** is calculated as `user throughput = 1 / decode step latency`. User throughput tells us how interactive the model is, and tells us how fast the generation is for a single user. Generally, decreasing batch size will increase user throughput.
 
-Note that each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified.
-
+> [!NOTE]
+> Each of these metrics change with batch size and sequence length. When reporting TTFT, total throughput, and user throughput, the batch size and sequence length must be specified.
 
 ### 3.2 Prefill and Decode
 
@@ -1070,13 +1074,13 @@ The decode phase is parallel-computed for all users, but sequential for each tok
 
 #### 3.2.1 Technical Implementation Differences
 
-The intermediate activations in prefill mode are kept in DRAM, due to the large size of the tensors which contain the entire sequence length. In decode mode, the intermediate activations are kept in L1 memory instead, since in this mode the sequence length to compute is just 1 (one token at the time), reducing latency.
+The intermediate activations in prefill mode are kept in DRAM, due to the large size of the tensors which contain the entire sequence length. In decode mode, the intermediate activations are kept in L1 memory instead, since in this mode the sequence length to compute is just one token at the time, reducing latency.
 
 ##### 3.2.1.1 Reshaping for Large Matrix Multiplications
 
 Please see the [attention source code](../../models/demos/llama3/tt/llama_attention.py) for reference.
 
-In prefill mode, when the input sequence length is very large, the model reshapes its input tensors to process sequences in smaller chunks in parallel for larger matrix multiplications, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For instance:
+In prefill mode, when the input sequence length is very large, the model reshapes its input tensors to process sequences in smaller chunks in parallel for larger matmuls, such as `wqkv`, `wo` in the attention module, and `w1`, `w2`, `w3` in the MLP module. This reshaping prevents running out of memory in cases of long prefill sequence lengths. For example:
 
 ```python
 if seq_len > 2048:
@@ -1092,7 +1096,7 @@ xqkv_fused = ttnn.linear(
 )
 ```
 
-This reshaping is not needed for decode mode because it only processes one token at a time. Instead, the parallelization for decode mode is done over user batches, which currently only goes up to 32.
+Reshaping is not needed for decode mode because it only processes one token at a time. Instead, the parallelization for decode mode is done over user batches, which currently only goes up to 32.
 
 ##### 3.2.1.2 KV Cache Management
 
@@ -1151,7 +1155,7 @@ attn_output_11BH = ttnn.transformer.scaled_dot_product_attention_decode(
 ```
 
 ##### 3.2.1.4 Slicing Before the LM Head
-At the end of prefill, the model should generate the first decoded token, then signaling the start of the decode phase. To this end, the model slices the output of the last decoder layer to the last tile before computing the LM head. This is necessary because only last token from prefill is needed to start the autoregressive decoding.
+At the end of prefill, the model should generate the first decoded token, then signal the start of the decode phase. To this end, the model slices the output of the last decoder layer to the last tile before computing the LM head. This is necessary because only the last token from prefill is needed to start the autoregressive decoding.
 
 ```python
 x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
@@ -1161,16 +1165,16 @@ x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape
 
 |  | Prefill Mode | Decode Mode |
 | --- | --- | --- |
-| Purpose | Bulk sequence processing for initialization or training | Incremental processing for autoregressive inference |
-| Demo Parallelization | Sequential for each user, parallel for the sequence length of each user | Parallel for 32 users, sequential for each token within a batch of users |
-| Batch and sequence Length | Processes long sequences (≥ 128 tokens), single user | Processes batch of users (≤ 32 users), single token |
-| Memory Use | DRAM, with reshaping into smaller chunks for long sequence lengths | L1 on-chip memory for fast, low-latency processing |
-| Attention | Handles sequences in bulk; more memory-intensive | Incremental attention with precomputed components |
-| LM head slicing | Slices to last tile before Lm head matmul to extract the last token | Slicing not required |
+| **Purpose** | Bulk sequence processing for initialization or training. | Incremental processing for autoregressive inference. |
+| **Demo Parallelization** | Sequential for each user, parallel for the sequence length of each user. | Parallel for 32 users, sequential for each token within a batch of users. |
+| **Batch and Sequence Length** | Processes long sequences (≥ 128 tokens), single user. | Processes batch of users (≤ 32 users), single token. |
+| **Memory Use** | DRAM, with reshaping into smaller chunks for long sequence lengths. | L1 on-chip memory for fast, low-latency processing. |
+| **Attention** | Handles sequences in bulk; more memory-intensive. | Incremental attention with precomputed components. |
+| **LM Head Slicing** | Slices to last tile before Lm head matmul to extract the last token. | Slicing not required. |
 
 ### 3.3 Multi-Device
 
-Please note that this section refers to sharding schemes across devices and not on a multi-core level. For details about different matmul versions and sharding on a core level, please see the [matmul configuration section](#44-op-configs).
+This section refers to sharding schemes across devices and not on a multi-core level. For details about different matmul versions and sharding on a core level, please see: [matmul configuration section](#44-op-configs).
 
 There are two main approaches for scaling across multiple devices: `data parallel` and `tensor parallel`.
 
@@ -1183,11 +1187,9 @@ There are also hybrid forms of those two modes where a cluster of devices runs m
 In the report [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md), there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices (tensor parallelism).
 The tensor handle is used analogously to single device tensors, with the only difference being that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data.
 
-TT-Metal supports different multi-device topologies. The most important ones for us are `Ring` topology, where all devices are connected in a ring shape with each other, and `Line` topology, where a (sub-)group of devices is connected in a line with each other. `Line` topology can be a 1D or 2D grid of devices, where each row and column are connected in a line.
+TT-Metal supports different multi-device topologies. The most important ones for us are `Ring` topology, where all devices are connected in a ring shape with each other, and `Line` topology, where a subgroup of devices is connected in a line with each other. `Line` topology can be a 1D or 2D grid of devices, where each row and column are connected in a line.
 
-Below is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TTNN:
-
-*Figure: Example usage of mesh_device, ShardTensorToMesh and ReplicateTensorToMesh*
+Below is a summary and example code of the most important concepts for mapping a tensor to a mesh of devices in TT-NN:
 
 ```python
 import ttnn
@@ -1217,7 +1219,7 @@ mesh_tensor_replicated = ttnn.from_torch(
 )
 ```
 
-The second key concept to scaling a model to multiple devices are Collective Communication Library (CCL) operations. They are used to efficiently exchange data between multiple devices. TTNN currently supports the following CCL Operations:
+The second key concept to scaling a model to multiple devices are Collective Communication Library (CCL) operations. They are used to efficiently exchange data between multiple devices. TT-NN currently supports the following CCL Operations:
 - AllGather
 - ReduceScatter
 - AllReduce
@@ -1228,7 +1230,7 @@ See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for mor
 The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).
 
 - Supported Topologies: Ring, Linear
-- Supported number of links
+- Supported Number of Links
   - N300, T3000: 1
   - TG: 4 along cluster_axis=0, 3 along cluster_axis=1
 - Arguments
@@ -1266,15 +1268,14 @@ The ReduceScatter operation reduces the data across all devices and shards the r
   - num_links: number of ethernet links to be used
   - topology: topology configuration ttnn.Ring or ttn.Linear
 
-*Figure: Example usage of Ring Reduce-Scatter on 2x4 mesh_device*
-
+The following is example usage of Ring Reduce-Scatter on a 2x4 mesh_device:
 ```py
 # Execute Reduce-Scatter on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 8 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is again of size 32x32 on each devices but reduced over all devices
 output_tensor = ttnn.reduce_scatter(mesh_tensor_sharded, dim=3, num_links=1)
 ```
 
-*Figure: Example usage of Linear Reduce-Scatter on 2x4 mesh_device*
+The following is example usage of Linear Reduce-Scatter on a 2x4 mesh_devcie:
 
 ```py
 # Execute Reduce-Scatter on the sharded tensor
@@ -1290,11 +1291,11 @@ A fused version of AllReduce is planned, but currently only the composite of All
 #### 3.3.4 Sharding schemes for decode
 In decode mode, activations are generally stored in L1 memory, while weights, which are too large, need to be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
 
-The activations in decode mode are so small because they contain the batch size (=users) in the height dimension while sequence length is 1.
+The activations in decode mode are small because they contain the batch size (=users) in the height dimension while sequence length is one.
 The only exception is the attention operations computing `softmax(Q*KˆT)*V`. The activation width is the model dim (e.g. 8192 for Llama3-70b).
 Activations are not sharded in the height dimension; however, depending on the operation and model, they may be sharded in the width dimension.
 
-Matmul weights on the other hand can be sharded in width, height or both. Sharding weights across multiple devices significantly reduces DRAM pressure per device, resulting in notable latency improvements. Below is a summary of useful sharding schemes for sharding weights in decode mode. Which scheme to use will depend on the shape and size of the model weights and the target device topology.
+Matmul weights on the other hand can be sharded in width, height, or both. Sharding weights across multiple devices significantly reduces DRAM pressure per device, resulting in notable latency improvements. Below is a summary of useful sharding schemes for sharding weights in decode mode. Which scheme to use will depend on the shape and size of the model weights and the target device topology.
 
 ##### 3.3.5 1D Column parallel
 
