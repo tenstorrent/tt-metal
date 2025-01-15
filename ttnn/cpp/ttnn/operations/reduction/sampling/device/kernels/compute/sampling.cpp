@@ -8,7 +8,10 @@
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/rand.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/reduce.h"
@@ -25,6 +28,23 @@ using namespace ckernel;
 int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
+
+void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
+    init_sfpu(cb_id, cb_id);
+    rand_tile_init(seed);
+    cb_reserve_back(cb_id, 1);
+
+    tile_regs_acquire();
+    rand_tile(0, 0, 1);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile(0, cb_id, 0);
+    tile_regs_release();
+
+    cb_push_back(cb_id, 1);
+}
+
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
@@ -159,7 +179,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-void untilize_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+void untilize_block_fn(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     untilize_init_short(in_cb);
@@ -370,29 +390,28 @@ void top_k() {
 
 void MAIN {
     uint32_t arg_id = 0;
-    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(arg_id++);
+    constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t index_cb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(4);
+    constexpr uint32_t values_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(6);
 
-    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(arg_id++);
+    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);
 
-    constexpr uint32_t output_local_values_rm_cb_index constexpr uint32_t output_local_indices_rm_cb_index =
-        get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(arg_id++);
+    constexpr uint32_t output_local_values_rm_cb_index = get_compile_time_arg_val(11);
+    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(12);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(13);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t Wt = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t nearest32_K = get_arg_val<uint32_t>(0);  // get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t logk = get_arg_val<uint32_t>(1);         // get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t logWt = get_compile_time_arg_val(arg_id++);
+    constexpr uint32_t Ht = get_compile_time_arg_val(14);
+    constexpr uint32_t Wt = get_compile_time_arg_val(15);
+    constexpr uint32_t logWt = get_compile_time_arg_val(16);
+    constexpr uint32_t nearest32_K = get_compile_time_arg_val(17);
+    constexpr uint32_t logk = get_compile_time_arg_val(18);
 
     // top-k
     top_k<
@@ -412,7 +431,7 @@ void MAIN {
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     // mask out all values except the top-k
     cb_wait_front(topk_mask_cb_index, Kt);
-    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht, Kt, false);
+    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
 
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
@@ -422,10 +441,10 @@ void MAIN {
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
 
     // untilize final indices
-    untilize_block(input_indices_cb_index, output_final_indices_rm_cb_index, Ht * Wt);
+    untilize_block_fn(input_indices_cb_index, output_final_indices_rm_cb_index, Ht * Wt);
     // untilize values
-    untilize_block(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
+    untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
     // untilize indices
-    untilize_block(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
+    untilize_block_fn(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
 }
 }  // namespace NAMESPACE

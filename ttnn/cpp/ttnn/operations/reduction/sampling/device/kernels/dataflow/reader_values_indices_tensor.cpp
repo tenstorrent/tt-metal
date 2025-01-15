@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
     constexpr DataFormat data_format_input_values = get_dataformat(input_values_cb_index);
 
-    const InterleavedAddrGenFast<src_is_dram> s0 = {
+    const InterleavedAddrGenFast<true> s0 = {
         .bank_base_address = values_addr,
         .page_size = tile_bytes_input_values,
         .data_format = data_format_input_values};
@@ -59,7 +59,7 @@ void kernel_main() {
     constexpr uint32_t tile_bytes_input_indices = get_tile_size(input_indices_cb_index);
     constexpr DataFormat data_format_input_indices = get_dataformat(input_indices_cb_index);
 
-    const InterleavedAddrGenFast<topk_mask_is_dram> s1 = {
+    const InterleavedAddrGenFast<true> s1 = {
         .bank_base_address = indices_addr,
         .page_size = tile_bytes_input_indices,
         .data_format = data_format_input_indices};

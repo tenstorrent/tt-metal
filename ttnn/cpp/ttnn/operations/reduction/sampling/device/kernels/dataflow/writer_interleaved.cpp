@@ -8,31 +8,30 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
     uint32_t arg_id = 0;
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(arg_id++);
+    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_local_values_rm_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t values_stick_size = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t im_indices_stick_size = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(arg_id++);
-
-    constexpr uint32_t k = get_arg_val<uint32_t>(1);              // get_compile_time_arg_val(arg_id++);
-    uint32_t core_id = get_arg_val<uint32_t>(2);                  // get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t ids_per_batch = get_arg_val<uint32_t>(3);  // get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t ids_per_batch_final = get_compile_time_arg_val(arg_id++);
-    constexpr uint32_t rand = get_compile_time_arg_val(arg_id++);
-
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(2);
+    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(4);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(5);
+    constexpr uint32_t output_local_values_rm_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t values_stick_size = get_compile_time_arg_val(8);
+    constexpr uint32_t im_indices_stick_size = get_compile_time_arg_val(9);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(10);
+    constexpr uint32_t out_stick_size = get_compile_time_arg_val(11);
+    constexpr uint32_t ids_per_batch_final = get_compile_time_arg_val(12);
+    constexpr uint32_t rand = get_compile_time_arg_val(13);
+    constexpr uint32_t k = get_compile_time_arg_val(14);
+    constexpr uint32_t core_id = get_compile_time_arg_val(15);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(16);
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
     // generate the top-k mask
-    generate_mask<cb_id_mask, 1, ids_per_batch / 32>(1, k);
+    constexpr uint32_t one = 1;
+    generate_mask<cb_id_mask, one, ids_per_batch / 32>(one, k);
 
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, final_indices_stick_size);
@@ -41,13 +40,13 @@ void kernel_main() {
 
     // Use cb as L1 scratch memory
     uint32_t cb_local_values_addr = get_write_ptr(output_local_values_rm_cb_index);
-    volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_local_values_addr);
+    volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
 
     uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_rm_cb_index);
-    volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_local_indices_addr);
+    volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_indices_addr);
 
     uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
-    volatile tt_l1_ptr uint16_t* final_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_final_indices_addr);
+    volatile tt_l1_ptr uint16_t* final_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_final_indices_addr);
 
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
