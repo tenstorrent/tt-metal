@@ -31,14 +31,8 @@ std::vector<Tensor> run_operation(
     static_assert(
         operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
     // Create output tensor vector by examining the number of output shapes created by the device operation
-    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors, {});
-    size_t output_shapes_size = 0;
-    if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(output_shapes)) {
-        output_shapes_size = std::get<std::vector<ttnn::SimpleShape>>(output_shapes).size();
-    } else {
-        output_shapes_size = std::get<std::vector<tt::tt_metal::LegacyShape>>(output_shapes).size();
-    }
-    std::vector<Tensor> outputs(output_shapes_size);
+    auto output_specs = operation::DeviceOperation<operation::Tensors>(devop).compute_output_specs(input_tensors, {});
+    std::vector<Tensor> outputs(output_specs.size());
     // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
     for (int i = 0; i < outputs.size(); i++) {
         outputs[i] = Tensor(operation::get_workers_for_op_output(input_tensors, optional_input_tensors));

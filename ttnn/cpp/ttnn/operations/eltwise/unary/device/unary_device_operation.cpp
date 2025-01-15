@@ -7,9 +7,9 @@
 #include <magic_enum/magic_enum.hpp>
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
@@ -199,6 +199,13 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         compute_volume(input_shape));
 
     return hash;
+}
+
+bool UnaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
 }
 
 std::tuple<UnaryDeviceOperation::operation_attributes_t, UnaryDeviceOperation::tensor_args_t>

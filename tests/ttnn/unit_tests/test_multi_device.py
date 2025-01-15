@@ -55,11 +55,10 @@ def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
-    pytest.skip("Issue #6983")
-    mesh_shape, device_ids = ttnn.MeshShape(2, 2), ttnn.get_device_ids()
-    if len(device_ids) <= 1:
+    if ttnn.get_num_devices() < 4:
         pytest.skip()
-    with ttnn.create_mesh_device(mesh_shape, device_ids) as mesh_device:
+    mesh_shape = ttnn.MeshShape(2, 2)
+    with ttnn.create_mesh_device(mesh_shape) as mesh_device:
         # Do something with multi_device
         pass
 

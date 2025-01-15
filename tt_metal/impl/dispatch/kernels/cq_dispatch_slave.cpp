@@ -294,5 +294,14 @@ void kernel_main() {
     }
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(total_pages_acquired);
+#ifdef COMPILE_FOR_IDLE_ERISC
+    // Wait for all transactions to complete, to avoid hitting the asserts in
+    // idle_erisck.cc if there are outstanding transactions. These barriers
+    // don't work on worker cores, because there cq_dispatch is on the same core
+    // and shares use of this noc, but doesn't update this risc's transaction
+    // counts. However, we don't have the barrier checks in brisck.cc, so we can
+    // skip this for now.
+    noc_async_full_barrier();
+#endif
     DPRINT << "dispatch_s : done" << ENDL();
 }

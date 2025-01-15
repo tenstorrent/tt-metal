@@ -105,7 +105,7 @@ ttnn::Tensor allocate_tensor_on_device(
 }
 
 void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {
-    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor));
+    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) {

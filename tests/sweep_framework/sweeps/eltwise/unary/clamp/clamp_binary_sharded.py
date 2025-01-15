@@ -124,29 +124,3 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
-
-
-from tests.sweep_framework.framework.permutations import *
-
-start_time = start_measuring_time()
-for suite in parameters.keys():
-    device_id = 0
-    device = ttnn.open_device(device_id=device_id)
-    suite_vectors = list(permutations(parameters[suite]))
-    print(len(suite_vectors))
-    failed = 0
-    crashed = 0
-    for vector in suite_vectors:
-        try:
-            passed, _ = run(**vector, device=device)
-            if passed[0] != True:
-                print(passed)
-                failed += 1
-        except Exception as e:
-            print(e)
-            crashed += 1
-
-passed = len(suite_vectors) - failed - crashed
-percent_passed = (passed / len(suite_vectors)) * 100
-print(f"{crashed} crash, {failed} fail, {passed} pass ({percent_passed}%)")
-ttnn.close_device(device)

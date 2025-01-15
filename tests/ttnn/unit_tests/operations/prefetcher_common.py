@@ -211,7 +211,6 @@ def run_prefetcher_mm(
                 dram_core_range_set,
                 [K, N // len(dram_cores)],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -235,7 +234,6 @@ def run_prefetcher_mm(
             sender_core_range_set,
             [tensor_addrs.shape[0] // len(dram_cores), tensor_addrs.shape[1]],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     tt_tensor_addrs = ttnn.as_tensor(
@@ -330,7 +328,6 @@ def run_prefetcher_mm(
                 output_core_range_set,
                 [M, N // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         output_mem_configs.append(output_sharded_mem_config)
@@ -350,7 +347,6 @@ def run_prefetcher_mm(
                 input_core_range_set,
                 [M, K // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 

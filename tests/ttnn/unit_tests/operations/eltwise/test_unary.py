@@ -194,6 +194,12 @@ def test_sin(device, h, w):
     run_unary_test(device, h, w, ttnn.sin)
 
 
+@pytest.mark.parametrize("h", [0])
+@pytest.mark.parametrize("w", [1])
+def test_01_volume_sin(device, h, w):
+    run_unary_test(device, h, w, ttnn.sin)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_asin(device, h, w):

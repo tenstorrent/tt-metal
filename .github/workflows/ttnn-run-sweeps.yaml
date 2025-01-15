@@ -21,6 +21,14 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.unary.cos.cos_sharded
+          - eltwise.unary.cosh.cosh_sharded
+          - eltwise.unary.deg2rad.deg2rad_sharded
+          - eltwise.unary.log1p.log1p_sharded
+          - eltwise.unary.log10.log10_sharded
+          - eltwise.unary.log2.log2_sharded
+          - eltwise.unary.nez.nez_sharded
+          - eltwise.unary.relu6.relu6_sharded
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
           - eltwise.unary.asin.asin_sharded
@@ -53,13 +61,16 @@ on:
           - eltwise.unary.clip.clip
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
+          - eltwise.unary.rsub.rsub_sharded
           - eltwise.unary.rsub.rsub_pytorch2
           - eltwise.unary.rsqrt.rsqrt_pytorch2
           - eltwise.unary.rsqrt.rsqrt_forge
           - eltwise.unary.rdiv.rdiv
+          - eltwise.unary.rdiv.rdiv_sharded
           - eltwise.unary.frac.frac
           - eltwise.unary.frac.frac_sharded
           - eltwise.unary.ceil.ceil
+          - eltwise.unary.ceil.ceil_sharded
           - eltwise.unary.ceil.ceil_pytorch2
           - eltwise.unary.trunc.trunc
           - eltwise.unary.trunc.trunc_sharded
@@ -301,16 +312,21 @@ on:
           - eltwise.binary.logical_or.logical_or
           - eltwise.binary.logical_or.logical_or_output
           - eltwise.binary.logical_or.logical_or_forge
+          - eltwise.binary.logical_or.logical_or_sharded
           - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_xor.logical_xor_sharded
           - eltwise.binary.logical_and.logical_and_
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
+          - eltwise.binary.logical_and.logical_and_sharded
           - eltwise.binary.polyval.polyval
           - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.remainder.remainder_forge
+          - eltwise.binary.remainder.remainder_unary
+          - eltwise.binary.remainder.remainder_unary_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.scatter.scatter_forge
@@ -323,6 +339,8 @@ on:
           - eltwise.binary.gt.gt_forge
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.fmod.fmod
+          - eltwise.binary.fmod.fmod_unary
+          - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
@@ -352,16 +370,24 @@ on:
           - eltwise.composite.binary.addalpha.addalpha
           - eltwise.composite.binary.subalpha.subalpha
           - eltwise.composite.binary.minimum.minimum
+          - eltwise.composite.binary.minimum.minimum_sharded
+          - eltwise.composite.binary.minimum.minimum_unary
+          - eltwise.composite.binary.minimum.minimum_unary_sharded
           - eltwise.composite.binary.minimum.minimum_pytorch2
           - eltwise.composite.binary.minimum.minimum_forge
           - eltwise.composite.binary.maximum.maximum
+          - eltwise.composite.binary.maximum.maximum_sharded
+          - eltwise.composite.binary.maximum.maximum_unary
+          - eltwise.composite.binary.maximum.maximum_unary_sharded
           - eltwise.composite.binary.maximum.maximum_pytorch2
           - eltwise.composite.binary.maximum.maximum_forge
           - eltwise.composite.binary.pow.pow_pytorch2
           - eltwise.composite.binary.pow.pow_scalar_pytorch2
           - eltwise.composite.binary.pow.pow_tensor_pytorch2
           - eltwise.ternary.addcmul.addcmul
+          - eltwise.ternary.addcmul.addcmul_sharded
           - eltwise.ternary.addcdiv.addcdiv
+          - eltwise.ternary.addcdiv.addcdiv_sharded
           - eltwise.ternary.mac.mac
           - eltwise.ternary.lerp.lerp
           - eltwise.ternary.where.where

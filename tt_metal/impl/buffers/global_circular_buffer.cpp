@@ -56,7 +56,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     uint32_t num_cores = this->all_cores_.num_cores();
 
     auto shard_parameters =
-        ShardSpecBuffer(this->all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {num_cores, 1});
+        ShardSpecBuffer(this->all_cores_, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
     uint32_t cb_buffer_size = this->size_ * num_cores;
     this->cb_buffer_ = Buffer::create(

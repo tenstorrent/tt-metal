@@ -21,9 +21,6 @@ DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
 DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
-EPS_GS = ttnn._ttnn.device.EPS_GS
-EPS_WHB0 = ttnn._ttnn.device.EPS_WHB0
-EPS_BH = ttnn._ttnn.device.EPS_BH
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 
@@ -132,6 +129,10 @@ def manage_device(device_id: int) -> "ttnn.device.Device":
 
 def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
+
+
+def get_memory_view(device, buffer_type):
+    return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
 def is_wormhole_b0(device=None):

@@ -277,7 +277,7 @@ struct Tensor {
 
     bool is_contiguous() const {
         if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
+            return this->get_logical_shape() == this->get_padded_shape();
         } else {
             return false;
         }
@@ -388,17 +388,21 @@ void memcpy(
     CommandQueue& queue,
     void* dst,
     const Tensor& src,
-    const std::optional<std::size_t> transfer_size = std::nullopt,
+    const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
 void memcpy(
-    void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt, bool blocking = true);
-void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
+    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(
+    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(
+    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
+
+void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,

@@ -206,12 +206,12 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     auto shard_spec = input.shard_spec().value();
     auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_logical_shape();
     auto input_dtype = input.get_dtype();
     auto input_layout = input.get_layout();
     TT_FATAL(
         input_layout == output.get_layout() && input_dtype == output.get_dtype() &&
-            shard_shape == output.shard_spec().value().shape && input_shape == output.get_legacy_shape(),
+            shard_shape == output.shard_spec().value().shape && input_shape == output.get_logical_shape(),
         "Error");
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;

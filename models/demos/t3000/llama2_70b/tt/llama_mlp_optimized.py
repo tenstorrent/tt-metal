@@ -80,7 +80,7 @@ class TtLlamaMLP_optimized:
         )
 
         w3_shard_shape = (H, nearest_32(H4 // self.model_config["NUM_DEVICES"] // 12))  # padded cols to divide by 12
-        w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w3_shard_spec = ttnn.ShardSpec(weight_grid, w3_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         w3_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w3_shard_spec)
 
         self.w1 = ttnn.as_tensor(
@@ -97,7 +97,7 @@ class TtLlamaMLP_optimized:
             H4 // self.model_config["NUM_DEVICES"],
             nearest_32(H // 12),
         )  # expand dim is 32k / 8 chips padded
-        w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        w2_shard_spec = ttnn.ShardSpec(weight_grid, w2_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         w2_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, w2_shard_spec)
         self.w2 = ttnn.as_tensor(
             padded_w2,
