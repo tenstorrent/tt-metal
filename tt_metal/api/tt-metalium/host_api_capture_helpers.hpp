@@ -11,9 +11,6 @@
 #include "span.hpp"
 #include "tracehost/types_to_flatbuffer.hpp"
 
-// FIXME (kmabee) - Temp hack, remove before merge and integrate as cmake define.
-#define TT_ENABLE_LIGHT_METAL_TRACE 1
-
 //////////////////////////////////////////////////////////////
 // TRACE GUARD & TRACE MACRO                                //
 //////////////////////////////////////////////////////////////
