@@ -25,10 +25,10 @@ on:
           - composite.binary.lcm.lcm
           - eltwise.unary.asin.asin_sharded
           - eltwise.unary.celu.celu_sharded
-          - eltwise.unary.clamp_binary.clamp_binary_sharded
-          - eltwise.unary.clamp_ternary.clamp_ternary_sharded
+          - eltwise.unary.clamp.clamp_binary_sharded
+          - eltwise.unary.clamp.clamp_ternary_sharded
           - eltwise.unary.silu.silu_sharded
-          - eltwise.unary.abs.logical_not_sharded_
+          - eltwise.unary.logical_not_sharded.logical_not_sharded_
           - eltwise.unary.abs.abs_pytorch2
           - eltwise.unary.relu.relu
           - eltwise.unary.relu.relu_pytorch2
