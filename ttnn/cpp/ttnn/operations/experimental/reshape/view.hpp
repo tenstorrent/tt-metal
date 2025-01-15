@@ -14,6 +14,10 @@ namespace operations::experimental::reshape {
 struct ViewOperation {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& shape);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape);
 };
 
 }  // namespace operations::experimental::reshape
