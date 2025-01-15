@@ -18,11 +18,14 @@ void MorehCumsumDeviceOperation::validate_inputs(
         return;
     }
 
-    const auto input_shape = input.get_shape();
-    const auto output_shape = output.value().get_shape();
-    const auto input_shape_wo_padding = input_shape.value.without_padding();
-    const auto output_shape_wo_padding = output_shape.value.without_padding();
-
+    const auto input_shape = input.get_padded_shape();
+    const auto output_shape = output.get_padded_shape();
+    //const auto input_shape_wo_padding = input_shape.value.without_padding();
+    //const auto output_shape_wo_padding = output_shape.value.without_padding();
+    //const auto input_shape_wo_padding = input_shape.value.get_padded_shape();
+    //const auto output_shape_wo_padding = output_shape.value.get_padded_shape();
+    const auto input_shape_wo_padding = input.get_logical_shape()
+    const auto output_shape_wo_adding = input.get_padded_shape()
     for (int i = 0; i < input_shape.rank(); ++i) {
         TT_FATAL(
             input_shape[i] == output_shape[i],

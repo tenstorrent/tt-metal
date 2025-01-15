@@ -25,7 +25,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
+    const auto& input_shape = input.get_padded_shape();
     auto rank = input_shape.rank();
 
     auto N = input_shape[0];
@@ -202,7 +202,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
+    const auto& input_shape = input.get_padded_shape();
     auto rank = input_shape.rank();
     auto N = input_shape[0];
 
@@ -382,8 +382,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
-    auto target_shape = target.get_shape().value;
+    const auto& input_shape = input.get_padded_shape();
+    const auto& target_shape = target.get_padded_shape();
     auto rank = input_shape.rank();
     auto N = input_shape[0];
     auto channel_size = input_shape[1];
@@ -577,7 +577,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // split work
-    auto input_shape = input.get_shape().value;
+    const auto& input_shape = input.get_padded_shape();
     auto rank = input_shape.rank();
 
     if (rank == 2) {

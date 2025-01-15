@@ -15,7 +15,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    const auto input_rank = tensor_args.input.get_shape().value.rank();
+    const auto& input_rank = tensor_args.input.get_padded_shape()rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
@@ -69,7 +69,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     const auto& input = tensor_args.input;
-    const auto& input_shape = input.get_shape();
+    const auto& input_shape = input.get_padded_shape();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
     log_debug(

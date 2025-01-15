@@ -51,8 +51,9 @@ ttnn::SmallVector<int64_t> find_reduce_dim(
 
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto& a_shape = tensor_a.get_shape().value;
-    const auto& b_shape = tensor_b.get_shape().value;
+    const auto& a_shape = tensor_a.get_padded_shape();
+    const auto& b_shape = tensor_b.get_padded_shape();
+
     ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);
@@ -136,7 +137,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     const auto num_output_tiles{output.volume() / tt::constants::TILE_HW};
 
     // input tensor
-    const auto& input_shape = input.get_shape().value;
+    const auto& input_shape = input.get_padded_shape();
     const auto& input_shape_wo_padding = input_shape.without_padding();
     const auto input_rank = input_shape.rank();
     log_debug(tt::LogOp, "input dim");
@@ -148,8 +149,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     get_tensor_stride(input_stride, input_dim);
 
     // other tensor
-    const auto& other_shape = other.get_shape().value;
-    const auto& other_shape_wo_padding = other_shape.without_padding();
+    const auto& other_shape = other.get_padded_shape();
+    const auto& other_shape_wo_padding = other.get_logical_shape();
     const auto other_rank = other_shape.rank();
     log_debug(tt::LogOp, "other dim");
     ttnn::SmallVector<uint32_t> other_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -165,8 +166,8 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     get_not_bcast(input_not_bcast, input_dim, other_not_bcast, other_dim);
 
     // output tensor
-    const auto& output_shape = output.get_shape().value;
-    const auto& output_shape_wo_padding = output_shape.without_padding();
+    const auto& output_shape = output.get_padded_shape();
+    const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape.rank();
     log_debug(tt::LogOp, "output dim");
     ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -189,7 +190,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     bool is_scalar_bias = false;
     if (bias.has_value()) {
         const auto& bias_tensor = bias.value();
-        const auto& bias_shape_wo_padding = bias_tensor.get_shape().value.without_padding();
+        const auto& bias_shape_wo_padding = bias_tensor.get_logical_shape();
         is_scalar_bias = (bias_shape_wo_padding[-1] == 1) ? (true) : (false);
         log_debug(tt::LogOp, "{}:{} bias tensor. is_scalar_bias {}", __func__, __LINE__, is_scalar_bias);
     }

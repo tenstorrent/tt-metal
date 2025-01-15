@@ -42,10 +42,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_shape();
-    auto input_shape_without_padding = input_shape.value.without_padding();
-    auto output_shape = output.get_shape();
-    auto output_shape_without_padding = output_shape.value.without_padding();
+    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape_without_padding = input.get_logical_shape()
+    const auto& output_shape_without_padding = output.get_logical_shape()
+
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -98,7 +98,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].unit_size = index.element_size();
         }
 
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        const uint32_t& index_size = index_tensors[0].get_logical_shape()[-1];
 
         uint32_t input_unit_size = input.element_size();
         uint32_t output_unit_size = output.element_size();
@@ -333,9 +333,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].is_defined = true;
             index_info[dim].address = index_tensors[i].buffer()->address();
             index_info[dim].is_dram = is_dram(index_tensors[i]);
-            index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
+            index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
         }
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        const uint32_t& index_size = index_tensors[0].get_logical_shape()[-1];
 
         uint32_t input_unit_size = 16 * input.element_size();
         uint32_t output_unit_size = 16 * output.element_size();
