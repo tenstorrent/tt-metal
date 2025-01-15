@@ -210,6 +210,7 @@ def run_prefetcher_mm(
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
     mesh_mapper = ReplicateTensorToMesh(device) if is_mesh_device else None
+    mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape) if is_mesh_device else None
 
     pt_tensors = []
     for l in range(num_layers):
@@ -461,9 +462,7 @@ def run_prefetcher_mm(
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
             tt_out = ttnn.to_torch(
                 outputs_t[idx],
-                mesh_composer=ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
-                if is_mesh_device
-                else None,
+                mesh_composer=mesh_composer,
             )[:1, :1, ...]
             pt_out = in0_tensors[t] @ pt_tensors[idx]
 
