@@ -403,12 +403,10 @@ ALL_ARCHS = set(
 
 
 def pytest_addoption(parser):
-    import ttnn
-
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default=ttnn.get_arch_name(),
+        default="grayskull",
         help="Target arch, ex. grayskull, wormhole_b0",
     )
     parser.addoption(
