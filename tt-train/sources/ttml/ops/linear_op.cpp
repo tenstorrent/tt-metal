@@ -115,7 +115,8 @@ autograd::TensorPtr linear_op(
     out->set_value(ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
-        bias->get_value(),
+        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
+                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
         /* transpose_a */ false,
         /* tranpose_b */ true,
         /* memory_config */ std::nullopt,

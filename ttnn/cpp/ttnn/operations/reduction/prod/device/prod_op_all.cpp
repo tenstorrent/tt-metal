@@ -10,7 +10,7 @@
 #include "tt_metal/common/constants.hpp"
 #include <ttnn/operations/functions.hpp>
 #include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "ttnn/tools/profiler/op_profiler.hpp"
 
 namespace tt {
 using namespace constants;
