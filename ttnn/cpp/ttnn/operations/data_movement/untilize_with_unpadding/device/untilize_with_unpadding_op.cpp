@@ -68,13 +68,6 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-uint32_t closest_multiple_tile(uint32_t num, uint32_t tile_size) {
-    if (num % tile_size == 0) {
-        return num;
-    }
-    return (num / tile_size + 1) * tile_size;
-}
-
 std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
@@ -96,7 +89,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.get_tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
-            uint32_t shard_idx0 = closest_multiple_tile(tt::div_up(fused_height, num_cores), tile_height);
+            uint32_t shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
             shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
