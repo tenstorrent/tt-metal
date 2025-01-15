@@ -150,11 +150,15 @@ void MAIN {
                     // for topk, which was in input_dest_start
                     pack_reconfig_data_format(input_transposed_cb_index);
                     pack_tile<true>(input_dest_start, input_transposed_cb_index, left_ind);
+                    pack_tile<true>(input_dest_end, input_transposed_cb_index, right_ind);
+                    cb_wait_front(input_transposed_cb_index, Wt);
+                    print_all_tiles(input_transposed_cb_index);
 
                     // pack index tiles in-place in the single-buffered cb_intermed1, we only need the upper 32 values
                     // for topk, which was in index_dest_start
                     pack_reconfig_data_format(index_transposed_cb_index);
                     pack_tile<true>(index_dest_start, index_transposed_cb_index, left_ind);
+                    pack_tile<true>(index_dest_end, index_transposed_cb_index, right_ind);
                     release_dst();
                 }
             }
@@ -166,12 +170,9 @@ void MAIN {
 
             cb_push_back(input_transposed_cb_index, Wt);
             cb_push_back(index_transposed_cb_index, Wt);
-            print_all_tiles(input_transposed_cb_index);
+            // print_all_tiles(input_transposed_cb_index);
 
             uint32_t updated_Wt = Wt >> 1;
-
-            cb_wait_front(input_transposed_cb_index, Wt);
-            cb_wait_front(index_transposed_cb_index, Wt);
 
 #if 0
             int sel_tile_id[2];
