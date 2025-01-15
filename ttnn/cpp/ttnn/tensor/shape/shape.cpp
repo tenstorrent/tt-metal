@@ -21,6 +21,15 @@ uint64_t SimpleShape::volume() const {
     return std::accumulate(cbegin(), cend(), uint64_t{1}, std::multiplies<uint64_t>());
 }
 
+std::array<uint32_t, 4> SimpleShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    std::array<uint32_t, 4> ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
+}
+
 const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
@@ -33,7 +42,7 @@ const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shape) {
-    os << "SimpleShape([";
+    os << "Shape([";
     for (size_t i = 0; i < shape.rank(); ++i) {
         if (i > 0) {
             os << ", ";

@@ -103,16 +103,15 @@ Tensor optimized_conv_new(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
             const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
-            auto padded_a_shape =
-                ttnn::Shape(std::array<uint32_t, 4>{ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+            auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
-                .pad_shape = padded_a_shape.value, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+                .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
             FormatParams input_b_format_params = {
-                .pad_shape = b.get_legacy_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+                .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
             FormatParams input_bias_format_params = {};
             if (bias.has_value()) {
                 input_bias_format_params = {
-                    .pad_shape = bias.value().get_legacy_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+                    .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
             }
             auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
             auto arch = is_tensor_on_device_or_multidevice(a)

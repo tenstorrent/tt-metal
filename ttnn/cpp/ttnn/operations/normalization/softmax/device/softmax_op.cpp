@@ -290,9 +290,9 @@ Tensor scale_mask_softmax(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
-            tt::tt_metal::LegacyShape input_pad_shape =
+            ttnn::SimpleShape input_pad_shape =
                 ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                    input_tensor.get_legacy_shape());
+                    input_tensor.get_padded_shape());
             ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
                 .pad_shape = input_pad_shape,
                 .pad_value = -std::numeric_limits<float>::infinity(),
@@ -307,9 +307,9 @@ Tensor scale_mask_softmax(
                 for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
                     TT_FATAL(mask.value().get_legacy_shape()[i] == 1, "Error");
                 }
-                tt::tt_metal::LegacyShape mask_pad_shape =
+                ttnn::SimpleShape mask_pad_shape =
                     ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        mask.value().get_legacy_shape());
+                        mask.value().get_padded_shape());
                 mask_format_params = {
                     .pad_shape = mask_pad_shape,
                     .pad_value = -std::numeric_limits<float>::infinity(),

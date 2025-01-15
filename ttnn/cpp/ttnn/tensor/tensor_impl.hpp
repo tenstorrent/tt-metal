@@ -253,7 +253,10 @@ enum class TensorPrintProfile {
 extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 template <typename T>
-std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype = std::nullopt);
+std::string to_string(
+    const Tensor& tensor,
+    std::optional<DataType> original_dtype = std::nullopt,
+    std::optional<Layout> original_layout = std::nullopt);
 
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);

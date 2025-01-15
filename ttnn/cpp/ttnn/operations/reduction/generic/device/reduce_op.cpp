@@ -217,7 +217,7 @@ Tensor reduce(
                 }
                 auto input_tensor_pad_shape =
                     ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        input_tensor.get_legacy_shape());
+                        input_tensor.get_padded_shape());
                 auto formatted_input_tensor = input_tensor;
                 if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
                         input_tensor, input_tensor_pad_shape)) {

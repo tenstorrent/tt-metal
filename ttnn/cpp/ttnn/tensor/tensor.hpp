@@ -277,7 +277,7 @@ struct Tensor {
 
     bool is_contiguous() const {
         if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
+            return this->get_logical_shape() == this->get_padded_shape();
         } else {
             return false;
         }
