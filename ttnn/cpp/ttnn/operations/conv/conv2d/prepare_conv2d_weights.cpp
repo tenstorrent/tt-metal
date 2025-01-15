@@ -663,8 +663,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t input_width,
     const bool parameters_on_device,
     bool is_non_tile_mul_width) {
-    std::cout << "Preparing weights on device. Non tile mul width  " << is_non_tile_mul_width << std::endl;
-
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
