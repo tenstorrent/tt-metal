@@ -7,7 +7,6 @@ import csv
 import pathlib
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, Union
 
 from loguru import logger
@@ -346,6 +345,6 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
 
     json_data = complete_benchmark_run.model_dump_json()
 
-    output_path = Path(str(github_partial_benchmark_json_filename).replace("partial_run_", "complete_run_"))
+    output_path = pathlib.Path(str(github_partial_benchmark_json_filename).replace("partial_run_", "complete_run_"))
     with open(output_path, "w") as f:
         f.write(json_data)
