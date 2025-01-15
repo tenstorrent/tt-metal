@@ -20,6 +20,35 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
+inline uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
+    uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
+    return cb_src0_size + cb_output_size;
+}
+
+inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
+    auto device = input_tensor_a.device();
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
+    return max_l1_space;
+}
+
+inline bool enough_available_space(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t estimated_size_of_cbs =
+        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    return max_l1_space > estimated_size_of_cbs;
+}
+
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     const auto& input_shape = a.get_padded_shape();
@@ -222,6 +251,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+
+    bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    if (!enough_space) {
+        return untilize_with_unpadding_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
+    }
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
