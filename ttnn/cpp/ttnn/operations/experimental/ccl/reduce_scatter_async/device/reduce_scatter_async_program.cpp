@@ -537,6 +537,7 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     // Would be great if we could do something like `DefineKernel` to create a temporary handle which can later be used to
     // merge with other kernels (if all args are identical), to produce a merged kernel.
 
+
     static std::string const& reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/compute/eltwise_binary_kernel.cpp";
 

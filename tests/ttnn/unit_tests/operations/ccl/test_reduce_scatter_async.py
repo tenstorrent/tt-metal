@@ -106,6 +106,7 @@ def run_reduce_scatter_test(
     enable_async=True,
     topology=ttnn.Topology.Ring,
     trace_mode=False,
+    multi_coregrid_test=False,
 ):
     assert num_iters > 0
     enable_persistent_fabric = True
@@ -211,6 +212,38 @@ def run_reduce_scatter_test(
     assert len(tt_input_tensors) == num_devices
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    if multi_coregrid_test and (compute_grid_size.x > 0):
+        worker_sub_device = ttnn.SubDevice(
+            [
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, compute_grid_size.y - 1)),
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(1, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
+                        ),
+                    }
+                )
+            ]
+        )
+    else:
+        worker_sub_device = ttnn.SubDevice(
+            [
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
+                        )
+                    }
+                )
+            ]
+        )
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+        mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+    )
+
 
     # Run the op
     if trace_mode:
@@ -376,6 +409,76 @@ def test_line_reduce_scatter_async_post_commit(
         trace_mode=trace_mode,
     )
 
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, dim, layout",
+    [
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 27648}], indirect=True)
+def test_line_reduce_multi_core_grid_scatter_async_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    trace_mode,
+    num_iters=16,
+):
+    run_reduce_scatter_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        topology=ttnn.Topology.Linear,
+        trace_mode=trace_mode,
+        multi_coregrid_test=True,
+    )
+
+
+@pytest.mark.skip(
+    "persistent fabric test with cluster-axis API and multiple concurrent reduce_scatter instances not enabled yet"
+)
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(

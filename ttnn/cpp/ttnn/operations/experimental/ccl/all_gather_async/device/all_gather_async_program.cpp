@@ -208,6 +208,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     );
 
     // KERNEL CREATION
+
     KernelHandle worker_sender_reader_kernel_id =
         ttnn::ccl::worker_detail::generate_multi_command_stream_kernel_ct_args(
             program,
