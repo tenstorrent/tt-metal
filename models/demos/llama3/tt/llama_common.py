@@ -295,7 +295,7 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             pt_out = torch.argmax(pt_input, dim=-1)
 
     if mesh_device is None:
-        return pt_out
+        return None, pt_out
     if on_host:
         return (
             ttnn.as_tensor(
