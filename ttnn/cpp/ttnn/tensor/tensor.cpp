@@ -833,7 +833,7 @@ const ttnn::SimpleShape Tensor::strides() const {
     return ttnn::SimpleShape(tt::tt_metal::compute_strides(this->get_padded_shape()));
 }
 
-uint32_t Tensor::volume() const { return tt::tt_metal::compute_volume(this->get_legacy_shape()); }
+uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
 
 uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 

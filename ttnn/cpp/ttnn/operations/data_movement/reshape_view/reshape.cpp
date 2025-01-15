@@ -336,6 +336,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     //The following case should only be called for the device storage case, the rest is a bandaid
     //for issue 15317
 
+    const uint32_t shape_last_dim = shape.rank() >= 1 ? shape[-1] : 1;
+    const uint32_t tensor_shape_last_dim = tensor_shape.rank() >= 1 ? tensor_shape[-1] : 1;
     const uint32_t shape_second_last_dim = shape.rank() >= 2 ? shape[-2]:1;
     const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
 
@@ -351,7 +353,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     TT_FATAL(shape.logical_shape().volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
     bool this_is_view =
-        (tensor_shape[-1] == shape[-1]) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
+        (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
         ((tensor.get_layout() == ttnn::ROW_MAJOR_LAYOUT) ||          // Its row major
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same

@@ -74,7 +74,12 @@ void py_module(py::module& module) {
                         const std::vector<chip_id_t>& physical_device_ids,
                         MeshType mesh_type) {
                 return MeshDevice::create(
-                    MeshDeviceConfig(mesh_device_shape, offset, physical_device_ids, mesh_type),
+                    MeshDeviceConfig{
+                        .mesh_shape = mesh_device_shape,
+                        .offset = offset,
+                        .physical_device_ids = physical_device_ids,
+                        .mesh_type = mesh_type,
+                    },
                     l1_small_size,
                     trace_region_size,
                     num_command_queues,
@@ -90,7 +95,7 @@ void py_module(py::module& module) {
             py::arg("physical_device_ids"),
             py::arg("mesh_type"))
         .def("get_num_devices", &MeshDevice::num_devices)
-        .def("get_mesh_id", &MeshDevice::get_mesh_id)
+        .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
             "get_device",
@@ -186,7 +191,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager(sub_devices, local_l1_size);
+                return self.mesh_create_sub_device_manager(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -204,7 +209,7 @@ void py_module(py::module& module) {
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+                return self.mesh_create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
             },
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
@@ -223,7 +228,7 @@ void py_module(py::module& module) {
             )doc")
         .def(
             "load_sub_device_manager",
-            &MeshDevice::load_sub_device_manager,
+            &MeshDevice::mesh_load_sub_device_manager,
             py::arg("mesh_sub_device_manager_id"),
             R"doc(
                 Loads the sub-device manager with the given ID.
@@ -233,13 +238,13 @@ void py_module(py::module& module) {
             )doc")
         .def(
             "clear_loaded_sub_device_manager",
-            &MeshDevice::clear_loaded_sub_device_manager,
+            &MeshDevice::mesh_clear_loaded_sub_device_manager,
             R"doc(
                 Clears the loaded sub-device manager for the given mesh device.
             )doc")
         .def(
             "remove_sub_device_manager",
-            &MeshDevice::remove_sub_device_manager,
+            &MeshDevice::mesh_remove_sub_device_manager,
             py::arg("mesh_sub_device_manager_id"),
             R"doc(
                 Removes the sub-device manager with the given ID.
@@ -250,7 +255,7 @@ void py_module(py::module& module) {
         .def(
             "set_sub_device_stall_group",
             [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
-                self.set_sub_device_stall_group(sub_device_ids);
+                self.mesh_set_sub_device_stall_group(sub_device_ids);
             },
             py::arg("sub_device_ids"),
             R"doc(
@@ -263,7 +268,7 @@ void py_module(py::module& module) {
             )doc")
         .def(
             "reset_sub_device_stall_group",
-            &MeshDevice::reset_sub_device_stall_group,
+            &MeshDevice::mesh_reset_sub_device_stall_group,
             R"doc(
                 Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                 back to all SubDevice IDs.

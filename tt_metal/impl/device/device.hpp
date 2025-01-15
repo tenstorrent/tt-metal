@@ -19,7 +19,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
 #include "tt_metal/impl/sub_device/sub_device_types.hpp"
 #include "tt_metal/tt_stl/span.hpp"
 #include "program_cache.hpp"
@@ -159,15 +159,6 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
-    // machine epsilon
-    float sfpu_eps() const override;
-
-    // machine nan
-    float sfpu_nan() const override;
-
-    // machine inf
-    float sfpu_inf() const override;
-
     const JitBuildEnv& build_env() const override { return this->build_env_; }
     const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
     const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
@@ -259,7 +250,6 @@ public:
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
-    static_assert(detail::SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES, "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     void initialize_cluster();
@@ -283,9 +273,6 @@ private:
 
     void generate_device_bank_to_noc_tables();
 
-    SubDeviceManagerId get_next_sub_device_manager_id();
-    void reset_sub_devices_state(const std::unique_ptr<detail::SubDeviceManager>& sub_device_manager);
-
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
@@ -298,9 +285,8 @@ private:
     uint32_t build_key_ = 0;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
-    // Leaving here for compatibility with current reacharounds
-    // TODO: Replace with get_initialized_allocator()
-    Allocator* allocator_ = nullptr;
+    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+
     bool initialized_ = false;
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
@@ -329,13 +315,6 @@ private:
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
 
     std::map<std::string, std::string> device_kernel_defines_;
-
-    std::unordered_map<SubDeviceManagerId, std::unique_ptr<detail::SubDeviceManager>> sub_device_managers_;
-    SubDeviceManagerId active_sub_device_manager_id_ = {0};
-    detail::SubDeviceManager *active_sub_device_manager_ = nullptr;
-    SubDeviceManagerId next_sub_device_manager_id_ = {0};
-    SubDeviceManagerId default_sub_device_manager_id_ = {0};
-    detail::SubDeviceManager *default_sub_device_manager_ = nullptr;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;
