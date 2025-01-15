@@ -315,6 +315,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto local_core_type = local_tensor.buffer()->core_type();
     auto remote_core_type = remote_tensor.buffer()->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
+    constexpr uint32_t scratch_cb_index = tt::CBIndex::c_1;
     auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto remote_cores = corerange_to_cores(
@@ -346,13 +347,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         program,
         kernel_name,
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
+        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram, scratch_cb_index}));
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program,
         kernel_name,
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
+        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram, scratch_cb_index}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -369,6 +370,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
+    uint32_t max_transfer_bytes = 0;
     for (const auto& core : local_cores) {
         uint32_t local_units_per_core = std::min(local_units_left, local_units_per_shard);
         local_units_left -= local_units_per_core;
@@ -396,6 +398,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                         {bank_id,
                          (remote_units_per_shard - remote_core_units_rem) * unit_size,
                          units_to_transfer * unit_size});
+                    max_transfer_bytes = std::max(max_transfer_bytes, units_to_transfer * unit_size);
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
                     remote_core_units_rem -= units_to_transfer;
@@ -406,6 +409,12 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             SetRuntimeArgs(program, kernel_id, core, kernel_args);
         }
     }
+    // Set up scratch pad for unaligned DRAM access
+    max_transfer_bytes = align(max_transfer_bytes, hal.get_alignment(HalMemType::DRAM));
+    tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
+        tt::tt_metal::CircularBufferConfig(max_transfer_bytes, {{scratch_cb_index, data_format}})
+            .set_page_size(scratch_cb_index, 1);
+    auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_0, local_cores](
                                                    const void* operation,
