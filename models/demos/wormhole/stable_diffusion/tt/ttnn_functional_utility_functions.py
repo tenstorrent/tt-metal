@@ -279,7 +279,6 @@ def reshard_to(tensor, grid_size, layout, col_major=False, shape=None):
         output_shard_grid,
         shard_spec,
         (ttnn.ShardOrientation.COL_MAJOR if col_major else ttnn.ShardOrientation.ROW_MAJOR),
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         layout,

@@ -71,6 +71,13 @@ void validate_supported_arch_dtype(
                 static_cast<int>(output_datatype),
                 static_cast<int>(op_type));
             break;
+        case UnaryOpType::ABS:
+        case UnaryOpType::ABS_INT32:
+            TT_FATAL(
+                !(arch == tt::ARCH::GRAYSKULL && input_datatype == DataType::INT32),
+                "UnaryOpType '{}' (ABS int32 operation) is not supported on Grayskull architecture.",
+                static_cast<int>(op_type));
+            break;
         default: return;
     }
 }
@@ -192,6 +199,13 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         compute_volume(input_shape));
 
     return hash;
+}
+
+bool UnaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
 }
 
 std::tuple<UnaryDeviceOperation::operation_attributes_t, UnaryDeviceOperation::tensor_args_t>

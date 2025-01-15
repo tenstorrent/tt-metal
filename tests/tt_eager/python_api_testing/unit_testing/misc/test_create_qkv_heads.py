@@ -57,7 +57,6 @@ def run_create_qkv_heads_test(
             QKV.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
@@ -214,7 +213,6 @@ def run_create_q_and_kv_heads_test(
             KV_interleaved.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     q_shard_spec = ttnn.ShardSpec(
@@ -231,7 +229,6 @@ def run_create_q_and_kv_heads_test(
             Q_flattened.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     kv_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, kv_shard_spec)

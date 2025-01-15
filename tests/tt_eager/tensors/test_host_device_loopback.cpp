@@ -17,9 +17,9 @@ using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_single_tile_single_dram_bank_loopback(Device* device) {
+bool test_single_tile_single_dram_bank_loopback(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::SimpleShape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     Tensor host_a = ttnn::random::random(single_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
@@ -31,9 +31,9 @@ bool test_single_tile_single_dram_bank_loopback(Device* device) {
     return pass;
 }
 
-bool test_multi_tile_multi_dram_bank_loopback(Device* device) {
+bool test_multi_tile_multi_dram_bank_loopback(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape multi_tile_shape = {1, 1, 4 * TILE_HEIGHT, 3 * TILE_WIDTH};
+    ttnn::SimpleShape multi_tile_shape({1, 1, 4 * TILE_HEIGHT, 3 * TILE_WIDTH});
 
     Tensor host_a = ttnn::random::random(multi_tile_shape).to(Layout::TILE);
     Tensor device_a = host_a.to(device);
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_single_tile_single_dram_bank_loopback(device);
 

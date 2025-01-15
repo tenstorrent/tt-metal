@@ -8,17 +8,12 @@
 #include "conv2d_op.hpp"
 #include "common/math.hpp"
 
-#include "common/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
 #include "tt_metal/common/constants.hpp"
-
-#include "tt_metal/tt_stl/reflection.hpp"
 
 #include "tt_metal/common/work_split.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/operations/sharding_utilities.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -78,6 +73,7 @@ Tensor optimized_conv_new(
     bool enable_subblock_padding,
     bool use_non_tile_height) {
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({a, b}))};
+
     operation::launch_op(
         [sliding_window_config,
          output_channels,
@@ -107,16 +103,15 @@ Tensor optimized_conv_new(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
             const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
-            auto padded_a_shape =
-                ttnn::Shape(std::array<uint32_t, 4>{ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+            auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
-                .pad_shape = padded_a_shape.value, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+                .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
             FormatParams input_b_format_params = {
-                .pad_shape = b.get_legacy_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+                .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
             FormatParams input_bias_format_params = {};
             if (bias.has_value()) {
                 input_bias_format_params = {
-                    .pad_shape = bias.value().get_legacy_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+                    .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
             }
             auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
             auto arch = is_tensor_on_device_or_multidevice(a)
@@ -125,28 +120,30 @@ Tensor optimized_conv_new(
             bool fp32_accum =
                 a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
                                                               // compute_kernel_config.value().fp32_dest_acc_en : false;
-            return operation::run_without_autoformat(
-                OptimizedConvNew(
-                    sliding_window_config,
-                    output_channels,
-                    groups,
-                    untilize_out,
-                    bias.has_value(),
-                    fuse_relu,
-                    parallelization_config,
-                    block_config,
-                    memory_config,
-                    dtype,
-                    input_tensor_shape,
-                    use_shallow_conv_variant,
-                    compute_kernel_config,
-                    enable_act_double_buffer,
-                    enable_weights_double_buffer,
-                    enable_split_reader,
-                    enable_subblock_padding,
-                    use_non_tile_height),
-                input_tensors,
-                optional_input_tensors);
+            auto optimized_conv_op = OptimizedConvNew(
+                sliding_window_config,
+                output_channels,
+                groups,
+                untilize_out,
+                bias.has_value(),
+                fuse_relu,
+                parallelization_config,
+                block_config,
+                memory_config,
+                dtype,
+                input_tensor_shape,
+                use_shallow_conv_variant,
+                compute_kernel_config,
+                enable_act_double_buffer,
+                enable_weights_double_buffer,
+                enable_split_reader,
+                enable_subblock_padding,
+                use_non_tile_height);
+            IDevice* device = a.device();
+
+            optimized_conv_op.pre_op_l1_allocation_size_bytes =
+                device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+            return operation::run_without_autoformat(optimized_conv_op, input_tensors, optional_input_tensors);
         },
         {a, b},
         output_tensors,
@@ -263,10 +260,17 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 TensorLayout::fromLegacyPaddedShape(
                     dtype, PageConfig(output_layout), mem_config, ttnn::Shape(output_shape)))};
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto shard_grid = this->memory_config.shard_spec.value().grid;
+            auto shard_spec = ShardSpec{
+                shard_grid,
+                this->memory_config.shard_spec.value().shape,
+                this->memory_config.shard_spec.value().orientation};
+            auto mem_config = this->memory_config;
+            mem_config.shard_spec = shard_spec;
             return {TensorSpec(
                 output_shape.logical_shape(),
                 TensorLayout::fromLegacyPaddedShape(
-                    dtype, PageConfig(output_layout), memory_config, ttnn::Shape(output_shape)))};
+                    dtype, PageConfig(output_layout), mem_config, ttnn::Shape(output_shape)))};
         } else {
             TT_THROW("Unsupported shard scheme");
         }
@@ -285,7 +289,18 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const auto& input_tensor_b = input_tensors.at(1);
     const auto& input_tensor_bias = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    return multi_core_optimized_conv_sharded_v2_new(
+    tt::tt_metal::IDevice* device = input_tensor_a.device();
+
+    const auto arch = device->arch();
+    const auto has_bias = input_tensor_bias.has_value();
+
+    const auto input_dtype = input_tensor_a.dtype();
+    const auto weights_dtype = input_tensor_b.dtype();
+    const auto output_dtype = output_tensor.dtype();
+
+    const auto weights_shape = input_tensor_b.get_legacy_shape();
+
+    auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a,
         input_tensor_b,
         input_tensor_bias,
@@ -306,6 +321,51 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_split_reader,
         enable_subblock_padding,
         use_non_tile_height);
+
+    const uint32_t post_op_l1_stats =
+        device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+    auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+
+    auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
+        arch,
+        this->memory_config.memory_layout,
+        input_dtype,
+        weights_dtype,
+        output_dtype,
+        compute_kernel_config,
+        block_config,
+        parallelization_config,
+        input_tensor_shape,
+        weights_shape,
+        sliding_window_config.get_output_shape(),
+        output_channels,
+        groups,
+        std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
+        Conv2dConfig{
+            .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
+            .enable_act_double_buffer = enable_act_double_buffer,
+            .enable_weights_double_buffer = enable_weights_double_buffer,
+            .enable_split_reader = enable_split_reader,
+            .enable_subblock_padding = enable_subblock_padding},
+        this->memory_config,
+        has_bias,
+        use_non_tile_height);
+    if (calc_CB_size != actual_cb_size) {
+        TT_FATAL(
+            actual_cb_size == calc_CB_size,
+            "Calculated CB size {} does not match with the actual CB size {}",
+            calc_CB_size,
+            actual_cb_size);
+    }
+    if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+        TT_FATAL(
+            post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
+            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+            this->pre_op_l1_allocation_size_bytes,
+            post_op_l1_stats,
+            calc_output_size);
+    }
+    return program_with_cbs;
 }
 
 operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(

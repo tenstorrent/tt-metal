@@ -75,12 +75,12 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH});
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::random::random(shape).to(Layout::TILE).to(device);
 

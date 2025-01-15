@@ -38,7 +38,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
 
     // This should allocate a DRAM buffer on the device
-    Device* device = input.device();
+    IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
     tt::tt_metal::Buffer* reader_indices_buffer = reader_indices.buffer();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();

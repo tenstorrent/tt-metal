@@ -206,7 +206,7 @@ Tensor reduce(
                 const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                 const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
                 const auto& input_tensor = input_tensors.at(0);
-                Device* device;
+                IDevice* device;
 
                 // Get the device
                 if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -217,7 +217,7 @@ Tensor reduce(
                 }
                 auto input_tensor_pad_shape =
                     ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        input_tensor.get_legacy_shape());
+                        input_tensor.get_padded_shape());
                 auto formatted_input_tensor = input_tensor;
                 if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
                         input_tensor, input_tensor_pad_shape)) {

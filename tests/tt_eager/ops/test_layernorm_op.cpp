@@ -27,8 +27,8 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
-        tt::tt_metal::LegacyShape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        ttnn::SimpleShape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
         Tensor a = ttnn::random::random(shape).to(Layout::TILE).to(device);
         Tensor c = ttnn::layer_norm(a, 1e-4f);
         Tensor d = c.cpu();

@@ -7,7 +7,6 @@
 #include "ttnn/operations/math.hpp"
 #include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp"
 
@@ -218,7 +217,9 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     ttnn::operations::matmul::get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b,
+                    /*output_tile=*/std::nullopt,
+                    /*global_cb=*/std::nullopt});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

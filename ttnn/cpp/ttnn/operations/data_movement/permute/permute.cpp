@@ -33,18 +33,26 @@ ttnn::Tensor permute_impl(
     using ttnn::operations::experimental::auto_format::AutoFormat;
 
     // Get the device
-    Device* device = a.device();
+    IDevice* device = a.device();
+    uint32_t rank = a.get_shape().rank();
 
-    if (a.get_shape().rank() > 4) {
+    auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+    };
+
+    if (rank > 4) {
+        if (a.get_layout() == Layout::TILE && ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2)) ||
+            (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
+            return prim_permute(a);
+        }
         auto input = a.get_layout() == Layout::TILE
-                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr)
+                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr)
                          : a;
         TT_FATAL(
             !(pad_value.has_value() && pad_value.value() != 0.0f),
             "Non-zero padding is not supported for permute on tensors with rank > 4.");
-        SmallVector<uint32_t> permute_dims(dims.begin(), dims.end());
-        input = ttnn::prim::permute(input, permute_dims, output_mem_config, std::nullopt);
-        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
+        input = prim_permute(input);
+        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
@@ -88,7 +96,7 @@ ttnn::Tensor permute_impl(
     } else if (N == 1 && C == 0 && H == 2 && W == 3) {
         output = transpose_cn(formatted_input_tensor);
     } else if (N == 1 && C == 0 && H == 3 && W == 2) {
-        output = transpose_wh(transpose_cn(formatted_input_tensor));
+        output = prim_permute(formatted_input_tensor);
     } else if (N == 1 && C == 2 && H == 0 && W == 3) {
         output = transpose_hc(transpose_cn(formatted_input_tensor));
     } else if (N == 1 && C == 2 && H == 3 && W == 0) {
@@ -150,14 +158,55 @@ ttnn::Tensor permute_launch(
     return output_tensors.at(0);
 }
 
-bool is_permute_nop(const ttnn::Tensor& a, tt::stl::Span<const uint32_t> dims) {
-    if (a.get_shape().rank() <= 1) {
+bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& dims) {
+    // 1) Trivial early-out for rank <= 1
+    const auto rank = a.get_logical_shape().rank();
+    if (rank <= 1) {
         return true;
     }
-    auto normalized_dims = ttnn::SmallVector<uint32_t>(dims.begin(), dims.end());
-    ttnn::SmallVector<uint32_t> seq_dims(dims.size());
+
+    // 2) Check for identity permutation
+    ttnn::SmallVector<uint32_t> seq_dims(rank);
     std::iota(seq_dims.begin(), seq_dims.end(), 0);
-    return normalized_dims == seq_dims;
+    if (dims == seq_dims) {
+        return true;
+    }
+
+    // 3) Otherwise, when the input is tiled, it is never a NOP if the last two dimensions are permuted. When it is row
+    // major, it is never a NOP if the last dimension is permuted.
+    if (a.get_layout() == Layout::TILE && (dims[rank - 1] != rank - 1 || dims[rank - 2] != rank - 2)) {
+        return false;
+    } else if (a.get_layout() == Layout::ROW_MAJOR && dims[rank - 1] != rank - 1) {
+        return false;
+    }
+
+    // Build permuted shape
+    const auto& shape = a.get_logical_shape();
+    ttnn::SmallVector<uint32_t> perm_shape(rank);
+    for (uint32_t i = 0; i < rank; ++i) {
+        perm_shape[i] = shape[dims[i]];
+    }
+
+    // 4) If the shape changed, definitely not a no-op
+    if (perm_shape != shape) {
+        return false;
+    }
+
+    // 5) If the shape stayed the same, ensure we didn't
+    //    relocate a dimension with size > 1
+    for (uint32_t i = 0; i < rank; ++i) {
+        const uint32_t j = dims[i];
+        if (i != j && shape[i] > 1) {
+            // Moved a dimension that has > 1 elements
+            // => layout changed => not a no-op.
+            return false;
+        }
+    }
+
+    // If we made it here, we either
+    //    - only moved dimensions of size 1, or
+    //    - didn't move anything at all
+    return true;
 }
 
 }  // namespace detail
@@ -165,7 +214,7 @@ bool is_permute_nop(const ttnn::Tensor& a, tt::stl::Span<const uint32_t> dims) {
 ttnn::Tensor ExecutePermute::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int64_t> dims,
+    const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
     const auto input_rank = input_tensor.get_logical_shape().rank();
@@ -182,7 +231,7 @@ ttnn::Tensor ExecutePermute::invoke(
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
 
-    auto adjust_order = [](tt::stl::Span<const uint32_t> dims) {
+    auto adjust_order = [](const ttnn::SmallVector<uint32_t>& dims) {
         ttnn::SmallVector<uint32_t> new_order;
         TT_FATAL(dims.size() <= 4, "Minimum rank of tensor required is 4");
         int additional_ranks = 4 - dims.size();
@@ -200,7 +249,7 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.get_layout();
     auto output_tensor =
         detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()), pad_value);
-    output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (Device*)nullptr);
+    output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
 
     if (input_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_rank);
@@ -211,14 +260,14 @@ ttnn::Tensor ExecutePermute::invoke(
 
 ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int64_t> dims,
+    const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<float>& pad_value) {
     return invoke(DefaultQueueId, input_tensor, dims, memory_config, pad_value);
 }
 
 ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor, tt::stl::Span<const int64_t> dims, const std::optional<float>& pad_value) {
+    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
     return invoke(input_tensor, dims, std::nullopt, pad_value);
 }
 

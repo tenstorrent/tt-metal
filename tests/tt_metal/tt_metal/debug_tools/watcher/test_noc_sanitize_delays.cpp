@@ -30,7 +30,7 @@ void inc_populate(std::vector<std::uint32_t>& vec, float start_from) {
     }
 }
 
-void RunDelayTestOnCore(WatcherDelayFixture* fixture, Device* device, CoreCoord &core) {
+void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord &core) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
         const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
@@ -145,7 +145,7 @@ TEST_F(WatcherDelayFixture, TensixTestWatcherSanitizeInsertDelays) {
         GTEST_SKIP();
 
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){
+        [](WatcherFixture *fixture, IDevice* device){
             CoreCoord core{0, 0};
             RunDelayTestOnCore(dynamic_cast<WatcherDelayFixture*>(fixture), device, core);
         },

@@ -12,6 +12,7 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
 )
 
 
@@ -177,7 +178,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
             input_shard_spec.grid,
             output_shard_shape,
             input_shard_spec.orientation,
-            False,
         )
     output_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
     ttnn_tensor = ttnn.from_torch(
@@ -191,26 +191,29 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
 
+    sub_device_stall_group = []
     if use_all_gather_async:
         compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
         worker_sub_device = ttnn.SubDevice(
             [
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                        )
-                    }
-                )
+                ccl_sub_device_crs,
             ]
         )
         worker_sub_device_id = ttnn.SubDeviceId(0)
+        sub_device_stall_group = [worker_sub_device_id]
         if create_persistent_fabric:
             logger.info("Create persistent fabric interface")
             mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
                 mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
             )
             logger.info("Done Create persistent fabric interface")
+            mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+
+        # create global semaphore handles
+        ccl_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
     if trace_mode:
@@ -234,11 +237,11 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=ttnn.Topology.Linear,
+                    multi_device_global_semaphore=ccl_semaphore_handles,
                     num_links=num_links,
                     memory_config=output_mem_config,
                     subdevice_id=worker_sub_device_id,
                     enable_persistent_fabric_mode=enable_persistent_fabric,
-                    create_semaphore_handles=True,
                 )
             else:
                 ttnn_tensor_out = ttnn.all_gather(
@@ -252,13 +255,13 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 )
 
         if enable_persistent_fabric:
-            logger.info(f"Waiting for op {i}")
-            for d in mesh_device.get_devices():
-                ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
-            logger.info(f"Done iteration {i}")
+            logger.info(f"Waiting for op")
+            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+            logger.info(f"Done iteration")
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")
+        mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
         logger.info("Done tearing down persistent fabric interface")
 

@@ -35,34 +35,7 @@ sudo ./install_dependencies.sh
   - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
-### Step 3. Hugepages
-
-1. Download latest [setup_hugepages.py](https://github.com/tenstorrent/tt-metal/blob/main/infra/machine_setup/scripts/setup_hugepages.py) script.
-
-```sh
-wget https://raw.githubusercontent.com/tenstorrent/tt-metal/main/infra/machine_setup/scripts/setup_hugepages.py
-```
-
-2. Run first setup script.
-
-```sh
-sudo -E python3 setup_hugepages.py first_pass
-```
-
-3. Reboot
-
-```sh
-sudo reboot now
-```
-
-4. Run second setup script & check setup.
-
-```sh
-sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py check
-```
----
-
-### Step 4. Install and start using TT-NN and TT-Metalium!
+### Step 3. Install and start using TT-NN and TT-Metalium!
 
 > [!NOTE]
 >
@@ -75,21 +48,13 @@ sudo -E python3 setup_hugepages.py enable && sudo -E python3 setup_hugepages.py 
 > If you do not want to use the models or follow the tutorials and want to
 > immediately start using the API, you may install just the wheel or get the release Docker container.
 
-1. Install git and git-lfs.
-
-```sh
-sudo apt install git git-lfs
-```
-
-2. Clone the repo.
+1. Clone the repo.
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
-cd tt-metal
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-3. Install either from source, or from our release wheel. Note that if you are
+2. Install either from source, or from our release wheel. Note that if you are
 going to try using the model demos, we highly recommend you install from
 source.
 

@@ -11,7 +11,7 @@
 #include "gtest/gtest.h"
 #include "tt_metal/common/core_coord.hpp"
 #include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include "tt_metal/device.hpp"
 #include "tt_metal/impl/event/event.hpp"
 #include "tt_metal/impl/sub_device/sub_device.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -27,8 +27,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     auto sharded_cores_2_vec = corerange_to_cores(sharded_cores_2, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
-        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
         nullptr,
@@ -40,8 +40,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
-    ShardSpecBuffer shard_spec_buffer_2 = ShardSpecBuffer(
-        sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_2.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_2 =
+        ShardSpecBuffer(sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_2.num_cores(), 1});
     uint32_t page_size_2 = 64;
     ShardedBufferConfig shard_config_2 = {
         nullptr,
