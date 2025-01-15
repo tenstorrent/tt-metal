@@ -4,46 +4,33 @@
 from pathlib import Path
 from typing import Optional
 from loguru import logger
-
 from time import time
 from datetime import datetime
 import hashlib
 import requests
 import json
-
+from pkg_resources import resource_filename
 import math
 from termcolor import cprint
-
-# import llama_models.llama3.reference_impl.generation as llama_reference_generation
-# from llama_models.llama3.api.tokenizer import Tokenizer
-# TODO, use the tokenizer above or below?
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-
-# from llama_models.llama3.api.chat_format import ChatFormat
-# from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
-
-from pkg_resources import resource_filename
-
-from models.demos.llama3.tt.llama_common import (
-    get_prefill_rot_mat,
-    get_rot_transformation_mat,
-    # HostEmbedding,
-    encode_prompt_llama_instruct,
-    PagedAttentionConfig,
-    sample_host,
-)
-
-from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.llama3.tt.model_config import LlamaOptimizations
-
 
 import torch
 import pytest
 import os
 import ttnn
 
+from llama_models.llama3.api.tokenizer import Tokenizer
+
 from models.demos.llama3.tt.generator import LlamaGenerator
+from models.demos.llama3.tt.model_config import LlamaOptimizations
+from models.demos.llama3.tt.llama_common import (
+    get_prefill_rot_mat,
+    get_rot_transformation_mat,
+    encode_prompt_llama_instruct,
+    PagedAttentionConfig,
+    sample_host,
+)
+from models.perf.benchmarking_utils import BenchmarkProfiler
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -68,17 +55,32 @@ def load_and_cache_context(context_url, cache_dir, max_length=None):
             logger.error(f"Error fetching context from URL: {context_url}. Error: {str(e)}")
             context_text = ""
 
+    # Clip the context to the max length provided
+    if max_length:
+        context_text = context_text[:max_length]
+        logger.info(f"Clipped the context text to {max_length} characters")
 
-# load from json, return as a list
+    return context_text
+
+
+# load input prompts from json, return as a list
 def load_inputs(user_input, batch, instruct):
     if isinstance(user_input, str):
         with open(user_input, "r") as f:
             user_input = json.load(f)
-    assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
+
+    if len(user_input) < batch:
+        logger.warning(
+            f"Number of users in the file is less than the provided batch={batch}. Repeating the prompts to match the batch size."
+        )
+        user_input = user_input * batch
+
     in_prompt = []
     cache_dir = Path("models/demos/llama3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
+    # It clips the excerpt to the max length provided to allow testing different long context lengthts
     for i in range(batch):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -125,7 +127,7 @@ def preprocess_inputs_prefill(
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    # The large input demo we provide contains more tokens than the maximum (32k tokens)
+    # The large input demo we provide contains more tokens than the maximum
     # To avoid running out of memory, clip to max_prefill_len
     if min_prompt_len > max_prefill_len:
         logger.info(f"Clipping prompts to {max_prefill_len}")
@@ -197,9 +199,10 @@ def create_tt_model(
     )
     state_dict = tt_model_args.load_state_dict()
 
-    # page_table_tt = None
     page_table = None
     paged_attention_config = None
+    tt_kv_cache = None
+
     if use_paged_kv_cache:
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
@@ -212,13 +215,6 @@ def create_tt_model(
         page_table = reverse_permutation.reshape(
             tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
         )
-        # page_table_tt = ttnn.from_torch(
-        #     page_table,
-        #     device=mesh_device,
-        #     dtype=ttnn.int32,
-        #     layout=ttnn.ROW_MAJOR_LAYOUT,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=tt_model_args.cluster_shape),
-        # )
         paged_attention_config = PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
@@ -232,8 +228,11 @@ def create_tt_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    # TODO Miguel send page table to generator!
-    return tt_model_args, model, page_table
+
+    if use_paged_kv_cache:
+        tt_kv_cache = [l.attention.layer_past for l in model.layers]
+
+    return tt_model_args, model, page_table, tt_kv_cache
 
 
 # List of supported Parameters for demo.py
@@ -260,9 +259,9 @@ def create_tt_model(
             1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention # Miguel, set to True after adding to generator!
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0.6, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -271,7 +270,7 @@ def create_tt_model(
             1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention  # Miguel
+            True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
@@ -329,19 +328,20 @@ def test_llama_demo_text(
     """
     Simple Llama demo with limited dependence on reference code.
     """
-    mesh_device.enable_async(True)  # Miguel fix with blocking calls!
+    mesh_device.enable_async(True)
 
-    print_to_file = False
+    print_to_file = False  # Enable this flag to print the output of all users to a file
 
-    # Creat batch output file
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    output_directory = "models/demos/llama3/demo/output"
-    os.makedirs(output_directory, exist_ok=True)
-    os.chmod(output_directory, 0o755)
-    output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
+    if print_to_file:
+        # Creat batch output file
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_directory = "models/demos/llama3/demo/output"
+        os.makedirs(output_directory, exist_ok=True)
+        os.chmod(output_directory, 0o755)
+        output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
 
-    # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
-    N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+    # Instead of running warmup iterations, the demo profiles the initial compile iteration
+    bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
 
     # Start profiler
     logger.info(f"Start profiler")
@@ -350,19 +350,20 @@ def test_llama_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    if len(input_prompts) == 1:
+    if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * batch_size
-    else:
+    else:  # Inputs from file
         input_prompts = load_inputs(input_prompts, batch_size, input_prompts)
     profiler.end("loading_inputs")
 
-    # Generate the batched prompts (rotate the inputs between the users, for each batch)
-    # If batch_size == 1, the same prompt is repeated for each batch
-    batch_prompts = []
+    # To simulate a deployment environment, the demo supports repeating batched prompts.
+    # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
+    # If batch_size=1, the same prompt is repeated for each batch
+    repeat_batch_prompts = []
     for i in range(repeat_batches):
-        batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table = create_tt_model(
+    model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -373,13 +374,13 @@ def test_llama_demo_text(
         use_paged_kv_cache=paged_attention,
     )
 
-    generator = LlamaGenerator(model, model_args, mesh_device)
     tokenizer = Tokenizer(model_args.tokenizer_path)
+    generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
 
     logger.info("Starting inference...")
-    for batch_idx, input_prompts in enumerate(batch_prompts):
+    for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         # Preprocess initial prompt inputs
@@ -387,7 +388,7 @@ def test_llama_demo_text(
             input_tokens_prefill_pt,
             encoded_prompts,
             decoding_pos,
-            prompt_lens,  # Miguel change name to prefill lens!
+            prefill_lens,
         ) = preprocess_inputs_prefill(
             input_prompts,
             tokenizer,
@@ -403,56 +404,45 @@ def test_llama_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # set kv cache to zeros if not first batch, to avoid context leaking when doing multiple batches
+        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
-        logger.info(f"Starting prefill...")
-
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
-        tt_kv_cache = [l.attention.layer_past for l in model.layers]
-        # Miguel fix this (not pass the page table to model config! in the demo parameters)
-        # logits = generator.prefill_forward_text(input_tokens_prefill_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
-        logits = generator.prefill_forward_text(input_tokens_prefill_pt, prompt_lens=decoding_pos)
+        logger.info("Starting prefill warmup...")
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt[0].unsqueeze(0),
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
+        )
+        logger.info("Finished prefill warmup")
+
+        logger.info(f"Starting prefill...")
+        profiler.start(f"inference_prefill_time", iteration=batch_idx)
+
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos
+        )
+        prefilled_token = torch.argmax(logits, dim=-1)
+
+        profiler.end(f"inference_prefill_time", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
-        # Preparing first decode token
-        profiler.start(f"prepare_first_decode_token_{batch_idx}")
-        # pt_out_batched = logits.squeeze()
-        # pt_out_batched = torch.argmax(pt_out_batched, dim=-1)
-        pt_out_batched = torch.argmax(logits, dim=-1)
-
-        profiler.end(f"prepare_first_decode_token_{batch_idx}")
-
         # Keep track of generated outputs to print out every iteration
-        all_outputs = [encoded_prompts[b][: prompt_lens[b]] for b in range(batch_size)]
+        all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
         for user in range(batch_size):
-            user_tok = int(pt_out_batched[user].item())
+            user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
 
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        logger.info("Starting decode...")
-
-        # Shard the page table for TG decode
-        # if paged_attention and model_args.is_galaxy and batch_size > 1:
-        #     page_table_tt = ttnn.from_torch(
-        #         page_table,
-        #         device=mesh_device,
-        #         dtype=ttnn.int32,
-        #         layout=ttnn.ROW_MAJOR_LAYOUT,
-        #         mesh_mapper=ttnn.ShardTensor2dMesh(
-        #             mesh_device,
-        #             dims=(None, -2) if batch_size > 1 else (None, None),
-        #             mesh_shape=model_args.cluster_shape,
-        #         ),
-        #     )
-
         # Set sampling mode
+        # Miguel TODO
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
@@ -461,13 +451,12 @@ def test_llama_demo_text(
         # Start decoding
         iteration = 0
         users_decoding = True  # reset to handle next batch
-        total_decoding_time = 0  # Track total decoding time
         total_tokens_generated = 0  # Track total tokens generated
+
+        out_tok = prefilled_token
 
         logger.info(f"Starting decode loop...")
         profiler.start(f"inference_decode", iteration=batch_idx)
-
-        out_tok = pt_out_batched
 
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
@@ -475,14 +464,11 @@ def test_llama_demo_text(
             iteration_time_start = time()
 
             # Necessary padding to be full tile sized
-            padding_time = time()
             out_tok = torch.nn.functional.pad(out_tok, (0, 32 - len(out_tok)), "constant", 0)
-            logger.info(f"Miguel: padding time: {1000*(time() - padding_time)}ms")
+            logits = generator.decode_forward_text(
+                out_tok, current_pos, enable_trace=True, page_table=page_table, kv_cache=tt_kv_cache
+            )
 
-            # logits = generator.decode_forward_text(pt_out_batched, current_pos, page_table=page_table, kv_cache=tt_kv_cache)
-            logits = generator.decode_forward_text(out_tok, current_pos, enable_trace=True)
-
-            argmax_time = time()
             # TODO Miguel - Re-add argmax on device
             _, out_tok = sample_host(
                 logits,
@@ -491,17 +477,12 @@ def test_llama_demo_text(
                 top_p=sampling_params["top_p"],
                 on_host=True,
             )
-
-            logger.info(f"Miguel: Argmax time: {1000*(time() - argmax_time)}ms")
+            iteration_time = time() - iteration_time_start
 
             current_pos += 1
 
-            # Print out generated outputs for each user at the end of every iteration
-            iteration_time = time() - iteration_time_start
-
             # Save output token to print out later
             for user in range(batch_size):
-                # user_tok = tt_output_torch[user].tolist()
                 user_tok = out_tok[user].item()
                 if (
                     user_tok != 128009 and user_done[user] == False
@@ -513,9 +494,8 @@ def test_llama_demo_text(
                     if all(user_done):
                         users_decoding = False
 
-            # Ignore the first iteration for average speed calculation
+            # Ignore the first iteration (compile time) for average speed calculation
             if iteration > 0:
-                total_decoding_time += iteration_time
                 total_tokens_generated += 1
 
             tokens_per_second_per_user = 1 / iteration_time
@@ -533,7 +513,7 @@ def test_llama_demo_text(
                         text = text.replace("\n", " ")
                         logger.info("[User {}] {}".format(user, text))
 
-            # Always print perf at every iteration
+            # Always print perf after every iteration
             logger.info(
                 f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
@@ -544,7 +524,7 @@ def test_llama_demo_text(
 
             iteration += 1
 
-            # Upper limit of generated tokens for each user (to avoid infinite generation in case eos is not seen)
+            # Upper limit of generated tokens for each user
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
@@ -711,7 +691,7 @@ def test_llama_demo_text(
 
     # # Save benchmark data for CI dashboard
     # if is_ci_env:
-    #     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
+    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
     #     benchmark_data.prep_csvs(
     #         profiler,
     #         run_type=f"{tt_device_name}-demo",
