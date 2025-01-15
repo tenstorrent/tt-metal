@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "llrt/hal.hpp"
 #include "tt_fabric/control_plane.hpp"
-#include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
 #include <queue>
 
 namespace tt::tt_fabric {
-static_assert(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE == sizeof(fabric_router_l1_config_t));
 
 // Get the physical chip ids for a mesh
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) {
@@ -469,11 +468,17 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
             CoreCoord virtual_eth_core =
                 tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, eth_chan);
 
+            TT_ASSERT(
+                tt_metal::hal.get_dev_size(
+                    tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
+                    sizeof(tt::tt_fabric::fabric_router_l1_config_t),
+                "ControlPlane: Fabric router config size mismatch");
             tt::Cluster::instance().write_core(
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 tt_cxy_pair(physical_chip_id, virtual_eth_core),
-                eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE,
+                tt_metal::hal.get_dev_addr(
+                    tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
         }
     }

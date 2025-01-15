@@ -55,6 +55,7 @@ enum class HalL1MemAddrType : uint8_t {
     TILE_HEADER_BUFFER,
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
+    FABRIC_ROUTER_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
