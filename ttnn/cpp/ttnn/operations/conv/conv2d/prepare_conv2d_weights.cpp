@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
+#include "buffers/buffer_constants.hpp"
+#include "common/constants.hpp"
+#include "common/logger.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -675,23 +678,22 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     bool is_conv1d = original_weights_window_w == 1 && input_width == 1;
     bool is_depthwise_conv = groups == original_weights_out_channels && original_weights_in_channels == 1;
-    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor, device, std::nullopt);
 
+    weight_tensor_ = weight_tensor;
     // Convert weight tensor to 0 padded shape if groups > 1
-    // if (!is_conv1d and groups > 1) {
-    //     weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups,
-    //     weights_bias_dtype);
-    // }
-    // else if (is_conv1d and groups > 1) {
-    //     if (is_depthwise_conv) {
-    //         weight_tensor_ = convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles,
-    //         weights_bias_dtype); weight_block_h_ntiles = act_block_h_ntiles;
-    //     }
-    //     else{
-    //        weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups,
-    //        weights_bias_dtype);
-    //     }
-    // }
+    if (!is_conv1d and groups > 1) {
+        weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+    } else if (is_conv1d and groups > 1) {
+        if (is_depthwise_conv) {
+            weight_tensor_ =
+                convert_conv_weight_tensor_to_depthwise_layout(weight_tensor_, act_block_h_ntiles, weights_bias_dtype);
+            weight_block_h_ntiles = act_block_h_ntiles;
+        } else {
+            weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
+        }
+    }
+
+    weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
     auto weights_shape = weight_tensor_.get_shape();
     uint32_t out_channels = weights_shape[0];
@@ -787,15 +789,31 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, final_out_channels_padded}));
     } else {
         weight_tensor_ = ttnn::pad(
-            weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+            weight_tensor_, weights_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D({0, 0, 0, 0}), 0.0f);
 
         // Reshape the weights to 5D, and permute in 5D.
         weight_tensor_ = ttnn::reshape(
             weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
 
         weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({0, 3, 4, 2, 1}));
-        weight_tensor_ = ttnn::reshape(
-            weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+        // Shape is now {1, window_h, window_w, in_channels_padded, out_channels_padded}
+        auto weight_block_h_datums = weight_block_h_ntiles * constants::TILE_HEIGHT;
+        if ((weight_block_h_datums > (window_w * in_channels_padded)) &&
+            (input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED)) {
+            log_info("Applying weight block height padding");
+            weight_tensor_ = ttnn::reshape(
+                weight_tensor_, ttnn::Shape({1, window_h, window_w * in_channels_padded, out_channels_padded}));
+            weight_tensor_ = ttnn::pad(
+                weight_tensor_,
+                tt::tt_metal::Array4D({1, window_h, weight_block_h_datums, out_channels_padded}),
+                tt::tt_metal::Array4D({0, 0, 0, 0}),
+                13.0f);
+            weight_tensor_ = ttnn::reshape(
+                weight_tensor_, ttnn::Shape({1, 1, window_h * weight_block_h_datums, out_channels_padded}));
+        } else {
+            weight_tensor_ = ttnn::reshape(
+                weight_tensor_, ttnn::Shape({1, 1, window_h * window_w * in_channels_padded, out_channels_padded}));
+        }
     }
     weight_tensor_ = ttnn::tilize(
         weight_tensor_,
