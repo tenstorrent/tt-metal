@@ -27,8 +27,8 @@ from models.experimental.functional_unet.tests.common import (
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        # ("upblock3", 32, 264, 40, 16),
-        # ("upblock4", 16, 528, 80, 16),
+        ("upblock3", 32, 264, 40, 16),
+        ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -70,7 +70,7 @@ def test_unet_upblock(
     ttnn_input, ttnn_residual = ttnn.to_device(ttnn_input, device), ttnn.to_device(ttnn_residual, device)
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.998)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.999)
 
 
 @pytest.mark.parametrize("batch, groups", [(1, 2)])
@@ -79,8 +79,8 @@ def test_unet_upblock(
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        # ("upblock3", 32, 264, 40, 16),
-        # ("upblock4", 16, 528, 80, 16),
+        ("upblock3", 32, 264, 40, 16),
+        ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
@@ -143,4 +143,4 @@ def test_unet_upblock_multi_device(
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.998, mesh_composer=output_mesh_composer)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)
