@@ -53,7 +53,7 @@ jobs:
         with:
           name: TTMetal_build_any_profiler
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
         timeout-minutes: 60

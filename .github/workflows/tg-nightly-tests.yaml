@@ -39,7 +39,7 @@ jobs:
         with:
           name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run demo regression tests
         shell: bash {0}
