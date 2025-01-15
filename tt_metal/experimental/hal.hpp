@@ -52,4 +52,25 @@ uint32_t get_erisc_l1_unreserved_base();
  */
 uint32_t get_erisc_l1_unreserved_size();
 
+/**
+ * @brief Uses the hardware abstraction layer to fetch the representable epsilon value.
+ *
+ * @return SFPU epsilon value
+ */
+float get_eps();
+
+/**
+ * @brief Uses the hardware abstraction layer to fetch the representable NaN value.
+ *
+ * @return SFPU NaN value
+ */
+float get_nan();
+
+/**
+ * @brief Uses the hardware abstraction layer to fetch the representable Infinity value.
+ *
+ * @return SFPU Infinity value
+ */
+float get_inf();
+
 }  // namespace tt::tt_metal::experimental::hal
