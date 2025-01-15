@@ -68,6 +68,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
+uint32_t closest_multiple_tile(uint32_t num, uint32_t tile_size) {
+    if (num % tile_size == 0) {
+        return num;
+    }
+    return (num / tile_size + 1) * tile_size;
+}
+
 std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
@@ -82,12 +89,15 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     DataType output_dtype =
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
-        uint32_t fused_height = input_tensor_a.volume() / output_shape[-1];
+        uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_shape = {tt::div_up(fused_height, num_cores), output_shape[-1]};
+            const auto tile = input_tensor_a.get_tensor_spec().tile();
+            uint32_t tile_height = tile.get_height();
+            uint32_t shard_idx0 = closest_multiple_tile(tt::div_up(fused_height, num_cores), tile_height);
+            shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
         }
