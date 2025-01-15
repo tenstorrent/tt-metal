@@ -75,3 +75,19 @@ def run_topk_test(N, C, H, W, k, dtype, device):
 )
 def test_topk(N, C, H, W, k, dtype, device):
     run_topk_test(N, C, H, W, k, dtype, device)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat16,),
+    ids=[
+        "BFLOAT16_B",
+    ],
+)
+@pytest.mark.parametrize(
+    "N, C, H, W, k,",
+    ((1, 1, 32, 128, 64),),
+)
+def test_topk_fail(N, C, H, W, k, dtype, device):
+    run_topk_test(N, C, H, W, k, dtype, device)
