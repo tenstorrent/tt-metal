@@ -397,7 +397,98 @@ def test_all_gather(
 )
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
-def test_all_gather_sharded(
+def test_all_gather_sharded_one_coregrid(
+    t3k_mesh_device,
+    # pcie_mesh_device,
+    num_devices,
+    output_shape,
+    dim,
+    num_links,
+    input_dtype,
+    layout,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    input_shard_shape,
+    shard_grid,
+    tensor_mem_layout,
+):
+    run_all_gather_impl(
+        t3k_mesh_device,
+        num_devices,
+        output_shape,
+        dim,
+        num_links,
+        input_dtype,
+        layout,
+        use_program_cache,
+        function_level_defaults,
+        all_gather_topology=ttnn.Topology.Ring,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        rand_tensor=True,
+        input_shard_shape=input_shard_shape,
+        shard_grid=shard_grid,
+        tensor_mem_layout=tensor_mem_layout,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, output_shape, dim, layout, input_shard_shape, shard_grid, tensor_mem_layout",
+    [
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 3)),
+                }
+            ),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 64),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 2)),
+                    ttnn.CoreRange(ttnn.CoreCoord(7, 7), ttnn.CoreCoord(7, 7)),
+                }
+            ),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            2,
+            [1, 4, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("enable_async", [True])
+def test_all_gather_sharded_multiple_coregrid(
     t3k_mesh_device,
     # pcie_mesh_device,
     num_devices,
