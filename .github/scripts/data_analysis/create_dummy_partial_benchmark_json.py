@@ -14,8 +14,9 @@ if __name__ == "__main__":
             value=3051.942319201063,
         )
     ]
+    run_start_ts = "2024-10-09T20:44:58+0000"
     partial_benchmark_run = PartialBenchmarkRun(
-        run_start_ts="2024-10-09T20:44:58+0000",
+        run_start_ts=run_start_ts,
         run_end_ts="2024-10-09T20:45:52+0000",
         run_type="demo_perf_8chip",
         ml_model_name="tiiuae/falcon-7b-instruct",
@@ -29,6 +30,6 @@ if __name__ == "__main__":
     assert benchmark_data_dir.exists()
     assert benchmark_data_dir.is_dir()
 
-    output_path = os.path.join(benchmark_data_dir, f"partial_run_{partial_benchmark_run.run_start_ts}.json")
+    output_path = os.path.join(benchmark_data_dir, f"partial_run_{run_start_ts}.json")
     with open(output_path, "w") as f:
         f.write(json_data)

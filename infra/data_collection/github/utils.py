@@ -270,7 +270,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
     git_commit_hash = os.environ["GITHUB_SHA"]
 
     logger.warning("Hardcoded null for git_commit_ts")
-    git_commit_ts = ""
+    git_commit_ts = None
 
     assert "GITHUB_REF_NAME" in os.environ
     git_branch_name = os.environ["GITHUB_REF_NAME"]
@@ -281,7 +281,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
     github_pipeline_link = f"https://github.com/{git_repo_name}/actions/runs/{github_pipeline_id}"
 
     logger.warning("Hardcoded null for github_job_id")
-    github_job_id = ""
+    github_job_id = None
 
     assert "GITHUB_TRIGGERING_ACTOR" in os.environ
     user_name = os.environ["GITHUB_TRIGGERING_ACTOR"]
@@ -302,12 +302,7 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
     logger.warning("Hardcoded null for device_memory_size")
     device_memory_size = ""
 
-    device_info = json.dumps(
-        {
-            "card_type": device_type,
-            "dram_size": device_memory_size,
-        }
-    )
+    device_info = {"card_type": device_type, "dram_size": device_memory_size}
 
     with open(github_partial_benchmark_json_filename, "r") as f:
         partial_benchmark_data = json.load(f)

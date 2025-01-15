@@ -6,7 +6,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
-        default: 10066309412
+        default: 12788722730
         type: number
       test_workflow_run_attempt:
         description: "Run attempt of the workflow run"
@@ -147,11 +147,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: create dummy partial benchmark JSON
-        shell: bash
-        run: |
-          mkdir -p generated/benchmark_data
-          python3 .github/scripts/data_analysis/create_dummy_partial_benchmark_json.py
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'
@@ -159,6 +154,13 @@ jobs:
           cache-dependency-path: 'infra/requirements-infra.txt'
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
+      - name: create dummy partial benchmark JSON
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          mkdir -p generated/benchmark_data
+          python3 .github/scripts/data_analysis/create_dummy_partial_benchmark_json.py
       - name: Create complete benchmark JSON test
         env:
           PYTHONPATH: ${{ github.workspace }}

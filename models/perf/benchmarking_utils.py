@@ -316,9 +316,11 @@ class BenchmarkData:
         assert None not in [profiler, run_type, ml_model_name], "Missing required fields"
         assert profiler.contains_step("run"), "Run step not found in profiler"
 
+        run_start_ts = profiler.get_str_start("run")
+        run_end_ts = profiler.get_str_end("run")
         partial_benchmark_run = PartialBenchmarkRun(
-            run_start_ts=profiler.get_str_start("run"),
-            run_end_ts=profiler.get_str_end("run"),
+            run_start_ts=run_start_ts,
+            run_end_ts=run_end_ts,
             run_type=run_type,
             ml_model_name=ml_model_name,
             ml_model_type=ml_model_type,
@@ -338,7 +340,7 @@ class BenchmarkData:
 
         json_data = partial_benchmark_run.model_dump_json()
 
-        filename = os.path.join(self.output_folder, f"partial_run_{partial_benchmark_run.run_start_ts}.json")
+        filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.json")
         parent_dir = os.path.dirname(filename)
         if parent_dir != "" and not os.path.exists(parent_dir):
             os.makedirs(parent_dir)
