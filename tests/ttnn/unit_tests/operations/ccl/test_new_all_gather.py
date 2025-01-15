@@ -452,7 +452,7 @@ def test_all_gather_sharded_one_coregrid(
                     ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 3)),
                 }
             ),
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
         (
             2,
