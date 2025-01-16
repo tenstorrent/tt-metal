@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/distributed/mesh_buffer.hpp"
+#include "tt_metal/distributed/mesh_device_view.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -23,25 +24,24 @@ TEST_F(MeshBufferTest, ConfigValidation) {
 
     // Unaligned shard shape
     EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_buffer_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
+        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
         device_local_config,
         mesh_device_.get()));
 
-    // Unaligned mesh shape shape
+    // Number of shards exceeds the number of devices
     EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_buffer_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 128}},
+        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {16, 16}},
         device_local_config,
         mesh_device_.get()));
 
     // 32x32 shards distributed across 2x4 mesh, resulting in 64x128 global shape.
     auto buffer = MeshBuffer::create(
-        ShardedBufferConfig{.global_buffer_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}},
+        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}},
         device_local_config,
         mesh_device_.get());
-    buffer->deallocate();
 }
 
-TEST_F(MeshBufferTest, ShardedBuffer) {
+TEST_F(MeshBufferTest, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
         .buffer_type = BufferType::DRAM,
@@ -49,32 +49,28 @@ TEST_F(MeshBufferTest, ShardedBuffer) {
         .bottom_up = false};
 
     const ShardedBufferConfig buffer_config{
-        .global_buffer_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
+        .global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}};
     EXPECT_EQ(buffer_config.compute_datum_size_bytes(), 2);
     auto sharded_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
-    EXPECT_EQ(sharded_buffer->global_size(), 16 << 10);
+    EXPECT_EQ(sharded_buffer->size(), 16 << 10);
     EXPECT_EQ(sharded_buffer->global_layout(), MeshBufferLayout::SHARDED);
     EXPECT_EQ(sharded_buffer->device_local_size(), 2 << 10);
-
-    sharded_buffer->deallocate();
 }
 
-TEST_F(MeshBufferTest, ReplicatedBuffer) {
+TEST_F(MeshBufferTest, ReplicatedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
         .buffer_type = BufferType::DRAM,
         .buffer_layout = TensorMemoryLayout::INTERLEAVED,
         .bottom_up = false};
 
-    const ReplicatedBufferConfig buffer_config{.buffer_size = 16 << 10};
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
     auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
-    EXPECT_EQ(replicated_buffer->global_size(), 16 << 10);
+    EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
-
-    replicated_buffer->deallocate();
 }
 
 TEST_F(MeshBufferTest, GetDeviceBuffer) {
@@ -85,14 +81,12 @@ TEST_F(MeshBufferTest, GetDeviceBuffer) {
         .bottom_up = false};
 
     auto replicated_buffer =
-        MeshBuffer::create(ReplicatedBufferConfig{.buffer_size = 16 << 10}, device_local_config, mesh_device_.get());
+        MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, device_local_config, mesh_device_.get());
 
     // Out of bounds coordinates.
-    EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(4, 2));
+    EXPECT_ANY_THROW(replicated_buffer->get_device_buffer(Coordinate{2, 4}));
 
-    EXPECT_NO_THROW(replicated_buffer->get_device_buffer(3, 1));
-
-    replicated_buffer->deallocate();
+    EXPECT_NO_THROW(replicated_buffer->get_device_buffer(Coordinate{1, 3}));
 }
 
 }  // namespace
