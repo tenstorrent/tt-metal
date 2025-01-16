@@ -5,6 +5,7 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -801,10 +802,13 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             weight_tensor_ = ttnn::reshape(
                 weight_tensor_, ttnn::Shape({1, window_h, window_w * in_channels_padded, out_channels_padded}));
             weight_tensor_ = ttnn::pad(
+                0,
                 weight_tensor_,
                 tt::tt_metal::Array4D({1, window_h, weight_block_h_datums, out_channels_padded}),
                 tt::tt_metal::Array4D({0, 0, 0, 0}),
-                13.0f);
+                0.0f,
+                true,
+                std::nullopt);
             weight_tensor_ = ttnn::reshape(
                 weight_tensor_, ttnn::Shape({1, 1, window_h * weight_block_h_datums, out_channels_padded}));
         } else {
