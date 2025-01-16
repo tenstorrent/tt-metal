@@ -12,7 +12,7 @@ from typing import Optional, Union
 from loguru import logger
 
 from infra.data_collection.models import InfraErrorV1
-from models.perf.benchmarking_utils import CompleteBenchmarkRun
+from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
 def get_datetime_from_github_datetime(github_datetime):

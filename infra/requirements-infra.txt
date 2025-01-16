@@ -6,4 +6,3 @@ pydantic
 toolz
 defusedxml
 pytest
-pytz

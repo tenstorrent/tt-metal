@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from models.perf.benchmarking_utils import BenchmarkMeasurement, PartialBenchmarkRun
+from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
 
 if __name__ == "__main__":
     measurements = [
