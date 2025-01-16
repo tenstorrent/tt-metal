@@ -6,14 +6,14 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
-#include "tt_fabric/mesh_graph.hpp"
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/control_plane.hpp>
 //#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>
 #include <algorithm>
 #include <random>
@@ -46,7 +46,7 @@ uint32_t tx_signal_address;
 uint32_t host_signal_address;
 
 // kernels
-const std::string router_kernel_src = "tt_fabric/impl/kernels/tt_fabric_router.cpp";
+const std::string router_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp";
 const std::string traffic_controller_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_controller.cpp";
 const std::string rx_kernel_src =
@@ -171,7 +171,7 @@ typedef struct test_board {
         try {
             const std::filesystem::path mesh_graph_desc_path =
                 std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                "tt_fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
         } catch (const std::exception& e) {
             log_fatal(e.what());
