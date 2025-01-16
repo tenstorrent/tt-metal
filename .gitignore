@@ -60,7 +60,7 @@ docs/doxygen_build
 
 *profile_log*.csv
 **/profiler/output/*
-generated
+# generated
 
 env/
 tags

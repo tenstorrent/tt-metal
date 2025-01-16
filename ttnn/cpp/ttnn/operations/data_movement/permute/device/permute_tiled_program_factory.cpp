@@ -310,8 +310,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
     if (needs_padding) {
         tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
-                .set_page_size(padding_cb_index, face_shape[1] * element_size);
+            tt::tt_metal::CircularBufferConfig(face_shape[0] * element_size, {{padding_cb_index, cb_data_format}})
+                .set_page_size(padding_cb_index, face_shape[0] * element_size);
         auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     }
     uint32_t padding_val_packed = 0;
@@ -319,7 +319,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     if (pad_value.has_value()) {
         if (output_H % tile_shape[1] != 0) {
             uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-            num_writes = face_shape[1] / num_packed_values;
+            num_writes = face_shape[0] / num_packed_values;
             if (input_tensor.get_dtype() == DataType::BFLOAT16) {
                 padding_val_packed =
                     pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
@@ -483,6 +483,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     uint32_t x_dim = dims[N - 1];
     uint32_t x = input_shape[x_dim];
+    uint32_t y = input_shape[y_dim];
     uint32_t w = input_shape[N - 1];
 
     // X is the new width so we need to pad it to the target tile_shape[1]
@@ -516,6 +517,25 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     }
 
     uint32_t xw_blocks = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
+
+    bool needs_x_padding = (x % tile_shape[1] != 0) && pad_value.has_value();
+    bool needs_y_padding = (y % tile_shape[0] != 0) && pad_value.has_value();
+
+    uint32_t padding_val_packed = 0;
+    uint32_t num_writes = 0;
+    if (needs_x_padding) {
+        uint32_t num_packed_values = sizeof(uint32_t) / element_size;
+        num_writes = face_shape[1] / num_packed_values;
+        if (input_tensor.get_dtype() == DataType::BFLOAT16) {
+            padding_val_packed =
+                pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
+        } else if (num_packed_values == 2) {
+            padding_val_packed =
+                static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
+        } else {
+            padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
+        }
+    }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_page_size = detail::tile_size(tensor_return_value);
@@ -610,6 +630,27 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
+        N,
+        input_page_size,
+        element_size,
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1],
+        x_dim,
+        x,
+        w,
+        input_shape[N - 2],
+        X_p,
+        W_p,
+        H_p,
+        H_t,
+        W_t,
+        final_tile_real_w,
+        final_tile_real_faces_w,
+        xw_blocks,
+        x_blocks,
+        w_blocks,
     };
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
