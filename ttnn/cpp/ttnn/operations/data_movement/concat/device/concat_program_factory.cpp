@@ -10,6 +10,8 @@
 #include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include <tt-metalium/tt_align.hpp>
+
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -18,9 +20,9 @@ namespace {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
     TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
-    uint32_t page_size = align(stick_sizes[0], alignment);
+    uint32_t page_size = tt::align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
-        const uint32_t padded_stick_size = align(stick_sizes[idx], alignment);
+        const uint32_t padded_stick_size = tt::align(stick_sizes[idx], alignment);
         page_size = std::gcd(page_size, padded_stick_size);
     }
     return page_size;
@@ -456,7 +458,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     uint32_t single_page_size;
     if (rm_layout) {
         num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
+        single_page_size =
+            tt::align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt_metal::detail::TileSize(cb_data_format);

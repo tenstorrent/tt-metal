@@ -8,6 +8,7 @@
 
 #include "assert.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/cq_commands.hpp>
@@ -970,7 +971,7 @@ void gen_packed_read_test(
         for (uint32_t i = 0; i < n_sub_cmds; i++) {
             uint32_t max_size128b = (scratch_db_size_g / 2) >> 7;
             // limit the length to min and max read size
-            uint32_t length = align(
+            uint32_t length = tt::align(
                 std::min(std::max(min_read_size, (std::rand() % max_size128b) << 7), max_read_size), dram_alignment);
             total_length += length;
             lengths.push_back(length);
@@ -1173,7 +1174,7 @@ void gen_smoke_test(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    uint32_t length_to_read = align(2080, dram_alignment);
+    uint32_t length_to_read = tt::align(2080, dram_alignment);
     lengths.push_back(length_to_read);
     gen_dram_packed_read_cmd(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
@@ -1185,19 +1186,19 @@ void gen_smoke_test(
     // when adding read lengths based on some calculations to generate test cases
     // ensure they are aligned properly so they work on all page table configs
     lengths.resize(0);
-    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 8, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 4, dram_alignment));  // won't fit in first pass
-    lengths.push_back(align(scratch_db_size_g / 2, dram_alignment));  // won't fit in second pass
+    lengths.push_back(tt::align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 8, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 4, dram_alignment));  // won't fit in first pass
+    lengths.push_back(tt::align(scratch_db_size_g / 2, dram_alignment));  // won't fit in second pass
     gen_dram_packed_read_cmd(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    lengths.push_back(align(scratch_db_size_g / 4 + 2 * 1024 + 32, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 4 + 3 * 1024 + 32, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 2, dram_alignment));
-    lengths.push_back(align(scratch_db_size_g / 8 + 5 * 1024 + 96, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 4 + 2 * 1024 + 32, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 4 + 3 * 1024 + 32, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 2, dram_alignment));
+    lengths.push_back(tt::align(scratch_db_size_g / 8 + 5 * 1024 + 96, dram_alignment));
     gen_dram_packed_read_cmd(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
@@ -1240,7 +1241,7 @@ void gen_smoke_test(
         device_data,
         worker_core,
         3,
-        align(128, dram_alignment),
+        tt::align(128, dram_alignment),
         6144,
         num_dram_banks_g - 1,
         0);
@@ -1275,7 +1276,7 @@ void gen_smoke_test(
         device_data,
         worker_core,
         3,
-        align(128, dram_alignment),
+        tt::align(128, dram_alignment),
         6144,
         num_dram_banks_g - 1,
         640);
@@ -1732,7 +1733,7 @@ void configure_for_single_chip(
     packetized_path_test_results_addr = l1_unreserved_base;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(
+    uint32_t l1_unreserved_base_aligned = tt::align(
         l1_unreserved_base + packetized_path_test_results_size,
         (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE));  // Was not aligned, lately.
     TT_ASSERT((l1_buf_base_g & ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) - 1)) == 0);
@@ -2441,7 +2442,7 @@ void configure_for_multi_chip(
     uint32_t tunneler_test_results_size = 0x7000;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
-    uint32_t l1_unreserved_base_aligned = align(
+    uint32_t l1_unreserved_base_aligned = tt::align(
         l1_unreserved_base + packetized_path_test_results_size,
         (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE));  // Was aligned, lately.
     l1_buf_base_g =
@@ -3244,7 +3245,7 @@ int main(int argc, char** argv) {
         void* host_hugepage_base;
         uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
         uint32_t packetized_path_test_results_size = 1024;
-        uint32_t l1_unreserved_base_aligned = align(
+        uint32_t l1_unreserved_base_aligned = tt::align(
             l1_unreserved_base + packetized_path_test_results_size,
             (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE));  // Was not aligned, lately.
         l1_buf_base_g =
