@@ -1416,43 +1416,45 @@ Finally, test the new model through vLLM. Register the new model as seen in [`of
 from models.demos.t3000.llama2_70b.tt.llama_generation import TtLlamaModelForGeneration
 ModelRegistry.register_model("TTLlamaForCausalLM", TtLlamaModelForGeneration)
 ```
-and run `offline_inference_tt.py` to generate outputs with vLLM.
+Run `offline_inference_tt.py` to generate outputs with vLLM.
 
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
-Reference [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for background on tracing. Tracing allows you to record a single pass of your model and store the list of commands and buffers used on-device. You can then execute that trace in a single command with no additional work performed on the host. This eliminates overhead in stages 1-3, you are still responsible for transferring any data needed to and from the device, but host-device transfer of commands is eliminated.
+Tracing allows you to record a single pass of your model and store the list of commands and buffers used on-device. You can execute the trace in a single command with no additional work performed on the host. This eliminates overhead in stages 1-3, you are still responsible for transferring any data needed to and from the device, but host-device transfer of commands is eliminated. For more information on Tracing see: [Metal Trace guide](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md).
 
 We typically use tracing for the decode pass of LLMs but not the prefill pass. The main reasons for this are linked to tracing’s key limitation:
 
-* You cannot allocate or deallocate tensors during a trace. When executing a trace every buffer will be the same size every time.
+> [!IMPORTANT]
+> You cannot allocate or deallocate tensors during a trace. When executing a trace every buffer will be the same size every time.
 
-Tracing doesn’t work with prefill, sequence length and matmul row counts will likely change. Tracing works with decode, reference sections on handling kv-cache and paging with tracing. Conveniently, in prefill we have large operations in the millisecond plus range which the host can dispatch quickly. Decode, with a comparatively small batch size, we iterate through the entire model in 10ms with microsecond-length op times where we can't wait for a CPU or linux process scheduling, the speed at which electrons coruscate from DRAM and the NoC through our cores.
+Tracing doesn’t work with prefill; sequence length and matmul row counts will likely change. Tracing works with decode, reference sections on handling KV-cache and paging with tracing. Conveniently, in prefill we have large operations in the millisecond plus range which the host can dispatch quickly. Decode, with a comparatively small batch size, we iterate through the entire model in 10ms with microsecond-length OP times where we can't wait for a CPU or Linux process scheduling, the speed at which electrons coruscate from DRAM and the NOC through our cores.
 
 ### 4.2 Async Mode
 
-Async mode allows the host to continuously send commands to the device without blocking until data is read back from device, improving performance. Enable it with:
+Async mode allows the host to continuously send commands to the device without blocking until data is read back from device, improving performance. Enable async mode with:
 
 ```python
 mesh_device.enable_async(True)
 ```
 
-Without async mode each python call to ttnn will block until the device has finished and results are available. This is good for debugging, any crash or error will show you the offending line of code. With async mode enabled your python thread keeps on running while the host and device handle background calls, only blocking when data needs to be read back from device.
+Without async mode each python call to TT-NN will block until the device has finished and results are available. This is good for debugging, any crash or error will show you the offending line of code. With async mode enabled your python thread keeps on running while the host and device handle background calls, only blocking when data needs to be read back from device.
 
 Async mode is faster, in case of asserts or crashes your python stack will be several lines further on than the call that caused the problem.
 For performance work async mode should always be enabled. For debugging it can be useful to disable it.
 
 ### 4.3 Multiple CQs
-  - how to feed back output to input and read output asyncronously
+
+  - How to feed back output to input and read output asyncronously.
 
 ### 4.4 Op Configs
 
-Program configs and memory configs are your greatest levers for performance. As a prerequisite for this section, you should understand [Tensor and Memory Layouts](../tensor_layouts/tensor_layouts.md) and the concepts in [ViT-TTNN](../VIT-TTNN/vit.md).
+Program and memory configurations are your greatest levers for performance. As a prerequisite for this section, you should understand [Tensor and Memory Layouts](../tensor_layouts/tensor_layouts.md) and the concepts in [ViT-TTNN](../VIT-TTNN/vit.md).
 
 Most `ttnn` operations have arguments for `program_config` and `memory_config`. You should optimize these for best performance.
 `memory_config` is used to determine the layout of the output tensor.
-`program_config` configures the op with some hyperparameters like block size, core grid, etc. You should be intentional when setting up `memory_config` and `program_config`. Not only should you make each particular op execute fast, but ideally each op in the model should produce its output in a layout that is most efficient for the next op.
+`program_config` configures the OP with some hyperparameters like block size, core grid, etc. You should be intentional when setting up `memory_config` and `program_config`. Not only should you make each particular OP execute fast, but ideally each OP in the model should produce its output in a layout that is most efficient for the next OP.
 
-Let's look at `ttnn.matmul` as an example.
+Let's look at `ttnn.matmul` as an example:
 ```python
 output = ttnn.linear(
   act,
@@ -1463,13 +1465,13 @@ output = ttnn.linear(
   memory_config=memory_config,
 )
 ```
-When you don't pass memory configs or program configs the operation will choose default values. These defaults are often sub-optimal. `memory_config` typically defaults to a DRAM interleaved configuration, while `program_config` defaults to something reasonable but still sub-optimal.
+When you don't pass program or memory configurations, the operation will choose default values. These defaults are often sub-optimal. `memory_config` typically defaults to a DRAM interleaved configuration, while `program_config` defaults to something reasonable but still sub-optimal.
 See [Matrix Engine](../matrix_engine/matrix_engine.md) for background on `compute_kernel_config`.
 
 #### 4.4.1 Memory Configs
-For the LLM context, memory configs are not as important in prefill mode, where activations are large (due to the long sequence lengths) and thus should generally be DRAM interleaved (otherwise wouldn't fit on L1). In prefill mode, each op should consume DRAM interleaved inputs and produce DRAM interleaved output(s).
+For the LLM context, memory configs are not as important in prefill mode, where activations are large due to the long sequence lengths. Memory configs should generally be DRAM interleaved; otherwise it wouldn't fit on L1. In prefill mode, each OP should consume DRAM interleaved inputs and produce DRAM interleaved outputs.
 
-Memory configs are most important in decode mode. For some operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic and get better performance. The Llama3 codebase has examples of how to create a width-sharded memory config (see [Llama3 model config](../../models/demos/llama3/tt/model_config.py)).
+Memory configs are most important in decode mode. For an operation like `ttnn.matmul`, both the activation and the output will be sharded according to their memory configs. Decode mode activations are of shape `[batch_size, hidden_size]` and should be width-sharded in L1 (sharding the `hidden_size` dimension). By keeping activations and outputs width-sharded in L1 we reduce DRAM traffic for better performance. The Llama3 codebase has examples of how to create a width-sharded memory config (see [Llama3 model config](../../models/demos/llama3/tt/model_config.py)).
 
 ```python
 input_memcfg = ttnn.create_sharded_memory_config(
@@ -1483,27 +1485,34 @@ input_memcfg = ttnn.create_sharded_memory_config(
   use_height_and_width_as_shard_shape=True,
 )
 ```
-Now that we know activations should be width-sharded, the only design decision to make is the `core_grid` on which to shard over. This is where you pay attention to 1) any constraints that an op might have on the input core grid, 2) how the input core grid affects the speed of the op, and 3) how the input core grid interplays with the output core grid.
+Since activations are width-sharded, the only design decision is the `core_grid` on which to shard over. Pay attention firstly, to any constraints that an OP might have on the input core grid, secondly, how the input core grid affects the speed of the OP, and lastly, how the input core grid interplays with the output core grid.
 
-There are some cases where you don't need to create a specific sharded memory config. In these cases, you can instead pass one of the following:
+In cases where you don't need to create a specific sharded memory config, pass one of the following:
 1. `ttnn.DRAM_MEMORY_CONFIG` when you just want DRAM interleaved.
 2. `ttnn.L1_MEMORY_CONFIG` when you want L1 interleaved.
-3. `ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG` when you want width-sharded and the op can infer the core grid and shard shape.
+3. `ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG` when you want width-sharded and the OP can infer the core grid and shard shape.
 
-As always, you should try running your `ttnn` op in a unit test with whichever settings you provide. You may find that the op produces incorrect outputs because it's missing some validation or different shard specs are used between input/output and the op itself (as TT-Metal matures, the sharding logic will get better at detecting these edge cases). You may also find that your memory config is not optimal and you can improve performance with a different configuration.
+As always, you should try running your `ttnn` OP in a unit test with whichever settings you provide. You may find that the OP produces incorrect outputs because of missing validation. Possible different shard specs are used between input/output and the OP itself. As TT-Metalium matures, the sharding logic will get better at detecting these edge cases. Your memory config might not be optimal; you can improve performance with a different configuration.
 
-Be careful when your memory config creates shards that require padding (i.e, the shard shape does not divide evenly into 32x32 tiles). Padded shards and padded ops are under active development and can be sources of bugs. When your memory config requires padding, you probably want to instead find a core grid which divides evenly into the tensor shape.
+> [!TIP]
+> Be careful when your memory config creates shards that require padding (i.e, the shard shape does not divide evenly into 32x32 tiles). Padded shards and padded OPs are under active development and can be sources of bugs. When your memory config requires padding, instead find a core grid which divides evenly into the tensor shape.
 
 #### 4.4.2 Program Configs and Picking the Right Matmul
-Each `ttnn` operation has its own unique program config class. In general, program configs configure the op with hyperparameters that affects their functionality and performance. There are too many ops and program configs to cover in detail. We will focus on `ttnn.matmul` since it has multiple variants and it usually requires the most care.
+Each `ttnn` operation has a unique program config class. Program configs configure the OP with hyperparameters that affect functionality and performance. There are too many OPs and program configs to cover in detail. We will focus on `ttnn.matmul` since it has multiple variants and it requires much care.
 
-Picking a matmul variant is a key decision in optimizing a model. The choice depends on the shapes of the inputs and outputs and how the matmul fits into the rest of the model. You choose a variant by providing a specific `program_config` to `ttnn.matmul`. The following presents three matmul variants that are commonly used in LLMs.
+Picking a matmul variant is a key decision in optimizing a model. The choice depends on the shapes of the inputs and outputs and how the matmul fits into the rest of the model. Choose a variant by providing a specific `program_config` to `ttnn.matmul`. The following presents three matmul variants that are commonly used in LLMs:
 
-##### 4.4.3 Matmul 2D
-Matmul 2D gets its name because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are large (usually >= 256). Rule of thumb: use matmul 2D for all matmuls in prefill mode. Generally, inputs and output to matmul 2D will be interleaved in DRAM because these matmuls should be compute bound rather than memory bound and the inputs may be too large to fit in L1. NOTE: the weights can be DRAM sharded and still work with matmul 2D.
+##### 4.4.2.1 Matmul 2D
+Matmul 2D is named because it parallelizes an `(M x K) @ (K x N)` matmul over the M and N dimensions. It is useful to have this 2D parallelization when M and N are largeer than or equal to 256.
 
-The following is a description of the program config for matmul 2D.
-Given your input tensors of shape `(M x K)` and `(K x N)` and a core grid of shape `(cores_x, cores_y)`:
+> [!TIP]
+> Use matmul 2D for all matmuls in prefill mode. Inputs and output to matmul 2D are interleaved in DRAM because these matmuls should be compute bound rather than memory bound and the inputs may be too large to fit in L1.
+
+> [!NOTE]
+> DRAM sharded weights work with matmul 2D.
+
+The following is a description of the program config for matmul 2D:
+Input tensors shapes are `(M x K)` and `(K x N)`. A core grid shape is `(cores_x, cores_y)`:
 
 ```python
 matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1518,7 +1527,7 @@ matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
   fuse_batch=False,
 )
 ```
-Line by line, this is what the program config means.
+Line by line, this is what the program config means:
 
 - `ttnn.MatmulMultiCoreReuseMultiCastProgramConfig`: Selects the matmul 2D variant.
 
@@ -1529,13 +1538,13 @@ in0_block_w=1,
 out_subblock_h=1, # Must be divisible by per_core_M
 out_subblock_w=1, # Must be divisible by per_core_N
 ```
-`in0_block_w` should divide evenly into K. Higher is better. `out_subblock_h` and `out_subblock_w` should divide evenly into M and N respectively. Higher is better. The product `out_subblock_h * out_subblock_w` must be less than or equal to the size of DST, which depends on the HW architecture and whether FP32 accumulation is enabled. For example, Wormhole DST has 8 tiles when accumulating in BF16 and 4 tiles when accumulating in FP32.
+`in0_block_w` divides evenly into K; higher is better. `out_subblock_h` and `out_subblock_w` divides evenly into M and N respectively; again, higher is better. The product `out_subblock_h * out_subblock_w` must be less than or equal to the size of DST, which depends on the HW architecture and whether FP32 accumulation is enabled. For example, Wormhole DST has eight tiles when accumulating in BF16 and four tiles when accumulating in FP32.
 
 ```python
 per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
 per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
 ```
-- These parameters tell the matmul how many tiles of output each core is responsible for. Therefore, divide M and N by 32 (the tile size) and the core grid size. Round up because you may have padding.
+- These parameters tell the matmul how many tiles of output each core is responsible for. Therefore, divide M and N by 32, the tile size, and the core grid size. Round up for possible padding.
 
 ```python
 transpose_mcast=False,
@@ -1543,24 +1552,24 @@ fused_activation=None,
 fuse_batch=False,
 ```
 - If this matmul is part of an MLP with an activation, `fused_activation` will tell the kernel which activation to apply.
-- `fuse_batch` should generally be set to `False`.
+- Set `fuse_batch` to `False`.
 
-Since we use matmul 2D for large matmuls, there may be some issues where we run out of L1 just to store intermediate values in the kernel. When this happens, try reducing `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
+Since we use matmul 2D for large matmuls, there might be issues where we run out of L1 space to store intermediate values in the kernel. When this happens, reduce `in0_block_w` and `out_subblock_h` and `out_subblock_w`.
 
-##### 4.4.4 DRAM-Sharded Matmul
-DRAM-Sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in op performance. This matmul gets its name because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. See the [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) writeup for details on the implementation.
+##### 4.4.2.2 DRAM-Sharded Matmul
+DRAM-sharded matmul should be used in decode mode, where activations are small and DRAM-bandwidth to read weights is the limiting factor in OP performance. DRAM-Sharded matmul is named because rather than having weights interleaved in DRAM, they are sharded across DRAM banks to optimally collocate weights with compute. For more details on implmentation see: [DRAM-Sharded Matmul](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
 
-We use DRAM-Sharded matmul for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights are width-sharded in DRAM.
+DRAM-Sharded matmul is used for all matmuls in decode mode. The activation and output are width-sharded in L1, and the weights width-sharded in DRAM.
 
-To use DRAM-Sharded matmul, create your weight memory config with this helper function we created in [`model_config.py`](../../models/demos/llama3/tt/model_config.py):
+To use DRAM-Sharded matmul, create the weight memory config with this helper function: [`model_config.py`](../../models/demos/llama3/tt/model_config.py).
 
 ```python
 weights_memory_config = create_dram_sharded_mem_config(k=K, n=N)
 ```
 
-This function takes care of padding weights to fit evenly into the 12 DRAM banks.
+This function pads weights to fit evenly into the 12 DRAM banks.
 
-You will also have to create a program config. We have another helper function in `model_config.py` which does this for you:
+You must also create a program config. Use this helper function in `model_config.py` to create a program config.
 
 ```python
 matmul_program_config = dram_matmul_config(
@@ -1571,7 +1580,10 @@ matmul_program_config = dram_matmul_config(
 )
 ```
 
-The `core_grid` should be the same core grid that the activation is width-sharded on. The output will end up width-sharded on this core grid as well. Call the matmul like this:
+The `core_grid` is the same core grid the activation is width-sharded on. The output ends up width-sharded on this core grid as well.
+
+The following function will call the DRAM-sharded matmul:
+
 ```python
 output = ttnn.linear(
   activation,
@@ -1583,13 +1595,14 @@ output = ttnn.linear(
 )
 ```
 
-Be careful that the core grid evenly divides both the activations and the output. Padding functionality is not yet implemented for DRAM-Sharded matmuls.
+> [!CAUTION]
+> Take care that the core grid evenly divides both activations and output. Padding functionality is not implemented for DRAM-Sharded matmuls.
 
-#### 4.4.5 Matmul 1D
-Matmul 1D is the final variant to cover. Before ttnn implemented DRAM-Sharded matmul, this was the matmul of choice for decode mode. Now that DRAM-Sharded matmul exists and is much faster, matmul 1D is less often used.
-Matmul 1D gets its name because it only parallelizes over the N dimension. The activation and output(s) should be width-sharded in L1. Weights should be DRAM interleaved.
+#### 4.4.2.3 Matmul 1D
 
-To use matmul 1D, create a program config like this:
+Matmul 1D is named because it only parallelizes over the N dimension. The activation and outputs are width-sharded in L1. Weights are DRAM interleaved.
+
+The following is an example of matmul 1D program config:
 
 ```python
 model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -1605,46 +1618,45 @@ model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgr
 )
 ```
 
-The parameters of this matmul config have the same meaning as in matmul 2D. The only difference is that each core is responsible for some width shard of the output, rather than some 2D shard of the output.
-When creating a matmul 1D program config, maximize the `in0_block_w` and `out_subblock` parameters. In addition, sweep the `compute_with_storage_grid_size` to find the fastest core grid.
-
+Parameters are the same as matmul 2D. The only difference is that each core is responsible for some width shard of the output, rather than some 2D shard of the output.
+Maximize the `in0_block_w` and `out_subblock` parameters and sweep `compute_with_storage_grid_size` to find the fastest core grid.
 
 ### 4.5 Accuracy
 
-While we work on maximizing the performance of large language models on Tenstorrent hardware, we must also ensure that the models are functionally correct and that they produce outputs of the expected quality. The subsections below will describe our methods for evaluating the accuracy (also referred to as functionality or correctness for our purposes) of a given model and how to debug issues pertaining to this.
+While maximizing performance of LLMs on Tenstorrent hardware, we ensure that models are functionally correct and produce outputs of the expected quality. This section describes methods for evaluating the accuracy, functionality, or correctness of a given model and how to debug issues pertaining to this.
 
 #### 4.5.1 Accuracy Testing
 
-Below is a list of metrics that are used when evaluating accuracy:
-- **Pearson Correlation Coefficient (PCC)**: A measure of the linear relationship between two variables, where a PCC of 1 indicates a perfect positive correlation, and a PCC of 0 indicates no linear correlation.
-- **Top-1/5 accuracy**: A measure of how often the correct token appears as the Top-1/5 most likely tokens predicted by the model at each step in a sequence.
-- **Perplexity**: Measures how well the LLM predicts the text in the dataset, and is computed as $e^{\text{(avg negative log likelihood)}}$.
-- **Human ocular evaluation**: Manual assessment of the quality, coherence, and relevance of the text generated by a LLM.
-- **Specialized benchmark eval scores**: Metrics that evaluate specific capabilities of LLMs, such as MMLU for multitask language understanding, or BIG-bench for diverse general knowledge tasks.
+The following is a list of metrics used to evaluate accuracy:
+- **Pearson Correlation Coefficient (PCC):** A measure of the linear relationship between two variables, where a PCC of 1 indicates a perfect positive correlation, and a PCC of 0 indicates no linear correlation.
+- **Top-1/5 accuracy:** A measure of how often the correct token appears as the Top-1/5 most likely tokens predicted by the model at each step in a sequence.
+- **Perplexity:** Measures how well the LLM predicts the text in the dataset, and is computed as $e^{\text{(avg negative log likelihood)}}$.
+- **Human Ocular Evaluation:** Manual assessment of the quality, coherence, and relevance of the text generated by a LLM.
+- **Specialized Benchmark Eval Scores:** Metrics that evaluate specific capabilities of LLMs, such as MMLU for multitask language understanding, or BIG-bench for diverse general knowledge tasks.
 
-In order to thoroughly test the accuracy of a model, a bottom up approach is taken such that sub-modules of the model are tested all the way up to the full token generation.
-- **Sub-module unit tests**: Each sub-module of the model should have its own test. For example, the [llama3 models](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) have a separate [MLP test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_mlp.py), [attention test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_attention.py), and [decoder layer test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model (typically from Hugging Face) on CPU for a small set of inputs. A good rule of thumb is that the MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
-- **Model-level unit tests**: In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [llama3 model test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_model.py) runs 1 or many layers of the model over multiple iterations and checks the PCC against the reference model. A rule of thumb is that the full model PCC should be approximately ~0.99.
-- **Dataset evaluation**: Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be comparable (e.g. within a couple percentage points of difference) to those obtained from running the evaluation with the reference model on CPU / GPU.
+To thoroughly test the accuracy of a model, a bottom up approach is taken such that sub-modules are tested all the way up to the full token generation.
+- **Sub-module Unit Tests:** Each sub-module of the model should have its own test. For example, the [llama3 models](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3) have a separate [MLP test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_mlp.py), [attention test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_attention.py), and [decoder layer test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_decoder.py). For each of these tests, the outputs produced by the TT implementation of the model are compared against those of the original reference model, typically from Hugging Face, on CPU for a small set of inputs. MLP, attention, and other small sub-modules should have a PCC of ~0.999, while a PCC of ~0.998 would be reasonable for a full decoder layer.
+- **Model-level Unit Tests:** In addition to the sub-module unit tests, there should also be unit tests for a full layer of the model with all sub-modules, and the full model comprising of all layers. For example, the [llama3 model test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tests/test_llama_model.py) runs one or many layers of the model over multiple iterations and checks the PCC against the reference model. The full model PCC should be approximately ~0.99.
+- **Dataset Evaluation:** Once a model has been brought up with sufficient accuracy on the smaller unit tests, it should be tested on a larger set of prompts such as a full dataset or a subset of it. For example, the [Falcon7b perplexity test](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/falcon7b_common/tests/perplexity/test_perplexity_falcon.py) loads a subset of the [WikiText dataset](https://huggingface.co/datasets/Salesforce/wikitext) and computes several metrics (including perplexity and top-1/5 accuracy) for evaluating the TT model with respect to the ground truth from the dataset. The results of these metrics should be within a couple percentage points of difference to those obtained from running the evaluation with the reference model on CPU / GPU.
 
 #### 4.5.2 Debugging Accuracy
 
-If during model bringup or optimization it is observed that the model outputs do not seem reasonable or any of the evaluations above are failing, the following steps can be taken to debug the accuracy:
-1. Locate the smallest module test that is failing. The fewer the number of operations that could be causing the issue, the easier it will be to debug the root cause. In most cases, the issue should be able to be found using a 1 layer or submodule test.
-    - If the submodule and 1 layer tests are all passing with high PCC, some possible explanations are that 1) there is some corruption of data happening when executing multiple layers or 2) the failure is specific to a certain distribution of input data.
-    - If the dataset evaluation or a human occular (qualitative) evaluation is failing while the unit tests are passing, some possible explanations are that 1) there has not been sufficient testing of consecutive token generations in the unit tests, or 2) the PCC targets in the unit tests are too low.
-2. Once the smallest failing test has been found, it may be required to step through individual operations in the model and compare their outputs against that of the reference model. This can be achieved by manually setting breakpoints in the TT model execution and CPU model execution and comparing the outputs, or by storing intermediate outputs to files or intermediate variables within the model itself to compare once both models have executed.
+During model bringup or optimization, if model outputs do not seem reasonable or any of the evaluations above are failing, the following steps can be taken to debug the accuracy:
+1. Locate the smallest module test that is failing. The fewer the number of operations that could be causing the issue, the easier it will be to debug the root cause. In most cases, the issue should be able to be found using a one layer or submodule test.
+    - If the submodule and one layer tests are all passing with high PCC, some possible explanations are: corruption of data is happening when executing multiple layers or the failure is specific to a certain distribution of input data.
+    - If the dataset evaluation or a human occular (qualitative) evaluation is failing while the unit tests are passing, there has not been sufficient testing of consecutive token generations in the unit tests or the PCC targets in the unit tests are too low.
+2. Once the smallest failing test has been found, it may require individual operations in the model. Compare outputs against the reference model. Manually set breakpoints in the TT model and CPU model executions, then compare outputs, or store intermediate outputs to files or intermediate variables within the model itself to compare once both models have executed.
 
-For the operations under suspicion, some possible things to try could be:
-- Use higher precision dataformats or math fidelities (e.g. HiFi vs LoFi)
-- Convert inputs and outputs to DRAM interleaved so that the problematic op(s) read/write to DRAM (as opposed to L1 or sharded)
-- Remove custom program configs and try the ttnn defaults
-- If using CCL operations, verify that the reduction dimensions are appropriately set (particularly for 2D weight sharding)
-- If loading cached weights which may have had their memory configurations modified, try disabling loading from caches (or regenerating them) to ensure the weights are generated from the torch tensors
-- If using sharded tensors, ensure that the sharding configurations of the producer and consumer ops match
-- Verify that the reference model does not have any bugs (i.e. check if there were any recent fixes for the reference model on GitHub/HuggingFace)
+For suspicious operations, possible solutions are to:
+- Use higher precision dataformats or math fidelities, HiFi vs LoFi.
+- Convert inputs and outputs to DRAM interleaved so problematic OPs read/write to DRAM instead of L1 or sharded.
+- Remove custom program configs and try TT-NN defaults.
+- If using CCL operations, verify that reduction dimensions are appropriately set, particularly for 2D weight sharding.
+- If loading cached weights which may have had their memory configurations modified, try disabling loading from caches, or regenerating them, to ensure weights are generated from torch tensors.
+- If using sharded tensors, ensure that the sharding configurations of the producer and consumer OPs match.
+- Verify that the reference model does not have any bugs, check if there were any recent fixes for the reference model on GitHub/HuggingFace.
 
-In some cases, it may be possible that the issue is not with the model and that there is a bug with a ttnn operation. If this is suspected, it should be verified using a unit test with the exact same input/output configurations and an issue should be filed to the tt-metal team.
+It's possible the issue is not with the model and that there is a bug with a TT-NN operation. If suspected, verify using a unit test with the exact input/output configurations and file an issue with the TT-Metalium team.
 
 ### 4.6 Performance Analysis
 
