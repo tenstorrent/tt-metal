@@ -201,7 +201,9 @@ void kernel_main() {
             if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
                 bool full_packet_sent;
                 uint32_t words_sent = output_queue.template forward_data_from_input<tx_network_type, output_depacketize, input_network_type, input_cb_mode>(sequence_i, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
-                data_words_sent += words_sent;
+                if constexpr (test_results_buf_addr_arg) {
+                    data_words_sent += words_sent;
+                }
                 if constexpr (timeout_cycles > 0) {
                     if (words_sent > 0) {
                         progress_timestamp = get_timestamp_32b();

@@ -289,7 +289,9 @@ void kernel_main() {
             if (input_queues[sequence_i].template get_curr_packet_valid<input_cb_mode>()) {
                 bool full_packet_sent;
                 uint32_t words_sent = output_queues[sequence_i].template forward_data_from_input<remote_receiver_network_type[sequence_i], false, remote_sender_network_type[sequence_i], false>(0, full_packet_sent, input_queues[sequence_i].get_end_of_cmd());
-                data_words_sent += words_sent;
+                if constexpr (kernel_status_buf_addr_arg) {
+                    data_words_sent += words_sent;
+                }
                 if (words_sent > 0) {
                     switch_counter = 0;
                     all_outputs_finished = false;

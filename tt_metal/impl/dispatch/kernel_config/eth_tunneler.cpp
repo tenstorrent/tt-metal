@@ -38,8 +38,8 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         case 5: static_config_.in_queue_size_words = 32768 >> 4; break;
         default: static_config_.in_queue_size_words = 16384 >> 4; break;
     }
-    static_config_.kernel_status_buf_addr_arg = 0x39000;
-    static_config_.kernel_status_buf_size_bytes = 0x7000;
+    static_config_.kernel_status_buf_addr_arg = 0;
+    static_config_.kernel_status_buf_size_bytes = 0;
     static_config_.timeout_cycles = 0;
 }
 

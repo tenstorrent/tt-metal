@@ -260,7 +260,11 @@ void kernel_main() {
                 default:
                     break;
             }
-            data_words_sent += words_sent;
+
+            if constexpr (test_results_buf_addr_arg) {
+                data_words_sent += words_sent;
+            }
+
             if constexpr (timeout_cycles > 0) {
                 if (words_sent > 0) {
                     progress_timestamp = get_timestamp_32b();
