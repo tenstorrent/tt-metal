@@ -541,7 +541,7 @@ def run_falcon_demo_kv(
     profiler.end("run")
     logger.info(f"Total demo duration: {(profiler.get_duration('run')):.2f} s")
 
-    # Save benchmark data
+    # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, json_perf_targets)
     benchmark_data.save_partial_run_json(
         profiler,

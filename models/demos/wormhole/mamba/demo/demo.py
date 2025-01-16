@@ -379,6 +379,8 @@ def run_mamba_demo(
         "decode_t/s/u": 7.3,
     }
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
+
+    # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, warmup_iterations, targets)
     benchmark_data.save_partial_run_json(
         profiler,

@@ -7,7 +7,11 @@ from datetime import datetime
 import pytz
 from loguru import logger
 from typing import List
-from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
+
+# Decouple dependency of model tests on infra folder unless running in CI
+IS_CI_ENV = os.getenv("CI") == "true"
+if IS_CI_ENV:
+    from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
 
 
 class BenchmarkProfiler:
@@ -59,8 +63,9 @@ class BenchmarkProfiler:
 
 class BenchmarkData:
     def __init__(self):
-        self.measure_data: List[BenchmarkMeasurement] = []
-        self.output_folder = "generated/benchmark_data/"
+        if IS_CI_ENV:
+            self.measure_data: List[BenchmarkMeasurement] = []
+            self.output_folder = "generated/benchmark_data/"
 
     def add_measurement(
         self,
@@ -74,28 +79,29 @@ class BenchmarkData:
         device_power: float = None,
         device_temperature: float = None,
     ):
-        """
-        Measurement data contains records and attributes for each measurement performed at each iteration and each step of the benchmark run.
-        The triad of fields (iteration, step_name, name) must be unique.
-        """
-        assert None not in [profiler, iteration, step_name, name, value], "Missing required fields"
-        assert profiler.contains_step(
-            step_name, iteration
-        ), f"Completed step '{step_name}' for iteration {iteration} not found in profiler"
-        self.measure_data.append(
-            BenchmarkMeasurement(
-                step_start_ts=profiler.get_str_start(step_name, iteration),
-                step_end_ts=profiler.get_str_end(step_name, iteration),
-                iteration=iteration,
-                step_name=step_name,
-                name=name,
-                value=value,
-                step_warm_up_num_iterations=step_warm_up_num_iterations,
-                target=target,
-                device_power=device_power,
-                device_temperature=device_temperature,
+        if IS_CI_ENV:  # no-op if not running in CI environment
+            """
+            Measurement data contains records and attributes for each measurement performed at each iteration and each step of the benchmark run.
+            The triad of fields (iteration, step_name, name) must be unique.
+            """
+            assert None not in [profiler, iteration, step_name, name, value], "Missing required fields"
+            assert profiler.contains_step(
+                step_name, iteration
+            ), f"Completed step '{step_name}' for iteration {iteration} not found in profiler"
+            self.measure_data.append(
+                BenchmarkMeasurement(
+                    step_start_ts=profiler.get_str_start(step_name, iteration),
+                    step_end_ts=profiler.get_str_end(step_name, iteration),
+                    iteration=iteration,
+                    step_name=step_name,
+                    name=name,
+                    value=value,
+                    step_warm_up_num_iterations=step_warm_up_num_iterations,
+                    target=target,
+                    device_power=device_power,
+                    device_temperature=device_temperature,
+                )
             )
-        )
 
     def save_partial_run_json(
         self,
@@ -115,37 +121,40 @@ class BenchmarkData:
         perf_analysis: bool = None,
         training: bool = None,
     ):
-        assert None not in [profiler, run_type, ml_model_name], "Missing required fields"
-        assert profiler.contains_step("run"), "Run step not found in profiler"
+        if IS_CI_ENV:  # no-op if not running in CI environment
+            assert None not in [profiler, run_type, ml_model_name], "Missing required fields"
+            assert profiler.contains_step("run"), "Run step not found in profiler"
 
-        run_start_ts = profiler.get_str_start("run")
-        run_end_ts = profiler.get_str_end("run")
-        partial_benchmark_run = PartialBenchmarkRun(
-            run_start_ts=run_start_ts,
-            run_end_ts=run_end_ts,
-            run_type=run_type,
-            ml_model_name=ml_model_name,
-            ml_model_type=ml_model_type,
-            num_layers=num_layers,
-            batch_size=batch_size,
-            config_params=config_params,
-            precision=precision,
-            dataset_name=dataset_name,
-            profiler_name=profiler_name,
-            input_sequence_length=input_sequence_length,
-            output_sequence_length=output_sequence_length,
-            image_dimension=image_dimension,
-            perf_analysis=perf_analysis,
-            training=training,
-            measurements=self.measure_data,
-        )
+            run_start_ts = profiler.get_str_start("run")
+            run_end_ts = profiler.get_str_end("run")
+            partial_benchmark_run = PartialBenchmarkRun(
+                run_start_ts=run_start_ts,
+                run_end_ts=run_end_ts,
+                run_type=run_type,
+                ml_model_name=ml_model_name,
+                ml_model_type=ml_model_type,
+                num_layers=num_layers,
+                batch_size=batch_size,
+                config_params=config_params,
+                precision=precision,
+                dataset_name=dataset_name,
+                profiler_name=profiler_name,
+                input_sequence_length=input_sequence_length,
+                output_sequence_length=output_sequence_length,
+                image_dimension=image_dimension,
+                perf_analysis=perf_analysis,
+                training=training,
+                measurements=self.measure_data,
+            )
 
-        json_data = partial_benchmark_run.model_dump_json()
+            json_data = partial_benchmark_run.model_dump_json()
 
-        filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.json")
-        parent_dir = os.path.dirname(filename)
-        if parent_dir != "" and not os.path.exists(parent_dir):
-            os.makedirs(parent_dir)
-        with open(filename, "w") as f:
-            f.write(json_data)
-        logger.info(f"Run and measurement data saved to {filename}")
+            filename = os.path.join(self.output_folder, f"partial_run_{run_start_ts}.json")
+            parent_dir = os.path.dirname(filename)
+            if parent_dir != "" and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir)
+            with open(filename, "w") as f:
+                f.write(json_data)
+            logger.info(f"Run and measurement data saved to {filename}")
+        else:
+            logger.info("Skipping saving benchmark data JSON since not running in CI environment")
