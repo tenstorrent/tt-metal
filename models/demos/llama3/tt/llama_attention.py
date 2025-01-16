@@ -478,6 +478,12 @@ class TtLlamaAttention(LightweightModule):
                 raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
+        for device in self.mesh_device.get_devices():
+            ttnn.synchronize_device(device)
+        print("start qkv matmul")
+        print("x_11SH shape: ", x_11SH.shape)
+        breakpoint()
+
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
@@ -486,6 +492,11 @@ class TtLlamaAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+        breakpoint()
+
+        for device in self.mesh_device.get_devices():
+            ttnn.synchronize_device(device)
+        print("start all reduce")
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
@@ -501,6 +512,8 @@ class TtLlamaAttention(LightweightModule):
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
+
+        print("start qkv split")
 
         # split qkv into heads
         (
@@ -523,6 +536,8 @@ class TtLlamaAttention(LightweightModule):
 
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+
+        print("start rope")
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -570,6 +585,8 @@ class TtLlamaAttention(LightweightModule):
         else:
             v_fill = v_heads_1VSD_8b
 
+        print("start fill cache")
+
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
@@ -605,6 +622,8 @@ class TtLlamaAttention(LightweightModule):
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
+        print("start SDPA")
+
         if chunk_start_idx is not None:
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
@@ -632,6 +651,8 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
+
+        print("start concat heads")
 
         ###
         # Output matmul

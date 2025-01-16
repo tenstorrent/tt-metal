@@ -114,6 +114,7 @@ class TtTransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
         # Attention takes replicated inputs and produces fractured outputs
+        print("start attention")
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -125,6 +126,7 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        print("end attention")
         # Here x and attn_out are both fractured across devices
         h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
         ttnn.deallocate(attn_out)

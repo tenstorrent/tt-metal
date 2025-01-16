@@ -148,10 +148,12 @@ class LlamaGenerator:
                 else:
                     del tt_logits
         else:
+            logger.info("start prepare inputs")
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
+            logger.info("start forward")
 
             tt_logits = self.model.ttnn_prefill_forward(
                 prefill_input,
@@ -161,8 +163,16 @@ class LlamaGenerator:
                 get_last_token=(last_token_idx // 32) * 32,
                 kv_cache=kv_cache,
             )
+            logger.info("process output")
+
+            del prefill_input
+            for rot_mat in rot_mats_prefill:
+                del rot_mat
+            del page_table_tt
 
             logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+
+            del tt_logits
 
             return logits
 

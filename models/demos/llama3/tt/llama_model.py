@@ -333,6 +333,7 @@ class TtTransformer(LightweightModule):
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
         for i, layer in enumerate(self.layers):
+            print(f"Running layer {i}")
             x = layer(
                 x,
                 current_pos,
