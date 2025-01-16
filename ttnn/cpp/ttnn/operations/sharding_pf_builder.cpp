@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // non-transposed - always row-major layout
 #include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/operations/sharding_pf_builder.hpp"
 namespace shard_pf_builder {
 
 uint32_t get_sharding_core_count(const Tensor t) {
