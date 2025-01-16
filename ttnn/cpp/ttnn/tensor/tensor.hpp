@@ -10,21 +10,21 @@
 #include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/tile/tile.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -157,12 +157,18 @@ struct Tensor {
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
-    // Same as `from_span`, but takes a vector instead.
+    // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
         const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
-        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec, device);
+        return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
+
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
+    // type conversion is needed.
+    template <typename T>
+    static Tensor from_vector(
+        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of

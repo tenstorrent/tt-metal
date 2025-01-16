@@ -10,10 +10,10 @@
 
 #include <magic_enum/magic_enum.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 // #include "tt_gdb/tt_gdb.hpp"

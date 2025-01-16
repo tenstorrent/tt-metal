@@ -6,7 +6,7 @@
 #include <utility>
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 

@@ -8,8 +8,8 @@
 // It imports and renames types from the tt_metal library to maintain a consistent naming convention
 // within the TTNN namespace while leveraging the underlying tt_metal functionality.
 
-#include "tt_metal/distributed/mesh_device.hpp"
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 namespace ttnn::distributed {
 
 using MeshShape = tt::tt_metal::distributed::MeshShape;

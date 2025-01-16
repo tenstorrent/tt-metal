@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/test_tiles.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/programming_examples/matmul_common/bmm_op.hpp"
-#include "tt_metal/common/tilize_untilize.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <matmul_common/bmm_op.hpp>
+#include <tt-metalium/tilize_untilize.hpp>
+#include <tt-metalium/device.hpp>
 
 using namespace tt::constants;
 using namespace std;

@@ -3,9 +3,9 @@
 
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "host_api.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"

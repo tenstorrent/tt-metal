@@ -7,7 +7,7 @@
 #include "ttnn/operations/functions.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;

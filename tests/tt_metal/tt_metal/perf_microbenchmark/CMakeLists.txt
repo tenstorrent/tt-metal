@@ -71,6 +71,9 @@ foreach(arch ${ARCHITECTURES})
                 yaml-cpp::yaml-cpp
                 tt_fabric
         )
+        if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
+            target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        endif()
         target_include_directories(
             ${TEST_TARGET}
             BEFORE

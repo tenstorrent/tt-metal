@@ -7,16 +7,16 @@
 #include <iomanip>
 #include <filesystem>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tools/profiler/profiler.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tools/profiler/common.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+#include <profiler.hpp>
+#include <profiler_state.hpp>
+#include <common.hpp>
 #include "hostdevcommon/profiler_common.h"
-#include "llrt/rtoptions.hpp"
-#include "dev_msgs.h"
+#include <rtoptions.hpp>
+#include <dev_msgs.h>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 namespace tt {
 
