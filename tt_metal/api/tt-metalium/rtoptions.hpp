@@ -109,6 +109,7 @@ class RunTimeOptions {
 
     bool profiler_enabled = false;
     bool profile_dispatch_cores = false;
+    bool profile_do_experimental = false;
     bool profiler_sync_enabled = false;
     bool profiler_buffer_usage_enabled = false;
 
@@ -285,6 +286,7 @@ public:
 
     inline bool get_profiler_enabled() { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() { return profile_dispatch_cores; }
+    inline bool get_profiler_do_experimental() { return profile_do_experimental; }
     inline bool get_profiler_sync_enabled() { return profiler_sync_enabled; }
     inline bool get_profiler_buffer_usage_enabled() { return profiler_buffer_usage_enabled; }
 

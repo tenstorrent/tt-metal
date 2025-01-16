@@ -100,6 +100,7 @@ int main(int argc, char *argv[]) {
 
     reset_cfg_state_id();
 
+    DeviceProfilerInit();
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
