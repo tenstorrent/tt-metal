@@ -102,6 +102,11 @@ void LayerNorm::validate(
             this->output_mem_config.is_sharded() &&
                 this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
             "Error");
+        if (b.has_value()) {
+            TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
+            TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
+            TT_FATAL(b.value().memory_config() == a.memory_config(), "Both a and b should have the same memory config");
+        }
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
