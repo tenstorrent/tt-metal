@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include <chrono>
+#include <cstdint>
 #include <functional>
 
-#include "base.hpp"
 #include "metal_soc_descriptor.h"
 #include "test_common.hpp"
 #include "tt_backend_api_types.hpp"
@@ -29,6 +28,15 @@ enum EthRouterMode : uint32_t {
 };
 
 namespace tt {
+
+/**
+ * @brief Specifies the target devices on which the graph can be run.
+ */
+enum class TargetDevice : std::uint8_t {
+    Silicon = 0,
+    Simulator = 1,
+    Invalid = 0xFF,
+};
 
 class Cluster {
    public:

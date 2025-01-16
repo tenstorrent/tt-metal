@@ -14,6 +14,7 @@
 #include "memcpy.hpp"
 #include "aligned_allocator.hpp"
 #include "hal.hpp"
+#include "tt_align.hpp"
 
 namespace tt::tt_metal {
 template <bool hugepage_write = false>
