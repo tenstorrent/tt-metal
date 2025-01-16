@@ -21,38 +21,16 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(global_cb.has_value(), "Global circular buffer must be provided");
     ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
 
-    uint32_t num_receiver_cores;
-    std::visit(
-        [&](const auto& global_cb) {
-            using GlobalCBType = std::decay_t<decltype(global_cb)>;
-            if constexpr (std::is_same_v<GlobalCBType, tt::tt_metal::v1::experimental::GlobalCircularBuffer>) {
-                num_receiver_cores = global_cb.receiver_cores().num_cores();
+    auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
+    uint32_t num_receiver_cores = global_cb.receiver_cores().num_cores();
 
-                // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
-                const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
-                for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
-                    TT_FATAL(
-                        receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
-                        "Global circular buffer must have same number of receivers for each sender core");
-                }
-            } else if constexpr (std::is_same_v<
-                                     GlobalCBType,
-                                     ttnn::global_circular_buffer::MultiDeviceGlobalCircularBuffer>) {
-                const auto& single_global_cb = global_cb.global_circular_buffers[0];
-                num_receiver_cores = single_global_cb.receiver_cores().num_cores();
-
-                // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
-                const auto& sender_receiver_core_mapping = single_global_cb.sender_receiver_core_mapping();
-                for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
-                    TT_FATAL(
-                        receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
-                        "Global circular buffer must have same number of receivers for each sender core");
-                }
-            } else {
-                TT_THROW("Global circular buffer must either be single device or multi-device type");
-            }
-        },
-        *this->global_cb);
+    // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
+    const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
+    for (const auto& [sender_core, receiver_core_range] : sender_receiver_core_mapping) {
+        TT_FATAL(
+            receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
+            "Global circular buffer must have same number of receivers for each sender core");
+    }
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
