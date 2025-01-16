@@ -14,10 +14,10 @@
 #include <thread>
 #include <unordered_map>
 
-#include "llrt/hal.hpp"
-#include "dev_msgs.h"
-#include "llrt/llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <hal.hpp>
+#include <dev_msgs.h>
+#include <llrt.hpp>
+#include <rtoptions.hpp>
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
 

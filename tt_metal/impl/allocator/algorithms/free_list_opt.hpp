@@ -8,7 +8,7 @@
 #include <vector>
 #include <optional>
 
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include <allocator_algorithm.hpp>
 
 namespace tt {
 namespace tt_metal {

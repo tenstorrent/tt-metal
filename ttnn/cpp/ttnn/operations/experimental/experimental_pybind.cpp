@@ -30,12 +30,15 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
+
+#include "ttnn/operations/experimental/reshape/view_pybind.hpp"
+
 namespace ttnn::operations::experimental {
 
 void py_module(py::module& module) {
@@ -76,6 +79,8 @@ void py_module(py::module& module) {
 
     plusone::detail::bind_experimental_plusone_operation(module);
     dropout::detail::bind_experimental_dropout_operation(module);
+    reshape::detail::py_bind_view(module);
+
     // CCL ops
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");

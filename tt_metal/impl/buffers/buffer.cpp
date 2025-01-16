@@ -2,25 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
 
 #include "tt_metal/buffer.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/types.hpp"
+#include <assert.hpp>
+#include <math.hpp>
+#include <tt_metal.hpp>
+#include <allocator.hpp>
+#include <device.hpp>
+#include <types.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <utility>
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <buffer_constants.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
-#include "tt_stl/reflection.hpp"
+#include <reflection.hpp>
 
 namespace tt {
 

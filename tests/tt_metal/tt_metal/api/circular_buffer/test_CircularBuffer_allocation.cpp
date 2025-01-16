@@ -5,10 +5,10 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 using std::vector;
 using namespace tt::tt_metal;

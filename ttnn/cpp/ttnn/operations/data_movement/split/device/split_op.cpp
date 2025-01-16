@@ -4,8 +4,8 @@
 
 #include "split_op.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "split_program_factory.hpp"
 using namespace tt::constants;
