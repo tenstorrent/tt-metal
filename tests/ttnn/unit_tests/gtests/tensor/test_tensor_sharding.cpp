@@ -3,6 +3,8 @@
 
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
+#include "gmock/gmock.h"
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/shape2d.hpp>
@@ -61,6 +63,7 @@ struct ShardWithAlignmentInputs {
     SimpleShape shape;
     Shape2D logical_shard_shape;
     std::optional<Shape2D> physical_shard_shape;
+    TensorMemoryLayout memory_layout;
     PageConfig page_config;
     std::vector<float> logical_data;
 };
@@ -84,17 +87,19 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     const auto& params = GetParam();
 
     // Only shard shapes and shard mode matters for this test
-    auto shard_spec =
-        params.inputs.physical_shard_shape.has_value()
-            ? ShardSpec(
-                  CoreRangeSet{},
-                  params.inputs.logical_shard_shape,
-                  params.inputs.physical_shard_shape.value(),
-                  ShardOrientation::ROW_MAJOR)
-            : ShardSpec(
-                  CoreRangeSet{}, params.inputs.logical_shard_shape, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL);
+    auto shard_spec = params.inputs.physical_shard_shape.has_value()
+                          ? ShardSpec(
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                                params.inputs.logical_shard_shape,
+                                params.inputs.physical_shard_shape.value(),
+                                ShardOrientation::ROW_MAJOR)
+                          : ShardSpec(
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                                params.inputs.logical_shard_shape,
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL);
     MemoryConfig memory_config{
-        .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
+        .memory_layout = params.inputs.memory_layout, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
     auto tensor_spec = TensorSpec(params.inputs.shape, tensor_layout);
 
@@ -132,17 +137,20 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
     const auto& params = GetParam();
 
     // Only shard shapes and shard mode matters for this test
-    auto shard_spec =
-        params.inputs.physical_shard_shape.has_value()
-            ? ShardSpec(
-                  CoreRangeSet{},
-                  params.inputs.logical_shard_shape,
-                  params.inputs.physical_shard_shape.value(),
-                  ShardOrientation::ROW_MAJOR)
-            : ShardSpec(
-                  CoreRangeSet{}, params.inputs.logical_shard_shape, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL);
+    // For grid size, set it to a 7x7 grid (fine as long as > num sharded)
+    auto shard_spec = params.inputs.physical_shard_shape.has_value()
+                          ? ShardSpec(
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                                params.inputs.logical_shard_shape,
+                                params.inputs.physical_shard_shape.value(),
+                                ShardOrientation::ROW_MAJOR)
+                          : ShardSpec(
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                                params.inputs.logical_shard_shape,
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL);
     MemoryConfig memory_config{
-        .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
+        .memory_layout = params.inputs.memory_layout, .buffer_type = BufferType::L1, .shard_spec = shard_spec};
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.inputs.page_config, memory_config);
     auto tensor_spec = TensorSpec(params.inputs.shape, tensor_layout);
 
@@ -189,6 +197,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 15, 20},
                 .logical_shard_shape = Shape2D{15, 20},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,
                                   20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,
@@ -267,6 +276,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 1, 15, 15},
                 .logical_shard_shape = Shape2D{5, 15},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,
                                   15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
@@ -347,6 +357,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 5, 20},
                 .logical_shard_shape = Shape2D{10, 10},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = { 0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  /**/  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,
                                  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  /**/  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,
@@ -386,6 +397,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 1, 30, 30},
                 .logical_shard_shape = Shape2D{18, 20},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  /**/  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
                                   30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,  49,  /**/  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,
@@ -479,6 +491,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 5, 1},
                 .logical_shard_shape = Shape2D{1, 1},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,
 
@@ -530,6 +543,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 5, 1},
                 .logical_shard_shape = Shape2D{3, 1},
                 .physical_shard_shape = Shape2D{3, 4},
+                .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,
                                    1,
@@ -571,6 +585,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 5, 10},
                 .logical_shard_shape = Shape2D{10, 3},
                 .physical_shard_shape = std::nullopt,
+                .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,  /**/   3,   4,   5,  /**/   6,   7,   8,  /**/   9,
                                   10,  11,  12,  /**/  13,  14,  15,  /**/  16,  17,  18,  /**/  19,
@@ -604,6 +619,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 5, 10},
                 .logical_shard_shape = Shape2D{10, 3},
                 .physical_shard_shape = Shape2D{10, 4},
+                .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,  /**/   3,   4,   5,  /**/   6,   7,   8,  /**/   9,
                                   10,  11,  12,  /**/  13,  14,  15,  /**/  16,  17,  18,  /**/  19,
@@ -637,6 +653,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shape = SimpleShape{1, 2, 10, 10},
                 .logical_shard_shape = Shape2D{3, 4},
                 .physical_shard_shape = Shape2D{5, 7},
+                .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,   3,  /**/   4,   5,   6,   7,  /**/   8,   9,
                                   10,  11,  12,  13,  /**/  14,  15,  16,  17,  /**/  18,  19,
@@ -769,16 +786,16 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
-                            {48, 32},
-                            ShardOrientation::ROW_MAJOR,
-                            ShardMode::LOGICAL}
+                        .shard_spec =
+                            ShardSpec{
+                                num_cores_to_corerangeset(tt::div_up(48 * 56, 48), grid_size, /*row_wise=*/true),
+                                {48, 32},
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{3584, 32}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{3584, 32}}
         },
         // Example 1b: Logical shard shape that is already aligned
         // NOTE: If ShardMode::PHYSICAL, it expects height 56 to be padded up to 64
@@ -792,16 +809,16 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
-                            {64, 32},
-                            ShardOrientation::ROW_MAJOR,
-                            ShardMode::LOGICAL}
+                        .shard_spec =
+                            ShardSpec{
+                                num_cores_to_corerangeset(tt::div_up(48 * 56, 64), grid_size, /*row_wise=*/true),
+                                {64, 32},
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{2688, 32}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{2688, 32}}
         },
         // Example 1c: For interleaved, we treat entire height/width as "logical shard shape" for calculations
         // 48 "shards" with 56 aligned to 32 for tile alignment; 48 * 64 = 3072
@@ -817,9 +834,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .shard_spec = std::nullopt
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{3072, 32}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{3072, 32}}
         },
         /////////////////////////////////////////////////////////////////////////////////////////////////////
         // EXAMPLE 2: ROW_MAJOR tensor with different representation for width sharded / interleaved
@@ -837,16 +852,16 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(5, 1), grid_size, /*row_wise=*/true),
-                            {20, 1},
-                            ShardOrientation::ROW_MAJOR,
-                            ShardMode::LOGICAL}
+                        .shard_spec =
+                            ShardSpec{
+                                num_cores_to_corerangeset(tt::div_up(5, 1), grid_size, /*row_wise=*/true),
+                                {20, 1},
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{20, 5}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{20, 5}}
         },
         // Example 2b: Logical shard shape that is already aligned
         // NOTE: ShardMode::PHYSICAL is equivalent in this case
@@ -860,16 +875,16 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
-                            {20, 4},
-                            ShardOrientation::ROW_MAJOR,
-                            ShardMode::LOGICAL}
+                        .shard_spec =
+                            ShardSpec{
+                                num_cores_to_corerangeset(tt::div_up(5, 4), grid_size, /*row_wise=*/true),
+                                {20, 4},
+                                ShardOrientation::ROW_MAJOR,
+                                ShardMode::LOGICAL
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{20, 8}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{20, 8}}
         },
         // Example 2c: For interleaved, we treat entire height/width as "logical shard shape" for calculations
         // 20 "shards" with 5 aligned to 1
@@ -885,9 +900,7 @@ INSTANTIATE_TEST_SUITE_P(
                         .shard_spec = std::nullopt
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{20, 5}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{20, 5}}
         },
         ////////////////////////////////////////////////////////////////////
         // EXAMPLE 3: Interesting cases with custom (legal) shard alignment
@@ -904,16 +917,16 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 5})),
-                            {48, 10},
-                            {64, 48},
-                            ShardOrientation::ROW_MAJOR}
+                        .shard_spec =
+                            ShardSpec{
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{3, 5})),
+                                {48, 10},
+                                {64, 48},
+                                ShardOrientation::ROW_MAJOR
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{384, 192}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{384, 192}}
         },
         // Example 3b: ROW_MAJOR block sharded tensor with 2 and 1 extra rows and col per shard, respectively
         // - Along height: 2 * 10 / 5 is 4 shards; 4 * custom alignment 7 = 28 (no restriction on height alignment for ROW_MAJOR)
@@ -927,16 +940,352 @@ INSTANTIATE_TEST_SUITE_P(
                     MemoryConfig{
                         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
                         .buffer_type = BufferType::L1,
-                        .shard_spec = ShardSpec{
-                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{2, 3})),
-                            {5, 2},
-                            {7, 3},
-                            ShardOrientation::ROW_MAJOR}
+                        .shard_spec =
+                            ShardSpec{
+                                CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{2, 3})),
+                                {5, 2},
+                                {7, 3},
+                                ShardOrientation::ROW_MAJOR
+                            }
                     }
             },
-            CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Shape2D{28, 9}
-            }
+            CreateShardedTensorWithAlignmentExpected{.physical_shape = Shape2D{28, 9}}
+        }
+    )  // Values
+    // clang-format on
+);
+
+namespace {
+struct IllegalShardSpecParams {
+    SimpleShape shape;
+    PageConfig page_config;
+    MemoryConfig memory_config;
+    std::string expected_err_msg;
+};
+}  // namespace
+
+class IllegalTensorLayoutCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
+
+TEST_P(IllegalTensorLayoutCreationTests, ExpectFailAndCheckErrMsg) {
+    GTEST_SKIP() << "Enable tests after flipping asserts to TT_FATAL (issue #17060)";
+    const auto& params = GetParam();
+
+    EXPECT_THAT(
+        std::function<void()>([&params]() {
+            auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.page_config, params.memory_config);
+        }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr(params.expected_err_msg)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    IllegalTensorLayoutCreationTests,
+    // clang-format off
+    ::testing::Values(
+        // Physical shard shape is not tile sized
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {10, 20},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Physical shard shape (10, 20) must be tile {32, 16} sized!"
+        },
+        // Custom physical shard shape for logical sharding is not tile sized (check along shard width)
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {10, 20},
+                            {40, 20},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Wrong custom Tensor Layout alignment Alignment([40, 20]). For Tile layout innermost dimension should be multiple of tile width 32."
+        },
+        // Custom physical shard shape for logical sharding is not tile sized (check along shard height)
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {10, 20},
+                            {40, 32},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Wrong custom Tensor Layout alignment Alignment([40, 32]). For Tile layout second innermost dimension should be multiple of tile height 32."
+        }
+    )  // Values
+    // clang-format on
+);
+
+class IllegalTensorSpecCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
+
+TEST_P(IllegalTensorSpecCreationTests, ExpectFailAndCheckErrMsg) {
+    GTEST_SKIP() << "Enable tests after flipping asserts to TT_FATAL (issue #17060)";
+    const auto& params = GetParam();
+
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.page_config, params.memory_config);
+    EXPECT_THAT(
+        std::function<void()>(
+            [&params, &tensor_layout]() { auto tensor_spec = TensorSpec(params.shape, tensor_layout); }),
+        ThrowsMessage<std::runtime_error>(::testing::HasSubstr(params.expected_err_msg)));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TensorShardingTests,
+    IllegalTensorSpecCreationTests,
+    // clang-format off
+    ::testing::Values(
+        // HEIGHT sharded: Not enough cores
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 16},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(3, grid_size, /*row_wise=*/true),
+                            {32, 16},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Number of shards along height 4 must not exceed number of cores 3"
+        },
+        // HEIGHT sharded: Not enough cores
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(5, grid_size, /*row_wise=*/true),
+                            {10, 20},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along height 10 must not exceed number of cores 5"
+        },
+        // HEIGHT sharded: Shard width does not match
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {32, 16},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard width 16 must match physical width 32 for height sharded"
+        },
+        // HEIGHT sharded: Shard width does not match
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 20},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {32, 10},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Shard width 16 must match physical width 32 for height sharded"
+        },
+        // WIDTH sharded: Not enough cores
+        IllegalShardSpecParams{
+            .shape = SimpleShape{16, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(3, grid_size, /*row_wise=*/true),
+                            {16, 32},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Number of shards along width 4 must not exceed number of cores 3"
+        },
+        // WIDTH sharded: Not enough cores
+        IllegalShardSpecParams{
+            .shape = SimpleShape{20, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(5, grid_size, /*row_wise=*/true),
+                            {20, 10},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along width 10 must not exceed number of cores 5"
+        },
+        // WIDTH sharded: Shard height does not match
+        IllegalShardSpecParams{
+            .shape = SimpleShape{20, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {16, 32},
+                            ShardOrientation::ROW_MAJOR,
+                        }
+                },
+            .expected_err_msg = "Shard height 16 must match physical height 32 for width sharded"
+        },
+        // WIDTH sharded: Shard height does not match
+        IllegalShardSpecParams{
+            .shape = SimpleShape{20, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            num_cores_to_corerangeset(10, grid_size, /*row_wise=*/true),
+                            {10, 32},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Shard height 16 must match physical height 32 for width sharded"
+        },
+        // BLOCK sharded: Grid is not rectangular
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            CoreRangeSet((std::set<CoreRange>){CoreRange(CoreCoord{0, 0}, CoreCoord{6, 0}), CoreRange(CoreCoord{0, 1}, CoreCoord{1, 1})}),
+                            {10, 32},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Shard grid must be one full rectangular grid for block sharded!"
+        },
+        // BLOCK sharded: Shards must stay within row/col
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                            {10, 20},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along height 10 must not exceed number of rows 7 for row major orientation!"
+        },
+        // BLOCK sharded: Shards must stay within row/col
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                            {20, 10},
+                            ShardOrientation::ROW_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along width 10 must not exceed number of columns 7 for row major orientation!"
+        },
+        // BLOCK sharded: Shards must stay within row/col
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                            {10, 20},
+                            ShardOrientation::COL_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along height 10 must not exceed number of columns 7 for column major orientation!"
+        },
+        // BLOCK sharded: Shards must stay within row/col
+        IllegalShardSpecParams{
+            .shape = SimpleShape{100, 100},
+            .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
+            .memory_config =
+                MemoryConfig{
+                    .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+                    .buffer_type = BufferType::L1,
+                    .shard_spec =
+                        ShardSpec{
+                            CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{6, 6})),
+                            {20, 10},
+                            ShardOrientation::COL_MAJOR,
+                            ShardMode::LOGICAL,
+                        }
+                },
+            .expected_err_msg = "Number of shards along width 10 must not exceed number of rows 7 for column major orientation!"
         }
     )  // Values
     // clang-format on

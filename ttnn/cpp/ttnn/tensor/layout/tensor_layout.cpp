@@ -83,6 +83,33 @@ Alignment legacyShapeToAlignment(
     return result;
 }
 
+void validate_alignment(const TensorLayout& tensor_layout) {
+    const auto& alignment = tensor_layout.get_alignment();
+    const auto& memory_config = tensor_layout.get_memory_config();
+    TT_FATAL(
+        alignment.size() <= 2 || !memory_config.is_sharded(),
+        "Tensor must be interleaved if alignment has rank greater than 2!");
+
+    const auto& page_config = tensor_layout.get_page_config();
+    const auto& dtype = tensor_layout.get_data_type();
+    return page_config.validate_alignment(alignment, dtype, memory_config);
+}
+
+void validate_shard_spec(const TensorLayout& tensor_layout) {
+    const auto& memory_config = tensor_layout.get_memory_config();
+    const auto& layout = tensor_layout.get_layout();
+    if (memory_config.is_sharded() and memory_config.shard_spec.has_value() and layout == Layout::TILE) {
+        const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
+        const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
+        // TODO (issue #17060): Flip to TT_FATAL
+        TT_ASSERT(
+            (physical_shard_shape.height() % tile_shape[0] == 0 && physical_shard_shape.width() % tile_shape[1] == 0),
+            "Physical shard shape {} must be tile {} sized!",
+            physical_shard_shape,
+            tile_shape);
+    }
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -94,7 +121,8 @@ TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
     initialize_alignment();
-    validate_alignment();
+    CMAKE_UNIQUE_NAMESPACE::validate_alignment(*this);
+    CMAKE_UNIQUE_NAMESPACE::validate_shard_spec(*this);
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(
@@ -136,13 +164,6 @@ void TensorLayout::initialize_alignment() {
         result[result_idx] = CMAKE_UNIQUE_NAMESPACE::round_up(result[result_idx], default_alignment[i]);
     }
     alignment_ = Alignment(std::move(result));
-}
-
-void TensorLayout::validate_alignment() const {
-    TT_FATAL(
-        alignment_.size() <= 2 || !memory_config_.is_sharded(),
-        "Tensor must be interleaved if alignment has rank greater than 2!");
-    return page_config_.validate_alignment(alignment_, dtype_, memory_config_);
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
