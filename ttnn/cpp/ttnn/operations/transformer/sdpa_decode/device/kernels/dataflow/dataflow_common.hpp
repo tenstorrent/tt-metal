@@ -73,13 +73,14 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
 }
 
 template <uint32_t tile_bytes>
-void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_tile, uint32_t partial_val) {
+void fill_tile_partial(
+    uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_tile, uint32_t partial_val, uint32_t base_val = 0) {
     /*
     We want to fill cur_pos_in_tile + 1 to the end
     */
 
-    fill_tile<tile_bytes>(cb_id, tile_id, 0);
-    if (cur_pos_in_tile == 31 || partial_val == 0) {
+    fill_tile<tile_bytes>(cb_id, tile_id, base_val);
+    if (cur_pos_in_tile == 31 || partial_val == base_val) {
         return;
     }
     const uint16_t datum_val = partial_val >> 16;
@@ -123,6 +124,62 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
                 uint32_ptr[uint32_face_idx + (uint32_face_col_idx + num_cols_in_uint32_face * face_row_idx)] =
                     partial_val;
             }
+        }
+    }
+}
+
+template <uint32_t tile_bytes>
+void fill_tile_partial_transposed(
+    uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_tile, uint32_t partial_val, uint32_t base_val = 0) {
+    /*
+    We want to fill cur_pos_in_tile + 1 to the end in the row dimension
+    Tile layout (32x32):
+    [Phase 0: 16x16] [Phase 1: 16x16]
+    [Phase 2: 16x16] [Phase 3: 16x16]
+
+    Memory layout: Phases are stored contiguously
+    [Phase 0][Phase 1][Phase 2][Phase 3]
+    */
+
+    fill_tile<tile_bytes>(cb_id, tile_id, base_val);
+    if (cur_pos_in_tile == 31 || partial_val == base_val) {
+        return;
+    }
+
+    const uint16_t datum_val = partial_val >> 16;
+    volatile tt_l1_ptr uint16_t* uint16_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+    volatile tt_l1_ptr uint32_t* uint32_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+
+    // Calculate which phase and position within phase we're at
+    uint32_t phase_start = (cur_pos_in_tile < 15) ? 0 : 2;  // Top half (0,1) or bottom half (2,3)
+
+    // Fill all remaining columns in the current row
+    if (phase_start == 0) {
+        uint32_t row_in_phase = cur_pos_in_tile + 1;
+        uint32_t uint32_face_idx_1 = 1 << 7;
+
+        // For top half (phases 0 and 1)
+        for (uint32_t row = row_in_phase; row < 16; row++) {
+            // Fill remaining positions in current row for both phases
+            for (uint32_t col = 0; col < 8; col++) {  // 8 uint32 values per row (16 uint16 values)
+                uint32_ptr[row * 8 + col] = partial_val;
+                uint32_ptr[uint32_face_idx_1 + row * 8 + col] = partial_val;
+            }
+        }
+    }
+
+    uint32_t row_in_phase = (phase_start == 0) ? 0 : (cur_pos_in_tile + 1) % 16;
+    uint32_t uint32_face_idx_2 = 2 << 7;
+    uint32_t uint32_face_idx_3 = 3 << 7;
+
+    // For bottom half (phases 2 and 3)
+    for (uint32_t row = row_in_phase; row < 16; row++) {
+        // Fill remaining positions in current row for both phases
+        for (uint32_t col = 0; col < 8; col++) {  // 8 uint32 values per row (16 uint16 values)
+            uint32_ptr[uint32_face_idx_2 + row * 8 + col] = partial_val;
+            uint32_ptr[uint32_face_idx_3 + row * 8 + col] = partial_val;
         }
     }
 }
