@@ -224,11 +224,11 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
-        xt::xarray<float> xtensor_a = xt::ones<float>(shape);
+        xt::xarray<float> xtensor = xt::ones<float>(shape);
         ttml::core::XTensorToMeshVariant<float> replicate_composer =
             ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-        auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
-        auto out_tensor = ttnn::experimental::dropout(xtensor_a_tensor, prob, scale, dropout_seed1);
+        auto xtensor_tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
+        auto out_tensor = ttnn::experimental::dropout(xtensor_tensor, prob, scale, dropout_seed1);
         ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
         auto xtensors_back = ttml::core::to_xtensor(out_tensor, identity_composer);
         EXPECT_FALSE(xt::allclose(xtensors_back[0], xtensors_back[1], /*rtol=*/1e-4, /*atol=*/1e-3));
