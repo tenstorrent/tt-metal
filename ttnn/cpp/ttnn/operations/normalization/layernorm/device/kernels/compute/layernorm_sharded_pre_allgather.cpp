@@ -51,6 +51,8 @@ void MAIN {
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 #ifdef FUSE_PRE_ADD
     constexpr uint32_t cb_in = tt::CBIndex::c_14;
+#else
+    constexpr uint32_t cb_in = cb_in0;
 #endif
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
@@ -105,7 +107,6 @@ void MAIN {
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
 #else
-    constexpr uint32_t cb_in = cb_in0;
     binary_op_init_common(cb_in, cb_in, cb_x2);
 #endif
 
