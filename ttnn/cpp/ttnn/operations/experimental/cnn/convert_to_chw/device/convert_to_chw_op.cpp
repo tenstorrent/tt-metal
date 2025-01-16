@@ -5,7 +5,7 @@
 #include "convert_to_chw_op.hpp"
 
 #include "convert_to_chw_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::cnn {
 

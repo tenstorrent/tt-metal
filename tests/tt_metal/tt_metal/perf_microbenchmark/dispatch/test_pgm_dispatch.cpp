@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/rtoptions.hpp>
 #include <benchmark/benchmark.h>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
 #include <numeric>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt;

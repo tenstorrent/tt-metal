@@ -9,7 +9,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -22,7 +22,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 namespace ttnn::operations::unary {
 

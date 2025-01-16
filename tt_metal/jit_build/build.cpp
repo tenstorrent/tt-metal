@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/build.hpp"
+#include <build.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -14,13 +14,13 @@
 #include <string>
 #include <thread>
 
-#include "common/executor.hpp"
+#include <executor.hpp>
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include "tools/profiler/common.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <common.hpp>
+#include <profiler_state.hpp>
+#include <command_queue_interface.hpp>
+#include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;

@@ -9,10 +9,10 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_metal/common/constants.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include "fold.hpp"
 

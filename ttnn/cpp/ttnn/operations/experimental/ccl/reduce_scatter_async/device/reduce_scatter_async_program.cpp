@@ -9,28 +9,28 @@
 #include <vector>
 #include <array>
 #include <ranges>
-#include "common/core_coord.hpp"
-#include "common/logger.hpp"
-#include "device/device.hpp"
-#include "kernels/kernel_types.hpp"
-#include "span.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/span.hpp>
+#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
 // For reduction op
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/tt_stl/overloaded.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/overloaded.hpp>
 
 /*
  * This file contains the program factory for reduce scatter operation implemented on line (and soon, ring) topologies.
