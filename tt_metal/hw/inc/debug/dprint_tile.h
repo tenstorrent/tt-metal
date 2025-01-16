@@ -129,24 +129,34 @@ inline tile_info_t get_tile_info(
 // Specialization of TileSliceHostDev, with device-side implementation
 template <int MAX_BYTES = 32 * 2>
 struct TileSlice : TileSliceHostDev<MAX_BYTES> {
-    static inline uint32_t get_tilized_index(tile_info_t& tile_info, uint32_t h, uint32_t w) {
-        uint32_t row_in_face = h % tile_info.face_dim_r;
-        uint32_t col_in_face = w % tile_info.face_dim_c;
-        uint32_t face_idx_r = h / tile_info.face_dim_r;
-        uint32_t face_idx_c = w / tile_info.face_dim_c;
-        uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
-        uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
-        return face_idx * tile_info.face_dim_r * tile_info.face_dim_c + row_in_face * tile_info.face_dim_c +
-               col_in_face;
+    static inline uint32_t get_data_index(tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
+        if (untilize) {
+            uint32_t row_in_face = h % tile_info.face_dim_r;
+            uint32_t col_in_face = w % tile_info.face_dim_c;
+            uint32_t face_idx_r = h / tile_info.face_dim_r;
+            uint32_t face_idx_c = w / tile_info.face_dim_c;
+            uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
+            uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
+            return face_idx * tile_info.face_dim_r * tile_info.face_dim_c + row_in_face * tile_info.face_dim_c +
+                   col_in_face;
+        } else {
+            return w + h * tile_info.tile_dim_r;
+        }
     }
-    static inline uint32_t get_exponent_index(tile_info_t& tile_info, uint32_t h, uint32_t w) {
-        uint32_t row_in_face = h % tile_info.face_dim_r;
-        uint32_t col_in_face = w % tile_info.face_dim_c;
-        uint32_t face_idx_r = h / tile_info.face_dim_r;
-        uint32_t face_idx_c = w / tile_info.face_dim_c;
-        uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
-        uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
-        return face_idx * tile_info.face_dim_r + row_in_face;
+    static inline uint32_t get_exponent_index(tile_info_t& tile_info, uint32_t h, uint32_t w, bool untilize) {
+        if (untilize) {
+            // For tilized data, exponents are grouped by face
+            uint32_t row_in_face = h % tile_info.face_dim_r;
+            uint32_t col_in_face = w % tile_info.face_dim_c;
+            uint32_t face_idx_r = h / tile_info.face_dim_r;
+            uint32_t face_idx_c = w / tile_info.face_dim_c;
+            uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;
+            uint32_t face_idx = face_idx_r * num_faces_c + face_idx_c;
+            return face_idx * tile_info.face_dim_r + row_in_face;
+        } else {
+            // For already untilized data, exponents are in order of row appearance
+            return (w + h * tile_info.tile_dim_r) / tile_info.face_dim_c;
+        }
     }
 
     __attribute__((__noinline__)) TileSlice(
@@ -220,21 +230,21 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
             for (uint32_t w = slice_range.w0; w < slice_range.w1; w += slice_range.ws) {
                 // Convert w_idx, h_idx to 1D index using num_rows
                 if (is_bfp_format) {
-                    uint32_t data_offset = tile_info.face_dim_r * tile_info.num_faces;
+                    // For Bfp formats, mantissa data follows after exponents (one exponent per row per tile)
+                    uint32_t mantissa_offset = tile_info.face_dim_r * tile_info.num_faces;
                     // Write 1 byte exponent before each datum. Need to do this since requested stride could put us on
                     // any of the faces.
-                    this->data[byte_idx++] = cb_data[TileSlice::get_exponent_index(tile_info, h, w)];
+                    this->data[byte_idx++] = cb_data[TileSlice::get_exponent_index(tile_info, h, w, print_untilized)];
                     this->data[byte_idx++] = get_datum(
                         static_cast<DataFormat>(this->data_format),
-                        cb_data + data_offset,
-                        TileSlice::get_tilized_index(tile_info, h, w));
+                        cb_data + mantissa_offset,
+                        TileSlice::get_data_index(tile_info, h, w, print_untilized));
                     if (byte_idx - 2 >= MAX_BYTES) {
                         max_count_exceeded = true;
                         break;
                     }
                 } else {
-                    uint32_t i = (print_untilized) ? TileSlice::get_tilized_index(tile_info, h, w)
-                                                   : w + h * tile_info.tile_dim_r;
+                    uint32_t i = TileSlice::get_data_index(tile_info, h, w, print_untilized);
                     for (uint32_t offset = 0; offset < bytes_per_datum; offset++) {
                         this->data[byte_idx++] = cb_data[i * bytes_per_datum + offset];
                         // If we've gone over the maximum data points to print, break
