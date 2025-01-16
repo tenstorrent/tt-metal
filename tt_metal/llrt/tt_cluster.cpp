@@ -21,7 +21,6 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include <base.hpp>
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <test_common.hpp>
@@ -52,6 +51,43 @@
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
+namespace {
+
+inline std::string get_soc_description_file(
+    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& output_dir = "") {
+    // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
+    std::string tt_metal_home;
+    if (getenv("TT_METAL_HOME")) {
+        tt_metal_home = getenv("TT_METAL_HOME");
+    } else {
+        tt_metal_home = "./";
+    }
+    if (tt_metal_home.back() != '/') {
+        tt_metal_home += "/";
+    }
+    if (target_device == tt::TargetDevice::Simulator) {
+        switch (arch) {
+            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
+            case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
+            case tt::ARCH::BLACKHOLE:
+                return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
+            default: throw std::runtime_error("Unsupported device arch");
+        };
+    } else {
+        switch (arch) {
+            case tt::ARCH::Invalid:
+                throw std::runtime_error(
+                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
+            default: throw std::runtime_error("Unsupported device arch");
+        };
+    }
+    return "";
+}
+}  // namespace
 namespace tt {
 
 const Cluster &Cluster::instance() {

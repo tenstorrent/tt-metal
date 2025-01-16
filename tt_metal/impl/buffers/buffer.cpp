@@ -16,7 +16,6 @@
 #include <atomic>
 #include <mutex>
 #include <utility>
-#include <base.hpp>
 #include <buffer_constants.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"

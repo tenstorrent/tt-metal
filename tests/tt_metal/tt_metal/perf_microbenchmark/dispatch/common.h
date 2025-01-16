@@ -15,6 +15,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/llrt.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 extern bool debug_g;
 extern bool use_coherent_data_g;
@@ -654,7 +655,7 @@ inline void generate_random_paged_payload(
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
-        uint32_t bank_offset = align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
+        uint32_t bank_offset = tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
             auto dram_channel = device->dram_channel_from_bank_id(bank_id);
@@ -951,7 +952,7 @@ inline void gen_dispatcher_paged_write_cmd(
 
     // For the CMD generation, start_page is 8 bits, so much wrap around, and increase base_addr instead based on page
     // size, which assumes page size never changed between calls to this function (checked above).
-    uint32_t bank_offset = align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
+    uint32_t bank_offset = tt::align(page_size, page_size_alignment_bytes) * (start_page / num_banks);
     // TODO: make this take the latest address, change callers to not manage this
     uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
     uint16_t start_page_cmd = start_page % num_banks;

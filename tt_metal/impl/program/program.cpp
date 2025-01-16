@@ -27,6 +27,7 @@
 #include <llrt.hpp>
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
+#include <tt_align.hpp>
 
 namespace tt::tt_metal {
 
@@ -804,7 +805,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = align(computed_addr, device->get_allocator_alignment());
+        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -1098,7 +1099,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
-                        align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+                        tt::align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
             }
