@@ -241,7 +241,7 @@ __attribute__((noinline)) void finish_profiler() {
         }
     }
 
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
     profiler_control_buffer[RUN_COUNTER]++;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
@@ -326,6 +326,7 @@ struct profileScope {
     }
 };
 
+uint32_t loop_count = 0;
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
@@ -333,18 +334,44 @@ struct profileScopeGuaranteed {
 
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
+#if defined(COMPILE_FOR_BRISC)
+    static constexpr uint32_t loop_count_limit = 100;
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
-        if constexpr (index == 0) {
+        if (loop_count == 0) {
             init_profiler();
+            SrcLocNameToHash("PROFILER-INIT-MARK");
+            mark_time_at_index_inlined(start_index, hash);
+            mark_time_at_index_inlined(end_index, get_const_id(hash, ZONE_END));
         }
-        mark_time_at_index_inlined(start_index, timer_id);
+        mark_time_at_index_inlined(wIndex, timer_id);
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        loop_count++;
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
-        mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
-        if constexpr (index == 0) {
+        mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        if (loop_count >= loop_count_limit) {
+            SrcLocNameToHash("PROFILER-NOC-PUSH-MARK");
+            mark_time_at_index_inlined(start_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, hash);
+            mark_time_at_index_inlined(end_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, get_const_id(hash, ZONE_END));
+            loop_count = 0;
             finish_profiler();
         }
     }
+#else
+    // inline __attribute__((always_inline)) profileScopeGuaranteed() {
+    // if constexpr (index == 0) {
+    // init_profiler();
+    //}
+    // mark_time_at_index_inlined(start_index, timer_id);
+    //}
+    // inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
+    // mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+    // if constexpr (index == 0) {
+    // finish_profiler();
+    //}
+    //}
+#endif
 };
 
 template <uint32_t timer_id, uint32_t index>
