@@ -1851,14 +1851,14 @@ _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
 
 * Output subblock size should be at least 2x1 or 1x2.
 * DRAM-sharded matmuls should be used for any DRAM-bound cases, e.g. most decode matmuls.
-* The inner dim number of tiles (`in0_block_w`) should be at least 2 if possible.
-* Use the lowest precision you can for weights and inputs - we find BFP8 weights always work and BFP4 weights work for some matmuls particularly in the MLP.
+* The inner dim number of tiles (`in0_block_w`) should be at least two if possible.
+* Use the lowest precision you can for weights and inputs; BFP8 weights always work and BFP4 weights work for some matmuls particularly in the MLP.
 * Use an appropriate math fidelity in the compute kernel config. This controls the number of bits multiplied together and is especially important for compute-bound matmuls as the Tensix core’s math throughput is 2x higher with HiFi2 and 3.6x faster with LoFi.
-    * Use HiFi4 for BF16 weights or if accuracy is very important (you often see this in attention ops)
-    * Use HiFi2 for BFP8 weights - this drops the least-significant bit of a BF16 @ BFP8 matmul but this is usually not an issue. You may find that LoFi works as well.
+    * Use HiFi4 for BF16 weights or if accuracy is very important, often seen in attention OPs.
+    * Use HiFi2 for BFP8 weights to drop the least-significant bit of a BF16 @ BFP8 matmul but this is usually not an issue. You may find that LoFi works as well.
     * Use LoFi for BFP4 weights.
 
-You can specify a compute kernel like this:
+Specify a compute kernel:
 
 ```python
 self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
@@ -1869,37 +1869,39 @@ self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
 )
 ```
 
-As always, do not recreate these every single forward pass if you want your python thread to be fast (which you do).
+> [!IMPORTANT]
+> Do NOT recreate for every forward pass if you want your python thread to be fast.
+
 ### 4.8 Module Tests
 
 #### 4.8.1 Llama3 Module and Test Differences
 
-In our current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
+In the current Llama3 model, the attention module class (`TtLlamaAttention`) implements two primary methods for attention computation: `forward_prefill` and `forward_decode`.
 To test these, we provide two separate attention test files, `test_attention_decode` and `test_attention_prefill`, which create the appropriate input tensors:
 - A tensor of size `(batch, dim)` in L1 for decode,
 - A tensor of size `(seqlen, dim)` in DRAM for prefill.
 
-Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TTNN device implementation.
+Each attention test compares the attention module output and KV-cache correlation between the PyTorch host implementation and the TT-NN device implementation.
 
-The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences (mentioned in the section below).
+The current version of the MLP module class (`TtLlamaMLP`) handles prefill and decode in the same file but has some technical differences, mentioned in the following section.
 
-The decoder module (which encapsulates both attention and MLP) and model module (which encapsulates the decoder and the remaining parts of the Llama3 model) also handle prefill and decode in the same file, but they call the respective modes within the attention and MLP modules.
+The decoder module, which encapsulates both attention and MLP, and model module, which encapsulates the decoder and the remaining parts of the Llama3 model, also handle prefill and decode in the same file, but call the respective modes within the attention and MLP modules.
 
 ### 4.9 Performance Testing
 ### 4.10 Common Pitfalls
 #### 4.10.1 Error Messages
   - Running out of L1
   - Shard spec and program config mismatches
-  - For some TTNN ops (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument.
+  - For some TT-NN OPs (e.g. ttnn.all_gather) it's not supported to pass -1 in the dim argument.
     - You'll see an error related to op invocation where the arguments don't match
 #### 4.10.2 Shard Spec Mismatches
 #### 4.10.3 Ethernet Dispatch Cores
   - link to any other description, and mention it is needed for N300 and T3K
 #### 4.10.4 Hangs
 ##### 4.10.4.1 Tracing
-  - Host communications cause tracing to hang
-  - Running without async mode enabled causes tracing to hang
-  - Careful with print in tracing
+  - Host communications cause tracing to hang.
+  - Running without async mode enabled causes tracing to hang.
+  - Careful with print in tracing.
 ##### 4.10.4.2 Large Matmuls
-  - Large matmuls hanging? Link to appropriate ticket with workaround
-  - Issue is being investigated with a workaround of setting the output subblock to 1,1 and grid size to 8x7
+  - Large matmuls hanging? Link to appropriate ticket with workaround.
+  - Issue is being investigated with a workaround of setting the output subblock to 1,1 and grid size to 8x7.
