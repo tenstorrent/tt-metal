@@ -4,8 +4,8 @@
 
 #include "global_semaphore.hpp"
 
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include "cpp/ttnn/global_semaphore.hpp"
 #include "pybind11/pybind11.h"
 
 namespace ttnn::global_semaphore {

@@ -16,15 +16,15 @@
 
 #include "core_coord.hpp"
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "llrt/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt;
 

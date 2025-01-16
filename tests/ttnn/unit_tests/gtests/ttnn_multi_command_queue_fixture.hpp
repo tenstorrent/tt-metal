@@ -5,11 +5,11 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace ttnn {
 

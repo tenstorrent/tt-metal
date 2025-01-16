@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"

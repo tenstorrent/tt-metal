@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include <cstdint>
 
 inline size_t get_flat_index_from_shape(

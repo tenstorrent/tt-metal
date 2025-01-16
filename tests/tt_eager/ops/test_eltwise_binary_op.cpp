@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"

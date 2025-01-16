@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <ttnn/operations/functions.hpp>
 

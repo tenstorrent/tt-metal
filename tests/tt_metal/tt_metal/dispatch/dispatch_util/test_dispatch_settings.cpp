@@ -5,11 +5,11 @@
 #include <array>
 #include <stdexcept>
 #include "command_queue_fixture.hpp"
-#include "common/logger.hpp"
-#include "dispatch/dispatch_constants.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/dispatch_constants.hpp>
 #include "gtest/gtest.h"
-#include "llrt/hal.hpp"
-#include "tt_metal/impl/dispatch/util/include/dispatch_settings.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
 using namespace tt::tt_metal::dispatch;

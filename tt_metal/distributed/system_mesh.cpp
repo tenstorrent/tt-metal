@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <system_mesh.hpp>
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"

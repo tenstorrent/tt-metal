@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/trace/trace.hpp"
+#include <trace.hpp>
 
 #include <memory>
 
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
+#include <logger.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
+#include <trace.hpp>
 #include "tt_metal/trace.hpp"
 
 namespace {

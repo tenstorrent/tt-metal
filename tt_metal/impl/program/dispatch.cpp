@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <command_queue.hpp>
 #include "tt_metal/distributed/mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/distributed/mesh_workload.hpp"
