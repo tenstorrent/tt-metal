@@ -5,7 +5,6 @@
 #include "pool_op.hpp"
 
 #include <tt-metalium/math.hpp>
-#include "common/constants.hpp"
 #include <utility>
 
 /**
