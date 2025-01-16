@@ -40,6 +40,7 @@ public:
         const ttnn::SimpleShape& padded_shape);
 
     Layout get_layout() const { return page_config_.get_layout(); }
+    Tile get_tile() const { return page_config_.get_tile(); }
     PageConfig get_page_config() const { return page_config_; }
     DataType get_data_type() const { return dtype_; }
     const MemoryConfig& get_memory_config() const { return memory_config_; }
@@ -93,7 +94,6 @@ private:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
     void initialize_alignment();
-    void validate_alignment() const;
 
     Shape2D compute_page_shape(const Shape2D& physical_size) const;
     size_t compute_page_size_bytes(const Shape2D& page_size) const;
