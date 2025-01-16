@@ -47,9 +47,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
     if input_layout == "ROW_MAJOR_LAYOUT":
-        return True, "Inputs to eltwise binary must be tilized"
+        return True, "Input to eltwise binary must be tilized"
+    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str
+
     return False, None
 
 
@@ -79,12 +82,9 @@ def run(
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-
-    torch_op = ttnn.get_golden_function(ttnn.ceil)
-    torch_output_tensor = torch_op(torch_input_tensor_a)
+    print(
+        f"{input_shape} {core_grid} {sharding_strategy} {shard_orientation} {tensor_hw_as_shard_shape} {input_a_dtype} {input_layout} {shard_height_mul_of_32}"
+    )
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
@@ -95,6 +95,12 @@ def run(
         tile_layout=shard_height_mul_of_32,
     )
 
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    golden_function = ttnn.get_golden_function(ttnn.lez)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
+
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_a_dtype,
@@ -104,9 +110,37 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.ceil(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn.lez(input_tensor_a, memory_config=sharded_config)
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    print(pcc)
     return [pcc, e2e_perf]
+
+
+# # Run sweeps locally
+# from tests.sweep_framework.framework.permutations import *
+
+# start_time = start_measuring_time()
+# for suite in parameters.keys():
+#     device_id = 0
+#     device = ttnn.open_device(device_id=device_id)
+#     suite_vectors = list(permutations(parameters[suite]))
+#     print(len(suite_vectors))
+#     for vector in suite_vectors:
+#         invalidate_res = invalidate_vector(vector)
+#         if invalidate_res[0]:
+#             print(f"Invalidated: {invalidate_res[1]}")
+#             continue
+#         try:
+#             passed, _ = run(**vector, device=device)
+#             # if passed[0] != True:
+#             #     print(passed)
+#         except Exception as e:
+#             print(e)
+
+#     ttnn.close_device(device)
+
+# e2e_perf = stop_measuring_time(start_time)
+# print(f"time {e2e_perf / 1000000000}s")
