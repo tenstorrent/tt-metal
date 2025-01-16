@@ -95,10 +95,12 @@ int main(int argc, char *argv[]) {
     // Need to save address to jump to after BRISC resumes NCRISC
     set_ncrisc_resume_addr();
 
+    kernel_profiler::init_profiler();
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
         notify_brisc_and_wait();
+        DeviceZoneScopedPush();
         DeviceZoneScopedMainN("NCRISC-FW");
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;

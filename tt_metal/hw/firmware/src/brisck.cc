@@ -42,7 +42,11 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #endif
     wait_for_go_message();
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
+        // DeviceZoneScopedMainChildN("BRISC-KERNEL");
+        DeviceZoneScopedMainN("BRISC-KERNEL");
+        {
+            DeviceZoneScopedMainN("TEST");
+        }
         kernel_main();
     }
 #endif

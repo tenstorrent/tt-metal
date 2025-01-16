@@ -103,8 +103,15 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     if (!tt::llrt::RunTimeOptions::get_instance().get_profiler_sync_enabled()) {
         return;
     }
+
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
+
+    profiler_msg_t* profiler_msg = device->get_dev_addr<profiler_msg_t*>(core, HalL1MemAddrType::PROFILER);
+    uint32_t addr = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    uint64_t control_l1_addr =
+        reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::L1_HOST_SYNC_ADDRESS]);
+    tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device_id, core), control_l1_addr);
 
     deviceHostTimePair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     smallestHostime.emplace(device_id, 0);
@@ -142,8 +149,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    profiler_msg_t* profiler_msg = device->get_dev_addr<profiler_msg_t*>(core, HalL1MemAddrType::PROFILER);
-    uint64_t control_addr = reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::FW_RESET_L]);
+    uint64_t control_addr =
+        reinterpret_cast<uint64_t>(&profiler_msg->control_vector[kernel_profiler::HOST_SYNC_TIMESTAMP]);
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
         std::this_thread::sleep_for(std::chrono::milliseconds(millisecond_wait));
@@ -167,7 +174,6 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     double writeOverhead = (double)writeSum / sampleCount;
 
     constexpr uint32_t briscIndex = 0;
-    uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
     std::vector<std::uint32_t> sync_times =
         tt::llrt::read_hex_vec_from_core(device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));

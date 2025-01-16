@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -40,7 +40,11 @@ volatile tt_reg_ptr uint * mailbox_base[4] = {
 void kernel_launch(uint32_t kernel_base_addr) {
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    DeviceZoneScopedMainN("TRISC-KERNEL");
+    {
+        // DeviceZoneScopedMainN("TRISC-TEST");
+    }
 #ifdef KERNEL_RUN_TIME
     ckernel::wait(KERNEL_RUN_TIME);
 #endif
@@ -58,7 +62,11 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("TRISC-KERNEL");
+    DeviceZoneScopedMainN("TRISC-KERNEL");
+    {
+        // DeviceZoneScopedMainN("TRISC-TEST");
+    }
     run_kernel();
 #endif
 }

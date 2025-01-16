@@ -63,10 +63,23 @@ void DeviceProfiler::readRiscProfilerResults(
         (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
         return;
     }
+    // std::vector<std::uint32_t> profiler_buffer_L1 = tt::llrt::read_hex_vec_from_core(
+    // device_id,
+    // worker_core,
+    // reinterpret_cast<uint64_t>(profiler_msg->buffer),
+    // 16 * 4);
+
+    // std::cout << "L1" << std::endl;
+    // for (auto pv: profiler_buffer_L1)
+    //{
+    // std::cout << pv << std::endl;
+    //}
+    // std::cout << "DRAM" << std::endl;
 
     int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
+        // std::cout << bufferEndIndex << std::endl;
         uint32_t riscType;
         if (CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = riscEndIndex;
@@ -99,6 +112,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t opTime_L = 0;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
+                // std::cout << index << "," << profile_buffer[index] << "," << profile_buffer[index + 1] << std::endl;
                 if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
                     newRunStart = true;
                     opTime_H = 0;
@@ -490,6 +504,8 @@ void DeviceProfiler::pushTracyDeviceResults() {
     for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
         event.timestamp = event.timestamp * this->freqScale + this->shift;
+        // std::cout << event.timestamp <<  "," <<  event.zone_name << "," <<magic_enum::enum_name(event.zone_phase) <<
+        // std::endl;
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], event);
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {

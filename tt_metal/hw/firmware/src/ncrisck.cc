@@ -50,7 +50,8 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    // DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+    DeviceZoneScopedMainN("NCRISC-KERNEL");
     kernel_main();
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
         WAYPOINT("NKFW");

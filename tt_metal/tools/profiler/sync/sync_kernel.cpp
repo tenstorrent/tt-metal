@@ -12,8 +12,8 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(((mailboxes_t*)MEM_MAILBOX_BASE)->profiler.control_vector);
 
     constexpr uint32_t briscIndex = 0;
-    volatile tt_l1_ptr uint32_t* briscBuffer = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        &((mailboxes_t*)MEM_MAILBOX_BASE)->profiler.buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
+    volatile tt_l1_ptr uint32_t* briscBuffer =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(profiler_control_buffer[kernel_profiler::L1_HOST_SYNC_ADDRESS]);
 
     uint32_t syncTimeBufferIndex = 0;
 
@@ -22,27 +22,28 @@ void kernel_main() {
     while (syncTimeBufferIndex < FIRST_READ_COUNT) {
         uint32_t deviceTime = p_reg[kernel_profiler::WALL_CLOCK_LOW_INDEX];
 
-        uint32_t hostTime = profiler_control_buffer[kernel_profiler::FW_RESET_L];
+        uint32_t hostTime = profiler_control_buffer[kernel_profiler::HOST_SYNC_TIMESTAMP];
         if (hostTime > 0) {
             briscBuffer[syncTimeBufferIndex++] = p_reg[kernel_profiler::WALL_CLOCK_HIGH_INDEX];
             briscBuffer[syncTimeBufferIndex++] = deviceTime;
             briscBuffer[syncTimeBufferIndex++] = deviceTime;
             briscBuffer[syncTimeBufferIndex++] = hostTime;
-            profiler_control_buffer[kernel_profiler::FW_RESET_L] = 0;
+            profiler_control_buffer[kernel_profiler::HOST_SYNC_TIMESTAMP] = 0;
         }
     }
 
     {
-        DeviceZoneScopedMainChildN("SYNC-LOOP");
+        DeviceZoneScopedMainN("SYNC-LOOP");
         while (syncTimeBufferIndex < ((SAMPLE_COUNT + 1) * 2)) {
             uint32_t deviceTime = p_reg[kernel_profiler::WALL_CLOCK_LOW_INDEX];
 
-            uint32_t hostTime = profiler_control_buffer[kernel_profiler::FW_RESET_L];
+            uint32_t hostTime = profiler_control_buffer[kernel_profiler::HOST_SYNC_TIMESTAMP];
             if (hostTime > 0) {
                 briscBuffer[syncTimeBufferIndex++] = deviceTime;
                 briscBuffer[syncTimeBufferIndex++] = hostTime;
-                profiler_control_buffer[kernel_profiler::FW_RESET_L] = 0;
+                profiler_control_buffer[kernel_profiler::HOST_SYNC_TIMESTAMP] = 0;
             }
         }
     }
+    kernel_profiler::finish_profiler();
 }
