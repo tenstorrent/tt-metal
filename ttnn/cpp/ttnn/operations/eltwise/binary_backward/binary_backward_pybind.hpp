@@ -1202,13 +1202,14 @@ void py_module(py::module& module) {
         ttnn::remainder_bw,
         R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16)doc",
-        R"doc(Supported only in WHB0.)doc");
+        R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_overload(
         module,
         ttnn::fmod_bw,
         R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_assign(
         module,
@@ -1244,7 +1245,8 @@ void py_module(py::module& module) {
         module,
         ttnn::xlogy_bw,
         R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_ops(
         module,
@@ -1264,13 +1266,15 @@ void py_module(py::module& module) {
         module,
         ttnn::logaddexp_bw,
         R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_ops(
         module,
         ttnn::logaddexp2_bw,
         R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc");
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_binary_backward_ops(
         module,
