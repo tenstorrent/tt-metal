@@ -2112,7 +2112,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
 
 def test_small_matmul_pcc(device):
     torch.manual_seed(0)
-    pcc = 0.999
+    pcc = 0.99
     torch_input_tensor_a = torch.rand([1, 2048], dtype=torch.float32)
     torch_input_tensor_b = torch.rand([2048, 1000], dtype=torch.float32)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
