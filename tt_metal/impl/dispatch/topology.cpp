@@ -14,6 +14,7 @@
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
+#include "fabric_host_interface.h"
 
 #include "tt_cluster.hpp"
 

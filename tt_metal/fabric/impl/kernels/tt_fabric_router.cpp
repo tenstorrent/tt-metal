@@ -4,8 +4,8 @@
 
 // clang-format off
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -33,7 +33,7 @@ bool terminated_slave_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
-tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
+volatile tt_l1_ptr chan_req_buf* fvc_consumer_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);

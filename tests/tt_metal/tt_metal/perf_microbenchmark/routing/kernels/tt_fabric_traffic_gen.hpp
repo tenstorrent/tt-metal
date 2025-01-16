@@ -5,7 +5,7 @@
 #pragma once
 
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 #define is_power_of_2(x) (((x) > 0) && (((x) & ((x) - 1)) == 0))
 

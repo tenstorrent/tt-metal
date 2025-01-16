@@ -5,7 +5,7 @@
 #pragma once
 
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 
 inline uint32_t prng_next(uint32_t n) {
     uint32_t x = n;
