@@ -340,7 +340,7 @@ Common Terminology:
 | bsz | Batch Size |
 | batch_id | Batch Index (used for prefill) |
 | cur_pos/cur_pos_tensor | List/tensor of current positions in the sequence for each batch. |
-| cache_len | Length of the KV Cache |
+| cache_len | Length of the KV Cache. |
 | seqlen | Sequence Length |
 | dim | Hidden dimension of input x. |
 | head_dim | Hidden dimension of Q, K, V. |
@@ -1020,7 +1020,7 @@ def forward(
 ## 3. Features
 ### 3.1 Generative Decoding
 
-Almost every LLM generates text in the same manner: Given a prompt from the user, the LLM predicts the next token. Then, the LLM takes that new token and uses it as context to predict the following token. This process repeats until the LLM generates a token that indicates the end of the sequence, or until the user decides to stop the generation. The process is called "autoregressive generation" because each new token is used to predict the next token.
+Almost every LLM generates text in the same manner; given a prompt from the user, the LLM predicts the next token. Then, the LLM takes that new token and uses it as context to predict the following token. This process repeats until the LLM generates a token that indicates the end of the sequence, or until the user decides to stop the generation. The process is called "autoregressive generation" because each new token is used to predict the next token.
 
 #### 3.1.1 Model Inputs and Outputs
 Inputs to the model for generative decoding are generally:
@@ -1038,7 +1038,7 @@ The logits are unnormalized probabilities over the vocabulary. Given these proba
 - **Greedy Decoding:** Argmax of the logits, picks the most likely next token.
 - **Top-p/top-k Sampling:** Restricts the logits according to P and K values, then samples according to the remaining probabilities.
 
-#### 3.1.2 KV cache
+#### 3.1.2 KV Cache
 The KV cache is an inference optimization. It allows us to cache intermediate values during the first inference step for reuse in later steps.
 On the first inference step, the model processes the full prompt and caches the K and V projections for each layer. Subsequent inference steps compute a Q, K, V projection only for the new token, then use the cached K and V projections in attention. Therefore the first step (prefill) creates the KV cache and subsequent steps (decode) use and update the cache.
 
@@ -1184,7 +1184,7 @@ In tensor parallel scaling there is _one_ instance of the model executed on mult
 
 There are also hybrid forms of those two modes where a cluster of devices runs multiple independent instances of the model, but each of those model instances uses multiple chips in a tensor parallel fashion.
 
-In the report [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md), there is a good introduction to using TTNN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices (tensor parallelism).
+In the report [Programming Mesh of Devices with TT-NN](../Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md), there is a good introduction to using TT-NN's key concepts for scaling to multiple devices. It shows how to use a single handle for a mesh of devices, and how a tensor can be sharded or replicated to that mesh of devices (tensor parallelism).
 The tensor handle is used analogously to single device tensors, with the only difference being that all operations on that tensor are then executed in parallel on each device and operate on their respective local chunk of data.
 
 TT-Metal supports different multi-device topologies. The most important ones for us are `Ring` topology, where all devices are connected in a ring shape with each other, and `Line` topology, where a subgroup of devices is connected in a line with each other. `Line` topology can be a 1D or 2D grid of devices, where each row and column are connected in a line.
@@ -1240,7 +1240,7 @@ The AllGather operation collects data from all devices, concatenating each chunk
   - cluster_axis: cluster axis to gather along
   - mesh_device: mesh device the tensor is mapped to
 
-*Figure: Example usage of Ring All-Gather on 2x4 mesh_device*
+The following is an example of Ring All-Gather on s 2x4 mesh_device:
 
 ```py
 # Execute All-Gather on the sharded tensor
@@ -1248,7 +1248,7 @@ The AllGather operation collects data from all devices, concatenating each chunk
 output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=1)
 ```
 
-*Figure: Example usage of Linear All-Gather on 2x4 mesh_device*
+The following is an example of Linear All-Gather on a 2x4 mesh_device:
 
 ```py
 # Execute All-Gather on the sharded tensor
@@ -1257,18 +1257,19 @@ output_tensor = ttnn.all_gather(mesh_tensor_sharded, dim=3, num_links=2, cluster
 ```
 
 #### 3.3.2 ReduceScatter
-The ReduceScatter operation reduces the data across all devices and shards the result of the reduction over a specified dimension across all devices.
+The ReduceScatter operation reduces data across all devices and shards the result of the reduction over a specified dimension across all devices.
 
-- Supported Topologies: Ring, Linear
-- Supported number of links: 1
-- Arguments
-  - mesh_tensor: a tensor mapped to a mesh_device via mesh_mapper
-  - dim: the dimension to concatenate
-  - cluster_axis: cluster axis to gather along
-  - num_links: number of ethernet links to be used
-  - topology: topology configuration ttnn.Ring or ttn.Linear
+- **Supported Topologies:** Ring, Linear
+- **Supported Number of Links:** One
+- **Arguments:**
+  - **mesh_tensor:** a tensor mapped to a mesh_device via mesh_mapper
+  - **dim:** the dimension to concatenate
+  - **cluster_axis:** cluster axis to gather along
+  - **num_links:** number of ethernet links to be used
+  - **topology:** topology configuration ttnn.Ring or ttn.Linear
 
 The following is example usage of Ring Reduce-Scatter on a 2x4 mesh_device:
+
 ```py
 # Execute Reduce-Scatter on the sharded tensor
 # Assuming mesh_tensor_sharded is a sharded tensor over 8 devices where each devices contains a 32x32 sized chunk of data, the output_tensor is again of size 32x32 on each devices but reduced over all devices
@@ -1289,7 +1290,7 @@ The AllReduce operation reduces data across all devices and stores the entire te
 A fused version of AllReduce is planned, but currently only the composite of AllGather+ReduceScatter is supported.
 
 #### 3.3.4 Sharding schemes for decode
-In decode mode, activations are generally stored in L1 memory, while weights, which are too large, need to be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
+In decode mode, activations are generally stored in L1 memory, while weights, which are too large, must be stored in DRAM. The main bottleneck in decode mode is thereby DRAM bandwidth required to load model weights.
 
 The activations in decode mode are small because they contain the batch size (=users) in the height dimension while sequence length is one.
 The only exception is the attention operations computing `softmax(Q*KˆT)*V`. The activation width is the model dim (e.g. 8192 for Llama3-70b).
@@ -1299,24 +1300,24 @@ Matmul weights on the other hand can be sharded in width, height, or both. Shard
 
 ##### 3.3.5 1D Column parallel
 
-Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations need to be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. An AllGather operation is used on dim=3 to gather (i.e., replicate) activations.
+Weights are sharded in width, such that each device contains a horizontal slice of the weights. For this scheme the activations must be gathered beforehead, i.e. each device processes the whole activation. The result of a column parallel matmul is an activation that is sharded in width. Use an AllGather operation on dim=3 to gather (i.e., replicate) activations.
 
 <img src="images/column_parallel.png" style="width:500px;"/>
 
 ##### 3.3.6 1D Row parallel
 
-Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations need to be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, a ReduceScatter operation is used to compute the reduced result across all devices and shard the result along a specified dimension.
-Additionally an AllGather operation is used (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
+Weights are sharded in height, such that each device contains a vertical slice of the weights. For this scheme the activations must be sharded beforehand, i.e. each device processes a width-shard of the activation. The result of a row parallel matmul are activation partials with the final result's output dimensions, each device containing a partial result. To reduce the activations, i.e. compute the final output, use a ReduceScatter operation to compute the reduced result across all devices and shard the result along a specified dimension.
+Additionally use an AllGather operation (ReduceScatter+AllGather = AllReduce) to gather the reduced shards and thus replicate the final output on each device.
 
 <img src="images/row_parallel.png" style="width:500px;"/>
 
-##### 3.3.7 1D Column parallel followed by row parallel (1D weight sharding)
+##### 3.3.7 1D Column Parallel Followed by Row Parallel (1D Weight Sharding)
 
-1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. We need an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
+1D Weight Sharding is a sharding scheme that combines column and row parallel matmuls and can reduce the data volume sent over CCL operation and thus speed up computation. It consists of a column parallel matmul followed by a row parallel matmul. In this scheme the initial activations are gathered, and the column parallel matmul produces width-sharded outputs. The row parallel matmul consumes those sharded activations and produces parial outputs. Use an AllReduce (ReduceScatter+AllGather) operation to compute the final reduced and gathered outputs.
 
-Optimization potential in this scheme depends highly on the input dimensions to the CCL operations. We can use this scheme for the MLP and any sequence of matmuls that expands and then narrows the output dimension again, becuase it moves the CCL operation to a more beneficial location in the computational graph and thus reduces the CCL data volume.
+Optimization potential in this scheme depends highly on the input dimensions to the CCL operations. Use this scheme for the MLP and any sequence of matmuls that expand and then narrow the output dimension again, because it moves the CCL operation to a more beneficial location in the computational graph and thus reduces the CCL data volume.
 
-Let's look at the MLP as concrete example: in Llama3-70b we have `FF1` and `FF3` with dimensions `[32, 8k] x [8k, 28k]` and then the `FF2` with dimension `[32, 28k] x [28k, 8k]`.
+Let's look at the MLP as a concrete example: in Llama3-70b we have `FF1` and `FF3` with dimensions `[32, 8k] x [8k, 28k]` and then the `FF2` with dimension `[32, 28k] x [28k, 8k]`.
 If we gather after `FF1` and `FF3` we have to gather activations of size `[32, 28k/num_devices] -> [32, 28k]` for each of `FF1` and `FF3`; after the `FF2` we'd need to gather again `[32, 8k/num_devices] -> [32, 8k]`.
 If instead, we use the 1D weight sharding scheme and thus move the CCL operation after the `FF2`, we only have to ReduceScatter #num_devices partials of size `[32, 8k] -> [32, 8k/num_devices]` and then optionally AllGather to obtain the `[32, 8k]` gathered outputs.
 
@@ -1327,22 +1328,22 @@ If instead, we use the 1D weight sharding scheme and thus move the CCL operation
 In 2D Weight Sharding on a 2D cluster, weights are sharded both in width and height, such that each device contains a block of the weights.
 For this scheme the activations are width-sharded along `cluster_axis=0` and are replicated along `cluster_axis=1`, and the weights are block-sharded. Thus, each device processes a width-shard of the activation, and a block of the weights where the activations are replicated over one axis but the weights are not.
 The matmul result will be width-sharded along `cluster_axis=0` and contain partial results along `cluster_axis=1`.
-Typically an AllReduce (ReduceScatter+AllGather) is used to first reduce along `cluster_axis=1` and then gather the shards along `cluster_axis=0`.
+Typically we use an AllReduce (ReduceScatter+AllGather) to first reduce along `cluster_axis=1` and then gather the shards along `cluster_axis=0`.
 
 <img src="images/block_sharded.png" style="width:1000px;"/>
 
 ##### 3.3.9 Optimal strategy
 
-The optimal usage strategy of different parallelisation schemes depends on the specific shapes and model architecture, as well as the target device topology. To select the best parallelisation strategy, the overall data movement for each scheme can be computed; selecting the parallelisation stratgy with the lowest overall data movement will generally result in the best performance.
+The optimal usage strategy of different parallelization schemes depends on the specific shapes and model architecture, as well as the target device topology. To select the best parallelization strategy, the overall data movement for each scheme can be computed; selecting the parallelization stratgy with the lowest overall data movement will generally result in the best performance.
 
-To compute the data movement for a given parallelisation strategy, first the required sequence of parallelisation strategies and corresponding CCL operations is sketched out, and then the resulting dat movement is computed. The following table shows constraints on input and output activations for each parallelisation strategy. A partial activation always has to be reduced (ReduceScatter or AllReduce), while fractured activations may or may not need to be gathered, dependent on the consumer operation. A binary op for example is executed on the fractured activaiton to parallelise computation, while a matmul 1D column parallel operation requires inputs to be gathered in k.
+To compute the data movement for a given parallelization strategy, first the required sequence of parallelization strategies and corresponding CCL operations is sketched out, and then the resulting dat movement is computed. The following table shows constraints on input and output activations for each parallelization strategy. A partial activation always has to be reduced (ReduceScatter or AllReduce), while fractured activations may or may not need to be gathered, dependent on the consumer operation. A binary OP for example is executed on the fractured activaiton to parallelize computation, while a matmul 1D column parallel operation requires inputs to be gathered in k.
 
-| Parallelisation strategy  | Input activation requirement | Output activation requirement |
+| Parallelization strategy  | Input activation requirement | Output activation requirement |
 |---------------------------|-----------------|-----------------|
-| 1D Column parallel        | Gathered in k   | Fractured in k |
-| 1D row parallel           | Fractured in k  | Partials of full size |
-| 1D column + row parallel  | Gathered in k   | Partials of full size |
-| 2D parallel               | Fractured in k  | Partials over one cluster axis |
+| 1D Column Parallel        | Gathered in K   | Fractured in K |
+| 1D Row Parallel           | Fractured in K  | Partials of full size |
+| 1D Column + Row Parallel  | Gathered in K   | Partials of full size |
+| 2D Parallel               | Fractured in K  | Partials over one cluster axis |
 
 The overall data movement (DM) is then computed using:
 
@@ -1351,19 +1352,19 @@ The overall data movement (DM) is then computed using:
 | AllGather         | DM = (K⋅N⋅DF/D)⋅(D−1)⋅D  | DM = (K⋅N⋅DF)⋅D⋅log2(D)   |
 | ReduceScatter     | DM = (K⋅N⋅DF)⋅(1-(1/D))    | DM = (K⋅N⋅DF) ⋅ (D-1) / D |
 
-where K and N are height and width of the weight tensor, DF is the data format multiplyer (number of bytes per datum) and D is the number of devices along the axis that the CCL operation is performed on. Ring topology is more optimised and results in less overall data movement.
+Where K and N are height and width of the weight tensor, DF is the data format multiplyer (number of bytes per datum) and D is the number of devices along the axis that the CCL operation is performed on. Ring topology is more optimized and results in less overall data movement.
 
-##### 3.3.10 Examplary parallelisation scheme: Llama3
+##### 3.3.10 Examplary parallelization scheme: Llama3
 
 For our [Llama3 family of models](../../models/demos/llama3) we are using the following sharding schemes in our multi-device architectures:
 
 | Matmul            | N300            | T3000           | TG              |
 |-------------------|-----------------|-----------------|-----------------|
-| [_QKV projection_](../../models/demos/llama3/tt/llama_attention.py) | Column parallel | Column parallel | 2D              |
-| [_Dense out_](../../models/demos/llama3/tt/llama_attention.py)  | Row parallel    | Row parallel    | 2D              |
-| [_FF1_](../../models/demos/llama3/tt/llama_mlp.py)             | Column parallel | Column parallel | 2D              |
-| [_FF3_](../../models/demos/llama3/tt/llama_mlp.py)             | Column parallel | Column parallel | 2D              |
-| [_FF2_](../../models/demos/llama3/tt/llama_mlp.py)             | Row parallel    | Row parallel    | 2D              |
+| [_QKV projection_](../../models/demos/llama3/tt/llama_attention.py) | Column Parallel | Column Parallel | 2D              |
+| [_Dense out_](../../models/demos/llama3/tt/llama_attention.py)  | Row Parallel    | Row Parallel    | 2D              |
+| [_FF1_](../../models/demos/llama3/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF3_](../../models/demos/llama3/tt/llama_mlp.py)             | Column Parallel | Column Parallel | 2D              |
+| [_FF2_](../../models/demos/llama3/tt/llama_mlp.py)             | Row Parallel    | Row Parallel    | 2D              |
 
 
 ### 3.4 Continuous Batching
@@ -1371,7 +1372,7 @@ Continuous batching is a serving optimization. To describe continuous batching, 
 
 Without continuous batching, an LLM service waits for `batch_size` requests to come in. The service then prefills each request. Then, the service decodes the batched requests token by token. Once all users in the batch finish generation, the service accepts new requests. This is suboptimal because 1) some requests might end generation early, so 2) some slots in the batch are not doing useful computation, while 3) new requests are waiting.
 
-In contrast, continuous batching allows the service to process new requests as soon as there is a free slot in the batch. The pseudo-code for this algorithm is shown below.
+In contrast, continuous batching allows the service to process new requests as soon as there is a free slot in the batch. The pseudo-code for this algorithm is shown below:
 
 ```python
 while True:
@@ -1388,7 +1389,7 @@ The above image from anyscale (https://www.anyscale.com/blog/continuous-batching
 
 Continuous batching improves TTFT by reducing wait times for incoming users. It also increases total throughput by keeping the decode batch full of useful work.
 
-Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position ids can be different for each user in the batch, to avoid context contamination.
+Continuous batching is an LLM serving optimization but it requires some support in the model. The model has to support single user prefill so that when a slot is open, the model can prefill a new request into a specific slot of the batch. The model also has to support batched decode where position IDs can be different for each user in the batch, to avoid context contamination.
 Implementing continuous batching requires that the serving code track data for each slot of the batch. An example of our continuous batching demo can be found [here](../../models/demos/t3000/llama2_70b/demo/demo_continuous_batching.py). In production deployment, vLLM handles continuous batching for the LLM service.
 
 ### 3.5 vLLM Integration
