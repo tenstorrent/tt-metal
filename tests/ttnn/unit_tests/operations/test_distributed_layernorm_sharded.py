@@ -143,6 +143,7 @@ def run_pre_allgather_layernorm(
     max_atol_ex,
     min_pcc_ex2,
     max_atol_ex2,
+    min_pcc_residual_add=0.9997,
     fuse_residual=False,
 ):
     torch_input_tensor, _, torch_input_chunks, _ = create_input_and_weight_tensors(
@@ -168,6 +169,14 @@ def run_pre_allgather_layernorm(
             tt_input_tensor, core_grid, input_width, is_rmsnorm, tt_residual_input_tensor
         )
         tt_pre_allgather_torch = ttnn.to_torch(tt_pre_allgather_output).to(torch.bfloat16)
+        if fuse_residual:
+            tt_residual_add_output = ttnn.to_torch(tt_input_tensor).to(torch.bfloat16)
+            does_pass, pcc_residual_add = comp_pcc(
+                torch_input_chunks[d], tt_residual_add_output, pcc=min_pcc_residual_add
+            )
+            assert (
+                does_pass
+            ), f"PCC of residual add test failed: {pcc_residual_add} (threshold : {min_pcc_residual_add})"
 
         if is_rmsnorm:
             tt_ex2 = tt_pre_allgather_torch[..., :1]
@@ -196,6 +205,7 @@ def run_pre_allgather_layernorm(
                 tt_ex2, torch_ex2, atol=max_atol_ex2
             ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
+    assert device.num_program_cache_entries() == 2, "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
@@ -208,6 +218,7 @@ def run_pre_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((4, 8),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
+@pytest.mark.parametrize("min_pcc_residual_add", [0.997])
 @pytest.mark.parametrize(
     "min_pcc_ex2",
     [
@@ -230,6 +241,7 @@ def test_pre_allgather_layernorm(
     max_atol_ex,
     min_pcc_ex2,
     max_atol_ex2,
+    min_pcc_residual_add,
     fuse_residual,
 ):
     run_pre_allgather_layernorm(
@@ -247,6 +259,7 @@ def test_pre_allgather_layernorm(
         max_atol_ex,
         min_pcc_ex2,
         max_atol_ex2,
+        min_pcc_residual_add,
         fuse_residual,
     )
 
