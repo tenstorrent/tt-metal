@@ -98,7 +98,7 @@ static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& 
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
-    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
     }
@@ -128,7 +128,7 @@ inline std::vector<T> convert_layout_row_major_to_tile(
 
 template <typename T, template <typename> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(
-    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
