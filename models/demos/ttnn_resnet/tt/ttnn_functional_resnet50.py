@@ -1057,27 +1057,27 @@ class resnet50:
 
         reshard = False
         height_shard = False
-        if is_first_run:
-            reshard = True
+        # if is_first_run:
+        #     reshard = True
 
-        # ## 104
-        # core_range_set = ttnn.CoreRangeSet(
-        #     {
-        #         ttnn.CoreRange(
-        #             ttnn.CoreCoord(0, 0),
-        #             ttnn.CoreCoord(12, 7),
-        #         ),
-        #     }
-        # )
-        # layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
-        # mem_config = ttnn.create_sharded_memory_config_(
-        #     layer4_module1_input_shape,
-        #     core_range_set,
-        #     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        #     ttnn.ShardOrientation.COL_MAJOR,
-        #     tile_layout=True,
-        # )
-        # x = ttnn.to_memory_config(x, mem_config)
+        ## 104
+        core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(12, 7),
+                ),
+            }
+        )
+        layer4_module1_input_shape = ttnn.Shape(x.shape.with_tile_padding())
+        mem_config = ttnn.create_sharded_memory_config_(
+            layer4_module1_input_shape,
+            core_range_set,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardOrientation.COL_MAJOR,
+            tile_layout=True,
+        )
+        x = ttnn.to_memory_config(x, mem_config)
 
         logger.debug(f"==== Running layer 4 module 1")
         x, x_height, x_width = self.layer4_module1(
