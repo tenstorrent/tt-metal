@@ -25,6 +25,10 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
+namespace {
+constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
+}
+
 /* WANDB BLocks this signal.
  Control+C didn't work.
 */
@@ -47,7 +51,7 @@ using DataLoader = ttml::datasets::DataLoader<
 uint32_t sample(std::span<const float> log_softmax) {
     auto probabilities_vector = std::vector<float>(log_softmax.size());
     std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
+        return std::exp(value / 0.8F);
     });
     auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
     return distribution(ttml::autograd::ctx().get_generator());
@@ -329,7 +333,7 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-
+    std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -352,7 +356,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
-
+    config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
 }
@@ -438,19 +442,21 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
-    auto create_dataset_and_tokenizer = [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
-        if (tokenizer_type == "char") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                text, sequence_length);
-        } else if (tokenizer_type == "bpe") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                text, sequence_length);
-        } else {
-            throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-        }
-    };
+    auto create_dataset_and_tokenizer =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    text, sequence_length);
+            } else if (tokenizer_type == "bpe") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                    text, sequence_length, tokenizer_path);
+            } else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
 
-    auto [dataset, tokenizer] = create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_type);
+    auto [dataset, tokenizer] =
+        create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_path, config.tokenizer_type);
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
@@ -634,7 +640,7 @@ int main(int argc, char **argv) {
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (enable_wandb && global_step % 10 == 0) {
+                if (enable_wandb && global_step % 1 == 0) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
