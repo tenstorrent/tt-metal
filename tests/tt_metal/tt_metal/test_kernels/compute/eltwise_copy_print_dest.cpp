@@ -39,17 +39,17 @@ void MAIN {
 
     // TESTING DPRINT FOR CONFIG REIGSTERS
 
-    // MATH(dprint_tensix_alu_config());
-    // UNPACK(dprint_tensix_unpack_tile_descriptor());
-    // UNPACK(dprint_tensix_unpack_config());
+    // dprint_tensix_alu_config();
+    // dprint_tensix_unpack_tile_descriptor();
+    // dprint_tensix_unpack_config();
 
-    // MATH(dprint_tensix_pack_config());
-    // MATH(dprint_tensix_pack_relu_config());
+    // dprint_tensix_pack_config();
+    // dprint_tensix_pack_relu_config();
 
-    // PACK(dprint_tensix_dest_rd_ctrl());
-    // PACK(dprint_tensix_pck_edge_offset());
-    // PACK(dprint_tensix_pack_counters());
-    // PACK(dprint_tensix_pack_strides());
+    // dprint_tensix_dest_rd_ctrl();
+    // dprint_tensix_pck_edge_offset();
+    // dprint_tensix_pack_counters();
+    // dprint_tensix_pack_strides();
 
     release_dst();
 }

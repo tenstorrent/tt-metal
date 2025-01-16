@@ -280,9 +280,9 @@ inline void dprint_tensix_struct_field(uint32_t word, uint32_t mask, uint8_t sha
 
 // NOTE: FUNCTIONS WITHOUT ARCH NAME (GRAYSKULL, WORMHOLE, BLACKHOLE) AND WITHOUT HELPER SUFIX ARE INTENDED TO BE USE
 
-// TODO: MAKE SEPARATE FUNCTION FOR EVERY STRUCT FIELD
-
 // UNPACK TILE DESCRIPTOR
+
+// These function's argument should be return value of read_unpack_tile_descriptor()
 
 inline void dprint_tensix_unpack_tile_descriptor_in_data_format(
     const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
@@ -350,6 +350,8 @@ inline void dprint_tensix_unpack_tile_descriptor_digest_size(
 }
 
 // UNPACK CONFIG
+
+// These function's argument should be return value of read_unpack_config()
 
 inline void dprint_tensix_unpack_config_out_data_format(const ckernel::unpacker::unpack_config_t& config) {
     dprint_data_format(config.out_data_format);
@@ -449,6 +451,8 @@ inline void dprint_tensix_unpack_config_reserved_5(const ckernel::unpacker::unpa
 #endif
 
 // PACK CONFIG
+
+// // These function's argument should be return value of read_pack_config()
 
 inline void dprint_tensix_pack_config_row_ptr_section_size(const ckernel::packer::pack_config_t& config) {
     DPRINT << DEC() << config.row_ptr_section_size << ENDL();
@@ -853,6 +857,8 @@ inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatil
 
 // PCK_EDGE_OFFSET
 
+// These function's argument should be return value of read_pck_edge_offset()
+
 inline void dprint_tensix_pck_edge_offset_mask(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "0x" << HEX() << edge.mask << ENDL();
 }
@@ -911,6 +917,8 @@ inline void dprint_tensix_pck_edge_offset_helper(uint reg_id, const volatile uin
 }
 
 // PACK COUNTERS
+
+// These functions' argument should be return value of read_pack_counters()
 
 inline void dprint_tensix_pack_counters_pack_per_xy_plane(const ckernel::packer::pack_counters_t& counters) {
     DPRINT << DEC() << counters.pack_per_xy_plane << ENDL();
@@ -997,6 +1005,8 @@ inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint t
 
 // ALU CONFIG
 
+// These functions' argument should be return value of read_alu_config()
+
 inline void dprint_tensix_alu_config_alu_rounding_mode_fpu_srnd_en(const ckernel::unpacker::alu_config_t& config) {
     DPRINT << "0x" << HEX() << config.ALU_ROUNDING_MODE_Fpu_srnd_en << ENDL();
 }
@@ -1056,41 +1066,43 @@ inline void dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(const ckerne
     DPRINT << "0x" << HEX() << config.ALU_ACC_CTRL_INT8_math_enabled << ENDL();
 }
 
-// Print content of the register field by field. Issue: No ENDL.
+// Print content of the register field by field.
 inline void dprint_tensix_alu_config() {
-    ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
+    MATH(ckernel::unpacker::alu_config_t config = ckernel::unpacker::read_alu_config();
 
-    DPRINT << "ALU_ROUNDING_MODE_Fpu_srnd_en: ";
-    dprint_tensix_alu_config_alu_rounding_mode_fpu_srnd_en(config);
-    DPRINT << "ALU_ROUNDING_MODE_Gasket_srnd_en: ";
-    dprint_tensix_alu_config_alu_rounding_mode_gasket_srnd_en(config);
-    DPRINT << "ALU_ROUNDING_MODE_Packer_srnd_en: ";
-    dprint_tensix_alu_config_alu_rounding_mode_packer_srnd_en(config);
-    DPRINT << "ALU_ROUNDING_MODE_Padding: ";
-    dprint_tensix_alu_config_alu_rounding_mode_padding(config);
-    DPRINT << "ALU_ROUNDING_MODE_GS_LF: ";
-    dprint_tensix_alu_config_alu_rounding_mode_gs_lf(config);
-    DPRINT << "ALU_ROUNDING_MODE_Bfp8_HF: ";
-    dprint_tensix_alu_config_alu_rounding_mode_bfp8_hf(config);
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcAUnsigned: ";
-    dprint_tensix_alu_config_alu_format_spec_reg0_srcaunsigned(config);
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcBUnsigned: ";
-    dprint_tensix_alu_config_alu_format_spec_reg0_srcbunsigned(config);
-    DPRINT << "ALU_FORMAT_SPEC_REG0_SrcA: ";
-    dprint_tensix_alu_config_alu_format_spec_reg0_srca(config);
-    DPRINT << "ALU_FORMAT_SPEC_REG1_SrcB: ";
-    dprint_tensix_alu_config_alu_format_spec_reg1_srcb(config);
-    DPRINT << "ALU_FORMAT_SPEC_REG2_Dstacc: ";
-    dprint_tensix_alu_config_alu_format_spec_reg2_dstacc(config);
-    DPRINT << "ALU_ACC_CTRL_Fp32_enabled: ";
-    dprint_tensix_alu_config_alu_acc_ctrl_fp32_enabled(config);
-    DPRINT << "ALU_ACC_CTRL_SFPU_Fp32_enabled: ";
-    dprint_tensix_alu_config_alu_acc_ctrl_sfpu_fp32_enabled(config);
-    DPRINT << "ALU_ACC_CTRL_INT8_math_enabled: ";
-    dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(config);
+         DPRINT << "ALU_ROUNDING_MODE_Fpu_srnd_en: ";
+         dprint_tensix_alu_config_alu_rounding_mode_fpu_srnd_en(config);
+         DPRINT << "ALU_ROUNDING_MODE_Gasket_srnd_en: ";
+         dprint_tensix_alu_config_alu_rounding_mode_gasket_srnd_en(config);
+         DPRINT << "ALU_ROUNDING_MODE_Packer_srnd_en: ";
+         dprint_tensix_alu_config_alu_rounding_mode_packer_srnd_en(config);
+         DPRINT << "ALU_ROUNDING_MODE_Padding: ";
+         dprint_tensix_alu_config_alu_rounding_mode_padding(config);
+         DPRINT << "ALU_ROUNDING_MODE_GS_LF: ";
+         dprint_tensix_alu_config_alu_rounding_mode_gs_lf(config);
+         DPRINT << "ALU_ROUNDING_MODE_Bfp8_HF: ";
+         dprint_tensix_alu_config_alu_rounding_mode_bfp8_hf(config);
+         DPRINT << "ALU_FORMAT_SPEC_REG0_SrcAUnsigned: ";
+         dprint_tensix_alu_config_alu_format_spec_reg0_srcaunsigned(config);
+         DPRINT << "ALU_FORMAT_SPEC_REG0_SrcBUnsigned: ";
+         dprint_tensix_alu_config_alu_format_spec_reg0_srcbunsigned(config);
+         DPRINT << "ALU_FORMAT_SPEC_REG0_SrcA: ";
+         dprint_tensix_alu_config_alu_format_spec_reg0_srca(config);
+         DPRINT << "ALU_FORMAT_SPEC_REG1_SrcB: ";
+         dprint_tensix_alu_config_alu_format_spec_reg1_srcb(config);
+         DPRINT << "ALU_FORMAT_SPEC_REG2_Dstacc: ";
+         dprint_tensix_alu_config_alu_format_spec_reg2_dstacc(config);
+         DPRINT << "ALU_ACC_CTRL_Fp32_enabled: ";
+         dprint_tensix_alu_config_alu_acc_ctrl_fp32_enabled(config);
+         DPRINT << "ALU_ACC_CTRL_SFPU_Fp32_enabled: ";
+         dprint_tensix_alu_config_alu_acc_ctrl_sfpu_fp32_enabled(config);
+         DPRINT << "ALU_ACC_CTRL_INT8_math_enabled: ";
+         dprint_tensix_alu_config_alu_acc_ctrl_int8_math_enabled(config);)
 }
 
 // PACK RELU CONFIG
+
+// These functions' argument should be return value of read_relu_config()
 
 inline void dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_src(
     const ckernel::packer::relu_config_t& config) {
@@ -1139,31 +1151,33 @@ inline void dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_ncr
 }
 
 inline void dprint_tensix_pack_relu_config() {
-    ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
+    MATH(ckernel::packer::relu_config_t config = ckernel::packer::read_relu_config();
 
-    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_src: ";
-    dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_src(config);
-    DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_dst: ";
-    dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_dst(config);
-    DPRINT << "STACC_RELU_ApplyRelu: ";
-    dprint_tensix_pack_relu_config_stacc_relu_apply_relu(config);
-    DPRINT << "STACC_RELU_ReluThreshold: ";
-    dprint_tensix_pack_relu_config_stacc_relu_relu_threshold(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_main: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_main(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_trisc: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_trisc(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_ncrisc: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_ncrisc(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_main: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_main(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_trisc: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_trisc(config);
-    DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc: ";
-    dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_ncrisc(config);
+         DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_src: ";
+         dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_src(config);
+         DPRINT << "ALU_ACC_CTRL_Zero_Flag_disabled_dst: ";
+         dprint_tensix_pack_relu_config_alu_acc_ctrl_zero_flag_disabled_dst(config);
+         DPRINT << "STACC_RELU_ApplyRelu: ";
+         dprint_tensix_pack_relu_config_stacc_relu_apply_relu(config);
+         DPRINT << "STACC_RELU_ReluThreshold: ";
+         dprint_tensix_pack_relu_config_stacc_relu_relu_threshold(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_main: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_main(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_trisc: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_trisc(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_ncrisc: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_ncrisc(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_main: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_main(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_trisc: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_trisc(config);
+         DPRINT << "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc: ";
+         dprint_tensix_pack_relu_config_disable_risc_bp_disable_bmp_clear_ncrisc(config);)
 }
 
 // PACK DEST RD CTRL
+
+// These functions' argument should be return value of read_dest_rd_ctrl()
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_32b_data(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
@@ -1190,59 +1204,61 @@ inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(const cker
 
 // Printing dest control bits
 inline void dprint_tensix_dest_rd_ctrl() {
-    ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
+    PACK(ckernel::packer::dest_rd_ctrl_t dest = ckernel::packer::read_dest_rd_ctrl();
 
-    DPRINT << "PCK_DEST_RD_CTRL_Read_32b_data: ";
-    dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_32b_data(dest);
-    DPRINT << "PCK_DEST_RD_CTRL_Read_unsigned: ";
-    dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_unsigned(dest);
-    DPRINT << "PCK_DEST_RD_CTRL_Read_int8: ";
-    dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_int8(dest);
-    DPRINT << "PCK_DEST_RD_CTRL_Round_10b_mant: ";
-    dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_round_10b_mant(dest);
-    DPRINT << "PCK_DEST_RD_CTRL_Reserved: ";
-    dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(dest);
+         DPRINT << "PCK_DEST_RD_CTRL_Read_32b_data: ";
+         dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_32b_data(dest);
+         DPRINT << "PCK_DEST_RD_CTRL_Read_unsigned: ";
+         dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_unsigned(dest);
+         DPRINT << "PCK_DEST_RD_CTRL_Read_int8: ";
+         dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_int8(dest);
+         DPRINT << "PCK_DEST_RD_CTRL_Round_10b_mant: ";
+         dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_round_10b_mant(dest);
+         DPRINT << "PCK_DEST_RD_CTRL_Reserved: ";
+         dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(dest);)
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pck_edge_offset(uint reg_id = 0) {
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    PACK(
+        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
-    if (reg_id) {
-        DPRINT << "REG_ID: " << reg_id << ENDL();
-        dprint_tensix_pck_edge_offset_helper(reg_id, cfg);
-    }
-    // Print all registers
-    else {
-        for (uint i = 1; i < 5; i++) {
-            DPRINT << "REG_ID: " << i << ENDL();
-            dprint_tensix_pck_edge_offset_helper(i, cfg);
-            if (i != 4) {
-                DPRINT << ENDL();
-            }
+        if (reg_id) {
+            DPRINT << "REG_ID: " << reg_id << ENDL();
+            dprint_tensix_pck_edge_offset_helper(reg_id, cfg);
         }
-    }
+        // Print all registers
+        else {
+            for (uint i = 1; i < 5; i++) {
+                DPRINT << "REG_ID: " << i << ENDL();
+                dprint_tensix_pck_edge_offset_helper(i, cfg);
+                if (i != 4) {
+                    DPRINT << ENDL();
+                }
+            }
+        })
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    PACK(
+        // Get pointer to registers for current state ID
+        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
-    if (reg_id) {
-        DPRINT << "REG_ID: " << reg_id << ENDL();
-        dprint_tensix_pack_counters_helper(reg_id, cfg);
-    }
-    // Print all registers
-    else {
-        for (uint i = 1; i < 5; i++) {
-            DPRINT << "REG_ID: " << i << ENDL();
-            dprint_tensix_pack_counters_helper(i, cfg);
-            if (i != 4) {
-                DPRINT << ENDL();
-            }
+        if (reg_id) {
+            DPRINT << "REG_ID: " << reg_id << ENDL();
+            dprint_tensix_pack_counters_helper(reg_id, cfg);
         }
-    }
+        // Print all registers
+        else {
+            for (uint i = 1; i < 5; i++) {
+                DPRINT << "REG_ID: " << i << ENDL();
+                dprint_tensix_pack_counters_helper(i, cfg);
+                if (i != 4) {
+                    DPRINT << ENDL();
+                }
+            }
+        })
 }
 
 #endif  // END OF ELSE
@@ -1273,52 +1289,55 @@ inline void dprint_tensix_pack_config_helper(uint reg_id) {
 }
 
 inline void dprint_tensix_unpack_tile_descriptor() {
+    UNPACK(
 #ifdef ARCH_GRAYSKULL
-    dprint_tensix_unpack_tile_descriptor_grayskull();
+        dprint_tensix_unpack_tile_descriptor_grayskull();
 #else
-    dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+        dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
 #endif
+    )
 }
 
 inline void dprint_tensix_unpack_config() {
+    UNPACK(
 #ifdef ARCH_GRAYSKULL
-    dprint_tensix_unpack_config_grayskull();
+        dprint_tensix_unpack_config_grayskull();
 #else
-    dprint_tensix_unpack_config_wormhole_or_blackhole();
+        dprint_tensix_unpack_config_wormhole_or_blackhole();
 #endif
+    )
 }
 
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
-    if (reg_id) {
-        dprint_tensix_pack_config_helper(reg_id);
-    } else {
-        for (uint i = 1; i < 5; i++) {
-            dprint_tensix_pack_config_helper(i);
-            if (i != 4) {
-                DPRINT << ENDL();
+    MATH(
+        if (reg_id) { dprint_tensix_pack_config_helper(reg_id); } else {
+            for (uint i = 1; i < 5; i++) {
+                dprint_tensix_pack_config_helper(i);
+                if (i != 4) {
+                    DPRINT << ENDL();
+                }
             }
-        }
-    }
+        })
 }
 
 // Choose what register you want printed (1-2). 0 for all.
 inline void dprint_tensix_pack_strides(uint reg_id = 0) {
+    PACK(
+        // Get pointer to registers for current state ID
+        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
-    if (reg_id) {
-        DPRINT << "REG_ID: " << reg_id << ENDL();
-        dprint_tensix_pack_strides_helper(reg_id, cfg);
-    }
-    // Print all registers
-    else {
-        for (uint i = 1; i < 3; i++) {
-            DPRINT << "REG_ID: " << i << ENDL();
-            dprint_tensix_pack_strides_helper(i, cfg);
-            if (i != 2) {
-                DPRINT << ENDL();
-            }
+        if (reg_id) {
+            DPRINT << "REG_ID: " << reg_id << ENDL();
+            dprint_tensix_pack_strides_helper(reg_id, cfg);
         }
-    }
+        // Print all registers
+        else {
+            for (uint i = 1; i < 3; i++) {
+                DPRINT << "REG_ID: " << i << ENDL();
+                dprint_tensix_pack_strides_helper(i, cfg);
+                if (i != 2) {
+                    DPRINT << ENDL();
+                }
+            }
+        })
 }
