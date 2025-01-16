@@ -312,8 +312,12 @@ class ResNet50TestInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(output_tensor, device=self.device, mesh_composer=self.output_mesh_composer)
+        output_tensor = output_tensor.cpu()
+        output_tensor = ttnn.to_torch(output_tensor)  ##, device=self.device, mesh_composer=self.output_mesh_composer)
+        # output_tensor = ttnn.to_torch(output_tensor, device=self.device, mesh_composer=self.output_mesh_composer)
         output_tensor = torch.reshape(output_tensor, (output_tensor.shape[0], 1000))
+
+        breakpoint()
 
         batch_size = output_tensor.shape[0]
 

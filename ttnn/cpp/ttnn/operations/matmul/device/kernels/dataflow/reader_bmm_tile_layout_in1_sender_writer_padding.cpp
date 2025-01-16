@@ -491,6 +491,8 @@ void kernel_main() {
         out_tensor_start_tile_id += MtNt;
     }
 
+    noc_async_write_barrier();
+
 #if OUT_SHARDED
     cb_wait_front(
         cb_id_out0,

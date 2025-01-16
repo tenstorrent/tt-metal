@@ -949,11 +949,47 @@ class resnet50:
 
         reshard = False
         height_shard = False
-        if is_first_run:
-            reshard = True
-            height_shard = False
-        else:
-            x = ttnn.to_memory_config(x, ops_parallel_config["layer3_module1_input"])
+        # if is_first_run:
+        #     reshard = True
+        #     height_shard = False
+        # else:
+        #     x = ttnn.to_memory_config(x, ops_parallel_config["layer3_module1_input"])
+
+        # ## 96
+        # core_range_set = ttnn.CoreRangeSet(
+        #     {
+        #         ttnn.CoreRange(
+        #             ttnn.CoreCoord(0, 0),
+        #             ttnn.CoreCoord(11, 7),
+        #         ),
+        #     }
+        # )
+        ## 104
+        core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(12, 7),
+                ),
+            }
+        )
+        # ## 52
+        # core_range_set = ttnn.CoreRangeSet(
+        #     {
+        #         ttnn.CoreRange(
+        #             ttnn.CoreCoord(0, 0),
+        #             ttnn.CoreCoord(12, 3),
+        #         ),
+        #     }
+        # )
+        mem_config = ttnn.create_sharded_memory_config_(
+            layer3_module1_input_shape,
+            core_range_set,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardOrientation.COL_MAJOR,
+            tile_layout=True,
+        )
+        x = ttnn.to_memory_config(x, mem_config)
 
         logger.debug(f"==== Running layer 3 module 1")
         x, x_height, x_width = self.layer3_module1(
@@ -1053,7 +1089,7 @@ class resnet50:
         )
 
         xshape = x.shape
-        x = ttnn.slice(x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1))
+        # x = ttnn.slice(x, starts=(0, 0, 0, 0), ends=(xshape[0], xshape[1], xshape[2], xshape[3]), steps=(1, 1, 1, 1))
 
         reshard = False
         height_shard = False
@@ -1061,11 +1097,12 @@ class resnet50:
         #     reshard = True
 
         ## 104
+        grid_size = (13, 8)
         core_range_set = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(12, 7),
+                    ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
                 ),
             }
         )
@@ -1220,21 +1257,21 @@ class resnet50:
         )
 
         x = self.fc(x)
-        desired_shape = list(x.shape)
-        desired_shape[-1] = 1000
-        x = ttnn.untilize_with_unpadding(
-            x,
-            output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
-            memory_config=self.final_output_mem_config,
-        )
-        x = ttnn.reshape(
-            x,
-            (
-                self.batch_size,
-                x.shape[1],
-                x.shape[2] // self.batch_size,
-                x.shape[3],
-            ),
-        )
+        # desired_shape = list(x.shape)
+        # desired_shape[-1] = 1000
+        # x = ttnn.untilize_with_unpadding(
+        #     x,
+        #     output_tensor_end=(desired_shape[0] - 1, desired_shape[1] - 1, desired_shape[2] - 1, desired_shape[3] - 1),
+        #     memory_config=self.final_output_mem_config,
+        # )
+        # x = ttnn.reshape(
+        #     x,
+        #     (
+        #         self.batch_size,
+        #         x.shape[1],
+        #         x.shape[2] // self.batch_size,
+        #         x.shape[3],
+        #     ),
+        # )
 
         return x
