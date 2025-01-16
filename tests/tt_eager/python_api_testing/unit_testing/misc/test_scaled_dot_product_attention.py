@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -118,7 +118,6 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
         run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
 
 
-# @pytest.mark.skip(reason="ND PCC issues")
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
@@ -222,7 +221,7 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
         sk = sq
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(1, 1),  # device.compute_with_storage_grid_size(),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -274,11 +273,9 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
     )
-    # logger.debug(f"tt_back: {tt_back.shape}")
     tt_back = ttnn.to_torch(tt_back)
     # Slice out any tile-padding
     tt_back = tt_back[:, :, :sq, :]
-    # breakpoint()
 
     if nkv > 1 and nkv != nh:
         assert nh % nkv == 0

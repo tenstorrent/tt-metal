@@ -1,7 +1,6 @@
 #include <cstdint>
 #include <algorithm>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -48,47 +47,6 @@ public:
     }
 };
 
-// template <bool is_dram = true>
-// void read_chunk(
-//     const InterleavedAddrGenFast<is_dram>& reader,
-//     const uint32_t cb_id,
-//     uint32_t start_tile_id,
-//     const uint32_t rows,
-//     const uint32_t cols,
-//     const uint32_t tile_bytes,
-//     const uint32_t barrier_threshold,
-//     const bool transpose = false) {
-//     /*
-//     Method always reads tiles from memory in row-major order.
-//     It assumes that the block of rows x cols in stored in contiguous tile order.
-//     That means, it won't work if the chunk to read is a slice of the last dimension.
-//     */
-//     // Read Q chunk
-//     const uint32_t num_tiles = rows * cols;
-//     cb_reserve_back(cb_id, num_tiles);
-//     const uint32_t base_write_ptr = get_write_ptr(cb_id);
-//     uint32_t outer_ptr_stride = transpose ? tile_bytes : cols * tile_bytes;
-//     uint32_t inner_ptr_stride = transpose ? tile_bytes * rows : tile_bytes;
-
-//     uint32_t barrier_count = 0;
-//     for (uint32_t row = 0; row < rows; ++row) {
-//         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-//         for (uint32_t col = 0; col < cols; ++col) {
-//             noc_async_read_tile(start_tile_id, reader, write_ptr);
-//             start_tile_id += 1;
-//             write_ptr += inner_ptr_stride;
-
-//             if (++barrier_count == barrier_threshold) {
-//                 noc_async_read_barrier();
-//                 barrier_count = 0;
-//             }
-//         }
-//     }
-//     noc_async_read_barrier();
-
-//     cb_push_back(cb_id, num_tiles);
-// }
-
 template <bool is_dram = true>
 void read_chunk_with_padding(
     const InterleavedAddrGenFast<is_dram>& reader,
@@ -134,48 +92,6 @@ void read_chunk_with_padding(
 
     cb_push_back(cb_id, num_tiles);
 }
-
-// template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, bool is_dram = true>
-// void read_paged_chunk(
-//     const InterleavedAddrGenFast<is_dram>& reader,
-//     const uint32_t cb_id,
-//     const uint32_t cur_head,
-//     const uint32_t chunk_start_row,
-//     const uint32_t rows,
-//     const uint32_t cols,
-//     const uint32_t tile_bytes,
-//     const uint32_t barrier_threshold,
-//     const volatile tt_l1_ptr uint32_t* const page_table_ptr,
-//     const bool transpose = false) {
-//     const uint32_t num_tiles = rows * cols;
-//     cb_reserve_back(cb_id, num_tiles);
-//     const uint32_t base_write_ptr = get_write_ptr(cb_id);
-
-//     // Stride calculation based on transpose flag
-//     uint32_t outer_ptr_stride = transpose ? tile_bytes : cols * tile_bytes;
-//     uint32_t inner_ptr_stride = transpose ? tile_bytes * rows : tile_bytes;
-
-//     uint32_t barrier_count = 0;
-//     for (uint32_t row = 0; row < rows; ++row) {
-//         uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
-//         uint32_t virtual_row_num = chunk_start_row + row;
-//         uint32_t physical_tile_id = virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(
-//             virtual_row_num, cur_head, page_table_ptr);
-
-//         for (uint32_t col = 0; col < cols; ++col) {
-//             noc_async_read_tile(physical_tile_id, reader, write_ptr);
-//             physical_tile_id += 1;
-//             write_ptr += inner_ptr_stride;
-
-//             if (++barrier_count == barrier_threshold) {
-//                 noc_async_read_barrier();
-//                 barrier_count = 0;
-//             }
-//         }
-//     }
-//     noc_async_read_barrier();
-//     cb_push_back(cb_id, num_tiles);
-// }
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, bool is_dram = true>
 void read_paged_chunk_with_padding(
@@ -292,17 +208,6 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
     }
 }
 
-// inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     DPRINT << "======" << ENDL();
-//     for (uint16_t r = 0; r < 32; ++r) {
-//         SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-//         DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
-//     }
-//     DPRINT << "++++++" << ENDL();
-// }
-
-// TODO: Print tiles and other info when creating vertical tile.
-
 template <uint32_t tile_bytes>
 void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_tile, uint32_t partial_val) {
     /*
@@ -354,8 +259,6 @@ void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_
             }
         }
     }
-    // noc_async_read_barrier(); // DEBUG: TODO: Remove this when not printing tiles
-    // print_full_tile(cb_id, tile_id, true);
 }
 
 template <uint32_t cb_mask_in>
@@ -372,7 +275,6 @@ void generate_causal_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t q_c
     int inf_tile_idx = -1;
     int diag_tile_idx = -1;
 
-    // TODO: cache indices of prepared tiles
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
         for (uint32_t k_tile = 0; k_tile < Sk_chunk_t; ++k_tile) {
             uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;
@@ -423,10 +325,7 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     const uint32_t unpadded_Sk_in_chunk = unpadded_Sk % (Sk_chunk_t * 32);  // TODO: constant for tile width
     uint32_t unpad_tile_col_in_chunk = unpadded_Sk_in_chunk / 32;
     uint32_t unpad_col_in_tile = unpadded_Sk_in_chunk % 32;
-    // DPRINT << "unpadded_Sk " << unpadded_Sk << "\nunpadded_Sk_in_chunk " << unpadded_Sk_in_chunk <<
-    // "\nunpad_tile_col_in_chunk " << unpad_tile_col_in_chunk << "\nunpad_col_in_tile " << unpad_col_in_tile << ENDL();
 
-    // TODO: cache indices of prepared tiles
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
         for (uint32_t k_tile = 0; k_tile < Sk_chunk_t; ++k_tile) {
             uint32_t in_mask_tile_id = q_tile * Sk_chunk_t + k_tile;

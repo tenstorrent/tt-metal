@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 
 #include "compute_kernel_api.h"
 #include "compute_common.hpp"
-#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -147,7 +146,6 @@ void MAIN {
                     // K-range = [k_low, k_high)
                     // does_overlap = not (q_low >= k_high or k_low >= q_high)
                     // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
-                    // UNPACK(DPRINT << "before mask k_chunk " << k_chunk << ENDL());
                     if constexpr (is_causal) {
                         if (!(q_low_idx >= k_high_idx)) {
                             /* QK += MASK */
@@ -166,7 +164,6 @@ void MAIN {
                             add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
                         }
                     }
-                    // UNPACK(DPRINT << "after mask k_chunk " << k_chunk << ENDL());
 
                     reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                     reduce_c<

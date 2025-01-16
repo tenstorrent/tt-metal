@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -124,7 +124,6 @@ void kernel_main() {
                 for (uint32_t row = 0; row < out_row_tile_count; ++row) {
                     for (uint32_t col = 0; col < DHt; ++col) {
                         noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
-                        DPRINT << "WRITER: " << out_tile_id << ENDL();
                         ++out_tile_id;
                         l1_read_addr += tile_bytes;
 

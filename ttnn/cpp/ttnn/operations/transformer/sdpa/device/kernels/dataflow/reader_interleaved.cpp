@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -95,7 +95,6 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        DPRINT << "b " << nb << ENDL();
         if constexpr (is_chunked) {
             // Chunked means that we have paged attention
             const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
@@ -111,7 +110,6 @@ void kernel_main() {
 
         const uint32_t mask_batch_offset = nb * Sqt * Skt;
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            DPRINT << "\tnq " << nq << ENDL();
             for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
                 /*
                 Read a chunk of Q. BALANCED_Q_PARALLEL evenly distributes Q chunks
@@ -140,11 +138,6 @@ void kernel_main() {
                 const uint32_t q_row_end_tile = std::min(q_row_start_tile + Sq_chunk_t, valid_Sqt);
                 const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
                 const uint32_t q_tile_id = q_tile_shape.id_of(nb, nq, q_row_start_tile, 0);
-                // DPRINT << "\t\tread q chunk " << q_chunk << ENDL();
-                // DPRINT << "\t\tq_row_start_tile " << q_row_start_tile << ENDL();
-                // DPRINT << "\t\tq_row_end_tile " << q_row_end_tile << ENDL();
-                // DPRINT << "\t\tq_row_tile_count " << q_row_tile_count << ENDL();
-                // DPRINT << "\t\tq_tile_id " << q_tile_id << ENDL();
 
                 read_chunk_with_padding(
                     q_reader,
@@ -199,11 +192,6 @@ void kernel_main() {
                             true  // transpose=true for K reads
                         );
                     } else {
-                        // DPRINT << "\t\t\tread k chunk " << k_chunk << ENDL();
-                        // DPRINT << "\t\t\tk_row_start_tile " << k_row_start_tile << ENDL();
-                        // DPRINT << "\t\t\tk_row_end_tile " << k_row_end_tile << ENDL();
-                        // DPRINT << "\t\t\tk_row_tile_count " << k_row_tile_count << ENDL();
-                        // DPRINT << "\t\t\tk_start_tile_id " << k_start_tile_id << ENDL();
                         read_chunk_with_padding(
                             k_reader,
                             cb_k_in,
@@ -263,8 +251,7 @@ void kernel_main() {
                             v_tile_bytes,
                             barrier_threshold,
                             page_table_ptr,
-                            false  // transpose=false for V reads
-                        );
+                            false);
                     } else {
                         read_chunk_with_padding(
                             v_reader,
