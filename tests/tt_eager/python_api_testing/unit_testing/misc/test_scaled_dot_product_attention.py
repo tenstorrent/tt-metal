@@ -88,21 +88,13 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     assert out_pass
 
 
-# @pytest.mark.skip(reason="ND PCC issues")
-# @pytest.mark.skip(reason="Skipping since it's not supported")
 @skip_for_blackhole("Mismatching on BH, see #12349")
-# @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 512], ids=["q128", "q512"])
 @pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
 @pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
-# @pytest.mark.parametrize("b", [1, 2, 4], ids=["b1", "b2", "b4"])
-# @pytest.mark.parametrize("nh", [1, 2, 8], ids=["nh1", "nh2", "nh8"])
-# @pytest.mark.parametrize("nkv", [1, 2, 8], ids=["nkv1", "nkv2", "nkv8"])
-# @pytest.mark.parametrize("s", [1, 13, 65, 160, 2011, 2049], ids=["s1", "s13", "s65", "s160", "s2011", "s2049"])
-# @pytest.mark.parametrize("d", [128, 96, 32], ids=["d128", "d96", "d32"])
 @pytest.mark.parametrize("b", [1, 32], ids=["b1", "b32"])
 @pytest.mark.parametrize("nh", [1, 8], ids=["nh1", "nh8"])
 @pytest.mark.parametrize("nkv", [1, 8], ids=["nkv1", "nkv8"])
@@ -128,7 +120,7 @@ def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dt
 
 # @pytest.mark.skip(reason="ND PCC issues")
 @skip_for_blackhole("Mismatching on BH, see #12349")
-# @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [128, 256], ids=["q128", "q256"])
