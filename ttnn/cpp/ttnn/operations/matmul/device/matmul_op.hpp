@@ -13,7 +13,6 @@
 #include "ttnn/types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/cpp/ttnn/global_circular_buffer.hpp"
 #include "ttnn/operations/global_cb_utils.hpp"
 
 namespace ttnn {

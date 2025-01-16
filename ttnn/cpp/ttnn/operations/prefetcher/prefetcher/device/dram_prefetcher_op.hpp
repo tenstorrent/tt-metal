@@ -9,7 +9,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/global_circular_buffer.hpp"
 #include "ttnn/operations/global_cb_utils.hpp"
 
 #include <tt-metalium/global_circular_buffer_impl.hpp>
