@@ -116,7 +116,7 @@ def run(
 
     output_tensor = ttnn.to_torch(result)
     if reduction_0 != "none":
-        output_tensor = output_tensor[0, 0, 0, 0]
+        output_tensor = output_tensor.squeeze()
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
