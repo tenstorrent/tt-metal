@@ -828,7 +828,7 @@ void HWCommandQueue::set_expected_num_workers_completed_for_sub_device(uint32_t 
     this->expected_num_workers_completed[sub_device_index] = num_workers;
 }
 
-void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
+void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
@@ -890,6 +890,20 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
 
     if (clear_count) {
         std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
+    }
+}
+
+void HWCommandQueue::reset_worker_state(
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    TT_FATAL(!this->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
+    // TODO: This could be further optimized by combining all of these into a single prefetch entry
+    // Currently each one will be pushed into its own prefetch entry
+    this->reset_worker_dispatch_state_on_device(reset_launch_msg_state);
+    this->set_num_worker_sems_on_dispatch(num_sub_devices);
+    this->set_go_signal_noc_data_on_dispatch(go_signal_noc_data);
+    this->reset_config_buffer_mgr(num_sub_devices);
+    if (reset_launch_msg_state) {
+        this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
     }
 }
 
@@ -1413,7 +1427,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
-    auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(sub_device_id);
+    auto& worker_launch_message_buffer_state =
+        this->manager.get_worker_launch_message_buffer_state()[sub_device_id.to_index()];
     auto command = EnqueueProgramCommand(
         this->id,
         this->device,
@@ -1523,7 +1538,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
         // state for those workers.
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(id);
+        auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state()[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             worker_launch_message_buffer_state.set_mcast_wptr(desc.num_traced_programs_needing_go_signal_multicast);
         }
@@ -1828,50 +1843,33 @@ volatile bool HWCommandQueue::is_dprint_server_hung() { return dprint_server_han
 volatile bool HWCommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
 
 void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx) {
-    uint32_t num_sub_devices = this->device->num_sub_devices();
-    // Issue event as a barrier and a counter reset
-    uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
-    if (this->device->distributed_dispatcher()) {
-        // wait on dispatch_s before issuing counter reset
-        cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST);
-    }
-    cmd_sequence_sizeB *= num_sub_devices;
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-    uint32_t dispatch_message_base_addr = dispatch_constants::get(
-        dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
-    // Currently Trace will track all sub_devices
-    // Potentially support tracking only used sub_devices in the future
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
-        if (this->device->distributed_dispatcher()) {
-            // wait on dispatch_s before issuing counter reset
-            command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[i], true, false, true, 1);
-        }
-        // dispatch_d waits for latest non-zero counter from dispatch_s and then clears its local counter
-        command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[i], true);
-    }
-
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id);
-    this->manager.fetch_queue_reserve_back(this->id);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id);
+    auto num_sub_devices = this->device->num_sub_devices();
+    // Record the original value of expected_num_workers_completed, and reset it to 0.
+    std::copy(
+        this->expected_num_workers_completed.begin(),
+        this->expected_num_workers_completed.begin() + num_sub_devices,
+        this->expected_num_workers_completed_reset.begin());
     std::fill(this->expected_num_workers_completed.begin(), this->expected_num_workers_completed.begin() + num_sub_devices, 0);
     // Record commands using bypass mode
     this->tid = tid;
     this->trace_ctx = std::move(ctx);
-    // Record original value of launch msg wptr
+    // Record original value of launch msg buffer
+    auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state();
+    std::copy(
+        worker_launch_message_buffer_state.begin(),
+        worker_launch_message_buffer_state.begin() + num_sub_devices,
+        this->worker_launch_message_buffer_state_reset.begin());
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(SubDeviceId{i});
-        this->multicast_cores_launch_message_wptr_reset[i] = worker_launch_message_buffer_state.get_mcast_wptr();
-        this->unicast_cores_launch_message_wptr_reset[i] = worker_launch_message_buffer_state.get_unicast_wptr();
         // Set launch msg wptr to 0. Every time trace runs on device, it will ensure that the workers
         // reset their rptr to be in sync with device.
-        worker_launch_message_buffer_state.reset();
+        worker_launch_message_buffer_state[i].reset();
     }
     this->manager.set_bypass_mode(true, true);  // start
+    // Record original value of config buffer manager
+    std::copy(
+        this->config_buffer_mgr.begin(),
+        this->config_buffer_mgr.begin() + num_sub_devices,
+        this->config_buffer_mgr_reset.begin());
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         // Sync values in the trace need to match up with the counter starting at 0 again.
         this->config_buffer_mgr[i].mark_completely_full(this->expected_num_workers_completed[i]);
@@ -1887,24 +1885,28 @@ void HWCommandQueue::record_end() {
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
-    // Currently Trace will track all sub_devices
-    uint32_t num_sub_devices = this->device->num_sub_devices();
-    // Reset the launch msg wptrs to their original value, so device can run programs after a trace
-    // was captured. This is needed since trace capture modifies the wptr state on host, even though device
-    // doesn't run any programs.
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(SubDeviceId{i});
-        worker_launch_message_buffer_state.set_mcast_wptr(this->multicast_cores_launch_message_wptr_reset[i]);
-        worker_launch_message_buffer_state.set_unicast_wptr(this->unicast_cores_launch_message_wptr_reset[i]);
-    }
+    // Reset the expected workers, launch msg buffer state, and config buffer mgr to their original value,
+    // so device can run programs after a trace was captured. This is needed since trace capture modifies the state on
+    // host, even though device doesn't run any programs.
+    auto num_sub_devices = this->device->num_sub_devices();
+    std::copy(
+        this->expected_num_workers_completed_reset.begin(),
+        this->expected_num_workers_completed_reset.begin() + num_sub_devices,
+        this->expected_num_workers_completed.begin());
+    std::copy(
+        this->worker_launch_message_buffer_state_reset.begin(),
+        this->worker_launch_message_buffer_state_reset.begin() + num_sub_devices,
+        this->manager.get_worker_launch_message_buffer_state().begin());
+    std::copy(
+        this->config_buffer_mgr_reset.begin(),
+        this->config_buffer_mgr_reset.begin() + num_sub_devices,
+        this->config_buffer_mgr.begin());
+
     // Copy the desc keys into a separate vector. When enqueuing traces, we sometimes need to pass sub-device ids separately
     this->trace_ctx->sub_device_ids.reserve(this->trace_ctx->descriptors.size());
     for (const auto& [id, _]: this->trace_ctx->descriptors) {
         auto index = id.to_index();
         this->trace_ctx->sub_device_ids.push_back(id);
-        // config_buffer_mgr reflects the state inside the trace, not on the current device, so reset it.
-        // TODO(jbauman): Use a temporary WorkingBufferSetMgr when recording a trace.
-        this->get_config_buffer_mgr(index).mark_completely_full(this->expected_num_workers_completed[index]);
     }
     this->tid = std::nullopt;
     this->trace_ctx = nullptr;
