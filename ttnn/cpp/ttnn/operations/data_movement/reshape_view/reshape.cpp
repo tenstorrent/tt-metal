@@ -23,7 +23,7 @@
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::data_movement {
 

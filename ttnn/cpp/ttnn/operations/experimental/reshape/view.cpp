@@ -2,35 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "view.hpp"
+
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
-#include "view.hpp"
-#include "tt_metal/common/constants.hpp"
-#include <functional>
+#include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/core/core.hpp"
-
-#include "ttnn/tensor/tensor.hpp"
-
-#include <cstdint>
-#include <memory>
-
-#include "common/bfloat16.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/core.hpp"
 
 namespace ttnn::operations::experimental::reshape {
 
