@@ -79,6 +79,14 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
+#if defined(COMPILE_FOR_BRISC)
+uint32_t core_flat_id;
+uint32_t profiler_core_count_per_dram;
+uint32_t profiler_dram_profiler_address;
+uint32_t bank;
+uint32_t dram_offset_base;
+#endif
+
 enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
 
 __attribute__((noinline)) void init_profiler(
@@ -114,6 +122,18 @@ __attribute__((noinline)) void init_profiler(
         profiler_data_buffer[riscID][ID_LL] =
             (runCounter & 0xFFFF) | (profiler_data_buffer[riscID][ID_LL] & 0xFFFF0000);
     }
+#endif
+#if defined(COMPILE_FOR_BRISC)
+    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
+
+    core_flat_id = profiler_control_buffer[FLAT_ID];
+    profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+    profiler_dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
+    profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
+    bank = core_flat_id / profiler_core_count_per_dram;
+    dram_offset_base =
+        (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+        (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
 #endif
 }
 
@@ -247,51 +267,43 @@ __attribute__((noinline)) void finish_profiler() {
 #endif
 }
 
+template <bool RECORD_ZONE = false>
 __attribute__((noinline)) void quick_push() {
-#if defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES) && \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
+#if defined(COMPILE_FOR_BRISC)
 
-    SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
-    mark_time_at_index_inlined(wIndex, hash);
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    if constexpr (RECORD_ZONE) {
+        SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
+        mark_time_at_index_inlined(wIndex, hash);
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
-    while (!profiler_control_buffer[DRAM_PROFILER_ADDRESS]);
-    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
-    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+        mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
+        wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    }
 
-    profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
-
-    uint32_t dram_offset =
-        (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-        profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
-
-    const InterleavedAddrGen<true> s = {
-        .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+    InterleavedAddrGen<true> s = {
+        .bank_base_address = profiler_dram_profiler_address,
         .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram};
 
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+    uint32_t dram_offset =
+        dram_offset_base + profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
-    mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
-    wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(bank, dram_offset);
 
-    for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
-        mark_padding();
-    }
-    uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
+    // for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
+    // mark_padding();
+    //}
+    // uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID];
 
-    if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        noc_async_write(
-            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
-            dram_bank_dst_noc_addr,
-            wIndex * sizeof(uint32_t));
+    // if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+    noc_async_write(
+        reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]), dram_bank_dst_noc_addr, wIndex * sizeof(uint32_t));
 
-        noc_async_write_barrier();
-        profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
+    // noc_async_write_barrier();
+    profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] += wIndex;
 
-    } else {
-        mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
-    }
+    //} else {
+    // mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
+    //}
 
     wIndex = CUSTOM_MARKERS;
 
@@ -326,7 +338,6 @@ struct profileScope {
     }
 };
 
-uint32_t loop_count = 0;
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeGuaranteed {
     static constexpr uint32_t start_index = (2 * index * PROFILER_L1_MARKER_UINT32_SIZE) + GUARANTEED_MARKER_1_H;
@@ -335,27 +346,19 @@ struct profileScopeGuaranteed {
     static_assert(start_index < CUSTOM_MARKERS);
     static_assert(end_index < CUSTOM_MARKERS);
 #if defined(COMPILE_FOR_BRISC)
-    static constexpr uint32_t loop_count_limit = 100;
     inline __attribute__((always_inline)) profileScopeGuaranteed() {
-        if (loop_count == 0) {
-            init_profiler();
-            SrcLocNameToHash("PROFILER-INIT-MARK");
-            mark_time_at_index_inlined(start_index, hash);
-            mark_time_at_index_inlined(end_index, get_const_id(hash, ZONE_END));
-        }
         mark_time_at_index_inlined(wIndex, timer_id);
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        loop_count++;
     }
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        if (loop_count >= loop_count_limit) {
+        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
             SrcLocNameToHash("PROFILER-NOC-PUSH-MARK");
             mark_time_at_index_inlined(start_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, hash);
             mark_time_at_index_inlined(end_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, get_const_id(hash, ZONE_END));
-            loop_count = 0;
-            finish_profiler();
+            quick_push();
+            wIndex = CUSTOM_MARKERS;
         }
     }
 #else

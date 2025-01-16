@@ -13,7 +13,8 @@ bool RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
 
     CoreCoord compute_with_storage_size = device->compute_with_storage_grid_size();
     CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
+    CoreCoord end_core = {0, 0};
+    // CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -32,23 +33,25 @@ bool RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
-    tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
-        all_cores,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = kernel_defines});
+    // tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
+    // program,
+    //"tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count.cpp",
+    // all_cores,
+    // tt_metal::DataMovementConfig{
+    //.processor = tt_metal::DataMovementProcessor::RISCV_1,
+    //.noc = tt_metal::NOC::RISCV_1_default,
+    //.defines = kernel_defines});
 
-    std::vector<uint32_t> trisc_kernel_args = {};
-    tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
-        program,
-        "tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
-        all_cores,
-        tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
+    // std::vector<uint32_t> trisc_kernel_args = {};
+    // tt_metal::KernelHandle trisc_kernel = tt_metal::CreateKernel(
+    // program,
+    //"tt_metal/programming_examples/profiler/test_custom_cycle_count/kernels/custom_cycle_count_compute.cpp",
+    // all_cores,
+    // tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
-    EnqueueProgram(device->command_queue(), program, false);
+    for (int i = 0; i < 24; i++) {
+        EnqueueProgram(device->command_queue(), program, false);
+    }
     tt_metal::DumpDeviceProfileResults(device, program);
 
     return pass;
@@ -66,7 +69,6 @@ int main(int argc, char** argv) {
 
         int loop_count = 2000;
         pass &= RunCustomCycle(device, loop_count);
-
         pass &= tt_metal::CloseDevice(device);
 
     } catch (const std::exception& e) {

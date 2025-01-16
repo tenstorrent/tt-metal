@@ -41,7 +41,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
+        // DeviceZoneScopedMainChildN("BRISC-KERNEL");
         kernel_main();
     }
 #endif

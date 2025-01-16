@@ -36,7 +36,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
     if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
         CoreType = HalProgrammableCoreType::TENSIX;
-        riscCount = 5;
+        riscCount = 1;
     } else {
         auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
         bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
@@ -63,9 +63,9 @@ void DeviceProfiler::readRiscProfilerResults(
         return;
     }
 
-    int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
+        std::cout << bufferEndIndex << std::endl;
         uint32_t riscType;
         if (CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = riscEndIndex;
