@@ -324,6 +324,10 @@ def create_json_with_github_benchmark_environment(github_partial_benchmark_json_
 
     json_data = complete_benchmark_run.model_dump_json()
 
+    # Save complete run json
     output_path = pathlib.Path(str(github_partial_benchmark_json_filename).replace("partial_run_", "complete_run_"))
     with open(output_path, "w") as f:
         f.write(json_data)
+
+    # Delete partial run json
+    os.remove(github_partial_benchmark_json_filename)
