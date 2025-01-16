@@ -19,4 +19,4 @@ jobs:
   nightly-debug:
     uses: ./.github/workflows/all-post-commit-tests.yaml
     with:
-      build-type: Debug
+      build-type: RelWithDebInfo
