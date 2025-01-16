@@ -77,7 +77,7 @@ inline void reduce_h(
     uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id, in_cb_id, in_scalar_cb_id);
     uint32_t base_tile_id = 0;
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles
