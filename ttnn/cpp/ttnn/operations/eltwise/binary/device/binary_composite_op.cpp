@@ -372,6 +372,9 @@ Tensor ExecuteBinaryRemainder::invoke(
     auto arch = input_a.device()->arch();
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole or Blackhole");
     DataType input_dtype = input_a.get_dtype();
+
+    float t_nan = std::nanf("");
+
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
         Tensor result = ttnn::subtract(
@@ -399,7 +402,9 @@ Tensor ExecuteBinaryRemainder::invoke(
     result = ttnn::where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
     result = ttnn::where(ttnn::ltz(b), ttnn::add(result, b), result);
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    return typecast(result, input_dtype);
+    result = typecast(result, input_dtype);
+    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result));
+    return result;
 }
 
 Tensor ExecuteBinaryRemainder::invoke(
