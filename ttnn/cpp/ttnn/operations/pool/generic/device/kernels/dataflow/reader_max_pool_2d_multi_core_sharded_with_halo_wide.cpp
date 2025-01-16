@@ -51,9 +51,9 @@ void kernel_main() {
     // value of 1 in bf16 in a uin32_t
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
 
     // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
 

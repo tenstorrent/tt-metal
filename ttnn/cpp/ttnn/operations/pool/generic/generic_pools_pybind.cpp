@@ -120,6 +120,64 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("queue_id") = 0});
 }
 
-void py_module(py::module& module) { bind_max_pool2d_operation(module); }
+void bind_avg_pool2d_operation(py::module& module) {
+    bind_registered_operation(
+        module,
+        ttnn::avg_pool2d,
+        R"doc(
+        Applies a max pool convolution to the input tensor. The resulting output Tensor will contain the maximum
+        value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
+        should be on the device. Height, width and block sharding schemes are supported.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const decltype(ttnn::avg_pool2d)& self,
+               const ttnn::Tensor& input_tensor,
+               uint32_t batch_size,
+               uint32_t input_h,
+               uint32_t input_w,
+               uint32_t channels,
+               std::array<uint32_t, 2> kernel_size,
+               std::array<uint32_t, 2> stride,
+               std::array<uint32_t, 2> padding,
+               std::array<uint32_t, 2> dilation,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               bool ceil_mode,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    batch_size,
+                    input_h,
+                    input_w,
+                    channels,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    memory_config,
+                    applied_shard_scheme,
+                    ceil_mode);
+            },
+            py::arg("input_tensor"),
+            py::arg("batch_size"),
+            py::arg("input_h"),
+            py::arg("input_w"),
+            py::arg("channels"),
+            py::arg("kernel_size"),
+            py::arg("stride"),
+            py::arg("padding"),
+            py::arg("dilation"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("applied_shard_scheme") = std::nullopt,
+            py::arg("ceil_mode") = false,
+            py::arg("queue_id") = 0});
+}
+
+void py_module(py::module& module) {
+    bind_max_pool2d_operation(module);
+    bind_avg_pool2d_operation(module);
+}
 
 }  // namespace ttnn::operations::pool
