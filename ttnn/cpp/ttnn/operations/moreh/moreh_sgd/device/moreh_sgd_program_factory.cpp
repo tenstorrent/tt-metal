@@ -31,7 +31,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    const auto& shape = param_in.get_padded_shape();
+    const auto& shape = param_in.get_logical_shape();
 
     auto H = shape[-2];
     auto W = shape[-1];

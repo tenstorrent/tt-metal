@@ -23,7 +23,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto& shape = input.get_padded_shape();
+    const auto& shape = input.get_logical_shape();
 
     auto device = input.device();
     auto kernel_config_val =

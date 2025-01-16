@@ -23,14 +23,14 @@ void MorehGetItemOperation::validate_inputs(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
 
     // validate index tensors
-    const uint32_t& index_size = index_tensors[0].get_logical_shape()[-1];
+    uint32_t index_size = index_tensors[0].get_logical_shape()[-1];
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto& index_tensor = index_tensors[i];
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.get_dtype() == DataType::INT32, "Index tensor must be of type INT32!");
 
-        const auto& index_shape = index_tensor.get_padded_shape();
+        const auto& index_shape = index_tensor.get_logical_shape();
         auto index_layout = index_tensor.get_layout();
         if (index_layout == Layout::ROW_MAJOR) {
             TT_FATAL(index_shape.rank() == 1, "Index tensor must be 1D for ROW_MAJOR layout!");
@@ -95,7 +95,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
     const auto& input_tensor = tensor_args.input;
     const auto index_dims = operation_attributes.index_dims;
     const auto& index_tensors = tensor_args.index_tensors;
-    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape = input_tensor.get_logical_shape();
     auto output_shape = input_shape;
     auto layout = input_tensor.get_layout();
 
@@ -115,7 +115,8 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         }
 
         auto index = index_tensors[0];
-        uint32_t index_size = index.get_padded_shape()[-1];
+        // Why are they both logical shape?
+        uint32_t index_size = index.get_logical_shape()[-1];
         uint32_t index_size_without_padding = index.get_logical_shape()[-1];
 
         uint32_t last_dim = index_dims.back() + dim_offset;
@@ -153,7 +154,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         // output: (10, 100, 40)
         SmallVector<uint32_t> output_size_vec;
 
-        const auto& input_shape = input_tensor.get_padded_shape();
+        const auto& input_shape = input_tensor.get_logical_shape();
         uint32_t input_rank = input_shape.rank();
 
         auto index = index_tensors[0];

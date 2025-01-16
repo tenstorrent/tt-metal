@@ -29,7 +29,7 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto& target_shape = target.get_padded_shape();
     auto N = target_shape[1];
 
-    const auto& target_shape_without_padding = target.logical_shape();
+    const auto& target_shape_without_padding = target.get_logical_shape();
     const auto origin_N = target_shape_without_padding[1];
 
     const bool weight_has_value = weight.has_value();

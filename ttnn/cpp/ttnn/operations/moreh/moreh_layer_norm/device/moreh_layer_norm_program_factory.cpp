@@ -66,7 +66,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
  
     const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_padded_shape();
+    const auto& input_shape_without_padding = input.get_logical_shape();
     
     const auto input_rank = input_shape.rank();
 

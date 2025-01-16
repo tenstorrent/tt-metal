@@ -21,7 +21,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    const auto& shape = input.get_padded_shape();
+    const auto& shape = input.;
     auto H = shape[-2];
     auto W = shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;

@@ -31,11 +31,11 @@ void MorehGroupNormOperation::validate_tensors(
     check_tensor(beta, "moreh_group_norm", "beta");
 
     // input (N, C, H, W)
-    auto C = input.get_padded_shape()[1];
+    auto C = input.get_logical_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
     if (output.has_value()) {
-        C = output.value().get_padded_shape()[1];
+        C = output.value().get_logical_shape()[1];
         TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
     }
     // gamma (1, 1, 1, C)

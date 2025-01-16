@@ -36,8 +36,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& output_shape = output.get_padded_shape();
+    const auto& input_shape = input.get_logical_shape();
+    const auto& output_shape = output.get_logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};

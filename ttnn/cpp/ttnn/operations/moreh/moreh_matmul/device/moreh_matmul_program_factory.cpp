@@ -51,8 +51,8 @@ ttnn::SmallVector<int64_t> find_reduce_dim(
 
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto& a_shape = tensor_a.get_padded_shape();
-    const auto& b_shape = tensor_b.get_padded_shape();
+    const auto& a_shape = tensor_a.get_logical_shape();
+    const auto& b_shape = tensor_b.get_logical_shape();
 
     ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -138,7 +138,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
     // input tensor
     const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_wo_padding = input_shape.without_padding();
+    const auto& input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
     log_debug(tt::LogOp, "input dim");
     ttnn::SmallVector<uint32_t> input_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
@@ -167,7 +167,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
 
     // output tensor
     const auto& output_shape = output.get_padded_shape();
-    const auto& output_shape_wo_padding = output.logical_shape();
+    const auto& output_shape_wo_padding = output.get_logical_shape();
     const auto output_rank = output_shape.rank();
     log_debug(tt::LogOp, "output dim");
     ttnn::SmallVector<uint32_t> output_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);

@@ -25,7 +25,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
 
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto& shape = input.get_padded_shape();
+    const auto& shape = input.get_logical_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -36,8 +36,8 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
-
-    const auto& input_shape = input.get_padded_shape();
+    
+    const auto& input_shape = input.get_logical_shape();
     const auto& input_shape_without_padding = input.get_logical_shape();
 
     const auto Ht = input_shape.value[-2] / constants::TILE_HEIGHT;

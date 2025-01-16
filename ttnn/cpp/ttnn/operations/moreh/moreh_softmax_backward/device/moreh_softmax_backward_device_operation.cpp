@@ -80,7 +80,7 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
         output_grad_tensor.get_dtype() == DataType::BFLOAT16 || output_grad_tensor.get_dtype() == DataType::BFLOAT8_B,
         "Output_tensor_grad dtype should be bfloat16 or bfloat8_b");
 
-    const auto& rank = output_tensor.get_padded_shape().rank();
+    const auto& rank = output_tensor.get_logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -147,7 +147,7 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    const auto& rank = output.get_padded_shape().rank();
+    const auto& rank = output.get_logical_shape().rank();
     if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_backward_w_small_available(output)) {
