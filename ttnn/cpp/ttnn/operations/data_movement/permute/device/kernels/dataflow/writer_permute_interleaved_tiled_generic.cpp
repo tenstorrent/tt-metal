@@ -5,20 +5,6 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-// ------------------------------------------------------------------
-// 1) unflatten_index<N>:
-//    Unflatten 'flat_idx' in row-major order for a shape[] of length N.
-//    shape[d] is also uint32_t. We store the result into out_multi_idx[].
-template <uint32_t N>
-inline void unflatten_index(uint32_t flat_idx, const uint32_t (&shape)[N], uint32_t (&out_multi_idx)[N]) {
-    // Process from last dimension to first, in row-major unflattening.
-    for (int d = N - 1; d >= 0; d--) {
-        uint32_t dim_size = shape[d];
-        out_multi_idx[d] = flat_idx % dim_size;
-        flat_idx /= dim_size;
-    }
-}
-
 template <uint32_t N>
 void dprint_array(const uint32_t* arr, const char* name) {
     DPRINT << name << ": ";
@@ -28,32 +14,15 @@ void dprint_array(const uint32_t* arr, const char* name) {
     DPRINT << ENDL();
 }
 
-// ------------------------------------------------------------------
-// 2) flatten_index_ignore_last_dim<N>:
-//    Flatten all N dims in row-major order except ignoring dimension N-1.
-template <uint32_t N>
-inline uint32_t flatten_index_ignore_last_dim(const uint32_t (&multi_idx)[N], const uint32_t (&shape)[N]) {
-    uint32_t offset = 0;
-    for (uint32_t d = 0; d < N - 1; d++) {
-        offset = offset * shape[d] + multi_idx[d];
+inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
+    for (uint32_t page = 0; page < npages; ++page) {
+        DPRINT << start + page << ": ";
+        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+            DPRINT << BF16(*ptr) << " ";
+        }
+        DPRINT << ENDL();
     }
-    return offset;
-}
-
-template <uint32_t N, uint32_t TILE_HEIGHT, uint32_t TILE_WIDTH>
-inline uint32_t get_unpadded_linear_row_index_for_tile(
-    uint32_t tile,
-    const uint32_t (&input_tiled_shape)[N],  // [ ..., X_t, W_t ]
-    const uint32_t (&input_shape)[N],        // [ ..., X,   W   ]
-    uint32_t (&src_multi_idx)[N]) {
-    // 1) Unflatten 'tile' => src_multi_idx in the tiled shape
-    unflatten_index<N>(tile, input_tiled_shape, src_multi_idx);
-
-    // 2) Multiply the X-dim by TILE_HEIGHT
-    src_multi_idx[N - 2] *= TILE_HEIGHT;
-
-    // 3) Flatten ignoring last dim => linear row offset
-    return flatten_index_ignore_last_dim<N>(src_multi_idx, input_shape);
 }
 
 void kernel_main() {
@@ -74,8 +43,8 @@ void kernel_main() {
     // constexpr uint32_t H_p = get_compile_time_arg_val(14);
     // constexpr uint32_t H_t = get_compile_time_arg_val(15);
     constexpr uint32_t W_t = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_w = get_compile_time_arg_val(17);
-    constexpr uint32_t final_tile_real_faces_w = get_compile_time_arg_val(18);
+    constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(17);
+    constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(18);
     constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
     constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
     constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
@@ -93,9 +62,6 @@ void kernel_main() {
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t cb_out = tt::CBIndex::c_2;
 
-    uint32_t final_tile_real_x = X % TILE_WIDTH;
-    uint32_t final_tile_real_faces_x =
-        final_tile_real_x == 0 ? NUM_FACES_W : ((final_tile_real_x + FACE_WIDTH - 1) / FACE_WIDTH);
     // W dimension is always the last dimension
     constexpr uint32_t w_dim = N - 1;
 
@@ -294,7 +260,8 @@ void kernel_main() {
 
         cb_wait_front(cb_out, 1);
         uint32_t transposed_buffer_read_addr = get_read_ptr(cb_out);
-        uint32_t real_faces_w = x_block != X_t - 1 ? NUM_FACES_W : final_tile_real_x;
+        print_bf16_pages(transposed_buffer_read_addr, 32, 32);
+        uint32_t real_faces_x = x_block != X_t - 1 ? NUM_FACES_W : final_tile_real_faces_x;
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
             // Update indices for the current W
@@ -308,11 +275,13 @@ void kernel_main() {
 
             uint64_t dest_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
 
-            for (uint8_t i = 0; i < real_faces_w; i++) {
+            for (uint8_t i = 0; i < real_faces_x; i++) {
                 uint64_t w_offset = i * FACE_HW_BYTES;
                 uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
                 DPRINT << "w_offset: " << w_offset << ENDL();
                 DPRINT << "cb_w_offset: " << cb_w_offset << ENDL();
+                print_bf16_pages(
+                    transposed_buffer_read_addr + cb_w_offset + page_offset, SUBTILE_LINE_BYTES / element_size, 1);
                 noc_async_write(
                     transposed_buffer_read_addr + cb_w_offset + page_offset,
                     dest_noc_addr + w_offset,
