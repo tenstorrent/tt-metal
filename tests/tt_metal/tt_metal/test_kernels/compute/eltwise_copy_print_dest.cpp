@@ -37,20 +37,6 @@ void MAIN {
         cb_push_back(tt::CBIndex::c_16, 1);
     }
 
-    // TESTING DPRINT FOR CONFIG REIGSTERS
-
-    // dprint_tensix_alu_config();
-    // dprint_tensix_unpack_tile_descriptor();
-    // dprint_tensix_unpack_config();
-
-    // dprint_tensix_pack_config();
-    // dprint_tensix_pack_relu_config();
-
-    // dprint_tensix_dest_rd_ctrl();
-    // dprint_tensix_pck_edge_offset();
-    // dprint_tensix_pack_counters();
-    // dprint_tensix_pack_strides();
-
     release_dst();
 }
 }  // namespace NAMESPACE
