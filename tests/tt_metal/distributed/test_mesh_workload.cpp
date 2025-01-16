@@ -518,7 +518,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEth) {
                 AddProgramToMeshWorkload(*workload, *programs[0], devices);
             }
         }
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         workloads.push_back(workload);
     }
     for (int i = 0; i < num_iters; i++) {
@@ -526,10 +526,10 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEth) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
-    Finish(mesh_device_->command_queue());
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
@@ -567,7 +567,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
                 run_on_eth = !run_on_eth;
             }
         }
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         workloads.push_back(workload);
     }
 
@@ -576,10 +576,10 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
-    Finish(mesh_device_->command_queue());
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
@@ -605,7 +605,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
                 AddProgramToMeshWorkload(*workload, *programs[0], devices);
             }
         }
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         workloads.push_back(workload);
     }
     for (int i = 0; i < num_iters; i++) {
@@ -613,10 +613,10 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
-    Finish(mesh_device_->command_queue());
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
@@ -647,7 +647,7 @@ TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
             AddProgramToMeshWorkload(*random_workload, *programs[i], devices_0);
             AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
         }
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -661,7 +661,7 @@ TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
         AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 2], devices_2);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 3], devices_3);
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     programs = create_random_programs(num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
@@ -684,7 +684,7 @@ TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
         AddProgramToMeshWorkload(*random_workload, *programs[i + 5], devices_5);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 6], devices_6);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 7], devices_7);
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
 
@@ -693,10 +693,10 @@ TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
-    Finish(mesh_device_->command_queue());
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshDevice_T3000, TestRandomizedMeshWorkload) {
@@ -721,7 +721,7 @@ TEST_F(MeshDevice_T3000, TestRandomizedMeshWorkload) {
         LogicalDeviceRange device_range = LogicalDeviceRange({0, 0}, {gen_x(rng), gen_y(rng)});
         auto random_workload = std::make_shared<MeshWorkload>();
         AddProgramToMeshWorkload(*random_workload, *programs[i], device_range);
-        EnqueueMeshWorkload(mesh_device_->command_queue(), *random_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
     for (int i = 0; i < num_iterations; i++) {
@@ -729,11 +729,11 @@ TEST_F(MeshDevice_T3000, TestRandomizedMeshWorkload) {
             log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
         }
         for (auto& workload : mesh_workloads) {
-            EnqueueMeshWorkload(mesh_device_->command_queue(), *workload, false);
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
         }
     }
     log_info(tt::LogTest, "Calling Finish");
-    Finish(mesh_device_->command_queue());
+    Finish(mesh_device_->mesh_command_queue());
 }
 
 TEST_F(MeshDevice_T3000, TestEltwiseBinaryMeshWorkload) {
@@ -764,7 +764,7 @@ TEST_F(MeshDevice_T3000, TestEltwiseBinaryMeshWorkload) {
     }
     // Run workload multiple times
     for (int i = 0; i < 1000; i++) {
-        EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     }
 
     buffer_idx = 0;
@@ -880,7 +880,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSanity) {
                 rtas[core.x][core.y].at(4) = ((iter % 2) + 1) * add_factor;
             }
         }
-        EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
         buffer_idx = 0;
         for (auto device : mesh_device_->get_devices()) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
@@ -922,8 +922,8 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadCBUpdate) {
     LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {4, 2});
 
     AddProgramToMeshWorkload(mesh_workload, *program, devices);
-    EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
-    Finish(mesh_device_->command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, cb_config_vector, cr_set);
 
     std::vector<CBConfig> updated_cb_config_vector = cb_config_vector;
@@ -933,8 +933,8 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadCBUpdate) {
         const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
         UpdateCircularBufferTotalSize(mesh_workload.get_program_on_device_range(devices), cb_handles[cb_id], cb_size);
     }
-    EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
-    Finish(mesh_device_->command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
 }
 
@@ -951,8 +951,8 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreSanity) {
     auto mesh_workload = CreateMeshWorkload();
     LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {4, 2});
     AddProgramToMeshWorkload(mesh_workload, program, devices);
-    EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
-    Finish(mesh_device_->command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
 
     for (const auto device : mesh_device_->get_devices()) {
         validate_sems(mesh_device_, device, full_grid, mesh_workload, expected_semaphore_values);
@@ -980,8 +980,8 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreDifferentPrograms) {
 
     AddProgramToMeshWorkload(mesh_workload, program0, devices_0);
     AddProgramToMeshWorkload(mesh_workload, program1, devices_1);
-    EnqueueMeshWorkload(mesh_device_->command_queue(), mesh_workload, false);
-    Finish(mesh_device_->command_queue());
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
+    Finish(mesh_device_->mesh_command_queue());
 
     for (std::size_t logical_x = devices_0.start_coord.x; logical_x < devices_0.end_coord.x; logical_x++) {
         for (std::size_t logical_y = devices_0.start_coord.y; logical_y < devices_0.end_coord.y; logical_y++) {

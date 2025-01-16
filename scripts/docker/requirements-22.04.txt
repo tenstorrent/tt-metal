@@ -4,7 +4,6 @@ build-essential
 gcc-12
 g++-12
 git
-git-lfs
 pandoc
 libtbb-dev
 libcapstone-dev

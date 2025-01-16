@@ -26,13 +26,22 @@ void LinearLayer::initialize_tensors(uint32_t in_features, uint32_t out_features
 }
 
 LinearLayer::LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias) {
-    initialize_tensors(in_features, out_features);
+    initialize_tensors(in_features, out_features, has_bias);
 
     create_name("linear");
     register_tensor(m_weight, "weight");
-    if (has_bias) {
+    if (m_bias != nullptr) {
         register_tensor(m_bias, "bias");
     }
+}
+
+autograd::TensorPtr LinearLayer::get_weight() const {
+    return m_weight;
+}
+
+void LinearLayer::set_weight(const autograd::TensorPtr& weight) {
+    m_weight = weight;
+    override_tensor(m_weight, "weight");
 }
 
 autograd::TensorPtr LinearLayer::operator()(const autograd::TensorPtr& tensor) {

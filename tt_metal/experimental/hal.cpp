@@ -41,4 +41,10 @@ uint32_t get_erisc_l1_unreserved_size() {
     return 0;
 }
 
+float get_eps() { return HalSingleton::getInstance().get_eps(); }
+
+float get_nan() { return HalSingleton::getInstance().get_nan(); }
+
+float get_inf() { return HalSingleton::getInstance().get_inf(); }
+
 }  // namespace tt::tt_metal::experimental::hal
