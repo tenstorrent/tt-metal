@@ -10,6 +10,7 @@
 #include "tt_metal/common/assert.hpp"
 #include "umd/device/pci_device.hpp"
 #include "umd/device/tt_soc_descriptor.h"
+#include "umd/device/tt_simulation_device.h"
 
 namespace tt::tt_metal {
 
@@ -18,7 +19,7 @@ namespace tt::tt_metal {
  *
  * This function determines the platform architecture by inspecting the environment
  * variables or available physical devices. If the environment variable
- * `TT_METAL_SIMULATOR_EN` is set, the architecture is retrieved from the
+ * `TT_METAL_SIMULATOR` is set, the architecture is retrieved from the
  * `ARCH_NAME` environment variable. Otherwise, the architecture is deduced
  * by detecting available physical devices.
  *
@@ -26,13 +27,13 @@ namespace tt::tt_metal {
  *                  if no valid architecture could be detected.
  *
  * @note
- * - If the system is in simulation mode (`TT_METAL_SIMULATOR_EN` is set),
+ * - If the system is in simulation mode (`TT_METAL_SIMULATOR` is set),
  *   the `ARCH_NAME` environment variable must be defined.
  * - A fatal error occurs if multiple devices are detected with conflicting
  *   architectures.
  *
  * @exception std::runtime_error Throws a fatal error if:
- * - `ARCH_NAME` is not set when `TT_METAL_SIMULATOR_EN` is enabled.
+ * - `ARCH_NAME` is not set when `TT_METAL_SIMULATOR` is enabled.
  * - Multiple devices with inconsistent architectures are detected.
  *
  * Example usage:
@@ -52,12 +53,10 @@ namespace tt::tt_metal {
  */
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
-    if (std::getenv("TT_METAL_SIMULATOR_EN")) {
-        auto arch_env = std::getenv("ARCH_NAME");
-        TT_FATAL(arch_env, "ARCH_NAME env var needed for VCS");
-        arch = tt::get_arch_from_string(arch_env);
+    if (std::getenv("TT_METAL_SIMULATOR")) {
+        tt_SimulationDeviceInit init(std::getenv("TT_METAL_SIMULATOR"));
+        arch = init.get_arch_name();
     } else {
-
         // Issue tt_umd#361: tt_ClusterDescriptor::create() won't work here.
         // This map holds PCI info for each mmio chip.
         auto devices_info = PCIDevice::enumerate_devices_info();
