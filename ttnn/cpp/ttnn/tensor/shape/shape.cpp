@@ -70,12 +70,12 @@ bool type_caster<ttnn::SimpleShape>::load(handle src, bool) {
         }
         vec.push_back(item.cast<uint32_t>());
     }
-    value = SimpleShape(std::move(vec));
+    value = ttnn::SimpleShape(std::move(vec));
     return true;
 }
 
 handle type_caster<ttnn::SimpleShape>::cast(
-    const SimpleShape& src, return_value_policy /* policy */, handle /* parent */) {
+    const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */) {
     py::list py_list;
     for (size_t i = 0; i < src.rank(); i++) {
         py_list.append(src[i]);
