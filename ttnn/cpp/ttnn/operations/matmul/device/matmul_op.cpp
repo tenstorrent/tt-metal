@@ -1223,6 +1223,10 @@ Matmul create_matmul_struct(
          (input_tensor_b.get_dtype() == DataType::BFLOAT8_B || input_tensor_b.get_dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    bool are_inputs_32F =
+        (input_tensor_a.get_dtype() == DataType::FLOAT32 && input_tensor_b.get_dtype() == DataType::FLOAT32);
+    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
