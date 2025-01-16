@@ -95,6 +95,7 @@ TensorLayout::TensorLayout(
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
     initialize_alignment();
     validate_alignment();
+    validate_shard_spec();
 }
 
 TensorLayout TensorLayout::fromLegacyPaddedShape(
@@ -143,6 +144,22 @@ void TensorLayout::validate_alignment() const {
         alignment_.size() <= 2 || !memory_config_.is_sharded(),
         "Tensor must be interleaved if alignment has rank greater than 2!");
     return page_config_.validate_alignment(alignment_, dtype_, memory_config_);
+}
+
+void TensorLayout::validate_shard_spec() const {
+    if (memory_config_.shard_spec.has_value()) {
+        if (get_layout() == Layout::TILE) {
+            const auto& tile_shape = get_tile().get_tile_shape();
+            const auto& physical_shard_shape = get_physical_shard_shape();
+            TT_FATAL(
+                (physical_shard_shape.height() % tile_shape[0] == 0 &&
+                 physical_shard_shape.width() % tile_shape[1] == 0),
+                "Shard shape {} must be tile {} sized!",
+                physical_shard_shape,
+                tile_shape);
+        }
+    }
+    return;
 }
 
 std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const {
