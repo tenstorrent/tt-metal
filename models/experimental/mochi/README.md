@@ -15,6 +15,7 @@ python3 ./scripts/download_weights.py weights/
 cd ..
 ```
 Set up your tt-metal environment **outside of tt-mochi** by following the instructions in [INSTALLING](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
+
 Create a symlink of the mochi source into tt-metal(TODO: remove this step)
 ```bash
 cd $TT_METAL_HOME
