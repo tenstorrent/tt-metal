@@ -366,6 +366,22 @@ Tensor ExecutePrelu::invoke(
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), ttnn::multiply(input_a, b), input_a);
     return result;
 }
+
+Tensor run_remainder(
+    const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
+    Tensor result = ttnn::subtract(
+        input_a,
+        ttnn::multiply(
+            input_b, ttnn::div(input_a, input_b, true, "floor", output_mem_config), std::nullopt, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    result = ttnn::where(ttnn::ge(result, input_b), ttnn::subtract(result, input_b), result);
+    result = ttnn::where(ttnn::ltz(input_b), ttnn::add(result, input_b), result);
+    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result));
+    result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result);
+    return result;
+}
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -373,38 +389,18 @@ Tensor ExecuteBinaryRemainder::invoke(
     TT_FATAL(arch != tt::ARCH::GRAYSKULL, "Op is supported on Wormhole or Blackhole");
     DataType input_dtype = input_a.get_dtype();
 
-    float t_nan = std::nanf("");
+    float t_nan = tt::tt_metal::experimental::hal::get_nan();
 
     // No typecast for FP32 input
-    if (input_dtype == DataType::FLOAT32 && input_b.get_dtype() == DataType::FLOAT32) {
-        Tensor result = ttnn::subtract(
-            input_a,
-            ttnn::multiply(
-                input_b,
-                ttnn::div(input_a, input_b, true, "floor", output_mem_config),
-                std::nullopt,
-                output_mem_config),
-            std::nullopt,
-            output_mem_config);
-        result = ttnn::where(ttnn::ge(result, input_b), ttnn::subtract(result, input_b), result);
-        result = ttnn::where(ttnn::ltz(input_b), ttnn::add(result, input_b), result);
-        result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-        return result;
-    }
-    Tensor a = typecast(input_a, DataType::FLOAT32);
-    Tensor b = typecast(input_b, DataType::FLOAT32);
-    Tensor result = ttnn::subtract(
-        a,
-        ttnn::multiply(
-            b, ttnn::div(input_a, input_b, false, "floor", output_mem_config), std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    result = ttnn::where(ttnn::ge(result, b), ttnn::subtract(result, b), result);
-    result = ttnn::where(ttnn::ltz(b), ttnn::add(result, b), result);
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    result = typecast(result, input_dtype);
-    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result));
-    return result;
+    const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.get_dtype() != DataType::FLOAT32;
+    const auto& a = do_typecast ? typecast(input_a, DataType::FLOAT32) : input_a;
+    const auto& b = do_typecast ? typecast(input_b, DataType::FLOAT32) : input_b;
+
+    // Perform the remainder operation
+    Tensor result = run_remainder(a, b, t_nan, output_mem_config);
+
+    // Return the result, typecasted if necessary
+    return do_typecast ? typecast(result, input_dtype) : result;
 }
 
 Tensor ExecuteBinaryRemainder::invoke(
