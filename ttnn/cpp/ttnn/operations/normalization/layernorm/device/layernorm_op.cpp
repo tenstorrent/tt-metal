@@ -106,6 +106,11 @@ void LayerNorm::validate(
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
         TT_FATAL(a.get_legacy_shape()[-2] == TILE_HEIGHT, "Only activations with batch size = 32 are supported");
+        if (b.has_value()) {
+            TT_FATAL(
+                b.value().get_legacy_shape()[-2] == TILE_HEIGHT,
+                "Only residual tensors with batch size = 32 are supported");
+        }
     }
     if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
         TT_FATAL(stats.has_value(), "Post all gather layernorm requires stats");
