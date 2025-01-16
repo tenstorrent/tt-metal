@@ -49,8 +49,9 @@ void kernel_main() {
     constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
     constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
     constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
-    constexpr bool needs_x_padding = get_compile_time_arg_val(22);
-    constexpr uint32_t padding_val_packed = 0;
+    constexpr uint32_t num_x_writes = get_compile_time_arg_val(22);
+    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(23);
+    constexpr bool needs_x_padding = get_compile_time_arg_val(24);
 
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t FACE_HW = FACE_HEIGHT * FACE_WIDTH;
@@ -136,6 +137,8 @@ void kernel_main() {
     DPRINT << "final_tile_real_w: " << final_tile_real_w << ENDL();
     DPRINT << "final_tile_real_faces_w: " << final_tile_real_faces_w << ENDL();
     DPRINT << "needs_x_padding: " << (uint32_t)needs_x_padding << ENDL();
+    DPRINT << "num_x_writes: " << num_x_writes << ENDL();
+    DPRINT << "padding_val_packed: " << BF16(padding_val_packed >> 16) << ENDL();
 
     dprint_array<N>(input_shape, "input_shape");
     dprint_array<N>(dims, "dims");
@@ -273,10 +276,7 @@ void kernel_main() {
                         uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
                         DPRINT << "cb_w_offset: " << cb_w_offset << ENDL();
                         tt::data_movement::common::fill_with_val(
-                            src_buffer_l1_addr + page_offset + cb_w_offset,
-                            SUBTILE_LINE_BYTES / (sizeof(uint32_t)),
-                            padding_val_packed);
-                        // SUBTILE_LINE_BYTES);
+                            src_buffer_l1_addr + page_offset + cb_w_offset, num_x_writes, padding_val_packed);
                     }
                 }
             }

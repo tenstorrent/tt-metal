@@ -310,8 +310,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
     if (needs_padding) {
         tt::tt_metal::CircularBufferConfig cb_src1_config =
-            tt::tt_metal::CircularBufferConfig(face_shape[0] * element_size, {{padding_cb_index, cb_data_format}})
-                .set_page_size(padding_cb_index, face_shape[0] * element_size);
+            tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
+                .set_page_size(padding_cb_index, face_shape[1] * element_size);
         auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     }
     uint32_t padding_val_packed = 0;
@@ -319,7 +319,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     if (pad_value.has_value()) {
         if (output_H % tile_shape[1] != 0) {
             uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-            num_writes = face_shape[0] / num_packed_values;
+            num_writes = face_shape[1] / num_packed_values;
             if (input_tensor.get_dtype() == DataType::BFLOAT16) {
                 padding_val_packed =
                     pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
@@ -503,11 +503,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t num_faces_w = tile_shape[1] / face_shape[1];
     uint32_t num_faces_h = tile_shape[0] / face_shape[0];
 
-    // Faces with real data in the final tile along the width dimension, divided up
-    uint32_t final_tile_real_w = w % tile_shape[1];
-    uint32_t final_tile_real_faces_w =
-        w % tile_shape[1] == 0 ? num_faces_w : ((final_tile_real_w + face_shape[1] - 1) / face_shape[1]);
-
     uint32_t padded_xw_volume = X_p * W_p;
     for (uint32_t i = 0; i < N - 1; i++) {
         if (i == x_dim) {
@@ -520,12 +515,20 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     bool needs_x_padding = (x % tile_shape[1] != 0) && pad_value.has_value();
     bool needs_y_padding = (y % tile_shape[0] != 0) && pad_value.has_value();
+    bool needs_padding = needs_x_padding or needs_y_padding;
 
     uint32_t padding_val_packed = 0;
-    uint32_t num_writes = 0;
-    if (needs_x_padding) {
+    uint32_t num_x_writes = 0;
+    uint32_t num_y_writes = 0;
+
+    if (needs_padding) {
         uint32_t num_packed_values = sizeof(uint32_t) / element_size;
-        num_writes = face_shape[1] / num_packed_values;
+        if (needs_x_padding) {
+            num_x_writes = face_shape[1] / num_packed_values;
+        }
+        if (needs_y_padding) {
+            num_y_writes = face_shape[0] / num_packed_values;
+        }
         if (input_tensor.get_dtype() == DataType::BFLOAT16) {
             padding_val_packed =
                 pack_two_bfloat16_into_uint32({bfloat16(pad_value.value()), bfloat16(pad_value.value())});
@@ -536,6 +539,17 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
         }
     }
+
+    // Faces with real data in the final tile along the width dimension, divided up
+    uint32_t final_tile_real_w = w % tile_shape[1];
+    uint32_t final_tile_real_faces_w =
+        w % tile_shape[1] == 0 ? num_faces_w : ((final_tile_real_w + face_shape[1] - 1) / face_shape[1]);
+
+    uint32_t final_tile_real_x = x % tile_shape[1];
+    uint32_t final_tile_real_faces_x =
+        needs_x_padding
+            ? num_faces_w
+            : (final_tile_real_x == 0 ? num_faces_w : ((final_tile_real_x + face_shape[1] - 1) / face_shape[1]));
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_page_size = detail::tile_size(tensor_return_value);
@@ -602,7 +616,9 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         xw_blocks,
         x_blocks,
         w_blocks,
-    };
+        num_x_writes,
+        padding_val_packed,
+        (uint32_t)needs_x_padding};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -646,8 +662,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         H_p,
         H_t,
         W_t,
-        final_tile_real_w,
-        final_tile_real_faces_w,
+        final_tile_real_x,
+        final_tile_real_faces_x,
         xw_blocks,
         x_blocks,
         w_blocks,
