@@ -25,8 +25,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
-#include "ttnn/cpp/ttnn/operations/experimental/reshape/reshape.hpp"
-
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 #include <tt-metalium/tile.hpp>
 
