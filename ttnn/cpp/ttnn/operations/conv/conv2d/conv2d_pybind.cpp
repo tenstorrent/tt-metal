@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/constants.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include <tt-metalium/constants.hpp>
+#include "cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"

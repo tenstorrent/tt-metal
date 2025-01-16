@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/assert.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/cpp/ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"

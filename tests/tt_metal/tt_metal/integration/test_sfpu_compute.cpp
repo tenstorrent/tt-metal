@@ -8,12 +8,12 @@
 #include <algorithm>
 
 #include "command_queue_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/device.hpp>
 
 using std::map;
 using std::vector;

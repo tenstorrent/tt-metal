@@ -11,9 +11,9 @@
 #include <variant>
 #include <limits>
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
 namespace ttnn {
 namespace ccl {

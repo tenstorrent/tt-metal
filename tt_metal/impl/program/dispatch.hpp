@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
+#include <circular_buffer.hpp>
+#include <device.hpp>
+#include <kernel.hpp>
+#include <program_impl.hpp>
+#include <worker_config_buffer.hpp>
 
 namespace tt {
 

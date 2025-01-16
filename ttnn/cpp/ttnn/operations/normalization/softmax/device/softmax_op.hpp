@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cmath>
-#include "common/base_types.hpp"
-#include "common/core_coord.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"

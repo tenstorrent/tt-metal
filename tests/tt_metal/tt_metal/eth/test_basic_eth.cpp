@@ -8,11 +8,11 @@
 #include "device_fixture.hpp"
 #include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/llrt.hpp>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

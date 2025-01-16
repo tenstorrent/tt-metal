@@ -11,8 +11,8 @@
 #include <string_view>
 #include <tuple>
 
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/reflection.hpp>
 
 namespace ttnn {
 

@@ -30,7 +30,7 @@ Runtime arguments
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"  // required in all kernels using DPRINT
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     //We are guranteed to be in 2D going to 2D

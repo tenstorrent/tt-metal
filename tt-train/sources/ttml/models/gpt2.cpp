@@ -84,6 +84,7 @@ Transformer::Transformer(const TransformerConfig& config) {
         position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
+    fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -129,6 +130,11 @@ Transformer::Transformer(const TransformerConfig& config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
+
+    if (config.weight_tying == WeightTyingType::Enabled) {
+        // tie weights between embedding and fc
+        tok_emb->set_weight(fc->get_weight());
+    }
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
@@ -175,6 +181,18 @@ PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config)
     }
 }
 
+WeightTyingType read_weight_tying_type(const YAML::Node& config) {
+    auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
+    if (weight_tying_str == "disabled") {
+        return WeightTyingType::Disabled;
+    } else if (weight_tying_str == "enabled") {
+        return WeightTyingType::Enabled;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
+    }
+}
+
 TransformerConfig read_config(const YAML::Node& config) {
     TransformerConfig transformer_config;
     transformer_config.num_heads = config["num_heads"].as<uint32_t>();
@@ -185,6 +203,7 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
     transformer_config.runner_type = read_runner_type(config);
+    transformer_config.weight_tying = read_weight_tying_type(config);
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =

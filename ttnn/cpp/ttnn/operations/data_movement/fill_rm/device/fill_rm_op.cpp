@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/fill_rm/device/fill_rm_op.hpp"
-#include "tt_metal/common/test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 

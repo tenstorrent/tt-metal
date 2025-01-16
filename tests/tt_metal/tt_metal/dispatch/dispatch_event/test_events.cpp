@@ -4,11 +4,11 @@
 
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;

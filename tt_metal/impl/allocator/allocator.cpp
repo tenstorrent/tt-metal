@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <allocator.hpp>
 
 #include <magic_enum/magic_enum.hpp>
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <math.hpp>
+#include <util.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
 
 namespace tt {
 

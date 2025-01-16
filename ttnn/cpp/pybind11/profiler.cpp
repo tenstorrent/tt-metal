@@ -6,7 +6,7 @@
 #include <pybind11/stl.h>
 
 #include "profiler.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace py = pybind11;
 

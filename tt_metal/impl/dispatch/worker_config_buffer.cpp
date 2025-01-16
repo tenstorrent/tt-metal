@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
+#include <assert.hpp>
+#include <worker_config_buffer.hpp>
 
 namespace tt {
 

@@ -4,10 +4,10 @@
 
 #include "graph_processor.hpp"
 #include "graph_consts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 #include "ttnn/types.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/program/program.hpp"
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "ttnn/graph/graph_consts.hpp"
 #include <cxxabi.h>
 #include <memory>

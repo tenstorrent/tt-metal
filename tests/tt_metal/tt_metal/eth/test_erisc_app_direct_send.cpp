@@ -12,9 +12,9 @@
 #include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include "command_queue_fixture.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 // TODO: ARCH_NAME specific, must remove

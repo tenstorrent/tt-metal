@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_log.h"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -566,7 +566,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
                     static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
             } else {
                 padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
-                ;
             }
         }
     }

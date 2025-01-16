@@ -6,7 +6,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
 #include "typecast.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 namespace ttnn::operations::experimental::copy {
 

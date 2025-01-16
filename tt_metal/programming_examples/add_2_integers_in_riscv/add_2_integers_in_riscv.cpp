@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_api.hpp"
-#include "impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

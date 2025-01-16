@@ -4,7 +4,7 @@
 
 #pragma once
 #include <magic_enum/magic_enum.hpp>
-#include "tt_fabric/mesh_graph.hpp"
+#include "mesh_graph.hpp"
 
 namespace tt::tt_fabric {
 

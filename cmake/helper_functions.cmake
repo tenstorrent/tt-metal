@@ -53,14 +53,7 @@ function(CREATE_PGM_EXAMPLES_EXE TESTLIST SUBDIR)
                 m
                 pthread
         )
-        target_include_directories(
-            ${TEST_TARGET}
-            PRIVATE
-                ${PROJECT_SOURCE_DIR}
-                ${PROJECT_SOURCE_DIR}/tt_metal
-                ${PROJECT_SOURCE_DIR}/tt_metal/common
-                ${CMAKE_CURRENT_SOURCE_DIR}
-        )
+        target_include_directories(${TEST_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
         set_target_properties(
             ${TEST_TARGET}
             PROPERTIES

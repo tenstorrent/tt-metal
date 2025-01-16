@@ -6,14 +6,14 @@
 #include <string>
 #include <vector>
 
-#include "common/tt_backend_api_types.hpp"
-#include "common/work_split.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "expand_device_operation.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "impl/buffers/buffer.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;

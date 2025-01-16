@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include "host_api.hpp"
-#include "impl/device/device_pool.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 using namespace tt;
 

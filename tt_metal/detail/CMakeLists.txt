@@ -4,4 +4,11 @@ set(DETAIL_SRC
 )
 
 add_library(detail OBJECT ${DETAIL_SRC})
-target_link_libraries(detail PUBLIC common PRIVATE Metalium::Metal::Impl)
+target_link_libraries(
+    detail
+    PUBLIC
+        common
+    PRIVATE
+        Metalium::Metal::Impl
+        TT::Metalium::HostDevCommon
+)

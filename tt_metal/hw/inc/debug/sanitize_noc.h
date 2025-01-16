@@ -25,7 +25,7 @@
 #include "watcher_common.h"
 
 #include "dataflow_cmd_bufs.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"

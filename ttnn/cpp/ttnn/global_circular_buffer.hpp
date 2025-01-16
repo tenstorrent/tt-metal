@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/types.hpp"
 
 namespace ttnn::global_circular_buffer {

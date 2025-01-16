@@ -2,34 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/device.hpp"
+#include <device_impl.hpp>
 
 #include <string>
 #include <thread>
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/common/core_descriptor.hpp"
+#include <host_api.hpp>
+#include <trace.hpp>
+#include <core_descriptor.hpp>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <tt_metal.hpp>
+#include <dprint_server.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "common/utils.hpp"
-#include "llrt/llrt.hpp"
-#include "dev_msgs.h"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <utils.hpp>
+#include <llrt.hpp>
+#include <dev_msgs.h>
+#include <device_pool.hpp>
+#include <persistent_kernel_cache.hpp>
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/experimental/hal.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/tt_stl/span.hpp"
-#include "tt_metal/types.hpp"
+#include <hal.hpp>
+#include <hal_exp.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager_tracker.hpp>
+#include <sub_device_manager.hpp>
+#include <sub_device_types.hpp>
+#include <span.hpp>
+#include <types.hpp>
 #include "impl/dispatch/topology.hpp"
 
 namespace tt {

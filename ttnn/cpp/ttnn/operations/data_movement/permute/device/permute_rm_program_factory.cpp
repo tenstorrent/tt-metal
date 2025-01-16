@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::tt_metal::experimental;
 

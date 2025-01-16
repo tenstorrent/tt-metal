@@ -7,7 +7,7 @@
 #include <numeric>
 #include <ostream>
 #include "ttnn/tensor/shape/small_vector.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace tt::tt_metal {
 

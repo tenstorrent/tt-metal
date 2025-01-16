@@ -8,7 +8,7 @@
 // #include <type_traits>
 #include <limits>
 #include <vector>
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------

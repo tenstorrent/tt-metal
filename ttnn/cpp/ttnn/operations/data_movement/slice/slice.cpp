@@ -7,11 +7,11 @@
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "cpp/ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 

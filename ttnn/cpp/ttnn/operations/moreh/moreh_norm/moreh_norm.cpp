@@ -5,8 +5,8 @@
 #include "moreh_norm.hpp"
 
 #include "device/moreh_norm_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
 Tensor MorehNorm::invoke(

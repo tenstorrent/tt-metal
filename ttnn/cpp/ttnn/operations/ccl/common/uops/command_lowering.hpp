@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 
 #include <vector>
 

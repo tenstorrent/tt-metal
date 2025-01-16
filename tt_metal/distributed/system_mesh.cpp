@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <system_mesh.hpp>
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
@@ -95,9 +95,11 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     // First check if total size fits
     TT_FATAL(
         requested_num_rows * requested_num_cols <= system_mesh_rows * system_mesh_cols,
-        "Requested submesh is too big: {}x{}",
+        "Requested submesh is too big: {}x{}, SystemMesh shape: {}x{}",
         requested_num_rows,
-        requested_num_cols);
+        requested_num_cols,
+        system_mesh_rows,
+        system_mesh_cols);
 
     bool is_single_row_or_column = requested_num_rows == 1 or requested_num_cols == 1;
     if (is_single_row_or_column) {

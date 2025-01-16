@@ -13,9 +13,11 @@ add_library(HAL::grayskull ALIAS gs_hal)
 target_sources(gs_hal PRIVATE grayskull/gs_hal.cpp)
 target_include_directories(
     gs_hal
+    BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/grayskull
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/grayskull/tt-metalium
 )
 target_link_libraries(
     gs_hal
@@ -37,10 +39,12 @@ target_sources(
 )
 target_include_directories(
     wh_hal
+    BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/wormhole/tt-metalium
 )
 target_link_libraries(
     wh_hal
@@ -62,9 +66,11 @@ target_sources(
 )
 target_include_directories(
     bh_hal
+    BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/blackhole/tt-metalium
 )
 target_link_libraries(
     bh_hal
@@ -84,13 +90,12 @@ set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/hal.cpp
 )
 
-add_library(llrt STATIC ${LLRT_SRC}) # FIXME(14541): Should be OBJECT, but can't handle circular deps between Object libs
+add_library(llrt OBJECT ${LLRT_SRC})
 add_library(Metalium::Metal::LLRT ALIAS llrt)
 
 target_link_libraries(
     llrt
     PUBLIC
-        Metalium::Metal::Common
         umd::device
         Metalium::Metal::Hardware
     PRIVATE
@@ -98,5 +103,10 @@ target_link_libraries(
         HAL::wormhole
         HAL::blackhole
         Tracy::TracyClient
+        nlohmann_json::nlohmann_json
+        Reflect::Reflect
+        magic_enum
+        span
+        Metalium::Metal::Impl
 )
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

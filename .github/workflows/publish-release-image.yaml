@@ -37,7 +37,7 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
         run: |

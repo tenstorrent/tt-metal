@@ -5,8 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "galaxy_fixture.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_cluster.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 

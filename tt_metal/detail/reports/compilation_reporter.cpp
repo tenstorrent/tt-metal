@@ -4,7 +4,7 @@
 
 #include <atomic>
 #include <filesystem>
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
+#include <compilation_reporter.hpp>
 #include "tt_metal/detail/reports/report_utils.hpp"
 
 namespace fs = std::filesystem;
