@@ -8,8 +8,6 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
-    with:
-      arch: '["wormhole_b0"]'
     secrets: inherit
   tg-demo-tests:
     needs: build-artifact

@@ -47,9 +47,9 @@ jobs:
       - uses: ./.github/actions/ensure-active-weka-mount
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run unit regression tests
         shell: bash {0}

@@ -32,20 +32,13 @@ jobs:
     secrets: inherit
     with:
       os: "ubuntu-22.04-amd64"
-      arch: '["blackhole"]'
       build-docker: false
   build-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: "ubuntu-22.04"
-      arch: "blackhole"
       from-precompiled: true
-#   build-artifact-profiler:
-#     uses: ./.github/workflows/build-artifact.yaml
-#     with:
-#       profiler-build: true
-#     secrets: inherit
   umd-unit-tests:
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml

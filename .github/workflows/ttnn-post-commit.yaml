@@ -79,7 +79,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
@@ -90,6 +90,8 @@ jobs:
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME

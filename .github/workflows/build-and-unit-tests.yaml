@@ -76,8 +76,6 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run

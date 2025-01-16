@@ -494,8 +494,6 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: wormhole_b0
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |
@@ -554,8 +552,6 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ matrix.test-group.arch }}
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |

@@ -34,7 +34,6 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
         with:
-          arch: ${{ matrix.test-info.arch }}
           is_profiler: 'true'
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}
