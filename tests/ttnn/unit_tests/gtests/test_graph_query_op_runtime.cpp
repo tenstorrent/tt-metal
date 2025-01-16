@@ -1,0 +1,114 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <ostream>
+#include <string>
+
+#include <tt-metalium/constants.hpp>
+#include "gtest/gtest.h"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include <tt-metalium/logger.hpp>
+#include "ttnn/device.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/graph/graph_query_op_runtime.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn_test_fixtures.hpp"
+
+namespace ttnn {
+namespace operations {
+namespace binary {
+namespace test {
+
+// ============================================================================
+// Test data
+// ============================================================================
+
+const auto g_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
+    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 3, 1024, 1024}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::L1_MEMORY_CONFIG));
+
+class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
+protected:
+    ttnn::IDevice* device_ = nullptr;
+
+    void SetUp() override {
+        TTNNFixture::SetUp();
+        device_ = &ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
+    }
+
+    void TearDown() override {
+        TTNNFixture::TearDown();
+        ttnn::close_device(*device_);
+    }
+
+    ttnn::IDevice& getDevice() { return *device_; }
+};
+
+// ============================================================================
+// Binary Eltwise Op tests
+// ============================================================================
+
+class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
+                             public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
+
+TEST_P(BinaryOpTraceRuntime, Add) {
+    const auto& input_spec_a = std::get<0>(GetParam());
+    const auto& input_spec_b = std::get<1>(GetParam());
+
+    {
+        tt::tt_metal::IDevice* device = &getDevice();
+        auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        std::cout << "Runtime: " << query.runtime << " ns\n";
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    QueryOpRuntime,
+    BinaryOpTraceRuntime,
+    ::testing::Values(std::make_tuple(g_interleaved_1_3_1024_1024_tiled, g_interleaved_1_3_1024_1024_tiled)),
+    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>>& info) {
+        std::stringstream ss;
+
+        // print unique id for each test case
+        static int uid = 0;
+        ss << uid++;
+
+        // print tensor layout
+        using detail::operator<<;
+        ss << "_" << std::get<0>(info.param).tensor_layout();
+
+        // print tensor shape; operator<< exists but is too long to be used here
+        ss << "_";
+        detail::operator<<(ss, std::get<0>(info.param).logical_shape());
+
+        ss << "_";
+
+        // print tensor layout
+        using detail::operator<<;
+        ss << "_" << std::get<1>(info.param).tensor_layout();
+
+        // print tensor shape; operator<< exists but is too long to be used here
+        ss << "_";
+        detail::operator<<(ss, std::get<1>(info.param).logical_shape());
+
+        return ss.str();
+    });
+
+}  // namespace test
+}  // namespace binary
+}  // namespace operations
+}  // namespace ttnn
