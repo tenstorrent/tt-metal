@@ -9,7 +9,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
-
 namespace NAMESPACE {
 
 void MAIN {
@@ -28,7 +27,7 @@ void MAIN {
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         copy_tile(tt::CBIndex::c_0, b, b);
-        // dprint_tensix_dest_reg(b);
+        dprint_tensix_dest_reg(b);
     }
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
