@@ -1225,7 +1225,7 @@ void generate_multi_command_stream_kernel_rt_args(
 
     for (size_t i = 0; i < num_command_streams; i++) {
         std::ranges::copy(
-            ttnn::ccl::legacy_(device, *tensors[i]), std::back_inserter(rt_args));
+            ttnn::ccl::legacy_emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
     }
 
     // TODO: Handle teardown signalling
