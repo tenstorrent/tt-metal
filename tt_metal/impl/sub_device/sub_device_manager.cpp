@@ -40,7 +40,6 @@ SubDeviceManager::SubDeviceManager(
     this->populate_num_cores();
     this->populate_sub_allocators();
     this->populate_noc_data();
-    this->populate_worker_launch_message_buffer_state();
 }
 
 SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
@@ -63,7 +62,6 @@ SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&&
     this->populate_num_cores();
     this->sub_device_allocators_.push_back(std::move(global_allocator));
     this->populate_noc_data();
-    this->populate_worker_launch_message_buffer_state();
 }
 
 SubDeviceManager::~SubDeviceManager() {
@@ -141,18 +139,6 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
         return trace->second;
     }
     return nullptr;
-}
-
-void SubDeviceManager::reset_worker_launch_message_buffer_state() {
-    std::for_each(
-        worker_launch_message_buffer_state_.begin(),
-        worker_launch_message_buffer_state_.end(),
-        std::mem_fn(&LaunchMessageRingBufferState::reset));
-}
-
-LaunchMessageRingBufferState& SubDeviceManager::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return worker_launch_message_buffer_state_[sub_device_index];
 }
 
 bool SubDeviceManager::has_allocations() const {
@@ -364,11 +350,6 @@ void SubDeviceManager::populate_noc_data() {
             idx,
             dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
-}
-
-void SubDeviceManager::populate_worker_launch_message_buffer_state() {
-    worker_launch_message_buffer_state_.resize(this->num_sub_devices());
-    this->reset_worker_launch_message_buffer_state();
 }
 
 }  // namespace tt::tt_metal
