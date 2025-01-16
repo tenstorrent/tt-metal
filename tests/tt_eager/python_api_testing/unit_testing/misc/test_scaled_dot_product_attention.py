@@ -84,6 +84,7 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
+    logger.debug(f"mse: {((gt - tt_back) ** 2).mean()}")
     assert out_pass
 
 
@@ -102,10 +103,10 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 # @pytest.mark.parametrize("nkv", [1, 2, 8], ids=["nkv1", "nkv2", "nkv8"])
 # @pytest.mark.parametrize("s", [1, 13, 65, 160, 2011, 2049], ids=["s1", "s13", "s65", "s160", "s2011", "s2049"])
 # @pytest.mark.parametrize("d", [128, 96, 32], ids=["d128", "d96", "d32"])
-@pytest.mark.parametrize("b", [1, 2], ids=["b1", "b2"])
-@pytest.mark.parametrize("nh", [1, 2], ids=["nh1", "nh2"])
-@pytest.mark.parametrize("nkv", [1, 2], ids=["nkv1", "nkv2"])
-@pytest.mark.parametrize("s", [1, 13, 160, 2011], ids=["s1", "s13", "s160", "s2011"])
+@pytest.mark.parametrize("b", [1, 32], ids=["b1", "b32"])
+@pytest.mark.parametrize("nh", [1, 8], ids=["nh1", "nh8"])
+@pytest.mark.parametrize("nkv", [1, 8], ids=["nkv1", "nkv8"])
+@pytest.mark.parametrize("s", [1, 160, 2011], ids=["s1", "s160", "s2011"])
 @pytest.mark.parametrize(
     "d",
     [128],
@@ -159,7 +160,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    ([1, 8, 1, 8192 * 16, 128],),  # Llama2-70B 128K sequence
+    ([1, 8, 1, 128 * 1024, 128],),  # Llama2-70B 128K sequence
 )
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
@@ -181,11 +182,10 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
     "b, nh, nkv, s, d",
     (
         [1, 8, 1, 128, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 2048 * 16, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 2, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 4, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 16, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 16 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 32 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 64 * 1024, 128],  # Llama2-70B 128K sequence
     ),
 )
 def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
@@ -297,10 +297,7 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
-    # for bb in range(b):
-    #     _, out_pcc = comp_pcc(gt[bb], tt_back[bb], 0.994)
-    #     logger.debug(f"batch {bb}: {out_pcc}")
-    # breakpoint()
+    logger.debug(f"mse: {((gt - tt_back) ** 2).mean()}")
     assert out_pass
 
 

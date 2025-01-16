@@ -293,12 +293,12 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
 }
 
 // inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-//     ((DPRINT << "======" << ENDL()));
+//     DPRINT << "======" << ENDL();
 //     for (uint16_t r = 0; r < 32; ++r) {
 //         SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-//         ((DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL()));
+//         DPRINT << (uint)r << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL();
 //     }
-//     ((DPRINT << "++++++" << ENDL()));
+//     DPRINT << "++++++" << ENDL();
 // }
 
 // TODO: Print tiles and other info when creating vertical tile.
@@ -339,7 +339,8 @@ void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_
         }
     }
 
-    const uint32_t unpad_col_in_right_face = std::max((uint32_t)0, unpad_col_in_tile - uint16_datums_per_face_row);
+    const uint32_t unpad_col_in_right_face =
+        (unpad_col_in_tile < uint16_datums_per_face_row) ? 0 : unpad_col_in_tile - uint16_datums_per_face_row;
     const uint32_t unpad_col_in_right_face_uint32 = (unpad_col_in_right_face + 1) >> 1;
     for (uint32_t k = 1; k < 4; k += 2) {
         uint32_t uint16_face_idx = k << 8;
