@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <iostream>
-#include <fstream>
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/utils.hpp"
 #include "tt_metal/jit_build/build.hpp"
-#include "tt_metal/impl/device/device.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/tools/tt_builder/builder.hpp"
 #include "llrt/hal.hpp"
@@ -29,6 +26,8 @@ void BuilderTool::set_built_path(const std::string& new_built_path) {
     output_dir_ /= "";
 }
 
+// TODO : This is copied from Device::initialize_build()::init_helper. Refactor this and place this in common utils
+// to be used by builder and jit build
 std::vector<std::shared_ptr<JitBuildState>> BuilderTool::get_build_states(
     tt_metal::IDevice* device, int id, bool is_fw) {
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(id);
