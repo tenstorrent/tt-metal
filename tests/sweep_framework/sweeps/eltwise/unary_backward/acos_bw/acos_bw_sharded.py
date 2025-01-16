@@ -34,7 +34,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16],
     },
 }
 
@@ -47,9 +47,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     sharding_invalidated, output_str = invalidate_vector_sharding(test_vector["input_spec"])
 
     if input_layout == "ROW_MAJOR_LAYOUT":
-        return True, "Inputs to eltwise binary must be tilized"
+        return True, "Input to eltwise binary must be tilized"
+    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str
+
     return False, None
 
 
@@ -79,13 +82,6 @@ def run(
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-
-    torch_op = ttnn.get_golden_function(ttnn.ceil)
-    torch_output_tensor = torch_op(torch_input_tensor_a)
-
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
         core_grid=core_grid,
@@ -95,8 +91,28 @@ def run(
         tile_layout=shard_height_mul_of_32,
     )
 
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
+    torch_grad_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+
+    torch_input_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+
+    torch_input_tensor.requires_grad = True
+    golden_function = ttnn.get_golden_function(ttnn.acos_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor)[0]
+
+    grad_tensor = ttnn.from_torch(
+        torch_grad_tensor,
+        dtype=input_a_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=sharded_config,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
@@ -104,7 +120,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.ceil(input_tensor_a, memory_config=sharded_config)
+    output_tensor = ttnn.acos_bw(grad_tensor, input_tensor, memory_config=sharded_config)[0]
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(output_tensor)
 
