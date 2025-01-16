@@ -17,6 +17,7 @@
 #include "dispatch_core_common.hpp"
 #include "span.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
+#include "control_plane.hpp"
 
 namespace tt {
 namespace tt_metal::detail {
