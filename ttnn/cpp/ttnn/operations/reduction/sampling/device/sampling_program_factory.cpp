@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     uint32_t input_indices_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig input_indices_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            cb_in_units * input_indices_tile_size, {{input_indices_cb_index, input_indices_cb_data_format}})
+            Wt * input_indices_tile_size, {{input_indices_cb_index, input_indices_cb_data_format}})
             .set_page_size(input_indices_cb_index, input_indices_tile_size);
     auto cb_input_indices_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, input_indices_cb_config);
 
@@ -173,11 +173,11 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     // final indices
     uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();
-    uint32_t aligned_final_indices_rm_unit_size = num_out0_units * final_indices_rm_unit_size;
-    uint32_t final_indices_rm_cb_index = tt::CBIndex::c_13;
+    uint32_t aligned_final_indices_rm_unit_size = 32 * 32 * final_indices_rm_unit_size;
+    uint32_t final_indices_rm_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            aligned_final_indices_rm_unit_size, {{final_indices_rm_cb_index, input_indices_cb_data_format}})
+            Wt * aligned_final_indices_rm_unit_size, {{final_indices_rm_cb_index, input_indices_cb_data_format}})
             .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
     auto cb_final_indices_rm_tensor =
         tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);

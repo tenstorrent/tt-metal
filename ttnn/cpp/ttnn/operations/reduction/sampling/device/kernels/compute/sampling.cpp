@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include <cstdint>
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "compute_kernel_api.h"
@@ -22,13 +20,24 @@
 #include "compute_kernel_api/pack.h"
 #include "debug/dprint.h"
 #include "ckernel_sfpu.h"
+
+#include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/tilize.h"
+
+#define DEBUG_PRINT 0
 using namespace ckernel;
 // topk llk needs a global variable atm
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        DPRINT << TSLICE(cb_id, 0, sr) << ENDL();
+    }
+}
 namespace NAMESPACE {
-
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
     rand_tile_init(seed);
@@ -182,6 +191,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 void untilize_block_fn(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
+
+    untilize_init(in_cb, out_cb);
     untilize_init_short(in_cb);
     cb_wait_front(in_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -385,10 +396,11 @@ void top_k() {
         cb_wait_front(index_transposed_cb_index, Wt);
         cb_pop_front(index_transposed_cb_index, Wt);
     }
-    // sfpu::_init_sfpu_config_reg();
+    sfpu::_init_sfpu_config_reg();
 }
 
 void MAIN {
+    DPRINT << "compute kernel" << ENDL();
     uint32_t arg_id = 0;
     constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
@@ -427,24 +439,29 @@ void MAIN {
         values_cb_index,
         output_ind_cb_index,
         true>();
-
+    DPRINT << "top-k " << ENDL();
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     // mask out all values except the top-k
     cb_wait_front(topk_mask_cb_index, Kt);
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
-
+    DPRINT << "done add " << ENDL();
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
-
+    DPRINT << "done softmax " << ENDL();
     // untilize final indices
     untilize_block_fn(input_indices_cb_index, output_final_indices_rm_cb_index, Ht * Wt);
-    // untilize values
-    untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
+
+    DPRINT << "untilize input_indices_cb_index " << ENDL();
+    // // untilize values
+    // untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
+    // DPRINT<<"untilize values_cb_index "<<Ht<<Kt<<ENDL();
+
     // untilize indices
-    untilize_block_fn(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
+    // untilize_block_fn(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
+    // DPRINT<<"done untilizes "<<ENDL();
 }
 }  // namespace NAMESPACE
