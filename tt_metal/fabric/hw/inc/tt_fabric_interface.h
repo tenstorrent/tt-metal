@@ -6,6 +6,7 @@
 
 #include "eth_l1_address_map.h"
 #include "noc/noc_parameters.h"
+#include <fabric_host_interface.h>
 
 namespace tt::tt_fabric {
 
