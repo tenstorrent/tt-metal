@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
+import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -162,6 +163,14 @@ def run_prefetcher_mm(
         hop_grid,
     ) = get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test)
 
+    # Pad K, N to be divsible by the number of receiver cores
+    padded_input_shapes = []
+    for K, N in input_shapes:
+        factor = ttnn.TILE_SIZE * len(receiver_cores_list)
+        K = int(math.ceil(K / factor) * factor)
+        N = int(math.ceil(N / factor) * factor)
+        padded_input_shapes.append((K, N))
+
     if num_reader_cores != 12:
         mm_optimised_ring_cores = receiver_cores_list
 
@@ -203,19 +212,22 @@ def run_prefetcher_mm(
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):
-        K, N = input_shapes[tid % num_tensors]
+        K, _ = input_shapes[tid % num_tensors]
+        K_pad, N_pad = padded_input_shapes[tid % num_tensors]
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(
                 dram_core_range_set,
-                [K, N // len(dram_cores)],
+                [K_pad, N_pad // len(dram_cores)],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
 
+        K_pad, _ = padded_input_shapes[tid % num_tensors]
+        input_tensor_padded = torch.nn.functional.pad(pt_tensors[tid], (0, 0, 0, K_pad - K), "constant", 0)
         tt_tensor = ttnn.as_tensor(
-            pt_tensors[tid],
+            input_tensor_padded,
             device=device,
             dtype=dtypes[tid % num_tensors],
             memory_config=input_sharded_mem_config,
@@ -263,10 +275,12 @@ def run_prefetcher_mm(
         out_shape = [1, 1, M, N]
         out_shapes.append(out_shape)
 
+        K_pad, N_pad = padded_input_shapes[tid]
+
         in0_block_h = M // ttnn.TILE_SIZE
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        in0_block_w = K_pad // num_cores // ttnn.TILE_SIZE
         out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        out_block_w = N_pad // num_cores // ttnn.TILE_SIZE
 
         out_subblock_h = 1
         out_subblock_w = max_dst_tiles
@@ -318,15 +332,17 @@ def run_prefetcher_mm(
     )
 
     output_mem_configs = []
-    for shape in out_shapes:
-        _, _, M, N = shape
+    for i in range(len(out_shapes)):
+        shape = out_shapes[i]
+        _, _, M, _ = shape
+        _, N_pad = padded_input_shapes[i]
 
         output_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 output_core_range_set,
-                [M, N // num_cores],
+                [M, N_pad // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -334,18 +350,20 @@ def run_prefetcher_mm(
 
     in0_tensors = []
     in0_t_tensors = []
-    for shape in in0_shapes:
+    for i in range(len(in0_shapes)):
+        shape = in0_shapes[i]
         in0 = torch.randn(shape)
         in0_tensors.append(in0)
 
-        _, _, M, K = shape
+        _, _, M, _ = shape
+        K_pad, _ = padded_input_shapes[i]
 
         in0_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 input_core_range_set,
-                [M, K // num_cores],
+                [M, K_pad // num_cores],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )

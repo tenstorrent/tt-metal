@@ -1356,11 +1356,6 @@ void Matmul::validate(
     TT_FATAL(
         (input_tensor_a.get_layout() == Layout::TILE && input_tensor_b.get_layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
-    TT_FATAL(
-        a_shape[-1] == b_shape[-2],
-        "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} height={}",
-        a_shape[-1],
-        b_shape[-2]);
 
     const bool is_optional_output_tensor = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
     if (is_optional_output_tensor) {
@@ -1413,6 +1408,28 @@ void Matmul::validate(
 
     MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, this);
 
+    bool gather_in0 = false;
+    std::visit(
+        [&gather_in0](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                if (program_config.gather_in0) {
+                    gather_in0 = true;
+                }
+            }
+        },
+        chosen_program_config);
+
+    // Gather in0 supports unpadded input shapes, where in0 K differs from in1 K
+    if (!gather_in0) {
+        TT_FATAL(
+            a_shape[-1] == b_shape[-2],
+            "The width of the first tensor must be equal to the height of the second tensor. Mismatch: width={} "
+            "height={}",
+            a_shape[-1],
+            b_shape[-2]);
+    }
+
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
     const auto& optional_bias = optional_input_tensors.at(0);
     if (optional_bias.has_value()) {
@@ -1454,7 +1471,7 @@ void Matmul::validate(
     }
 
     std::visit(
-        [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
+        [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, gather_in0, this](
             const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             // TODO: For 1D and 2D mcasts, we don't check if tensor is single core or single row/col
@@ -1492,6 +1509,13 @@ void Matmul::validate(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
                         "Input tensor B must be width sharded when using gather_in0.");
+
+                    auto in0_shard_shape = input_tensor_a.shard_spec().value().shape;
+                    TT_FATAL(
+                        (in0_shard_shape[1] * input_tensor_a.shard_spec().value().grid.num_cores()) ==
+                            input_tensor_b.get_logical_shape()[-2],
+                        "Padded Kt derived from in0 must equal unpadded Kt derived from in1.");
+
                     if (!this->global_cb.has_value()) {
                         TT_FATAL(
                             input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
@@ -1533,7 +1557,6 @@ void Matmul::validate(
                         // No padding
                         TT_FATAL(M == per_core_M, "Error");
                         TT_FATAL(per_core_M == (shard_shape[0] / in0_tile_shape[0]), "Error");
-                        TT_FATAL(K % program_config.in0_block_w == 0, "Error");
                         TT_FATAL((shard_shape[1] / in0_tile_shape[1]) % program_config.in0_block_w == 0, "Error");
                     }
                     if (this->output_mem_config.is_sharded()) {
@@ -1831,9 +1854,15 @@ void Matmul::validate(
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseProgramConfig> ||
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastProgramConfig> ||
                 std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                TT_FATAL(
-                    (input_tensor_a.get_legacy_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
-                    "Kt must be divisible by in0_block_w");
+                if (!gather_in0) {
+                    TT_FATAL(
+                        (input_tensor_a.get_padded_shape()[-1] / in0_tile_shape[1]) % program_config.in0_block_w == 0,
+                        "Kt must be divisible by in0_block_w");
+                } else {
+                    TT_FATAL(
+                        (input_tensor_b.get_padded_shape()[-2] / in1_tile_shape[0]) % program_config.in0_block_w == 0,
+                        "Kt (derived from in1) must be divisible by in0_block_w");
+                }
                 TT_FATAL(
                     program_config.per_core_M % program_config.out_subblock_h == 0,
                     "per_core_M must be divisible by out_subblock_h");
