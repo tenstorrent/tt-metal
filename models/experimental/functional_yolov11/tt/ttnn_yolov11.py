@@ -33,6 +33,7 @@ class Yolov11_Conv2D:
         weights_dtype=ttnn.bfloat8_b,
         use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     ):
         self.device = device
         self.batch_size = conv.batch_size
@@ -102,6 +103,7 @@ class Yolov11_Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            memory_config=memory_config,
         )
         return x
 
@@ -212,16 +214,10 @@ class C3K:
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
 
-        if x2.shape != k2.shape:
-            x2 = x2[:, :, : k2.shape[2], : k2.shape[3]]
-
         if x2.is_sharded():
             x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
         if k2.is_sharded():
             k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
-
-        k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
-        x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
 
         x = ttnn.concat((k2, x2), 3)
         x = self.cv3(device, x)
@@ -319,4 +315,78 @@ class YoloV11:
         x = self.conv6(self.device, x)  # 7
         x = self.c3k2_4(self.device, x)  # 8
 
+        return x
+
+
+class Atention:
+    def __init__(self, device, parameter, conv_pt):
+        # print(parameter,conv)
+        self.qkv = Conv(device, parameter.qkv, conv_pt.qkv, enable_act=False)
+        self.proj = Conv(device, parameter.proj, conv_pt.proj, enable_act=False)
+        self.pe = Conv(device, parameter.pe, conv_pt.pe, enable_act=False)
+        self.num_heads = 2
+        self.key_dim = 32
+        self.head_dim = 64
+        self.scale = self.key_dim**-0.5
+
+    def __call__(self, device, x, batch_size=1):
+        qkv = self.qkv(device, x)  # [1, 1, 49[64], 256]
+        qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        qkv = ttnn.permute(qkv, (0, 3, 1, 2))  # [1,256,1,49]
+        qkv = ttnn.reshape(
+            qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1])
+        )  # [1,2,128,49]
+        q, k, v = (
+            qkv[:, :, : self.key_dim, :],
+            qkv[:, :, self.key_dim : self.head_dim, :],
+            qkv[:, :, self.head_dim :, :],
+        )  # ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 64, 49[64]])
+        # print("------",q.shape,k.shape,v.shape)
+        q_permuted = ttnn.permute(q, (0, 1, 3, 2))  # ttnn.Shape([1, 2, 49[64]],32)
+        attn = ttnn.matmul(q_permuted, k)
+        attn = ttnn.multiply(attn, self.scale)  # ([1, 2, 49, 49])
+        attn = ttnn.softmax(attn, dim=-1)
+        attn = ttnn.permute(attn, (0, 1, 3, 2))
+        x1 = ttnn.matmul(v, attn)  # [1, 2, 64, 49[64]]
+        x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
+        x1 = ttnn.permute(x1, (0, 1, 3, 2))
+        v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))  # [1,1,128, 49[64]]
+        v = ttnn.permute(v, (0, 1, 3, 2))
+        x2 = self.pe(device=device, x=v)
+        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # print("shape before add", x1.shape, x2.shape)
+        x = x1 + x2
+        # print("------", x.shape)
+        x = self.proj(device=device, x=x)
+        return x
+
+
+class PSABlock:
+    def __init__(self, device, parameter, conv_pt):
+        self.attn = Atention(device=device, parameter=parameter.attn, conv_pt=conv_pt.attn)
+        self.ffn_conv1 = Conv(device, parameter.ffn_conv1, conv_pt.ffn_conv1)
+        self.ffn_conv2 = Conv(device, parameter.ffn_conv2, conv_pt.ffn_conv2, enable_act=False)
+
+    def __call__(self, device, x):
+        x = self.attn(device, x)
+        x1 = x
+        x = self.ffn_conv1(device, x)
+        x = self.ffn_conv2(device, x)
+        return x + x1
+
+
+class C2PSA:
+    def __init__(self, device, parameter, conv_pt):
+        self.out_channel_0 = parameter.cv1.conv.out_channels
+        self.cv1 = Conv(device, parameter.cv1, conv_pt.cv1)
+        self.cv2 = Conv(device, parameter.cv2, conv_pt.cv2)
+        self.psablock = PSABlock(device, parameter.psablock, conv_pt.psablock)
+
+    def __call__(self, device, x):
+        x = self.cv1(device, x)  # (1,1,49,256)
+        a, b = x[:, :, :, : int(self.out_channel_0 / 2)], x[:, :, :, int(self.out_channel_0 / 2) :]
+        x = self.psablock(device, b)
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.concat((a, x), dim=-1)
+        x = self.cv2(device, x)
         return x
