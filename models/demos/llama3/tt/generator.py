@@ -258,22 +258,14 @@ class LlamaGenerator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        prepare_decode_inputs_time = time()
         host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
-        logger.info(f"Miguel  prepare_decode_inputs_time : {1000*(time() - prepare_decode_inputs_time)}ms")
 
-        copy_host_to_device_time = time()
         device_inputs = copy_host_to_device(
             host_tensors=host_inputs,
             device_tensors=device_inputs,
         )
-        logger.info(f"Miguel  copy_host_to_device : {1000*(time() - copy_host_to_device_time)}ms")
 
-        execute_trace_time = time()
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
-        logger.info(
-            f"Miguel Trace execution time: {1000*(time() - execute_trace_time)}ms @ {1/(time() - execute_trace_time)} tok/s/user"
-        )
 
         return tt_out_trace
 
@@ -470,9 +462,7 @@ class LlamaGenerator:
             return tt_logits
 
     def read_decode_output(self, tt_logits, unpadded_batch):
-        read_decode_output_time = time()
         logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
-        logger.info(f"Miguel: read_decode_output_time = {1000*(time() - read_decode_output_time)}ms")
         return logits
 
     def _decode_forward_no_trace(
