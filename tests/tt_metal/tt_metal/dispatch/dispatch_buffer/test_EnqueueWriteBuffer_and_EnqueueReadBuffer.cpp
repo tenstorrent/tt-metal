@@ -1421,8 +1421,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
 }
 
 TEST_F(CommandQueueSingleCardBufferFixture, StressWrapTest) {
-    const char* arch = getenv("ARCH_NAME");
-    if (strcasecmp(arch, "wormhole_b0") == 0) {
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         tt::log_info("cannot run this test on WH B0");
         GTEST_SKIP();
         return;  // skip for WH B0
