@@ -4,7 +4,7 @@
 
 #include "pool_op.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/math.hpp>
 
 /**
  * Generic pool implementation that uses the new sliding window infrastructure.

@@ -4,7 +4,7 @@
 
 #include "moreh_linear.hpp"
 
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 namespace ttnn::operations::moreh::moreh_linear {
 Tensor MorehLinear::invoke(
     const Tensor& input,

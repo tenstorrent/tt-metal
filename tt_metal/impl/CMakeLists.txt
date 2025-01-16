@@ -49,11 +49,13 @@ target_link_libraries(
     impl
     PUBLIC
         common
-        Metalium::Metal::LLRT
         Tracy::TracyClient
+        Taskflow::Taskflow
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
+        TT::Metalium::HostDevCommon
+        Metalium::Metal::Hardware
 )
 
 target_include_directories(

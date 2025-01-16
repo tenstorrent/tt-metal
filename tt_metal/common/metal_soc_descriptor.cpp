@@ -8,7 +8,7 @@
 #include <iostream>
 #include <string>
 
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include "umd/device/cluster.h"
 #include "yaml-cpp/yaml.h"
 

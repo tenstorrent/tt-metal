@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include <chrono>
 
 /*

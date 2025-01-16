@@ -8,9 +8,9 @@
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "kernels/kernel_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.

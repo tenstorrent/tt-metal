@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <host_api.hpp>
+#include <command_queue.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {

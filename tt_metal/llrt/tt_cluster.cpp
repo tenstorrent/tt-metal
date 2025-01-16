@@ -21,11 +21,11 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/common/test_common.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include <base.hpp>
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <test_common.hpp>
+#include <tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/types/cluster_descriptor_types.h"
@@ -35,17 +35,17 @@
 #include "umd/device/types/xy_pair.h"
 #include "umd/device/hugepage.h"
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
-#include "tt_metal/impl/debug/sanitize_noc_host.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <debug/sanitize_noc_host.hpp>
+#include <rtoptions.hpp>
 #include "tt_metal/llrt/tlb_config.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <core_coord.hpp>
 
 #include "get_platform_architecture.hpp"
 

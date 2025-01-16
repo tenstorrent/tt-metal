@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt_metal.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -12,28 +12,28 @@
 #include <unordered_set>
 #include <utility>
 
-#include "dev_msgs.h"
-#include "llrt/hal.hpp"
-#include "impl/allocator/allocator.hpp"
-#include "impl/debug/dprint_server.hpp"
-#include "impl/dispatch/command_queue.hpp"
-#include "tools/profiler/profiler.hpp"
+#include <dev_msgs.h>
+#include <hal.hpp>
+#include <allocator.hpp>
+#include <dprint_server.hpp>
+#include <command_queue.hpp>
+#include <profiler.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <host_api.hpp>
+#include <circular_buffer_constants.h>
+#include <trace.hpp>
+#include <device_impl.hpp>
+#include <device_pool.hpp>
+#include <kernel.hpp>
+#include <circular_buffer.hpp>
+#include <global_circular_buffer_impl.hpp>
+#include <global_semaphore.hpp>
+#include <sub_device_types.hpp>
+#include <global_circular_buffer.hpp>
 #include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <graph_tracking.hpp>
 
 namespace tt {
 

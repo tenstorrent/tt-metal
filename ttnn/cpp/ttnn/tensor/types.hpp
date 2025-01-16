@@ -11,16 +11,16 @@
 #include <vector>
 #include <algorithm>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/span.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+#include "cpp/ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
 

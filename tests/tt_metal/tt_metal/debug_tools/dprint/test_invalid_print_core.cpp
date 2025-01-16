@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "gtest/gtest.h"
 #include "debug_tools_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/rtoptions.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the DPRINT server can detect an invalid core.

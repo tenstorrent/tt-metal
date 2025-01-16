@@ -151,6 +151,8 @@ foreach(ARCH IN LISTS ARCHS)
         -I..
         -I${PROJECT_SOURCE_DIR}
         -I${PROJECT_SOURCE_DIR}/tt_metal
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug

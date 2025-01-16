@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_fabric/mesh_graph.hpp"
+#include "mesh_graph.hpp"
 
 #include <fstream>
 #include <iostream>

@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "full_like.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/full_like/device/full_like_device_operation.hpp"
 
 namespace py = pybind11;

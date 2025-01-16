@@ -5,13 +5,13 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "impl/device/device.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "dispatch_test_utils.hpp"
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {

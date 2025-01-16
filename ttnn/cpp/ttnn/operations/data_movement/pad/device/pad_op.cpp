@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "pad_op.hpp"
 #include "pad_program_factory.hpp"
 

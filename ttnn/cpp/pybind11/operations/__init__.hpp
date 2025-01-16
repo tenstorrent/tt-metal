@@ -11,7 +11,7 @@
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_pybind.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"

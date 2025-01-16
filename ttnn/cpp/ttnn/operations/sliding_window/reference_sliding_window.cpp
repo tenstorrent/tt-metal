@@ -8,7 +8,7 @@
 #include <numeric>
 #include <tuple>
 
-#include "impl/device/device.hpp"
+#include <tt-metalium/device_impl.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 

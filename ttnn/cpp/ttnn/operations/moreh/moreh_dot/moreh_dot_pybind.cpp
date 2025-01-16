@@ -9,7 +9,7 @@
 
 #include "device/moreh_dot_device_operation.hpp"
 #include "moreh_dot.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
 

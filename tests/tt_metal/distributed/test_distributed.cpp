@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/distributed/distributed_fixture.hpp"
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <tt-metalium/system_mesh.hpp>
 
 namespace tt::tt_metal::distributed::test {
 

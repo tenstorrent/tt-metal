@@ -5,12 +5,12 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "tt_metal/impl/event/event.hpp"
+#include <tt-metalium/event.hpp>
 #include <cmath>
 #include <thread>
 

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt/hal.hpp"
-#include "tt_fabric/control_plane.hpp"
+#include <tt-metalium/hal.hpp>
+#include "control_plane.hpp"
 #include <queue>
 
 namespace tt::tt_fabric {

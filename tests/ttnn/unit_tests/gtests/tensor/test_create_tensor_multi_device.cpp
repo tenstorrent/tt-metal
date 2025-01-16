@@ -6,7 +6,7 @@
 #include <optional>
 #include <variant>
 
-#include "buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"

@@ -6,7 +6,7 @@
 
 #include <boost/container/small_vector.hpp>
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 
 #if TTNN_WITH_PYTHON_BINDINGS
 #include <pybind11/stl.h>

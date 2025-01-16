@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_fabric/routing_table_generator.hpp"
+#include "routing_table_generator.hpp"
 
 #include <queue>
 #include <memory>

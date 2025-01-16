@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <array>
 
-#include "common/assert.hpp"
+#include <assert.hpp>
 // C++
 #include <map>
 // C

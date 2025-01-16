@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "sub_device/sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 struct ReduceScatterAsync {

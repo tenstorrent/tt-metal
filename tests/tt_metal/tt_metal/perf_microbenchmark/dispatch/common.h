@@ -7,14 +7,14 @@
 #include <cstdint>
 #include <unordered_map>
 #include "core_coord.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/cq_commands.hpp>
 #include "noc/noc_parameters.h"
 
-#include "tt_metal/llrt/hal.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/llrt.hpp>
 
 extern bool debug_g;
 extern bool use_coherent_data_g;

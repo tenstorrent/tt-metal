@@ -6,9 +6,9 @@
 
 #include <cstddef>
 #include "types.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/dispatch/work_executor.hpp"
+#include <buffer_constants.hpp>
+#include <buffer.hpp>
+#include <work_executor.hpp>
 
 //==================================================
 //               DEVICE MANAGEMENT

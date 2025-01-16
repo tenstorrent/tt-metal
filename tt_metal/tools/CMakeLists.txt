@@ -9,4 +9,6 @@ target_link_libraries(
     PUBLIC
         profiler
         llrt
+    PRIVATE
+        TT::Metalium::HostDevCommon
 )

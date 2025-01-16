@@ -7,7 +7,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include <optional>
 

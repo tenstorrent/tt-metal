@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include "ttnn/decorators.hpp"

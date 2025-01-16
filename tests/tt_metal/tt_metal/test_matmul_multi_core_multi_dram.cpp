@@ -6,12 +6,12 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

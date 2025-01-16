@@ -4,10 +4,10 @@
 
 #include <optional>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {

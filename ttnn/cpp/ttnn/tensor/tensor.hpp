@@ -10,21 +10,21 @@
 #include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/tile/tile.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {

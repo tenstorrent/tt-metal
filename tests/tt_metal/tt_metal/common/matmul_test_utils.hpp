@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include "host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/common/test_tiles.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/test_tiles.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/llrt.hpp>
 
 using namespace tt;
 

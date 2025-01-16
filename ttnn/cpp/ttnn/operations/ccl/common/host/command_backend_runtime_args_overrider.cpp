@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include "tt_metal/impl/kernels/runtime_args_data.hpp"
-#include "common/assert.hpp"
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::ccl {
 size_t tensor_address_runtime_args_overrider::add_tensor() {

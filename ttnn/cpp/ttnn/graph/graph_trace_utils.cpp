@@ -10,7 +10,7 @@
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::graph {
 

@@ -4,8 +4,8 @@
 
 #include "hal.hpp"
 
-#include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt_backend_api_types.hpp>
+#include <assert.hpp>
 
 #include "get_platform_architecture.hpp"
 namespace tt {

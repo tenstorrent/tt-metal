@@ -4,13 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include "common/core_coord.hpp"
-#include "detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "impl/device/device.hpp"
-#include "impl/kernels/data_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "impl/program/program.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/kernels/kernel_types.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <kernel_types.hpp>
+#include <tt_cluster.hpp>
 
 #include <utility>
 

@@ -8,7 +8,7 @@
 #include "moreh_nll_loss_helper.hpp"
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss {
 

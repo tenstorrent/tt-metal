@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include <l1_banking_allocator.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -13,15 +13,15 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/allocator/allocator_types.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <allocator.hpp>
+#include <allocator_types.hpp>
+#include <buffer_constants.hpp>
+#include <assert.hpp>
+#include <core_coord.hpp>
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 namespace tt {
 

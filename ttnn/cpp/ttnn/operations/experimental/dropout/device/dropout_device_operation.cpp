@@ -5,8 +5,8 @@
 #include "dropout_device_operation.hpp"
 
 #include <magic_enum/magic_enum.hpp>
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;

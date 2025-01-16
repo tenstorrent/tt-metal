@@ -7,7 +7,7 @@
 #include <functional>
 #include <variant>
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/command_queue.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"

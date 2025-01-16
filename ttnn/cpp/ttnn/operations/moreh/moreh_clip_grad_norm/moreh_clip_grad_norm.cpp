@@ -6,13 +6,13 @@
 
 #include <optional>
 
-#include "common/base_types.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "cpp/ttnn/operations/eltwise/binary/binary.hpp"
+#include "cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"

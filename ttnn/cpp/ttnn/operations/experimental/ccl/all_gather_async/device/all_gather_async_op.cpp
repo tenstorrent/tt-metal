@@ -4,9 +4,9 @@
 
 #include "all_gather_async_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 

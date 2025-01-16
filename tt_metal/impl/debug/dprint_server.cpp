@@ -16,16 +16,16 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
-#include "llrt/llrt.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <llrt.hpp>
+#include <logger.hpp>
 
 #include "dprint_server.hpp"
 #include "debug_helpers.hpp"
-#include "llrt/rtoptions.hpp"
-#include "common/bfloat8.hpp"
+#include <rtoptions.hpp>
+#include <bfloat8.hpp>
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 using std::cout;
 using std::endl;

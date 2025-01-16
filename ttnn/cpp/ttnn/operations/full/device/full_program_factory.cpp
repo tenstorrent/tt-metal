@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "full_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "cpp/ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
 using namespace tt::constants;

@@ -5,9 +5,9 @@
 #include "global_semaphore.hpp"
 
 #include <memory>
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/span.hpp>
 
 namespace ttnn::global_semaphore {
 

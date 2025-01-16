@@ -13,13 +13,13 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/device.hpp"
+#include <core_coord.hpp>
+#include <device.hpp>
 #include "umd/device/tt_soc_descriptor.h"
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 // FIXME: ARCH_NAME specific, needed for several pointer types here
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 namespace tt::watcher {
 

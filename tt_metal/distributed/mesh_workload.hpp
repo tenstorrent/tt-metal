@@ -6,7 +6,7 @@
 
 #include "mesh_device.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/host_api.hpp"
+#include <host_api.hpp>
 
 namespace tt::tt_metal::distributed {
 // The LogicalDeviceRange concept is fundamentally identical to the CoreRange concept

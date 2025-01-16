@@ -6,15 +6,15 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/llrt/tt_memory.h"
-#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_memory.h>
+#include <tt-metalium/llrt.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "llrt/hal.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/hal.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

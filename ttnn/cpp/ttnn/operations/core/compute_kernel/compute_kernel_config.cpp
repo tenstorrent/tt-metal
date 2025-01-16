@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 

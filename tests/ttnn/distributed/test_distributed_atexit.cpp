@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <ttnn/core.hpp>
 #include <ttnn/distributed/api.hpp>
-#include "distributed/mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::distributed::test {
 

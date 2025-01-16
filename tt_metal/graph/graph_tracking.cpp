@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <graph_tracking.hpp>
 
 namespace tt::tt_metal {
 

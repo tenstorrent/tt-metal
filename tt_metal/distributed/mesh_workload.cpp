@@ -5,7 +5,7 @@
 #include "mesh_command_queue.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_workload_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
 

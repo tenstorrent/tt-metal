@@ -18,19 +18,19 @@
 #include <unordered_set>
 #include <utility>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 
 #include "llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <rtoptions.hpp>
 #include "hal.hpp"
 
-#include "jit_build/settings.hpp"
+#include <settings.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 namespace tt {
 

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/event/event.hpp"
+#include <event.hpp>
 
 #include <thread>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 #include "tt_metal/event.hpp"
 
 namespace tt::tt_metal {

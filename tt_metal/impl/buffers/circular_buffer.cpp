@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <circular_buffer.hpp>
 
-#include "host_api.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <host_api.hpp>
+#include <llrt.hpp>
+#include <buffer.hpp>
+#include <global_circular_buffer_impl.hpp>
+#include <tt_metal.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
 
 namespace {
 

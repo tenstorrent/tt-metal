@@ -4,8 +4,8 @@
 
 #include "topology.hpp"
 #include "kernel_config/fd_kernel.hpp"
-#include "impl/device/device_pool.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <device_pool.hpp>
+#include <tt_metal.hpp>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"

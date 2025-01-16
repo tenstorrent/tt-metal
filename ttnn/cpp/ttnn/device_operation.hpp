@@ -8,14 +8,14 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-#include "tt_metal/impl/device/program_cache.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
-#include "tt_stl/reflection.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/program_cache.hpp>
+#include <tracy/Tracy.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/core_coord.hpp"
+#include <core_coord.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -14,10 +14,10 @@
 #include <vector>
 
 #include "umd/device/tt_xy_pair.h"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <reflection.hpp>
+#include <span.hpp>
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {

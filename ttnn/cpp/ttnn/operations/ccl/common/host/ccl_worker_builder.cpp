@@ -6,17 +6,17 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "tt_metal/host_api.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "tt_metal/tt_stl/overloaded.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include <tt-metalium/overloaded.hpp>
 
 #include <optional>
 #include <variant>

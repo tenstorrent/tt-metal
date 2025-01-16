@@ -6,12 +6,12 @@
 
 #include <memory>
 
-#include "tt_metal/tt_stl/overloaded.hpp"
+#include <tt-metalium/overloaded.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 
 using namespace tt::tt_metal;

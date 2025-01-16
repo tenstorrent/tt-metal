@@ -10,9 +10,9 @@
 #include <vector>
 #include <magic_enum/magic_enum.hpp>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/tt_cluster.hpp>
+#include <tt-metalium/reflection.hpp>
 
 namespace tt::tt_fabric {
 struct ChipSpec {
