@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "tt_metal/hw/inc/dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include <tt-metalium/dataflow_api.h>
+#include "hw/inc/tt_fabric.h"
 // clang-format on
 
 router_state_t router_state __attribute__((aligned(16)));

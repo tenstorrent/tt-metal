@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "dataflow_api.h"
 
 using namespace tt;

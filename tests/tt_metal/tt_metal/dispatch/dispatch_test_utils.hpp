@@ -4,8 +4,8 @@
 
 #pragma once
 #include <cstdint>
-#include "host_api.hpp"
-#include "impl/kernels/kernel.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 
 struct TestBufferConfig {
     uint32_t num_pages;

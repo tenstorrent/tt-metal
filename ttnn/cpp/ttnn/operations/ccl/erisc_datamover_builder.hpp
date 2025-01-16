@@ -10,13 +10,13 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include <vector>
 #include <unordered_map>

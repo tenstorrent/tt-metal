@@ -7,8 +7,8 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 

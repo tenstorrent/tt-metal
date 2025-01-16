@@ -9,15 +9,15 @@
 #include <cstdint>
 #include <memory>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"

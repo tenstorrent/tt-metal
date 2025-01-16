@@ -5,9 +5,9 @@
 #include <cstdint>
 #include <string>
 
-#include "tt_metal/experimental/hal.hpp"
-#include "tt_metal/llrt/hal.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include <hal_exp.hpp>
+#include <hal.hpp>
+#include <tt_backend_api_types.hpp>
 #include <umd/device/types/arch.h>
 
 using tt::tt_metal::HalL1MemAddrType;

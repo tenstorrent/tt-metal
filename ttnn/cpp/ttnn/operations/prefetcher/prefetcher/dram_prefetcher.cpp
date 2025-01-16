@@ -6,8 +6,8 @@
 #include <optional>
 
 #include "device/dram_prefetcher_op.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::dram_prefetcher {
 
