@@ -22,7 +22,7 @@ void MAIN {
 #ifndef ROWWISE
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #else
-    transpose_wh_init(tt::CBIndex::c_0);
+    transpose_wh_init(tt::CBIndex::c_0, tt::CBIndex::c_16);
 #endif
     cumsum_tile_init();
 

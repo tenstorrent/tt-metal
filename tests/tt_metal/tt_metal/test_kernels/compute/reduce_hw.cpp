@@ -46,7 +46,7 @@ void MAIN {
     constexpr bool at_start = get_compile_time_arg_val(3);
     dummy_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
 #ifndef SHORT_INIT
-    reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #else
     reduce_init_delta<at_start>(tt::CBIndex::c_16, tt::CBIndex::c_0, tt::CBIndex::c_2);
 #endif

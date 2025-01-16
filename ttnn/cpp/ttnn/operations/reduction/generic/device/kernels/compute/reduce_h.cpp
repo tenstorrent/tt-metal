@@ -13,7 +13,7 @@ void MAIN {
     uint32_t NC = get_compile_time_arg_val(2);
     uint32_t row_chunk = get_compile_time_arg_val(3);
 
-    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CB::c_out0);
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
 
     constexpr int onetile = 1;
