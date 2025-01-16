@@ -1664,26 +1664,27 @@ TT-NN performance has five components:
 
 ![Performance components overview](images/4.6-overview.png)
 
-1. **Main Python Thread** - Main python thread is your code that executes ttnn calls and other logical OPs. The speed of the main python thread determines the speed at which python calls are dispatched to the API. You are in control of any overheads. When counting in microseconds python is slower than you think.
-2. **Host API** - Most ttnn calls are immediately dispatched onto multiple C++ threads for further processing before any hardware changes. You are generally not in control of any overheads in this part of the stack.
-3. **Host-device Communications** - Data is heavy, avoid moving it. PCIe bandwidth and latency isn't negligible at the speeds needed to run models. In addition, Tenstorrent converts data into tiles of 32x32 elements for faster processing. Tilizing and untilizing data must be specified, takes time, and is performed on-device where possible.
-4. **Device Dispatch** - We can measure time between one OP finishing and the next starting. The lower limit of device dispatches are single-digit microseconds. Work is underway to reduce the lower limit to zero. However, for various reasons you might see much higher dispatch times, most notably if there are a lot of runtime arguments to a function or if OPs are running between calls.
-5. **Device OP Performance** - Device OP performance measures how long it takes the hardware to run a given operation. We want performance limited by either DRAM bandwidth or math throughput. For larger OPs both of these are achievable. Device OP performance is about how data is placed (DRAM vs L1, sharded vs interleaved) and how the compute kernels are configured (process more than one tile at once and use smaller data formats).
+1. **Main Python Thread:** Main python thread is your code that executes TT-NN calls and other logical OPs. The speed of the main python thread determines the speed at which python calls are dispatched to the API. You are in control of any overheads. When counting in microseconds, python is slower than you think.
+2. **Host API:** Most TT-NN calls are immediately dispatched onto multiple C++ threads for further processing before any hardware changes. You are generally not in control of any overheads in this part of the stack.
+3. **Host-device Communications:** Data is heavy, avoid moving it. PCIe bandwidth and latency isn't negligible at the speeds needed to run models. In addition, Tenstorrent converts data into tiles of 32x32 elements for faster processing. Tilizing and untilizing data must be specified, takes time, and is performed on-device where possible.
+4. **Device Dispatch:** We can measure time between one OP finishing and the next starting. The lower limit of device dispatches are single-digit microseconds. Work is underway to reduce the lower limit to zero. However, for various reasons you might see much higher dispatch times, most notably if there are a lot of runtime arguments to a function or if OPs are running between calls.
+5. **Device OP Performance:** Device OP performance measures how long it takes hardware to run an operation. We want performance limited by either DRAM bandwidth or math throughput. For larger OPs, both are achievable. Device OP performance is about how data is placed (DRAM vs L1, sharded vs interleaved) and how the compute kernels are configured (process more than one tile at once and use smaller data formats).
 
-Further detail will be provided. It is important to confirm that Tracing has been enabled. For more inforation see [4.1 Tracing](#41-tracing) for more details, tracing should be used for decode mode but not prefill mode.
+> [!IMPORTANT]
+> Confirm that Tracing has been enabled!
+> Tracing is used for decode mode, NOT prefill mode! For decode mode, don't worry about 1-3, but for prefill mode you will.
 
-> [!NOTE]
-> This means that for decode mode you won’t have to worry about 1-3 but for prefill mode you will.
+For more inforation see: [4.1 Tracing](#41-tracing).
 
 #### 4.6.1 Main Python Thread
 
-Implement the main python thread if you are not tracing. The main python thread is not important if you are using tracing. The Metal Profiler/Tracy can also show python performance but for pure python analysis Viztracer is a recommended tool. [viztracer](https://github.com/gaogaotiantian/viztracer):
+The main python thread is only used if you are NOT tracing. The Metal Profiler/Tracy can also show python performance but for pure python analysis, we recommend the Viztracer tool: [viztracer](https://github.com/gaogaotiantian/viztracer).
 
 ```bash
 pip install viztracer
 ```
 
-Find the line of code to profile, it is usually the part that calls your model’s forward function and wrap it, e.g.:
+Find the line of code to profile, it usually calls the model’s forward function and wraps it, for example:
 
 ```python
 # ...
@@ -1694,33 +1695,36 @@ with Viztracer(output_file='trace.json') as tracer:
     tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
 ```
 
-You can view this file with `vizviewer trace.json` - it’s self-sufficient so if you’re working on a remote machine you can copy it back to your laptop and run it there (remember to `pip install viztracer` locally as well). Use WASD to navigate the UI and use the mouse to expand processes to see the call stacks. Look for any non-ttnn code that takes a significant amount of time between the ttnn calls in functions and find a way to remove or optimize it.
+View the file with `vizviewer trace.json`. It is self-sufficient; if you’re working on a remote machine, you can copy it back to your laptop. Remember to `pip install viztracer` locally as well. Use WASD to navigate the UI, use the mouse to expand processes to see call stacks. Look for any non-TT-NN code that takes significant time between TT-NN calls in functions. Find a way to remove or optimize it.
 
 What to look for:
 
-* The model forward pass running quickly and then waiting in a ttnn.to_torch or similar call reading data back from device.
-* Time from the start to end of the forward pass of your model. If this is shorter than target latency of your device, it is Fast Enough™ and you are done with this section.
+* The model forward pass running quickly, then waiting in a `ttnn.to_torch` or similar call reading data back from the device.
+* Time from start to end of the forward pass. If the time is shorter than the target latency of your device, it is Fast Enough™.
 
-Top tips:
+> [!TIP]
+> Torch modules add overhead to every function call and member access. We don’t subclass `torch.nn.Module` for anything that might have to run quickly.
 
-* Torch modules add overhead to every function call and member access. We don’t subclass `torch.nn.Module` for anything that might have to run quickly.
-* Generate shard spec and compute kernel config objects once (e.g. in a constructor) instead of recreating them every time you run the forward pass. Keep the forward pass clean.
-* Make sure Metal is compiled in Release mode (default) and you are using ttnn’s async mode (see above).
+> [!TIP]
+> Generate shard spec and compute kernel config objects once, in a constructor, instead of recreating them every time you run the forward pass. Keep the forward pass clean.
+
+> [!TIP]
+> Make sure Metal is compiled in Release mode (default) and you are using TT-NN’s async mode (see above).
 
 #### 4.6.2 Host API
 
 Any overhead here is outside your control and in our experience is minimal. Use a C++ profiler or [Metal Profiler/Tracy](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/MetalProfiler/metal-profiler.md) with host stack traces enabled to see this time.
 
-#### 4.6.3 Host-device communications
+#### 4.6.3 Host-Device Communications
 
 As little communication as possible between the host and the device is preferred. For LLMs this means:
 
-* Perform embeddings on-device (tokens ids are smaller than embeddings).
-* Return only the last token from prefill, not all the tokens.
-* Perform sampling (argmax etc) on-device if you can (at time of writing only argmax is implemented).
-* Avoid pushing attention masks, rotation matrices if they can be generated on-device or re-used between iterations.
+* Perform embeddings on-device, token IDs are smaller than embeddings.
+* Return only the last token from prefill, not all tokens.
+* Perform sampling (argmax etc) on-device if possible.
+* Avoid pushing attention masks or rotation matrices if they can be generated on-device or re-used between iterations.
 
-Note where data is tilized and untilized. Do not tilize or untilize data on the host. The API `to_torch` will by default do this on the host. You can untilize on-device like this:
+Take note where data is tilized and untilized. Do NOT tilize or untilize data on the host. The API `to_torch` will by default do this on the host. You can untilize on-device like this:
 
 ```python
 tt_out_tiled = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
@@ -1729,23 +1733,23 @@ tt_tok = ttnn.argmax(tt_out_row_major, dim=3, use_multicore=True)
 torch_tok = ttnn.to_torch(tt_tok)
 ```
 
-Looking at host-device communications in a python profiler like `viztracer` is possible but be careful - when async-mode is on then any time spent in a communication call like `to_torch` can be comprised of up to three measures:
+> [!CAUTION]
+> Looking at host-device communications in a python profiler like `viztracer` is possible but take care! When async-mode is on, time spent in a communication call like `to_torch`, can be comprised of up to three measures:
+> 1. Time spent waiting for the device.
+> 2. Time spent transferring data.
+> 3. Time spent untilizing data.
+>
+> If you want to measure calls this way, turn async mode off. The time your main python thread spends in `to_torch` will not include any time spent waiting for the device and will be a closer approximation the measures above.
 
-1. Time spent waiting for the device
-2. Time spent transferring data
-3. Time spent untilizing data
+#### 4.6.4 Device Dispatch and OP Performance
 
-If you want to measure calls this way, turn async mode off. The time your main python thread spends in `to_torch` will not include any time spent waiting for the device and will be a closer approximation the measures above.
-
-#### 4.6.4 Device dispatch and OP performance
-
-This is the fun bit, but we need to do a little prep to get started. First, metal must be compiled with `-p` to enable device profiling:
+A bit of preparation is required to get started. First, metal must be compiled with `-p` to enable device profiling:
 
 ```bash
 ./build_metal -p
 ```
 
-Then we can record an OP performance csv file with tracy. For the pytests, run it like this:
+Then we can record an OP performance CSV file with Tracy. For the pytests, run the following:
 
 ```bash
 python -m tracy -r -p -v -m pytest path/to/test.py
@@ -1753,9 +1757,11 @@ python -m tracy -r -p -v -m pytest path/to/test.py
 
 This produces a file with naming convention similar to `ops_perf_results_2024_11_01_15_33_18.csv`, this file is needed from the profiler. For more information see: [Metal Profiler tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/MetalProfiler/metal-profiler.md).
 
-> **Warning:** Only use a single trace execution step when profiling. Profiler support with tracing is still a work-in-progress and more iterations will result in a `AssertionError: Device data mismatch error`.
+> [!Warning]:
+> Only use a single trace execution step when profiling. Profiler support with tracing is still a work-in-progress and more iterations will result in a `AssertionError: Device data mismatch error`.
 
-> **Note:** If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes run `tt_metal/tools/profiler/process_ops_logs.py --date` to generate the CSV file.
+> [!Note]
+> If you see errors while running tracy, try this device-only profiling process instead: run with `TT_METAL_DEVICE_PROFILER=1 pytest path/to/test.py`. After the run completes, run `tt_metal/tools/profiler/process_ops_logs.py --date` to generate the CSV file.
 
 This CSV file contains information recorded from all devices during program execution. To summarize, we run the `perf_report.py` tool:
 
@@ -1769,27 +1775,27 @@ For device performance we recommend looking at a single layer. You can do this b
 
 Ideally you should run your model in as close to end-user form as possible, simplifying it as much as possible. In practice this means:
 
-* Use tracing (if you are using tracing in production).
-* Skip the first compilation iteration - this adds a lot of one-time host overhead between OPs.
-* Run a single layer of the model - but be aware of which OPs are run for every layer and which ones are only run at the start and end (e.g. embedding, final norm and LM head).
-* Add a tracy signpost e.g. `tracy.signpost("Performance pass")` before the part you want to record - this will be focused on by default by `perf_report.py`, saving you some work.
+* Use tracing if you are using tracing in production.
+* Skip the first compilation iteration, it adds a one-time host overhead between OPs.
+* Run a single layer of the model; be aware of which OPs are run for every layer and which OPs run at the start and end, for example, embedding, final norm, and LM Head.
+* Add a tracy signpost, for example, `tracy.signpost("Performance pass")` before the part you want to record; this will be focused on by default by `perf_report.py`, saving you some work.
 
 **What does such a report look like?**
 
-Here is an example without tracing enabled. You can instantly see that more time (756us) is spent in between OPs (op-to-op gap) than running OPs on device (362us)!
+Here is an example without tracing enabled. You can instantly see that more time (756us) is spent in between OPs (OP-to-OP gap) than running OPs on device (362us)!
 
-Reducing op-to-op gap
+#### 4.6.5 Reducing OP-to-OP Gap
 
 ![op-to-op gap](images/4.6-op-to-op-gap.png)
 
 There are two main contributors to op-to-op gap: **host time** and **dispatch time**.
 
-* **Host time** is optimized in steps 1-3. If you are already using tracing or are using async mode and have ensured that your python thread is dispatching faster than the device is generating outputs, then this has already been minimized.
+* **Host time** is optimized in steps 1-3. If you are already tracing or are using async mode and have ensured that your python thread is dispatching faster than the device is generating outputs, then this has already been minimized.
 * **Dispatch time** is out of your hands, but as an example, it is influenced by the number of runtime args a kernel uses.
-    * You can examine the source code for any kernel with high op-to-op latency and see if you can convert some runtime args into compile-time args for your use case.
+    * You can examine the source code for any kernel with high OP-to-OP latency and see if you can convert some runtime args into compile-time args for your use case.
     * You can fuse multiple OPs into a single kernel. Examples where this was worthwhile in the past include `LayerNorm` and `ScaledDotProductAttentionDecode`.
 
-Typically tracing reduces the op-to-op gap below 6us and as of November 2024 there are roadmap plans to reduce this to zero, so as long as your OPs are below this level, your opportunities for optimization here are limited.
+Typically tracing reduces the OP-to-OP gap below 6us and as of November 2024 there are roadmap plans to reduce this to zero, so as long as your OPs are below this level, your opportunities for optimization here are limited.
 
 See [the next section](#47-misc-performance-optimizations) for tips on how to optimize OP performance.
 
@@ -1797,8 +1803,9 @@ See [the next section](#47-misc-performance-optimizations) for tips on how to op
 
 There are many individual tips, let’s start with overall advice:
 
-1. Use as many cores as possible.
-2. Move data as little as possible.
+> [!TIP]
+> Use as many cores as possible.
+> Move data as little as possible.
 
 The perfect OP runs on the entire core grid using sharded inputs from L1. Let’s look more at data movement first, then specific tips.
 
@@ -1806,22 +1813,21 @@ The perfect OP runs on the entire core grid using sharded inputs from L1. Let’
 
 OPs can read data from:
 
-1. **DRAM Interleaved** - Each tile (32x32 datums) is read from a different DRAM bank. This is the ttnn default and is the slowest way to read data. A matmul can expect to read around 190 GB/s on a Wormhole like this.
-2. **DRAM Sharded** - Specifically used for DRAM-bound matmuls and nothing else, this splits the data across DRAM banks and uses the closest core to each bank on the chip to read from that bank. This achieves around 240 GB/s on a Wormhole.
-3. **L1 Interleaved** - Tiles are interleaved across the L1 of all the cores and are read across the NoC (network-on-chip).
-4. **L1 Sharded** - Tiles are sharded across a particular grid of cores.
+1. **DRAM Interleaved:** Each tile (32x32 datums) is read from a different DRAM bank. This is the ttnn default and is the slowest way to read data. A matmul can expect to read around 190 GB/s on a Wormhole like this.
+2. **DRAM Sharded:** Specifically used for DRAM-bound matmuls and nothing else, this splits the data across DRAM banks and uses the closest core to each bank on the chip to read from that bank. This achieves around 240 GB/s on a Wormhole.
+3. **L1 Interleaved:** Tiles are interleaved across the L1 of all the cores and are read across the NoC (network-on-chip).
+4. **L1 Sharded:** Tiles are sharded across a particular grid of cores.
 
-Note that the term **sharding** is used in two ways in the metal stack. Here we are talking about **sharding across cores** within a single chip. It is also used to refer to sharding a dimension across multiple devices - an analogous operation but confusing in this context.
+> [!Note]
+>  **Sharding** is used in two ways in the metal stack. Here we are talking about **sharding across cores** within a single chip. It is also used to refer to sharding a dimension across multiple devices - an analogous operation but confusing in this context.
 
-L1 sharded is particularly fast when the data an OP requires is already placed in L1 of the correct core, avoiding the NoC entirely and reading at maximum speed.
-
-Activations are placed in L1 and weights placed in DRAM.
+L1 sharded is particularly fast when the data an OP requires is already placed in L1 of the correct core, avoiding the NOC entirely and reading at maximum speed. Activations are placed in L1 and weights placed in DRAM.
 
 See the [op config section](#44-op-configs) for more details on writing shard specs in your code.
 
 #### 4.7.2 Specific tips
 
-Situation: OPs are reading from the fastest memory they can, sharded if possible. What might still make things slow?
+If OPs are reading from the fastest memory they can, sharded if possible, what might still make things slow?
 
 * **Unnecessary `ShardedToInterleaved` and `InterleavedToSharded` calls**. The fastest work is work that you don’t have to do. These calls are pure data movement and it is often better to have some OPs using fewer cores if it means they can use the same sharding of their input data as the previous and subsequent OPs. Always avoid data movement!
 * **Always use `ScaledDotProductAttention` (SDPA) OPs if possible**. These implement FlashAttention / FlashDecode and are much faster than writing attention using individual operations.
