@@ -24,11 +24,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_reads; ++i) {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = src_addr + args[args_idx++];
-        uint32_t read_size = args[args_idx++];
-        noc_async_read(get_noc_addr_from_bank_id<read_from_dram>(bank_id, addr), scratch_l1_write_addr, read_size);
-        noc_async_read_barrier();
-        noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, read_size);
-        l1_write_addr += read_size;
+        uint32_t units_to_transfer = args[args_idx++];
+        uint32_t unit_size = args[args_idx++];
+        uint64_t read_addr = get_noc_addr_from_bank_id<read_from_dram>(bank_id, addr);
+        for (uint32_t unit_idx = 0; unit_idx < units_to_transfer; ++unit_idx) {
+            noc_async_read(read_addr, scratch_l1_write_addr, unit_size);
+            noc_async_read_barrier();
+            noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, unit_size);
+            read_addr += unit_size;
+            l1_write_addr += unit_size;
+        }
     }
     noc_async_read_barrier();
 }
