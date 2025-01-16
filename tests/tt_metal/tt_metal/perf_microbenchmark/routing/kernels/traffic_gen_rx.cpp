@@ -13,15 +13,10 @@ constexpr uint32_t endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_src_endpoints = get_compile_time_arg_val(1);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(2);
 
-static_assert(is_power_of_2(num_src_endpoints), "num_src_endpoints must be a power of 2");
-static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
-
 constexpr uint32_t input_queue_id = 0;
 
 constexpr uint32_t queue_start_addr_words = get_compile_time_arg_val(3);
 constexpr uint32_t queue_size_words = get_compile_time_arg_val(4);
-
-static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_tx_x = get_compile_time_arg_val(5);
 constexpr uint32_t remote_tx_y = get_compile_time_arg_val(6);
@@ -49,6 +44,12 @@ constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(16);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(17);
 
 constexpr uint32_t disable_header_check = get_compile_time_arg_val(18);
+
+#ifdef POW2_CB
+static_assert(is_power_of_2(num_src_endpoints), "num_src_endpoints must be a power of 2");
+static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
+static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
+#endif
 
 // predicts size and payload of packets from each destination, should have
 // the same random seed as the corresponding traffic_gen_tx

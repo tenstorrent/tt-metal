@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//
 // Required defines:
 // FD_CORE_TYPE - Fast dispatch core type.
 //
 // Optional defines:
-// POW2_CB_SIZE - Enable power of 2 optimizations. This can be enabled if the queue size is a power of 2
+// POW2_CB - Enable power of 2 optimizations. This can be enabled if the queue size is a power of 2
 //
 
 #pragma once
@@ -156,8 +157,12 @@ public:
     uint8_t queue_id;
     uint32_t queue_start_addr_words;
     uint32_t queue_size_words;
+#ifdef POW2_CB
     uint32_t ptr_offset_mask;
     uint32_t queue_size_mask;
+#else
+    uint32_t queue_size_words_2x;
+#endif
 
     uint8_t remote_x, remote_y; // remote source for input queues, remote dest for output queues
     uint8_t remote_queue_id;
@@ -175,12 +180,15 @@ public:
               uint8_t cb_mode_local_sem_id,
               uint8_t cb_mode_remote_sem_id,
               uint8_t cb_mode_log_page_size) {
-
         this->queue_id = queue_id;
         this->queue_start_addr_words = queue_start_addr_words;
         this->queue_size_words = queue_size_words;
+#ifdef POW2_CB
         this->queue_size_mask = (this->queue_size_words << 1) - 1;
         this->ptr_offset_mask = this->queue_size_words - 1;
+#else
+        this->queue_size_words_2x = this->queue_size_words * 2;
+#endif
         this->remote_x = remote_x;
         this->remote_y = remote_y;
         this->remote_queue_id = remote_queue_id;
@@ -190,16 +198,6 @@ public:
         this->cb_mode_local_sem_id = cb_mode_local_sem_id;
         this->cb_mode_remote_sem_id = cb_mode_remote_sem_id;
         this->cb_mode_page_size_words = (((uint32_t)0x1) << cb_mode_log_page_size)/PACKET_WORD_SIZE_BYTES;
-
-        // Misc. register definitions below.
-
-        // For read/write pointers, we use stream credit registers with auto-increment.
-        // Pointers are in 16B units, and we assume buffer size is power of 2 so we get
-        // automatic wrapping. (If needed, we can fix the pointer advance functions later
-        // to handle non-power-of-2 buffer sizes.)
-
-        // For source/destination ready synchronization signals, we use misc. registers in
-        // streams that behave like scratch registers and are reset to 0.
 
         this->local_rptr_sent = 0;
         this->local_rptr_cleared = 0;
@@ -252,15 +250,42 @@ public:
         return this->queue_id;
     }
 
+    // Return physical offset from a logical offset
+    // already_wrapped = true means to use 1X queue size
+    // already_wrapped = false means to use 2X queue size
+    template<bool already_wrapped>
     inline uint32_t get_physical_offset(uint32_t logical_offset) const {
+#ifdef POW2_CB
         return logical_offset & this->ptr_offset_mask;
+#else
+        if constexpr (already_wrapped) {
+            return logical_offset >= this->queue_size_words ? logical_offset - this->queue_size_words : logical_offset;
+        } else {
+            return logical_offset >= this->queue_size_words_2x ? logical_offset - this->queue_size_words_2x : logical_offset;
+        }
+#endif
+    }
+
+    // Calculate distance between left pointer and right pointer. Right pointer should be
+    // ahead of left pointer. If it is behind, then that means the pointers have wrapped.
+    inline uint32_t calc_distance(uint32_t left, uint32_t right) const {
+#ifdef POW2_CB
+        return (right - left) & this->queue_size_mask;
+#else
+        return right >= left ? right - left : this->queue_size_words_2x - left + right;
+#endif
     }
 
     inline uint32_t wrap_logical_offset(uint32_t logical_offset) const {
-        if (logical_offset >= this->queue_size_words * 2) {
-            logical_offset -= this->queue_size_words * 2;
+        // Wrapping logical offset is not required for pow2. it will use AND mask.
+#ifdef POW2_CB
+        return logical_offset;
+#else
+        if (logical_offset >= this->queue_size_words_2x) {
+            logical_offset -= this->queue_size_words_2x;
         }
         return logical_offset;
+#endif
     }
 
     template<bool input_queue>
@@ -268,7 +293,7 @@ public:
         if constexpr (input_queue) {
             const auto wptr_creds = *this->local_wptr_val;
             *this->local_wptr_update = (-wptr_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-            this->local_wptr = wrap_logical_offset(wptr_creds + this->local_wptr);
+            this->local_wptr = this->wrap_logical_offset(wptr_creds + this->local_wptr);
         }
         return this->local_wptr;
     }
@@ -278,7 +303,7 @@ public:
         if constexpr (!input_queue) {
             const auto sent_creds = *this->local_rptr_sent_val;
             *this->local_rptr_sent_update = (-sent_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-            this->local_rptr_sent = wrap_logical_offset(sent_creds + this->local_rptr_sent);
+            this->local_rptr_sent = this->wrap_logical_offset(sent_creds + this->local_rptr_sent);
         }
         return this->local_rptr_sent;
     }
@@ -288,7 +313,7 @@ public:
         if constexpr (!input_queue) {
             const auto cleared_creds = *this->local_rptr_cleared_val;
             *this->local_rptr_cleared_update = (-cleared_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-            this->local_rptr_cleared = wrap_logical_offset(cleared_creds + this->local_rptr_cleared);
+            this->local_rptr_cleared = this->wrap_logical_offset(cleared_creds + this->local_rptr_cleared);
         }
         return this->local_rptr_cleared;
     }
@@ -298,14 +323,14 @@ public:
         if constexpr (is_input) {
             *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         } else {
-            this->local_wptr = wrap_logical_offset(num_words + this->local_wptr);
+            this->local_wptr = this->wrap_logical_offset(num_words + this->local_wptr);
         }
     }
 
     template<bool is_input>
     inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
         if constexpr (is_input) {
-            this->local_rptr_sent = wrap_logical_offset(num_words + this->local_rptr_sent);
+            this->local_rptr_sent = this->wrap_logical_offset(num_words + this->local_rptr_sent);
         } else {
             *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -314,7 +339,7 @@ public:
     template<bool is_input>
     inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
         if constexpr (is_input) {
-            this->local_rptr_cleared = wrap_logical_offset(num_words + this->local_rptr_cleared);
+            this->local_rptr_cleared = this->wrap_logical_offset(num_words + this->local_rptr_cleared);
         } else {
             *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -322,19 +347,13 @@ public:
 
     template<bool is_input>
     inline uint32_t get_queue_data_num_words_occupied() {
-        auto logical_wptr = this->get_queue_local_wptr<is_input>();
-        auto logical_rptr = this->get_queue_local_rptr_cleared<is_input>();
-        auto old = (logical_wptr - logical_rptr) & this->queue_size_mask;
-
-        auto phys_wptr = logical_wptr >= this->queue_size_words * 2 ? logical_wptr - this->queue_size_words * 2 : logical_wptr;
-        auto phys_rptr = logical_rptr >= this->queue_size_words * 2 ? logical_rptr - this->queue_size_words * 2 : logical_rptr;
-        auto x = (phys_wptr >= phys_rptr ? phys_wptr - phys_rptr : this->queue_size_words * 2 - phys_rptr + phys_wptr);
-
-        // if (x != old) {
-        //     DPRINT << "Occupied | Logical Wptr: " << logical_wptr << "| Physical Wptr: " << phys_wptr << " | Logical Rptr: " << logical_rptr << " | Physical Rptr: " << phys_rptr << " | Old: " << old << " | New: " << x << ENDL();
-        // }
-
-        return x;
+#ifdef POW2_CB
+        return this->calc_distance(this->get_queue_local_rptr_cleared<is_input>(), this->get_queue_local_wptr<is_input>());
+#else
+        const auto phys_wptr = this->get_physical_offset<false>(this->get_queue_local_wptr<is_input>());
+        const auto phys_rptr = this->get_physical_offset<false>(this->get_queue_local_rptr_cleared<is_input>());
+        return this->calc_distance(phys_rptr, phys_wptr);
+#endif
     }
 
     template<bool is_input>
@@ -344,54 +363,28 @@ public:
 
     template<bool is_input>
     inline uint32_t get_num_words_written_not_sent() {
-        auto logical_wptr = this->get_queue_local_wptr<is_input>();
-        auto logical_rptr = this->get_queue_local_rptr_sent<is_input>();
-        auto old = (logical_wptr - logical_rptr) & this->queue_size_mask;
-
-        auto phys_wptr = logical_wptr >= this->queue_size_words * 2 ? logical_wptr - this->queue_size_words * 2 : logical_wptr;
-        auto phys_rptr = logical_rptr >= this->queue_size_words * 2 ? logical_rptr - this->queue_size_words * 2 : logical_rptr;
-        auto x = (phys_wptr >= phys_rptr ? phys_wptr - phys_rptr : this->queue_size_words * 2 - phys_rptr + phys_wptr);
-
-        // if (x != old) {
-        //     DPRINT << "Not Sent | Logical Wptr: " << logical_wptr << "| Physical Wptr: " << phys_wptr << " | Logical Rptr: " << logical_rptr << " | Physical Rptr: " << phys_rptr << " | Old: " << old << " | New: " << x << ENDL();
-        // }
-
-        return x;
+#ifdef POW2_CB
+        return this->calc_distance(this->get_queue_local_rptr_sent<is_input>(), this->get_queue_local_wptr<is_input>());
+#else
+        const auto phys_wptr = this->get_physical_offset<false>(this->get_queue_local_wptr<is_input>());
+        const auto phys_rptr = this->get_physical_offset<false>(this->get_queue_local_rptr_sent<is_input>());
+        return this->calc_distance(phys_rptr, phys_wptr);
+#endif
     }
 
     template<bool is_input>
     inline uint32_t get_queue_wptr_offset_words() {
-        auto logical_wptr = this->get_queue_local_wptr<is_input>();
-        auto phys_wptr = logical_wptr >= this->queue_size_words ? logical_wptr - this->queue_size_words : logical_wptr;
-        auto old = this->get_physical_offset(logical_wptr);
-        // if (phys_wptr != old) {
-        //     DPRINT << "GetWptr | Logical Wptr: " << logical_wptr << "| Physical Wptr: " << phys_wptr << "| Old: " << old << " | New: " << phys_wptr << "| Ptr offset mask = " << ptr_offset_mask << " | Queue Size Words = " << queue_size_words << ENDL();
-        // }
-        return phys_wptr;
+        return this->get_physical_offset<true>(this->get_queue_local_wptr<is_input>());
     }
 
     template<bool is_input>
     inline uint32_t get_queue_rptr_sent_offset_words() {
-        auto logical_rptr = this->get_queue_local_rptr_sent<is_input>();
-        auto phys_rptr = logical_rptr >= this->queue_size_words ? logical_rptr - this->queue_size_words : logical_rptr;
-        auto old = this->get_physical_offset(logical_rptr);
-        // if (phys_rptr != old) {
-        //     DPRINT << "GetRptrSent | Logical Rptr: " << logical_rptr << "| Physical Rptr: " << phys_rptr << "| Old: " << old << " | New: " << phys_rptr << "| Ptr offset mask = " << ptr_offset_mask << " | Queue Size Words = " << queue_size_words << ENDL();
-        // }
-
-        return this->get_physical_offset(this->get_queue_local_rptr_sent<is_input>());
+        return this->get_physical_offset<true>(this->get_queue_local_rptr_sent<is_input>());
     }
 
     template<bool is_input>
     inline uint32_t get_queue_rptr_cleared_offset_words() {
-        auto logical_rptr = this->get_queue_local_rptr_cleared<is_input>();
-        auto phys_rptr = logical_rptr >= this->queue_size_words ? logical_rptr - this->queue_size_words : logical_rptr;
-        auto old = this->get_physical_offset(logical_rptr);
-        // if (phys_rptr != old) {
-        //     DPRINT << "GetRptrCleared | Logical Rptr: " << logical_rptr << "| Physical Rptr: " << phys_rptr << "| Old: " << old << " | New: " << phys_rptr << "| Ptr offset mask = " << ptr_offset_mask << " | Queue Size Words = " << queue_size_words << ENDL();
-        // }
-
-        return this->get_physical_offset(this->get_queue_local_rptr_cleared<is_input>());
+        return this->get_physical_offset<true>(this->get_queue_local_rptr_cleared<is_input>());
     }
 
     template<bool is_input>
