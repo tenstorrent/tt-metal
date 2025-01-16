@@ -222,9 +222,7 @@ struct Tensor {
     //                                  Low Level APIs
     // ======================================================================================
     Tensor reshape(const ttnn::SimpleShape& new_shape) const;
-    Tensor reshape(const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) const;
     Tensor reshape(const ttnn::Shape& new_shape) const;
-
     // ======================================================================================
     //                                      Getters
     // ======================================================================================

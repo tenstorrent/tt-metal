@@ -14,6 +14,7 @@
 #include "memcpy.hpp"
 #include "aligned_allocator.hpp"
 #include "hal.hpp"
+#include "tt_align.hpp"
 
 namespace tt::tt_metal {
 template <bool hugepage_write = false>
@@ -100,7 +101,7 @@ public:
             relay_wait->relay_inline.dispatcher_type = dispatcher_type;
             relay_wait->relay_inline.length = sizeof(CQDispatchCmd);
             relay_wait->relay_inline.stride =
-                align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
+                tt::align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
 
             wait_cmd->base.cmd_id = CQ_DISPATCH_CMD_WAIT;
             wait_cmd->wait.barrier = barrier;
@@ -122,13 +123,13 @@ public:
         } else {
             initialize_wait_cmds(relay_wait_dst, wait_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_wait_with_prefetch_stall(
         uint8_t barrier, uint32_t address, uint32_t count, uint8_t clear_count = 0, bool do_wait = true) {
         this->add_dispatch_wait(barrier, address, count, clear_count, true, do_wait);
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
             *stall_cmd = {};
             stall_cmd->base.cmd_id = CQ_PREFETCH_CMD_STALL;
@@ -145,7 +146,7 @@ public:
     }
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, uint32_t lengthB, uint32_t addr) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_linear_cmd = [&](CQPrefetchCmd* relay_linear_cmd) {
             relay_linear_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
             relay_linear_cmd->relay_linear.noc_xy_addr = noc_xy_addr;
@@ -170,7 +171,7 @@ public:
         uint32_t page_size,
         uint32_t pages,
         uint16_t length_adjust = 0) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_paged_cmd = [&](CQPrefetchCmd* relay_paged_cmd) {
             TT_ASSERT((length_adjust & CQ_PREFETCH_RELAY_PAGED_LENGTH_ADJUST_MASK) == length_adjust);
             relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
@@ -201,7 +202,7 @@ public:
         static_assert(sizeof(CQPrefetchRelayPagedPackedSubCmd) % sizeof(uint32_t) == 0);
 
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQPrefetchRelayPagedPackedSubCmd);
-        uint32_t increment_sizeB = align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sub_cmds_sizeB + sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_relay_paged_cmd = [&](CQPrefetchCmd* relay_paged_cmd) {
             relay_paged_cmd->base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
             relay_paged_cmd->relay_paged_packed.total_length = length;
@@ -251,24 +252,27 @@ public:
         }
 
         // Case 1: flush_prefetch
-        //  a) there is inline_data: data is provided here and follows prefetch relay inline and cq dispatch write linear so total increment size is:
-        //          align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB, pcie_alignment)
-        //  b) don't have inline_data: next command should be to add_data (don't do aligned increment) so total increment size is:
+        //  a) there is inline_data: data is provided here and follows prefetch relay inline and cq dispatch write
+        //  linear so total increment size is:
+        //          tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB, pcie_alignment)
+        //  b) don't have inline_data: next command should be to add_data (don't do aligned increment) so total
+        //  increment size is:
         //          sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)
         // Case 2: !flush_prefetch: no data, increment size is:
-        //          align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment)
-        // Note that adding prefetch_relay_inline and writing the dispatch command already increment cmd_write_offsetB via calls to reserve_space
+        //          tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment)
+        // Note that adding prefetch_relay_inline and writing the dispatch command already increment cmd_write_offsetB
+        // via calls to reserve_space
         if constexpr (flush_prefetch) {
             if constexpr (inline_data) {
                 TT_ASSERT(data != nullptr);  // compiled out?
                 this->add_data(data, data_sizeB, data_sizeB);
 		// this->cmd_write_offsetB has been incremented by sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB
 		// need to ensure this is aligned for next cmds to be written at the correct location
-            	this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+                this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
             }
         } else {
             // Need to make sure next command that flushes prefetch is written to correctly aligned location
-            this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+            this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
         }
     }
 
@@ -314,7 +318,7 @@ public:
         } else {
             initialize_mcast_cmd(mcast_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask) {
@@ -334,7 +338,7 @@ public:
         } else {
             initialize_sem_update_cmd(dispatch_s_sem_update_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     template <bool inline_data = false>
@@ -370,7 +374,7 @@ public:
 
         if (inline_data) {
             TT_ASSERT(data != nullptr);  // compiled out?
-            uint32_t increment_sizeB = align(data_sizeB, this->pcie_alignment);
+            uint32_t increment_sizeB = tt::align(data_sizeB, this->pcie_alignment);
             this->add_data(data, data_sizeB, increment_sizeB);
         }
     }
@@ -401,11 +405,11 @@ public:
             TT_ASSERT(data != nullptr);  // compiled out?
             this->add_data(data, data_sizeB, data_sizeB);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_exec_buf_cmd = [&](CQPrefetchCmd* exec_buf_cmd) {
             exec_buf_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
             exec_buf_cmd->exec_buf.base_addr = base_addr;
@@ -437,7 +441,7 @@ public:
         } else {
             initialize_set_num_worker_sems_cmd(set_num_worker_sems_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_set_go_signal_noc_data(
@@ -467,7 +471,7 @@ public:
         }
         uint32_t* noc_mcast_unicast_data_dst = this->reserve_space<uint32_t*>(data_sizeB);
         this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_set_write_offsets(uint32_t write_offset0, uint32_t write_offset1, uint32_t write_offset2) {
@@ -488,7 +492,7 @@ public:
         } else {
             initialize_write_offset_cmd(write_offset_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_terminate(DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER) {
@@ -506,11 +510,11 @@ public:
         } else {
             initialize_terminate_cmd(terminate_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_prefetch_terminate() {
-        uint32_t increment_sizeB = align(sizeof(CQPrefetchCmd), this->pcie_alignment);
+        uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
         auto initialize_terminate_cmd = [&](CQPrefetchCmd* terminate_cmd) {
             *terminate_cmd = {};
             terminate_cmd->base.cmd_id = CQ_PREFETCH_CMD_TERMINATE;
@@ -532,7 +536,7 @@ public:
             exec_buf_end_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF_END;
             exec_buf_end_cmd->relay_inline.length = sizeof(CQDispatchCmd);
             exec_buf_end_cmd->relay_inline.stride =
-                align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
+                tt::align(sizeof(CQDispatchCmd) + sizeof(CQPrefetchCmd), this->pcie_alignment);
         };
         auto initialize_dispatch_exec_buf_end_cmd = [&](CQDispatchCmd* exec_buf_end_cmd) {
             exec_buf_end_cmd->base.cmd_id = CQ_DISPATCH_CMD_EXEC_BUF_END;
@@ -552,7 +556,7 @@ public:
             initialize_prefetch_exec_buf_end_cmd(prefetch_exec_buf_end_cmd_dst);
             initialize_dispatch_exec_buf_end_cmd(dispatch_exec_buf_end_cmd_dst);
         }
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void update_cmd_sequence(uint32_t cmd_offsetB, const void* new_data, uint32_t data_sizeB) {
@@ -621,11 +625,11 @@ public:
         this->memcpy((char*)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
 
         uint32_t increment_sizeB =
-            align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
+            tt::align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
-        increment_sizeB = align(packed_data_sizeB, this->l1_alignment);
+        increment_sizeB = tt::align(packed_data_sizeB, this->l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             this->memcpy(
@@ -633,7 +637,7 @@ public:
             this->cmd_write_offsetB += increment_sizeB;
         }
 
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     // Tuple in data_collection is:
@@ -694,11 +698,11 @@ public:
         this->memcpy((char*)this->cmd_region + this->cmd_write_offsetB, &sub_cmds[offset_idx], sub_cmds_sizeB);
 
         uint32_t increment_sizeB =
-            align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
+            tt::align(sub_cmds_sizeB, this->l1_alignment);  // this assumes CQDispatchCmd is L1 aligned
         this->cmd_write_offsetB += increment_sizeB;
 
         // copy the actual data
-        increment_sizeB = align(packed_data_sizeB, this->l1_alignment);
+        increment_sizeB = tt::align(packed_data_sizeB, this->l1_alignment);
         uint32_t num_data_copies = no_stride ? 1 : num_sub_cmds;
         for (uint32_t i = offset_idx; i < offset_idx + num_data_copies; ++i) {
             uint32_t offset = 0;
@@ -710,7 +714,7 @@ public:
             this->cmd_write_offsetB += increment_sizeB;
         }
 
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     void add_dispatch_write_packed_large(
@@ -726,7 +730,7 @@ public:
         static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
         uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
         constexpr bool flush_prefetch = false;
-        uint32_t payload_size = align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
+        uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
         this->add_prefetch_relay_inline(flush_prefetch, payload_size);
 
         auto initialize_write_packed_large_cmd = [&](CQDispatchCmd* write_packed_large_cmd) {
@@ -736,7 +740,7 @@ public:
             write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
         };
         uint32_t payload_dst_size =
-            align(sizeof(CQPrefetchCmd) + payload_size, this->pcie_alignment) - sizeof(CQPrefetchCmd);
+            tt::align(sizeof(CQPrefetchCmd) + payload_size, this->pcie_alignment) - sizeof(CQPrefetchCmd);
         CQDispatchCmd* write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd*>(payload_dst_size);
         char* write_packed_large_sub_cmds_dst = (char*)write_packed_large_cmd_dst + sizeof(CQDispatchCmd);
 
@@ -749,7 +753,7 @@ public:
         }
 
         this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
-        this->cmd_write_offsetB = align(this->cmd_write_offsetB, this->pcie_alignment);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
     template <typename CommandPtr, bool data = false>
@@ -780,7 +784,7 @@ private:
             relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
             relay_write->relay_inline.dispatcher_type = (uint8_t)(dispatcher_type);
             relay_write->relay_inline.length = lengthB;
-            relay_write->relay_inline.stride = align(sizeof(CQPrefetchCmd) + lengthB, this->pcie_alignment);
+            relay_write->relay_inline.stride = tt::align(sizeof(CQPrefetchCmd) + lengthB, this->pcie_alignment);
         };
         CQPrefetchCmd* relay_write_dst = this->reserve_space<CQPrefetchCmd*>(sizeof(CQPrefetchCmd));
 
