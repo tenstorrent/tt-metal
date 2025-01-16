@@ -204,6 +204,8 @@ shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t pa
 template <uint32_t number_of_cores>
 std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_address) {
     // Gets the shard_array from the runtime arguments
+    // returns a pair where .first holds the shard array map
+    // and .second holds the new rt_address
     const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_address));
     constexpr uint32_t incrementation = (number_of_cores - 1) / 2 + 1;
     return std::pair<const uint32_t* const, uint32_t>(map, rt_address + incrementation);
@@ -216,13 +218,15 @@ struct ShardedAddrGen {
     // Use this address generator for sharded tensors
 
     constexpr static SHARDING_INFO_OBJECT CONSTANT_ARGS{};
-    // Sharded Info Class is a Sharded Info object that is appropriately templated including all the compile time
-    // parameters
+    // Sharded Info Class is a Sharded_Info class object that is appropriately templated
+    // including all the compile time parameters
     uint32_t bank_base_address;
     const uint32_t* const shard_array;
+
     FORCE_INLINE
     std::uint64_t get_sharded_addr(
         const uint32_t l1_addr, const uint32_t sharding_coordinates, const uint32_t noc = noc_index) const {
+        // Extracts the X and Y value and using the l1 address gets the noc address
         return NOC_XY_ADDR(
             DYNAMIC_NOC_X(noc, ((sharding_coordinates >> 8) & 0xFF)),
             DYNAMIC_NOC_Y(noc, (sharding_coordinates & 0xFF)),
@@ -230,6 +234,7 @@ struct ShardedAddrGen {
     }
 
     std::uint32_t get_sharded_l1_addr(const uint32_t core_page, const uint32_t offset = 0) const {
+        // Get the L1 address
         return this->bank_base_address + (core_page * CONSTANT_ARGS.page_size_jump) + offset;
     }
 
@@ -241,7 +246,9 @@ struct ShardedAddrGen {
     std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
         const uint32_t id, const uint32_t offset = 0, uint8_t noc = noc_index) const {
         // Returns the noc address AND the number of contiguous pages after.
-        // Resolve linear core id and the page num within that core
+
+        // Resolve linear core id/bank address, the page offset in the core,
+        // and the number of contiguous pages within that core
         shard_addr_gen_utils::shard_coord_info sharding_coordinates{};
         if constexpr (CONSTANT_ARGS.shard_type == 0) {
             sharding_coordinates = shard_addr_gen_utils::get_width_sharded_coordinates<
@@ -260,12 +267,17 @@ struct ShardedAddrGen {
                 CONSTANT_ARGS.pages_per_tensor_row,
                 CONSTANT_ARGS.contiguity>(id);
         }
-        // return get_addr
+        // Get the value from the resolved core location containing the core x and y each 8 bits
+        // Note we are stripping this from a 32 bit array hence the floor division by 2 and in
+        // odd numbered cores a right shift by 16 and a masking
         uint32_t sharding_coordinate_value =
             (shard_array[(sharding_coordinates.core_num) >> 1] >> ((sharding_coordinates.core_num & 1) == 1 ? 0 : 16)) &
             0xFFFF;
+        // Find the L1 address within the resolved core
         auto resolved_l1_addr = get_sharded_l1_addr(sharding_coordinates.page_num, offset);
+        // Find the noc address using the x,y core information
         auto resolved_sharded_addr = get_sharded_addr(resolved_l1_addr, sharding_coordinate_value, noc);
+        // Return the core info and the number of contiguous cores
         std::pair<uint64_t, uint32_t> return_val(resolved_sharded_addr, sharding_coordinates.num_contiguous_pages);
         return return_val;
     }
