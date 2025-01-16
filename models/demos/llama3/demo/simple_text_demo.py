@@ -111,7 +111,7 @@ def preprocess_inputs_prefill(
     """
     Run tokenizer on inputs, and create embeddings for the first token of each input
     """
-    # The maximum KV-cache len supported is 32k. To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
+    # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
     if max_prefill_len == 128 * 1024:
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
@@ -127,10 +127,9 @@ def preprocess_inputs_prefill(
     min_prompt_len = min(prompt_lens)
     max_prompt_len = max(prompt_lens)
 
-    # The large input demo we provide contains more tokens than the maximum
-    # To avoid running out of memory, clip to max_prefill_len
+    # To avoid running out of memory when giving prompts larger than the maximum, clip to max_prefill_len
     if min_prompt_len > max_prefill_len:
-        logger.info(f"Clipping prompts to {max_prefill_len}")
+        logger.warning(f"Prompt too long. Clipping prompts to {max_prefill_len}")
         if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
             encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
             dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
@@ -261,7 +260,7 @@ def create_tt_model(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0.6, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
@@ -340,13 +339,10 @@ def test_llama_demo_text(
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"
 
-    # Instead of running warmup iterations, the demo profiles the initial compile iteration
-    bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
-
     # Start profiler
     logger.info(f"Start profiler")
     profiler = BenchmarkProfiler()
-    profiler.start("run")
+    profiler.start("full_run")
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -414,22 +410,25 @@ def test_llama_demo_text(
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
         logger.info("Starting prefill warmup...")
+        profiler.start(f"compile_prefill_time", iteration=batch_idx)
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt[0].unsqueeze(0),
+            input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        profiler.end(f"compile_prefill_time", iteration=batch_idx)
         logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill_time", iteration=batch_idx)
-
         logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos
+            input_tokens_prefill_pt,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=decoding_pos,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
-
         profiler.end(f"inference_prefill_time", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
@@ -442,7 +441,6 @@ def test_llama_demo_text(
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
         # Set sampling mode
-        # Miguel TODO
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
@@ -450,26 +448,32 @@ def test_llama_demo_text(
 
         # Start decoding
         iteration = 0
-        users_decoding = True  # reset to handle next batch
-        total_tokens_generated = 0  # Track total tokens generated
+        users_decoding = True
 
         out_tok = prefilled_token
 
         logger.info(f"Starting decode loop...")
-        profiler.start(f"inference_decode", iteration=batch_idx)
 
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
-                profiler.start(f"compile_decode", iteration=batch_idx)
-            iteration_time_start = time()
+                profiler.start(f"compile_decode_time", iteration=batch_idx)
+            else:
+                profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
             # Necessary padding to be full tile sized
             out_tok = torch.nn.functional.pad(out_tok, (0, 32 - len(out_tok)), "constant", 0)
+            # Run decode forward
             logits = generator.decode_forward_text(
-                out_tok, current_pos, enable_trace=True, page_table=page_table, kv_cache=tt_kv_cache
+                out_tok,
+                current_pos,
+                enable_trace=True,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
             )
 
             # TODO Miguel - Re-add argmax on device
+            # Fix use case with temperature > 0
+            # Get the next token
             _, out_tok = sample_host(
                 logits,
                 None,
@@ -477,7 +481,19 @@ def test_llama_demo_text(
                 top_p=sampling_params["top_p"],
                 on_host=True,
             )
-            iteration_time = time() - iteration_time_start
+
+            if iteration == 0:  # First iteration will account the compile time
+                profiler.end(f"compile_decode_time", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration("compile_decode_time", iteration=batch_idx)
+            else:
+                profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
+
+            # Always print perf after every iteration
+            tokens_per_second_per_user = 1 / decode_iteration_time
+            logger.info(
+                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+            )
 
             current_pos += 1
 
@@ -494,13 +510,6 @@ def test_llama_demo_text(
                     if all(user_done):
                         users_decoding = False
 
-            # Ignore the first iteration (compile time) for average speed calculation
-            if iteration > 0:
-                total_tokens_generated += 1
-
-            tokens_per_second_per_user = 1 / iteration_time
-
-            profiler.start(f"log_printing_iter_{iteration}", iteration=batch_idx)
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
                 if len(input_prompts) == 1:
@@ -513,23 +522,16 @@ def test_llama_demo_text(
                         text = text.replace("\n", " ")
                         logger.info("[User {}] {}".format(user, text))
 
-            # Always print perf after every iteration
-            logger.info(
-                f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
-            )
-            profiler.end(f"log_printing_iter_{iteration}", iteration=batch_idx)
-
-            if iteration == 0:  # First iteration also accounts for compile time
-                profiler.end(f"compile_decode", iteration=batch_idx)
-
             iteration += 1
 
             # Upper limit of generated tokens for each user
             if iteration >= max_generated_tokens:
                 users_decoding = False
 
+            # Final print
             if not users_decoding:
                 profiler.start(f"log_saving_file", iteration=batch_idx)
+                logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                     text = tokenizer.decode(output)
                     if instruct:
@@ -553,152 +555,145 @@ def test_llama_demo_text(
                             else prompt
                         )
                         logger.info(
-                            f"\nbatch: {batch_idx} user: {i}\nprompt: {short_prompt} \noutput:\n{text_after_prompt.strip()}\n"
+                            f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
-        num_tokens_generated_decode.append(
-            total_tokens_generated
-        )  # Save the number of tokens generated for each batch (excluding the first token)
+        num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
-        profiler.end(f"inference_decode", iteration=batch_idx)
+    # Finish profiling at the end of inference for all repeated batches
+    profiler.end("full_run")
 
-    # Finish profiling at the end of all batches inference
-    profiler.end("run")
+    # Prepare profile benchmark metrics for the first repeat batch only
+    compile_prefill_time = profiler.get_duration("compile_prefill_time")
+    compile_decode_time = profiler.get_duration("compile_decode_time")
 
-    logger.info("Miguel: Re-add the benchmark profiling")
-    # # Prepare profile benchmark metrics for batch 0
-    # compile_prefill_time = profiler.get_duration("compile_prefill")
-    # compile_decode_time = profiler.get_duration("compile_decode")
-    # inference_prefill_time = profiler.get_duration("inference_prefill")
-    # inference_decode_time = profiler.get_duration("inference_decode")
-    # log_printing_time = sum(profiler.get_duration(f"log_printing_iter_{i}") for i in range(total_tokens_generated))
-    # log_saving_file_time = profiler.get_duration(f"log_saving_file")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill_time")
+    total_inference_decode_time = 0
+    for i in range(1, iteration):  # Iteration 0 is the compile time
+        total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
-    # # Correct the inference decode time to remove the time spent on compile (1st iteration) and log_printing (at the end of every iteration)
-    # inference_decode_time = inference_decode_time - compile_decode_time - log_printing_time - log_saving_file_time
-    # # Correct the inference prefill time to remove the time spent on compile (1st iteration)
-    # inference_prefill_time = inference_prefill_time - compile_prefill_time
-    # # Average prefill time for each user
-    # prefill_time_to_first = inference_prefill_time / num_users_generated_prefill
+    # Average prefill time for each user
+    avg_time_to_first_token = total_inference_prefill_time / batch_size
+    # Average decode time per batch iteration
+    avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
-    # measurements = {
-    #     # Required measurements
-    #     "compile_prefill": compile_prefill_time,
-    #     "compile_decode": compile_decode_time,
-    #     "inference_prefill": inference_prefill_time,
-    #     "inference_decode": inference_decode_time,
-    #     "prefill_time_to_token": prefill_time_to_first,
-    #     "prefill_t/s": num_users_generated_prefill / inference_prefill_time * prefill_seq_len,  # tokens/s
-    #     "decode_t/s/u": num_tokens_generated_decode[0] / inference_decode_time,  # tokens/s/u
-    #     "decode_t/s": num_tokens_generated_decode[0] / inference_decode_time * batch_size,  # tokens/s
-    #     # Optional measurements
-    #     "loading_inputs": profiler.get_duration("loading_inputs"),
-    #     "weight_loading": profiler.get_duration("weight_loading"),
-    #     "prepare_first_decode_token": profiler.get_duration("prepare_first_decode_token_0"),
-    #     "preprocess_prefill_inputs": profiler.get_duration("preprocess_prefill_inputs"),
-    #     "loading_weights_to_device": profiler.get_duration("loading_weights_to_device"),
-    #     "Total compile time": compile_prefill_time + compile_decode_time,
-    #     "Full demo runtime": profiler.get_duration("run"),
-    # }
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time / batch_size
+    decode_tok_s_user = num_tokens_generated_decode[0] / total_inference_decode_time
+    decode_tok_s = num_tokens_generated_decode[0] / total_inference_decode_time * batch_size
 
-    # # Print some of the perf metrics
-    # logger.info("")
-    # logger.info(f"Performance metrics for batch 0")
-    # logger.info(f"Prefill compile time: {round(measurements['compile_prefill'], 4)}s")
-    # logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
-    # logger.info(f"Prefill inference time per user: {round(inference_prefill_time/num_users_generated_prefill, 4)}s")
-    # logger.info(
-    #     f"Total Decode inference time ({total_tokens_generated-1} iterations): {round(measurements['inference_decode'], 4)}s"
-    # )
-    # logger.info("")
-    # logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
-    # logger.info(
-    #     f"Average speed: {round(inference_decode_time / num_tokens_generated_decode[0] * 1000, 2)}ms @ {round(measurements['decode_t/s/u'], 2)} tok/s/user ({round(measurements['decode_t/s'], 2)} tok/s throughput)"
-    # )
-    # logger.info("")
+    measurements = {
+        # Required measurements
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
+        "inference_prefill": total_inference_prefill_time,
+        "inference_decode": total_inference_decode_time,
+        "prefill_time_to_token": avg_time_to_first_token,
+        "prefill_t/s": prefill_tok_s,  # tokens/s
+        "decode_t/s/u": decode_tok_s_user,  # tokens/s/u
+        "decode_t/s": decode_tok_s,  # tokens/s
+        # Optional measurements
+        "Total compile time": compile_prefill_time + compile_decode_time,
+        "Full demo runtime": profiler.get_duration("full_run"),
+    }
 
-    # supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
-    # supported_devices = ["N150", "N300", "T3K", "TG"]
+    # Print some of the perf metrics
+    logger.info("")
+    logger.info(f"=== Performance metrics ===")
+    logger.info(f"Prefill compile time: {round(compile_prefill_time, 4)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 4)}s")
+    logger.info("")
+    logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
+    logger.info(
+        f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
+    )
 
-    # # TODO update targets based on the llama3 model and the target device
-    # llama_model_name = model_args.model_name
-    # tt_device_name = model_args.device_name
+    # Benchmark targets
+    supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
+    supported_devices = ["N150", "N300", "T3K", "TG"]
 
-    # assert llama_model_name in supported_models, f"Model {llama_model_name} not supported"
-    # assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+    llama_model_name = model_args.model_name
+    tt_device_name = model_args.device_name
 
-    # # Set the target times to first token for every combination of device and model
-    # target_prefill_tok_s = {
-    #     "N150_3.2-1B": 1050,  # TODO Update target
-    #     "N300_3.2-1B": 1050,  # TODO Update target
-    #     "T3K_3.2-1B": 1050,  # TODO Update target
-    #     "TG_3.2-1B": 1050,  # TODO Update target
-    #     #
-    #     "N150_3.2-3B": 1050,  # TODO Update target
-    #     "N300_3.2-3B": 1050,  # TODO Update target
-    #     "T3K_3.2-3B": 1050,  # TODO Update target
-    #     "TG_3.2-3B": 1050,  # TODO Update target
-    #     #
-    #     "N150_3.1-8B": 1050,
-    #     "N300_3.1-8B": 1050,
-    #     "T3K_3.1-8B": 1050,
-    #     "TG_3.1-8B": 1050,
-    #     #
-    #     "N150_3.2-11B": 1050,  # TODO Update target
-    #     "N300_3.2-11B": 1050,  # TODO Update target
-    #     "T3K_3.2-11B": 1050,  # TODO Update target
-    #     "TG_3.2-11B": 1050,  # TODO Update target
-    #     #
-    #     "N150_3.1-70B": 1050,  # TODO Update target
-    #     "N300_3.1-70B": 1050,  # TODO Update target
-    #     "T3K_3.1-70B": 1050,  # TODO Update target
-    #     "TG_3.1-70B": 1050,  # TODO Update target
-    # }[f"{tt_device_name}_{llama_model_name}"]
+    assert llama_model_name in supported_models, f"Model {llama_model_name} not supported"
+    assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
-    # # Set the target decode timesfor every combination of device and model
-    # target_decode_tok_s_u = {
-    #     "N150_3.2-1B": 160,  # TODO Update target
-    #     "N300_3.2-1B": 250,  # TODO Update target
-    #     "T3K_3.2-1B": 300,  # TODO Update target
-    #     "TG_3.2-1B": 300,  # TODO Update target
-    #     #
-    #     "N150_3.2-3B": 60,  # TODO Update target
-    #     "N300_3.2-3B": 100,  # TODO Update target
-    #     "T3K_3.2-3B": 150,  # TODO Update target
-    #     "TG_3.2-3B": 150,  # TODO Update target
-    #     #
-    #     "N150_3.1-8B": 23,  # TODO Update target
-    #     "N300_3.1-8B": 38,
-    #     "T3K_3.1-8B": 45,
-    #     "TG_3.1-8B": 45,  # TODO Update target
-    #     #
-    #     "N150_3.2-11B": 23,
-    #     "N300_3.2-11B": 38,  # TODO Update target
-    #     "T3K_3.2-11B": 45,  # TODO Update target
-    #     "TG_3.2-11B": 45,  # TODO Update target
-    #     #
-    #     "T3K_3.1-70B": 20,  # TODO Update target
-    #     "TG_3.1-70B": 20,  # TODO Update target
-    # }[f"{tt_device_name}_{llama_model_name}"]
+    # TODO Update these targets on PERF.md and read from there
+    # Set the target times to first token for every combination of device and model
+    target_prefill_tok_s = {
+        "N150_3.2-1B": 1050,  # TODO Update target
+        "N300_3.2-1B": 1050,  # TODO Update target
+        "T3K_3.2-1B": 1050,  # TODO Update target
+        "TG_3.2-1B": 1050,  # TODO Update target
+        #
+        "N150_3.2-3B": 1050,  # TODO Update target
+        "N300_3.2-3B": 1050,  # TODO Update target
+        "T3K_3.2-3B": 1050,  # TODO Update target
+        "TG_3.2-3B": 1050,  # TODO Update target
+        #
+        "N150_3.1-8B": 1050,
+        "N300_3.1-8B": 1050,
+        "T3K_3.1-8B": 1050,
+        "TG_3.1-8B": 1050,
+        #
+        "N150_3.2-11B": 1050,  # TODO Update target
+        "N300_3.2-11B": 1050,  # TODO Update target
+        "T3K_3.2-11B": 1050,  # TODO Update target
+        "TG_3.2-11B": 1050,  # TODO Update target
+        #
+        "N150_3.1-70B": 1050,  # TODO Update target
+        "N300_3.1-70B": 1050,  # TODO Update target
+        "T3K_3.1-70B": 1050,  # TODO Update target
+        "TG_3.1-70B": 1050,  # TODO Update target
+    }[f"{tt_device_name}_{llama_model_name}"]
 
-    # target_decode_tok_s = target_decode_tok_s_u * batch_size
-    # targets = {
-    #     "prefill_t/s": target_prefill_tok_s,
-    #     "decode_t/s": target_decode_tok_s,
-    #     "decode_t/s/u": target_decode_tok_s_u,
-    # }
+    # Set the target decode timesfor every combination of device and model
+    target_decode_tok_s_u = {
+        "N150_3.2-1B": 160,  # TODO Update target
+        "N300_3.2-1B": 250,  # TODO Update target
+        "T3K_3.2-1B": 300,  # TODO Update target
+        "TG_3.2-1B": 300,  # TODO Update target
+        #
+        "N150_3.2-3B": 60,  # TODO Update target
+        "N300_3.2-3B": 100,  # TODO Update target
+        "T3K_3.2-3B": 150,  # TODO Update target
+        "TG_3.2-3B": 150,  # TODO Update target
+        #
+        "N150_3.1-8B": 23,  # TODO Update target
+        "N300_3.1-8B": 38,
+        "T3K_3.1-8B": 45,
+        "TG_3.1-8B": 45,  # TODO Update target
+        #
+        "N150_3.2-11B": 23,
+        "N300_3.2-11B": 38,  # TODO Update target
+        "T3K_3.2-11B": 45,  # TODO Update target
+        "TG_3.2-11B": 45,  # TODO Update target
+        #
+        "T3K_3.1-70B": 20,  # TODO Update target
+        "TG_3.1-70B": 20,  # TODO Update target
+    }[f"{tt_device_name}_{llama_model_name}"]
 
-    # # Save benchmark data for CI dashboard
-    # if is_ci_env:
-    #     benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
-    #     benchmark_data.prep_csvs(
-    #         profiler,
-    #         run_type=f"{tt_device_name}-demo",
-    #         ml_model_name=llama_model_name,
-    #         ml_model_type="llm",
-    #         num_layers=model_args.n_layers,
-    #         batch_size=batch_size,
-    #         input_sequence_length=prefill_seq_len,
-    #         output_sequence_length=1,
-    #     )
+    target_decode_tok_s = target_decode_tok_s_u * batch_size
+    targets = {
+        "prefill_t/s": target_prefill_tok_s,
+        "decode_t/s": target_decode_tok_s,
+        "decode_t/s/u": target_decode_tok_s_u,
+    }
+
+    # Save benchmark data for CI dashboard
+    if is_ci_env:
+        # Instead of running warmup iterations, the demo profiles the initial compile iteration
+        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+        benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+        benchmark_data.prep_csvs(
+            # benchmark_data.save_partial_run_json(
+            profiler,
+            run_type=f"{tt_device_name}-demo",
+            ml_model_name=llama_model_name,
+            ml_model_type="llm",
+            num_layers=model_args.n_layers,
+            batch_size=batch_size,
+            input_sequence_length=prefill_seq_len,
+            output_sequence_length=1,
+        )
