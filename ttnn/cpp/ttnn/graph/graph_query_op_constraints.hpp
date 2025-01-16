@@ -13,8 +13,6 @@
 
 namespace ttnn::graph {
 
-enum class ExecutionStatus { Success, Error };
-
 struct ResourceUsage {
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
