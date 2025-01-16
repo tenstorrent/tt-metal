@@ -244,7 +244,6 @@ public:
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;
-    virtual LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) = 0;
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
     virtual const std::vector<SubDeviceId> &get_sub_device_ids() const = 0;
     virtual const std::vector<SubDeviceId> &get_sub_device_stall_group() const = 0;

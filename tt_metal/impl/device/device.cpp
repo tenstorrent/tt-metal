@@ -1716,11 +1716,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
     }
 }
 
-LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_worker_launch_message_buffer_state(
-        sub_device_id);
-}
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     return this->hw_command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
 }

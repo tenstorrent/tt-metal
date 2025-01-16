@@ -50,6 +50,18 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
     EnqueueProgram(device->command_queue(), incrementer_program, false);
     EndTraceCapture(device, device->command_queue().id(), tid_2);
 
+    // Capture trace on one sub-device while another sub-device is running a program
+    EnqueueProgram(device->command_queue(), waiter_program, false);
+    device->set_sub_device_stall_group({SubDeviceId{0}});
+    auto tid_3 = BeginTraceCapture(device, device->command_queue().id());
+    EnqueueProgram(device->command_queue(), syncer_program, false);
+    EnqueueProgram(device->command_queue(), incrementer_program, false);
+    EndTraceCapture(device, device->command_queue().id(), tid_3);
+    EnqueueProgram(device->command_queue(), syncer_program, false);
+    EnqueueProgram(device->command_queue(), incrementer_program, false);
+    device->reset_sub_device_stall_group();
+    Synchronize(device);
+
     for (uint32_t i = 0; i < num_iters; i++) {
         // Regular program execution
         EnqueueProgram(device->command_queue(), waiter_program, false);
@@ -63,6 +75,9 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
         // Partial trace execution
         EnqueueProgram(device->command_queue(), waiter_program, false);
         ReplayTrace(device, device->command_queue().id(), tid_2, false);
+
+        EnqueueProgram(device->command_queue(), waiter_program, false);
+        ReplayTrace(device, device->command_queue().id(), tid_3, false);
     }
     Synchronize(device);
     detail::DumpDeviceProfileResults(device);

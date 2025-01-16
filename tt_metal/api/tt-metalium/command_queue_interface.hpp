@@ -9,6 +9,7 @@
 
 #include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
+#include "launch_message_ring_buffer_state.hpp"
 #include "memcpy.hpp"
 #include "hal.hpp"
 #include "dispatch_settings.hpp"
@@ -433,6 +434,8 @@ private:
     bool bypass_enable;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset;
+    std::array<LaunchMessageRingBufferState, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>
+        worker_launch_message_buffer_state;
 
 public:
     SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
@@ -840,40 +843,18 @@ public:
         this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
         this->prefetch_q_dev_ptrs[cq_id] += sizeof(dispatch_constants::prefetch_q_entry_type);
     }
-};
 
-struct LaunchMessageRingBufferState {
-public:
-    void inc_mcast_wptr(uint32_t inc_val) {
-        this->multicast_cores_launch_message_wptr =
-            (this->multicast_cores_launch_message_wptr + inc_val) & (launch_msg_buffer_num_entries - 1);
+    std::array<LaunchMessageRingBufferState, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>&
+    get_worker_launch_message_buffer_state() {
+        return this->worker_launch_message_buffer_state;
     }
 
-    void inc_unicast_wptr(uint32_t inc_val) {
-        this->unicast_cores_launch_message_wptr =
-            (this->unicast_cores_launch_message_wptr + inc_val) & (launch_msg_buffer_num_entries - 1);
+    void reset_worker_launch_message_buffer_state(const uint32_t num_entries) {
+        std::for_each(
+            this->worker_launch_message_buffer_state.begin(),
+            this->worker_launch_message_buffer_state.begin() + num_entries,
+            std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
-
-    void set_mcast_wptr(uint32_t val) {
-        this->multicast_cores_launch_message_wptr = val & (launch_msg_buffer_num_entries - 1);
-    }
-
-    void set_unicast_wptr(uint32_t val) {
-        this->unicast_cores_launch_message_wptr = val & (launch_msg_buffer_num_entries - 1);
-    }
-
-    uint32_t get_mcast_wptr() { return this->multicast_cores_launch_message_wptr; }
-
-    uint32_t get_unicast_wptr() { return this->unicast_cores_launch_message_wptr; }
-
-    void reset() {
-        this->multicast_cores_launch_message_wptr = 0;
-        this->unicast_cores_launch_message_wptr = 0;
-    }
-
-private:
-    uint32_t multicast_cores_launch_message_wptr = 0;
-    uint32_t unicast_cores_launch_message_wptr = 0;
 };
 
 }  // namespace tt::tt_metal
