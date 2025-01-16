@@ -3,42 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
     constexpr bool tensor_in_dram = get_compile_time_arg_val(1) == 1;
-    const std::uint32_t fill_value = get_compile_time_arg_val(4);
-    const std::uint32_t element_size_bytes = get_compile_time_arg_val(5);
-    uint32_t logical_height = get_compile_time_arg_val(6);
-    uint32_t logical_width = get_compile_time_arg_val(7);
-    uint32_t padded_height = get_compile_time_arg_val(8);
-    uint32_t padded_width = get_compile_time_arg_val(9);
-    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(10);
-    uint32_t tiles_per_tile_row = get_compile_time_arg_val(11);
+    const uint32_t fill_value = get_compile_time_arg_val(2);
+    const uint32_t element_size_bytes = get_compile_time_arg_val(3);
+    uint32_t logical_height = get_compile_time_arg_val(4);
+    uint32_t logical_width = get_compile_time_arg_val(5);
+    uint32_t padded_height = get_compile_time_arg_val(6);
+    uint32_t padded_width = get_compile_time_arg_val(7);
+    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(8);
+    uint32_t tiles_per_tile_row = get_compile_time_arg_val(9);
     // hardware constraints
-    constexpr uint32_t tile_size = get_compile_time_arg_val(12);
+    constexpr uint32_t tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t tile_hw = tile_size * tile_size;
-    constexpr uint32_t face_size = get_compile_time_arg_val(13);
+    constexpr uint32_t face_size = get_compile_time_arg_val(11);
     constexpr uint32_t face_hw = face_size * face_size;
+    constexpr uint32_t alignment_adjustor = 16;
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t cb_page_size = get_arg_val<uint32_t>(1);
     uint32_t starting_tile_offset = get_arg_val<uint32_t>(2);
     uint32_t num_2d_tensors = get_arg_val<uint32_t>(3);
 
-#define dst_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
-#if (dst_stick_size_is_pow2)
-    constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<tensor_in_dram> s0 = {
+    const DataFormat data_format = get_dataformat(cb_id_0);
+    const InterleavedAddrGenFast<tensor_in_dram> s0 = {
         .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = dst_log_base_2_of_page_size  // Needs to be log2(tile_size)
+        .page_size = tile_hw * element_size_bytes,
+        .data_format = data_format  // page_size needs to be tile_size_bytes
     };
-#else
-    const InterleavedAddrGen<tensor_in_dram> s0 = {
-        .bank_base_address = dst_addr, .page_size = tile_hw * element_size_bytes  // needs to be tile_size
-    };
-#endif
 
     // Reserve and push the fill value into the circular buffer
     cb_reserve_back(cb_id_0, 1);
@@ -68,11 +62,10 @@ void kernel_main() {
                 uint32_t face = face_offset / (face_hw);
 
                 uint64_t dst_noc_addr = start_tile_noc_addr + face_offset * element_size_bytes;
-                uint32_t alignment_offset = dst_noc_addr % 16;
+                uint32_t alignment_offset = dst_noc_addr % alignment_adjustor;
                 uint32_t elems_to_write = col % face_size == 0 ? face_size : face_size - (col % face_size);
                 uint32_t bytes_to_write = elems_to_write * element_size_bytes;
                 noc_async_write(l1_write_addr + alignment_offset, dst_noc_addr, bytes_to_write);
-                noc_async_write_barrier();
                 col += elems_to_write;
                 face_offset += elems_to_write;
 
