@@ -64,7 +64,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
 
     uint32_t num_tiles = rows * cols;
     if (first_call) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb);
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
     } else {
         reconfig_data_format(in0_cb, in1_cb);
         add_bcast_rows_init_short(in0_cb, in1_cb);

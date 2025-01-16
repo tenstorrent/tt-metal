@@ -36,7 +36,7 @@ void MAIN {
     uint32_t bias_cb_id = tt::CBIndex::c_3;
 
 #ifdef FUSE_BIAS
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id);
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id, out_cb_id);
 #endif
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
