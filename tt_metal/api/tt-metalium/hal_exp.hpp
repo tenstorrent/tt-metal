@@ -5,8 +5,16 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace tt::tt_metal::experimental::hal {
+
+/**
+ * @brief Uses the hardware abstraction layer to inform client of the architecture name
+ *
+ * @return Name
+ */
+std::string get_arch_name();
 
 /**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific L1 Size
