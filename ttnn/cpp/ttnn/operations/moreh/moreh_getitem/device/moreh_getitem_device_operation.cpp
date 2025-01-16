@@ -110,8 +110,8 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         auto dimensions_pads = SmallVector<Padding::PadDimension>();
         SmallVector<uint32_t> output_size_vec;
         for (int dim = 0; dim < output_shape.size(); dim++) {
-            dimensions_pads.push_back(output_shape.value.padding()[dim]);
-            output_size_vec.push_back(output_shape.value[dim]);
+            dimensions_pads.push_back(input_tensor.get_padded_shape().padding()[dim]);
+            output_size_vec.push_back(input_tensor.get_padded_shape()[dim]);
         }
 
         auto index = index_tensors[0];
@@ -171,7 +171,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
                 output_size_vec.push_back(input_shape[input_dim]);
             }
         }
-
+        // How to handle this? ->
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(

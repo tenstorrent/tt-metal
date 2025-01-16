@@ -43,8 +43,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto core_range = allCores;
 
     const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape()
-    const auto& output_shape_without_padding = output.get_logical_shape()
+    const auto& input_shape_without_padding = input.get_logical_shape();
+    const auto& output_shape_without_padding = output.get_logical_shape();
 
 
     std::array<uint32_t, 5> new_input_shape{};
@@ -57,15 +57,15 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto input_dim_offset = 5 - input_shape.rank();
     for (auto index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape_without_padding[index];
-        new_input_padded_shape[index + input_dim_offset] = input_shape.value[index];
+        new_input_padded_shape[index + input_dim_offset] = input_shape[index];
     }
 
     new_output_shape.fill(1);
     new_output_padded_shape.fill(1);
     auto output_dim_offset = 5 - input_shape.rank();
-    for (auto index = 0; index < output_shape.rank(); index++) {
+    for (auto index = 0; index < output.get_logical_shape().rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape_without_padding[index];
-        new_output_padded_shape[index + output_dim_offset] = output_shape.value[index];
+        new_output_padded_shape[index + output_dim_offset] = output.get_padded_shape()[index];
     }
 
     ttnn::Shape input_5d_shape(new_input_shape, new_input_padded_shape);

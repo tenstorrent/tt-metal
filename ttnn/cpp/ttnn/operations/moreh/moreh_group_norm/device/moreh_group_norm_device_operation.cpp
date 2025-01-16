@@ -31,22 +31,22 @@ void MorehGroupNormOperation::validate_tensors(
     check_tensor(beta, "moreh_group_norm", "beta");
 
     // input (N, C, H, W)
-    auto C = input.get_logical_shape()[1];
+    auto C = input.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // output (N, C, H, W)
     if (output.has_value()) {
-        C = output.value().get_logical_shape()[1];
+        C = output.value().get_padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "output_shape[1] must be divisible by num_groups.");
     }
     // gamma (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_logical_shape()[-1];
+        C = gamma.value().get_padded_shape()[-1];
 
         TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
     // beta (1, 1, 1, C)
     if (beta.has_value()) {
-        C = beta.value().get_logical_shape()[-1];
+        C = beta.value().get_padded_shape()[-1];
         TT_FATAL(C % num_groups == 0, "beta_shape[-1] must be divisible by num_groups.");
     }
 
@@ -54,14 +54,14 @@ void MorehGroupNormOperation::validate_tensors(
     if (mean.has_value()) {
         TT_FATAL(
             //"mean_shape[-1] must match num_groups.");
-            mean.value().get_logical_shape()[-1] == num_groups,
+            mean.value().get_padded_shape()[-1] == num_groups,
             "mean_shape[-1] must match num_groups.");
     }
     // rstd (1, 1, N, num_groups)
     if (rstd.has_value()) {
         TT_FATAL(
             //"rstd_shape[-1] must match num_groups.");
-            rstd.value().get_logical_shape()[-1] == num_groups,
+            rstd.value().get_padded_shape()[-1] == num_groups,
             "rstd_shape[-1] must match num_groups.");
     }
 }

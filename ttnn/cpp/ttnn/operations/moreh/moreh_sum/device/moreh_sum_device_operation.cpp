@@ -82,7 +82,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
 
     ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keepdim) {
-        auto shape = input_shape.value;
+        auto shape = input.get_padded_shape();
         auto padding = shape.padding();
 
         if (is_tile_dim) {
@@ -99,7 +99,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         ttnn::SmallVector<uint32_t> shape;
         ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
-        auto input_padding = input_shape.value.padding();
+        auto input_padding = input.get_padded_shape().padding();
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
@@ -109,7 +109,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
                 continue;
             }
 
-            shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
+            shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input.get_padded_shape()[i]));
             pad_dimensions.push_back(
                 (is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
         }

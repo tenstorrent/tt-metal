@@ -125,7 +125,7 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = shape.without_padding()[-1] % tt::constants::TILE_WIDTH;
+        uint32_t mask_w = shape[-1] % tt::constants::TILE_WIDTH;
         if (mask_w == 0) {
             mask_w = tt::constants::TILE_WIDTH;
         }

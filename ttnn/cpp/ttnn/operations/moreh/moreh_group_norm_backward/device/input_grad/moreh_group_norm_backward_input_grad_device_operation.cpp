@@ -30,19 +30,19 @@ void MorehGroupNormBackwardInputGradOperation::validate_tensors(
     check_tensor(gamma, "moreh_group_norm_backward_input_grad", "gamma");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_logical_shape()[1];
+    auto C = output_grad.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
-    C = input.get_logical_shape()[1];
+    C = input.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // input_grad (N, C, H, W)
     if (input_grad.has_value()) {
-        C = input_grad.value().get_logical_shape()[1];
+        C = input_grad.value().get_padded_shape()[1];
         TT_FATAL(C % num_groups == 0, "input_grad_shape[1] must be divisible by num_groups.");
     }
     // gamma_grad (1, 1, 1, C)
     if (gamma.has_value()) {
-        C = gamma.value().get_logical_shape()[-1];
+        C = gamma.value().get_padded_shape()[-1];
         TT_FATAL(C % num_groups == 0, "gamma_shape[-1] must be divisible by num_groups.");
     }
 

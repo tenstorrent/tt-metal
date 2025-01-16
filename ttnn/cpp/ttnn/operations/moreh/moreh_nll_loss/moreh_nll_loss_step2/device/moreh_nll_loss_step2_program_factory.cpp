@@ -32,7 +32,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     // copy 32 Btyes per core
     uint32_t units_to_divide = N / tt::constants::TILE_HEIGHT;
-    const auto input_shape_without_padding = input_shape.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
 
@@ -206,7 +206,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto rank = input_shape.rank();
     auto N = input_shape[0];
 
-    const auto input_shape_without_padding = input_shape.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
     const auto origin_W = input_shape_without_padding[2];
@@ -394,7 +394,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     auto Wt = W / tt::constants::TILE_WIDTH;
     auto num_inner_tile = target.volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
-    const auto input_shape_without_padding = input_shape.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_N = input_shape_without_padding[0];
     const auto origin_C = input_shape_without_padding[1];
 
