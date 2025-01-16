@@ -6,14 +6,14 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
-#include "tt_fabric/mesh_graph.hpp"
+#include "tt_metal/fabric/mesh_graph.hpp"
+#include "tt_metal/fabric/control_plane.hpp"
 //#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>
 #include <algorithm>
 #include <random>
@@ -140,7 +140,7 @@ typedef struct test_board {
         try {
             const std::filesystem::path mesh_graph_desc_path =
                 std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                "tt_fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
             control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
         } catch (const std::exception& e) {
             log_fatal(e.what());
@@ -425,7 +425,7 @@ typedef struct test_device {
 
             auto kernel = tt_metal::CreateKernel(
                 program_handle,
-                "tt_fabric/impl/kernels/tt_fabric_router.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
                 router_logical_cores[i],
                 tt_metal::EthernetConfig{
                     .noc = tt_metal::NOC::NOC_0, .compile_args = compile_args, .defines = defines});
@@ -451,7 +451,7 @@ typedef struct test_device {
         if (run_gk_on_idle_ethernet) {
             kernel = tt_metal::CreateKernel(
                 program_handle,
-                "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
                 {gk_logical_core},
                 tt_metal::EthernetConfig{
                     .eth_mode = Eth::IDLE,
@@ -461,7 +461,7 @@ typedef struct test_device {
         } else {
             kernel = tt_metal::CreateKernel(
                 program_handle,
-                "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
                 {gk_logical_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,

@@ -32,7 +32,9 @@ static constexpr std::uint32_t MODULO_LOG_BASE_2 = (1 << LOG_BASE_2_NUM_CHANNELS
 static constexpr std::uint32_t NUM_TABLE_ENTRIES = MAX_MESH_SIZE >> LOG_BASE_2_NUM_CHANNELS_PER_UINT32;
 
 static_assert(MAX_MESH_SIZE == MAX_NUM_MESHES, "MAX_MESH_SIZE must be equal to MAX_NUM_MESHES");
-static_assert((sizeof(std::uint32_t) / sizeof(chan_id_t)) == NUM_CHANNELS_PER_UINT32, "LOG_BASE_2_NUM_CHANNELS_PER_UINT32 must be equal to log2(sizeof(std::uint32_t) / sizeof(chan_id_t))");
+static_assert(
+    (sizeof(std::uint32_t) / sizeof(chan_id_t)) == NUM_CHANNELS_PER_UINT32,
+    "LOG_BASE_2_NUM_CHANNELS_PER_UINT32 must be equal to log2(sizeof(std::uint32_t) / sizeof(chan_id_t))");
 
 enum eth_chan_magic_values {
     INVALID_DIRECTION = 0xDD,
@@ -40,14 +42,14 @@ enum eth_chan_magic_values {
 };
 
 struct routing_table_t {
-  chan_id_t dest_entry[MAX_MESH_SIZE];
+    chan_id_t dest_entry[MAX_MESH_SIZE];
 };
 
 struct port_direction_t {
-  chan_id_t north;
-  chan_id_t south;
-  chan_id_t east;
-  chan_id_t west;
+    chan_id_t north;
+    chan_id_t south;
+    chan_id_t east;
+    chan_id_t west;
 };
 
 struct fabric_router_l1_config_t {

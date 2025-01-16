@@ -4,7 +4,7 @@
 
 // clang-format off
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "debug/dprint.h"
 // clang-format on
 

@@ -65,7 +65,7 @@ foreach(arch ${ARCHITECTURES})
                 test_metal_common_libs
             PRIVATE
                 yaml-cpp::yaml-cpp
-                tt_fabric
+                fabric
         )
         if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
             target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
@@ -76,7 +76,6 @@ foreach(arch ${ARCHITECTURES})
             PRIVATE
                 ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${arch}
                 "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-                ${PROJECT_SOURCE_DIR}/tt_fabric
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/deprecated # this all should go away and be replaced with link to ttnn
                 ${PROJECT_SOURCE_DIR}/tests
                 ${CMAKE_CURRENT_SOURCE_DIR}

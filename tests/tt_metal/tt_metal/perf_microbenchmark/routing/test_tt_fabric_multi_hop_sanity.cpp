@@ -6,13 +6,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
+#include "tt_metal/fabric/control_plane.hpp"
 // #include <tt-metalium/cq_commands.hpp>
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
 using namespace tt;
@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
             std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-            "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
+            "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
         int num_devices = tt_metal::GetNumAvailableDevices();
@@ -362,7 +362,7 @@ int main(int argc, char** argv) {
             for (auto logical_core : device_router_cores) {
                 auto router_kernel = tt_metal::CreateKernel(
                     program_map[device.first],
-                    "tt_fabric/impl/kernels/tt_fabric_router.cpp",
+                    "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
                     logical_core,
                     tt_metal::EthernetConfig{
                         .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
@@ -393,7 +393,7 @@ int main(int argc, char** argv) {
 
             auto kernel = tt_metal::CreateKernel(
                 program_map[device.first],
-                "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
                 {gk_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,

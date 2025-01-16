@@ -55,39 +55,36 @@ using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<mesh_id
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
 
 class MeshGraph {
-   public:
-       explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
-       MeshGraph() = delete;
-       ~MeshGraph() = default;
+public:
+    explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
+    MeshGraph() = delete;
+    ~MeshGraph() = default;
 
-       void print_connectivity() const;
+    void print_connectivity() const;
 
-       const IntraMeshConnectivity& get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
-       const InterMeshConnectivity& get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
+    const IntraMeshConnectivity& get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
+    const InterMeshConnectivity& get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
 
-       const ChipSpec& get_chip_spec() const { return chip_spec_; }
+    const ChipSpec& get_chip_spec() const { return chip_spec_; }
 
-       std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
-       std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
+    std::uint32_t get_mesh_ns_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].first; }
+    std::uint32_t get_mesh_ew_size(mesh_id_t mesh_id) const { return mesh_shapes_[mesh_id].second; }
 
-   private:
-       std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
-           chip_id_t src_chip_id,
-           std::uint32_t row_size,
-           std::uint32_t num_chips_in_mesh,
-           FabricType fabric_type) const;
-       void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
+private:
+    std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
+        chip_id_t src_chip_id, std::uint32_t row_size, std::uint32_t num_chips_in_mesh, FabricType fabric_type) const;
+    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path);
 
-       void add_to_connectivity(
-           mesh_id_t src_mesh_id,
-           chip_id_t src_chip_id,
-           chip_id_t dest_mesh_id,
-           chip_id_t dest_chip_id,
-           RoutingDirection port_direction);
+    void add_to_connectivity(
+        mesh_id_t src_mesh_id,
+        chip_id_t src_chip_id,
+        chip_id_t dest_mesh_id,
+        chip_id_t dest_chip_id,
+        RoutingDirection port_direction);
 
-       ChipSpec chip_spec_;
-       std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
-       IntraMeshConnectivity intra_mesh_connectivity_;
-       InterMeshConnectivity inter_mesh_connectivity_;
+    ChipSpec chip_spec_;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> mesh_shapes_;
+    IntraMeshConnectivity intra_mesh_connectivity_;
+    InterMeshConnectivity inter_mesh_connectivity_;
 };
 }  // namespace tt::tt_fabric

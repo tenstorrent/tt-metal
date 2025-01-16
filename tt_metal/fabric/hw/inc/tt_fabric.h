@@ -9,9 +9,9 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
-#include "tt_fabric/hw/inc/routing_table.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/eth_chan_noc_mapping.h"
+#include "tt_metal/fabric/hw/inc/routing_table.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/eth_chan_noc_mapping.h"
 
 using namespace tt::tt_fabric;
 
@@ -423,7 +423,7 @@ typedef struct fvc_producer_state {
     inline void advance_next_packet() {
         if (this->get_num_words_available() >= PACKET_HEADER_SIZE_WORDS) {
             tt_l1_ptr uint32_t* packet_header_ptr = (uint32_t*)&current_packet_header;
-            tt_l1_ptr volatile uint32_t* next_header_ptr =
+            volatile tt_l1_ptr uint32_t* next_header_ptr =
                 reinterpret_cast<tt_l1_ptr uint32_t*>(get_local_buffer_read_addr());
             uint32_t words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
             uint32_t dwords_to_copy = PACKET_HEADER_SIZE_BYTES / 4;

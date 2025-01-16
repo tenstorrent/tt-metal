@@ -30,6 +30,7 @@ target_link_libraries(
         llrt
         detail
         distributed
+        fabric
         HAL::grayskull
         HAL::wormhole
         HAL::blackhole
@@ -87,3 +88,4 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(tt_stl)
+add_subdirectory(fabric)
