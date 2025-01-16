@@ -157,6 +157,28 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     EXPECT_TRUE(xt::allclose(reduced_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
 }
 
+TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce_96_768) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto mesh_shape = device->shape();
+    std::cout << "I AM HERE IN TEST 0\n";
+    xt::xarray<float> xtensor = xt::random::rand({96 * 768}, -0.05, 0.05).reshape({1, 1, 96, 768});
+
+    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
+    std::cout << "I AM HERE IN TEST 1\n";
+    tensor = ttnn::add(tensor, 100.0F);
+    std::cout << "I AM HERE IN TEST 2\n";
+    tensor = ttnn::reciprocal(tensor);
+    std::cout << "I AM HERE IN TEST 3\n";
+
+    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
+    auto xtensors_back = ttml::core::to_xtensor(tensor, identity_composer);
+    auto inverted_tensor = 1.0F / (xtensor + 100.0F);
+
+    EXPECT_TRUE(xt::allclose(inverted_tensor, xtensors_back[0], /*rtol=*/1e-3, /*atol=*/1e-2));
+    EXPECT_TRUE(xt::allclose(inverted_tensor, xtensors_back[1], /*rtol=*/1e-3, /*atol=*/1e-2));
+}
+
 TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();

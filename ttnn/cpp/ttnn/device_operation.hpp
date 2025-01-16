@@ -359,7 +359,7 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
 }
 
 template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
+typename device_operation_t::tensor_args_t get_shard_tensor_args(auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
         return Tensor{
@@ -436,33 +436,10 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    bool launch_shards_in_parallel = false;
-    if (launch_shards_in_parallel) {
-        std::vector<std::future<tensor_return_value_t>> shard_futures;
-        shard_futures.reserve(num_shards);
-
-        // Launch each shard
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            shard_futures.emplace_back(
-                std::async(
-                    std::launch::async,
-                    [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
-                        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-                        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-                        return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
-                    }));
-        }
-
-        // Combine shards into a multi-device storage
-        for (auto& shard_future : shard_futures) {
-            outputs.push_back(shard_future.get());
-        }
-    } else {
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            auto device = storage.get_buffer_for_device_id(shard_index)->device();
-            auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-            outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
-        }
+    for (auto &buffer : storage.get_buffers()) {
+        auto device = buffer->device();
+        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(device, tensor_args);
+        outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }
 
     return make_tensor_return_value_from_shards(storage, outputs);
