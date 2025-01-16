@@ -653,7 +653,7 @@ Tensor Tensor::from_span<float>(
             return tensor;
         }
         default: {
-            TT_THROW("Unsupported data type for from_span<float>: {}", spec.data_type());
+            TT_THROW("Unsupported data type: {}", spec.data_type());
         }
     }
 }
@@ -665,10 +665,37 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, 
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     TT_FATAL(
         spec.data_type() == convert_to_data_type<T>(),
-        "Unsupported data type for from_span: got {}, expected: {}",
+        "Unsupported data type: got {}, expected: {}",
         spec.data_type(),
         convert_to_data_type<T>());
     return create_owned_tensor_from_row_major_data(std::vector<T>(buffer.begin(), buffer.end()), spec, device);
+}
+
+template <>
+Tensor Tensor::from_vector<float>(
+    std::vector<float>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::FLOAT32) {
+        // User `buffer` directly, when no type conversion is needed.
+        return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device);
+    } else {
+        return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device);
+    }
+}
+
+template <typename T>
+Tensor Tensor::from_vector(std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    TT_FATAL(
+        spec.data_type() == convert_to_data_type<T>(),
+        "Unsupported data type: got {}, expected: {}",
+        spec.data_type(),
+        convert_to_data_type<T>());
+    return create_owned_tensor_from_row_major_data(std::move(buffer), spec, device);
 }
 
 template <>
@@ -719,6 +746,16 @@ template Tensor Tensor::from_span<uint16_t>(
     tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 template Tensor Tensor::from_span<uint32_t>(
     tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_vector<bfloat16>(
+    std::vector<bfloat16>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_vector<int32_t>(
+    std::vector<int32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_vector<uint8_t>(
+    std::vector<uint8_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_vector<uint16_t>(
+    std::vector<uint16_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::from_vector<uint32_t>(
+    std::vector<uint32_t>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 
 template std::vector<bfloat16> Tensor::to_vector<bfloat16>() const;
 template std::vector<int32_t> Tensor::to_vector<int32_t>() const;

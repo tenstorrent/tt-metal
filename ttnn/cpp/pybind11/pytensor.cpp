@@ -82,65 +82,6 @@ Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
     return Tensor(std::move(storage), tensor_spec);
 }
 
-OwnedBuffer create_owned_buffer_from_vector_of_floats(std::vector<float>&& data, DataType data_type) {
-    switch (data_type) {
-        case DataType::FLOAT32: {
-            return owned_buffer::create<float>(std::move(data));
-        }
-        case DataType::BFLOAT16: {
-            std::vector<::bfloat16> bfloat16_data(data.size());
-            std::transform(std::begin(data), std::end(data), std::begin(bfloat16_data), [](float value) {
-                return ::bfloat16(value);
-            });
-            return owned_buffer::create<::bfloat16>(std::move(bfloat16_data));
-        }
-        default: {
-            TT_THROW("Cannot create a host buffer!");
-        }
-    }
-}
-
-Tensor convert_float_vector_to_tt_tensor(
-    std::vector<float>&& data,
-    const std::array<uint32_t, 4>& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tile>& tile) {
-    if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
-        TT_FATAL(layout == Layout::TILE, "Tile layout is required for BFLOAT8_B and BFLOAT4_B; got {}", layout);
-        auto result_cpu_spec = TensorSpec(
-            ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::TILE, tile), MemoryConfig{}));
-
-        auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), DataType::FLOAT32);
-        auto float_tensor = Tensor(OwnedStorage{owned_buffer}, shape, DataType::FLOAT32, Layout::ROW_MAJOR, tile);
-        if (result_cpu_spec.logical_shape() != result_cpu_spec.padded_shape()) {
-            float_tensor =
-                tensor_ops::tensor_pad(float_tensor, result_cpu_spec.padded_shape(), ttnn::SimpleShape{0, 0, 0, 0}, 0);
-        }
-        auto output_float_data = owned_buffer::get_as<float>(float_tensor.to(Layout::TILE)).get();
-        auto output_packed_data =
-            data_type == DataType::BFLOAT8_B
-                ? pack_fp32_vec_as_bfp8_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
-                : pack_fp32_vec_as_bfp4_tiles(output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
-        auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-        auto tensor = Tensor(std::move(OwnedStorage{std::move(output_buffer)}), result_cpu_spec);
-        if (device) {
-            return tensor.to(device, memory_config.value_or(MemoryConfig{}));
-        }
-        return tensor;
-    }
-    auto result_cpu_spec = TensorSpec(
-        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(Layout::ROW_MAJOR, tile), MemoryConfig{}));
-    auto owned_buffer = create_owned_buffer_from_vector_of_floats(std::move(data), data_type);
-    auto tensor = Tensor(OwnedStorage{owned_buffer}, result_cpu_spec).to(layout);
-    if (device) {
-        return tensor.to(device, memory_config.value_or(MemoryConfig{}));
-    }
-    return tensor;
-}
-
 Tensor create_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
@@ -816,8 +757,10 @@ void pytensor_module(py::module& m_tensor) {
                           DataType data_type,
                           Layout layout,
                           const std::optional<Tile>& tile) {
-                return detail::convert_float_vector_to_tt_tensor(
-                    std::move(data), shape, data_type, layout, nullptr, std::nullopt, tile);
+                return Tensor::from_vector(
+                    std::move(data),
+                    TensorSpec(
+                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})));
             }),
             py::arg("data"),
             py::arg("shape"),
@@ -857,8 +800,11 @@ void pytensor_module(py::module& m_tensor) {
                           Layout layout,
                           IDevice* device,
                           const std::optional<Tile>& tile) {
-                return detail::convert_float_vector_to_tt_tensor(
-                    std::move(data), shape, data_type, layout, device, std::nullopt, tile);
+                return Tensor::from_vector(
+                    std::move(data),
+                    TensorSpec(
+                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
             }),
             py::keep_alive<1, 6>(),
             py::arg("data"),
@@ -910,8 +856,11 @@ void pytensor_module(py::module& m_tensor) {
                           IDevice* device,
                           const MemoryConfig& memory_config,
                           const std::optional<Tile>& tile) {
-                return detail::convert_float_vector_to_tt_tensor(
-                    std::move(data), shape, data_type, layout, device, memory_config, tile);
+                return Tensor::from_vector(
+                    std::move(data),
+                    TensorSpec(
+                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
+                    device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
             }),
             py::keep_alive<1, 7>(),
             py::arg("data"),

@@ -157,12 +157,18 @@ struct Tensor {
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
-    // Same as `from_span`, but takes a vector instead.
+    // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
         const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
-        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec, device);
+        return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
+
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
+    // type conversion is needed.
+    template <typename T>
+    static Tensor from_vector(
+        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
