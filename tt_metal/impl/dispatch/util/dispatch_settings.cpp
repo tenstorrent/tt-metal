@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
+#include <hal.hpp>
+#include <tt_cluster.hpp>
 #include "magic_enum/magic_enum.hpp"
 #include "umd/device/tt_core_coordinates.h"
-#include "include/dispatch_settings.hpp"
-#include "include/helpers.hpp"
+#include <dispatch_settings.hpp>
+#include <helpers.hpp>
 
 namespace tt::tt_metal::dispatch {
 

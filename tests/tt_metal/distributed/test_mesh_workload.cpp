@@ -6,9 +6,9 @@
 
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include "tests/tt_metal/distributed/distributed_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 namespace tt::tt_metal::distributed::test {
 

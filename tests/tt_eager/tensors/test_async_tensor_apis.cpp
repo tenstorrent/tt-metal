@@ -4,8 +4,8 @@
 
 #include <chrono>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -13,10 +13,12 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -58,7 +60,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
+        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, 128});
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
@@ -285,7 +287,8 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
+            Tensor reshaped_tensor =
+                ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");

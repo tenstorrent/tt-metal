@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/types.hpp"
+#include <types.hpp>
 
 namespace tt::tt_metal {
 namespace v1 {}

@@ -5,11 +5,11 @@
 #pragma once
 
 // CCL Kernel common includes
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/command_interpreter_base.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/ccl_command_base.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/command_interpreter_base.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/ccl_command_base.hpp"
 
 // Metal includes
 #include "dataflow_api.h"

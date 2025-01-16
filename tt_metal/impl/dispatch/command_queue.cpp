@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <command_queue.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,29 +17,29 @@
 #include <utility>
 #include <variant>
 
-#include "buffers/buffer.hpp"
-#include "common/math.hpp"
-#include "dev_msgs.h"
-#include "llrt/hal.hpp"
+#include <buffer.hpp>
+#include <math.hpp>
+#include <dev_msgs.h>
+#include <hal.hpp>
 #include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <circular_buffer_constants.h>
+#include <circular_buffer.hpp>
+#include <dprint_server.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <dispatch_core_manager.hpp>
+#include <event.hpp>
+#include <kernel.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "umd/device/tt_xy_pair.h"
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 using namespace tt::tt_metal;
 

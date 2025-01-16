@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/build.hpp"
+#include <build.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -14,13 +14,13 @@
 #include <string>
 #include <thread>
 
-#include "common/executor.hpp"
+#include <executor.hpp>
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include "tools/profiler/common.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <common.hpp>
+#include <profiler_state.hpp>
+#include <command_queue_interface.hpp>
+#include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;
@@ -162,19 +162,22 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "tt_metal " +
-                      "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ + "tt_metal/hw/inc " + "-I" +
-                      this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ + "tt_metal/hw/inc/debug " +
-                      "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" +
-                      this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ + "tt_metal/third_party/umd/device/" +
-                      this->arch_name_ + " " +  // TODO(fixme)
+    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
+                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
+                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
+                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
+                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
+                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
+                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/third_party/umd/device/api " +
+                      "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
                       "tt_metal/third_party/tt_llk_" + this->arch_name_ +
                       "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
+                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
+                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
+                      "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";

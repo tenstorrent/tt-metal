@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/core_coord.hpp>
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 

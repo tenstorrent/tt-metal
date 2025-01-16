@@ -9,12 +9,12 @@
 #include "random_program_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "impl/buffers/buffer.hpp"
-#include "impl/device/device.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 
 // TODO: ARCH_NAME specific, must remove

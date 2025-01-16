@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

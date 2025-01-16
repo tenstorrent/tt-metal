@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt/llrt.hpp"
-#include "llrt/tt_cluster.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <llrt.hpp>
+#include <tt_cluster.hpp>
+#include <span.hpp>
 
 #include <unistd.h>
 
