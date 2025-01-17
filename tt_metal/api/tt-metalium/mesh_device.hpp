@@ -228,7 +228,6 @@ public:
     // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
 
     std::vector<IDevice*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
-    IDevice* get_device_index(size_t logical_device_id) const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
