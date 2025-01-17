@@ -410,7 +410,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const std::vector<IDevice*>& devices,

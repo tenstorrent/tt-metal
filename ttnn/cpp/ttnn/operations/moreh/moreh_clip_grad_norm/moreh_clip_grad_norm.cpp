@@ -91,10 +91,10 @@ Tensor MorehClipGradNorm::invoke(
     }
 
     // max_norm / (total_norm + 1e-6)
-    Tensor max_norm_tensor = creation::create_scalar(max_norm, inputs.at(0).get_dtype(), Layout::TILE, device);
+    Tensor max_norm_tensor = ttnn::full(SimpleShape({1}), max_norm, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef = ttnn::div(max_norm_tensor, ttnn::add(output_total_norm, 1e-6f));
     // min(clip_coef, 1.0f)
-    Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
+    Tensor scalar = ttnn::full(SimpleShape({1}), 1.0f, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
     max_norm_tensor.deallocate();
