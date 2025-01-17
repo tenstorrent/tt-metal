@@ -31,9 +31,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.runner-info.arch }}_profiler
+          name: TTMetal_build_any_profiler
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.runner-info.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run profiler regression tests
         timeout-minutes: 30

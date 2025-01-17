@@ -5,7 +5,7 @@
 #include <optional>
 #include <utility>
 
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

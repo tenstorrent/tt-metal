@@ -17,7 +17,7 @@
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 #define DO_PRAGMA(x) _Pragma(#x)
 

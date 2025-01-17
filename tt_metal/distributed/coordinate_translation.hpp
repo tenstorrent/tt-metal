@@ -7,7 +7,7 @@
 #include <unordered_map>
 
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "tt_metal/distributed/mesh_device_view.hpp"
+#include <mesh_device_view.hpp>
 
 namespace tt::tt_metal::distributed {
 

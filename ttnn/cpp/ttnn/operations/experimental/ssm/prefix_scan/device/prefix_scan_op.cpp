@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prefix_scan_op.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "prefix_scan_program_factory.hpp"
 
 using namespace tt::tt_metal;

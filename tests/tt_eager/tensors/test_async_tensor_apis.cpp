@@ -4,8 +4,8 @@
 
 #include <chrono>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -13,10 +13,12 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -58,7 +60,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
+        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, 128});
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
@@ -120,11 +122,11 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     for (int i = 0; i < 5; i++) {
         // Initialize tensors and move them to DRAM
         Tensor input_tensor_a = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor input_tensor_b = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor input_tensor_c = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
@@ -173,13 +175,13 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // Run for multiple loops to ensure deterministic behaviour with device addresses
         // Initialize 2 tensors on device
         Tensor tensor1 = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}),
+            ttnn::SimpleShape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
             *device);
         Tensor tensor2 = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}),
+            ttnn::SimpleShape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -193,7 +195,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2
         Tensor tensor3 = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}),
+            ttnn::SimpleShape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -204,7 +206,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     log_info(LogTest, "Testing Device tensor self-assignment through function");
     for (int i = 0; i < 5; i++) {
         Tensor device_tensor = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}),
+            ttnn::SimpleShape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -220,7 +222,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     log_info(LogTest, "Testing Device tensor move assignment");
     for (int i = 0; i < 5; i++) {
         Tensor tensor1 = ttnn::full(
-            ttnn::Shape({1, 1, 1024, 1024}),
+            ttnn::SimpleShape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -231,7 +233,11 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
 
     log_info(LogTest, "Testing Device tensor self-assignment");
     Tensor tensor_to_self_assign = ttnn::full(
-        ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16, /*layout=*/std::nullopt, *device);
+        ttnn::SimpleShape({1, 1, 1024, 1024}),
+        static_cast<float>(0),
+        DataType::BFLOAT16,
+        /*layout=*/std::nullopt,
+        *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
     tensor_to_self_assign = tensor_to_self_assign;
     EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
@@ -285,7 +291,8 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
+            Tensor reshaped_tensor =
+                ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");

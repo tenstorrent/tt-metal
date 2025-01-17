@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/system_mesh.hpp"
+#include <system_mesh.hpp>
 
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
@@ -61,7 +61,13 @@ void SystemMesh::Impl::initialize() {
 
     std::tie(logical_to_physical_coordinates_, logical_mesh_shape_) = get_system_mesh_coordinate_translation_map();
     for (const auto& [logical_coordinate, physical_coordinate] : logical_to_physical_coordinates_) {
-        logical_to_device_id_.emplace(logical_coordinate, physical_coordinate_to_device_id_.at(physical_coordinate));
+        auto physical_device_id_iter = physical_coordinate_to_device_id_.find(physical_coordinate);
+        TT_FATAL(
+            physical_device_id_iter != physical_coordinate_to_device_id_.end(),
+            "Physical (Ethernet) coordinate: {} not found. Have you used `tt-topology` to flash the ethernet "
+            "coordinates with the correct topology?",
+            physical_coordinate);
+        logical_to_device_id_.try_emplace(logical_coordinate, physical_device_id_iter->second);
     }
 }
 
@@ -95,9 +101,11 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     // First check if total size fits
     TT_FATAL(
         requested_num_rows * requested_num_cols <= system_mesh_rows * system_mesh_cols,
-        "Requested submesh is too big: {}x{}",
+        "Requested submesh is too big: {}x{}, SystemMesh shape: {}x{}",
         requested_num_rows,
-        requested_num_cols);
+        requested_num_cols,
+        system_mesh_rows,
+        system_mesh_cols);
 
     bool is_single_row_or_column = requested_num_rows == 1 or requested_num_cols == 1;
     if (is_single_row_or_column) {

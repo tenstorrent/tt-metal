@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

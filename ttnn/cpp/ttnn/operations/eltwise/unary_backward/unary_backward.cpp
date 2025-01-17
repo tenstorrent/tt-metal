@@ -5,9 +5,9 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -24,7 +24,7 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::unary_backward {
 

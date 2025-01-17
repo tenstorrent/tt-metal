@@ -9,25 +9,25 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "hw/inc/dev_msgs.h"
+#include <assert.hpp>
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <dev_msgs.h>
 
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
-#include "llrt/llrt.hpp"
-#include "llrt/tt_cluster.hpp"
+#include <llrt.hpp>
+#include <tt_cluster.hpp>
 
-#include "common/core_coord.hpp"
+#include <core_coord.hpp>
 #include "hw/inc/debug/ring_buffer.h"
-#include "impl/device/device.hpp"
-#include "llrt/rtoptions.hpp"
+#include <device_impl.hpp>
+#include <rtoptions.hpp>
 
 #include "watcher_device_reader.hpp"
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 using namespace tt::tt_metal;
 using std::string;

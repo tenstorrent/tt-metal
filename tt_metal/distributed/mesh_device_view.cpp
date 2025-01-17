@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/mesh_device_view.hpp"
-
 #include <algorithm>
 #include <stdexcept>
 
-#include "tt_metal/distributed/mesh_device.hpp"
+#include <mesh_device.hpp>
+#include <mesh_device_view.hpp>
 
 namespace tt::tt_metal::distributed {
 

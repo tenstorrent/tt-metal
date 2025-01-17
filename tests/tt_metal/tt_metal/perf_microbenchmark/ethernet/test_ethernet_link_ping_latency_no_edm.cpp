@@ -11,21 +11,21 @@
 #include <map>
 
 #include "umd/device/types/arch.h"
-#include "impl/device/device.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

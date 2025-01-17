@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 #include <vector>
 // #include <cstdint>

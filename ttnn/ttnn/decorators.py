@@ -21,7 +21,9 @@ import ttnn
 import ttnn.database
 
 
-def compare_tensors_using_pcc(python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level):
+def compare_tensors_using_pcc(
+    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
+):
     import torch
 
     from models.utility_functions import comp_pcc
@@ -59,9 +61,11 @@ def compare_tensors_using_pcc(python_fully_qualified_name, golden_outputs, outpu
         comparison_records.append(commparison_record)
 
         if not matches:
-            logger.error(
-                f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
-            )
+            error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+            if fail_on_bad_comparison:
+                raise RuntimeError(error_message)
+            else:
+                logger.error(error_message)
 
     return comparison_records
 
@@ -453,6 +457,7 @@ class Operation:
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
                         level="locally",
+                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
                     )
 
                 if global_golden_function_output is not None:
@@ -464,6 +469,7 @@ class Operation:
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
                         level="globally",
+                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
                     )
 
                 if isinstance(local_golden_function_output, torch.Tensor):

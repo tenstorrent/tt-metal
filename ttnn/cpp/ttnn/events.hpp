@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::events {

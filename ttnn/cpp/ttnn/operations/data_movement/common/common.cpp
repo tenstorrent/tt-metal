@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace operations {

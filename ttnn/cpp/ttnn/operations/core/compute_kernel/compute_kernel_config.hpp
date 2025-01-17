@@ -9,7 +9,7 @@
 #include <tuple>
 #include <optional>
 #include "umd/device/types/arch.h"
-#include "tt_metal/common/base_types.hpp"
+#include <tt-metalium/base_types.hpp>
 
 namespace ttnn {
 

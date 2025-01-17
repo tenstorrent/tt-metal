@@ -13,13 +13,13 @@
 #include <variant>
 #include <vector>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "gtest/gtest.h"
-#include "impl/event/event.hpp"
-#include "impl/program/program.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include <nlohmann/json.hpp>
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_processor.hpp"

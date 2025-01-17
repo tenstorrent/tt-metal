@@ -6,11 +6,11 @@
 #include <array>
 #include <cstdint>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/llrt/hal.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <assert.hpp>
+#include <core_coord.hpp>
+#include <sub_device.hpp>
+#include <hal.hpp>
+#include <span.hpp>
 
 namespace tt::tt_metal {
 

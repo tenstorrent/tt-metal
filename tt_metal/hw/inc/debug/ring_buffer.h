@@ -11,7 +11,7 @@ constexpr static int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 

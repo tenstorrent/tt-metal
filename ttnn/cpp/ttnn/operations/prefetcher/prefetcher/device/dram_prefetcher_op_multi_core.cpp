@@ -5,13 +5,13 @@
 #include <stdint.h>
 
 #include "dram_prefetcher_op.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::dram_prefetcher {
 

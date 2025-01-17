@@ -329,3 +329,9 @@ import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
+
+from ttnn._ttnn.device import get_arch_name as _get_arch_name
+
+
+def get_arch_name():
+    return _get_arch_name()

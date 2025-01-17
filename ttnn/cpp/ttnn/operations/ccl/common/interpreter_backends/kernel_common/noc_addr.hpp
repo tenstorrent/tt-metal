@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "dataflow_api.h"
 #include <cstdint>

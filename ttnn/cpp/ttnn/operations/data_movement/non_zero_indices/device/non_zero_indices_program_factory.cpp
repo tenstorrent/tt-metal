@@ -5,12 +5,12 @@
 #include <algorithm>
 
 #include "non_zero_indices_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

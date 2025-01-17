@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <random>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {

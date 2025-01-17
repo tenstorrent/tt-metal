@@ -10,9 +10,9 @@
 #include <tuple>
 #include <vector>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
+#include <assert.hpp>
+#include <core_coord.hpp>
+#include <math.hpp>
 #include "tracy/Tracy.hpp"
 
 namespace tt {

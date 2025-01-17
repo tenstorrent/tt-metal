@@ -11,7 +11,7 @@ void MAIN {
     constexpr uint32_t onetile = 1;
 
 #ifndef BCAST_OP_INIT
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 #else
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1);
     BCAST_OP_INIT(tt::CBIndex::c_0, tt::CBIndex::c_1);

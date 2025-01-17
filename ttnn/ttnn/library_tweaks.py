@@ -75,25 +75,7 @@ def _is_non_existent_or_empty_env_var(env_var_name):
 
 
 def _setup_env(ttnn_package_path, cwd):
-    # We are heuristically determinining that we installed from a wheel by
-    # checking whether or not we have these environment variables. Only devs
-    # working from source should be using these environment variables.
-    # Otherwise, we set them dynamically here.
-
-    is_wheel_installation = _is_non_existent_or_empty_env_var("ARCH_NAME") and _is_non_existent_or_empty_env_var(
-        "TT_METAL_HOME"
-    )
-
-    if is_wheel_installation:
-        arch_name_file = ttnn_package_path / ".ARCH_NAME"
-
-        assert (
-            arch_name_file.is_file()
-        ), f".ARCH_NAME is not a file, so architecture cannot be determined. Are you installing ttnn from source? If you are installing and running from source, please set the ARCH_NAME environment variable."
-
-        with open(arch_name_file) as f:
-            os.environ["ARCH_NAME"] = f.readline().strip()
-
+    if _is_non_existent_or_empty_env_var("TT_METAL_HOME"):
         # Workaround: treat cwd / ttnn_links as TT_METAL_HOME and copy/symlink assets to it
         metal_home = cwd / ".ttnn_runtime_artifacts"
         prepare_dir_as_metal_home(ttnn_package_path, metal_home)

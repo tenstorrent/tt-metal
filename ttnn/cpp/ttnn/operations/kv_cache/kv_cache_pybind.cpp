@@ -7,7 +7,7 @@
 
 #include "kv_cache.hpp"
 #include "kv_cache_pybind.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;

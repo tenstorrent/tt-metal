@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/allocator/basic_allocator.hpp"
+#include <basic_allocator.hpp>
 
 namespace tt {
 

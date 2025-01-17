@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/move/move.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/trace.hpp>
+#include "cpp/ttnn/operations/data_movement/move/move.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
@@ -85,7 +85,7 @@ ttnn::Tensor to_device(
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
@@ -95,7 +95,7 @@ ttnn::Tensor allocate_tensor_on_device(
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,

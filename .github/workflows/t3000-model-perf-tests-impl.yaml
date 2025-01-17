@@ -49,17 +49,17 @@ jobs:
         if: ${{ matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}_profiler
+          name: TTMetal_build_any_profiler
         continue-on-error: true
       - name: Download build artifact
         id: download-artifact
         if: ${{ !matrix.test-group.tracy }}
         uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_any
       - name: Extract files
         if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run model perf regression tests
         if: ${{ matrix.test-group.tracy && steps.download-profiler-artifact.outcome == 'success' || !matrix.test-group.tracy }}

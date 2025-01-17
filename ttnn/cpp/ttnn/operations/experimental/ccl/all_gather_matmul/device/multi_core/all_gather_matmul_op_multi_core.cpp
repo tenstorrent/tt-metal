@@ -4,22 +4,22 @@
 ///
 #include <algorithm>
 
-#include "tt_metal/common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <sstream>
 #include <type_traits>
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 

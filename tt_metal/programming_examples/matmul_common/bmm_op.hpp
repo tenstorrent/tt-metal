@@ -10,14 +10,14 @@
 #include <algorithm>
 #include <array>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 #include "umd/device/tt_xy_pair.h"
 #include <magic_enum/magic_enum.hpp>
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using std::pair;
 using CoreCoord = tt_xy_pair;

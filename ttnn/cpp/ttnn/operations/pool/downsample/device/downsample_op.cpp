@@ -8,7 +8,7 @@
 #include <math.h>
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

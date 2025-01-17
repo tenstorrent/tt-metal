@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -230,6 +230,7 @@ def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
 @skip_for_blackhole("tilize_block gives bad pcc after second iteration")
 @skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 def test_permute_nd(device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 5, 1))
@@ -239,6 +240,7 @@ def test_permute_nd(device):
 
 
 def test_permute_squeeze(device):
+    torch.manual_seed(2005)
     ones = ttnn.ones((1, 1, 3))
     tensor = ttnn.to_device(ones, device)
     out = ttnn.permute(tensor, (0, 1, 2))
@@ -253,6 +255,7 @@ def test_permute_squeeze(device):
 def test_permute_3D(shape, perm, layout, memory_config, dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=dtype, memory_config=memory_config)
     output_tensor = ttnn.permute(input_tensor, perm)
@@ -263,6 +266,7 @@ def test_permute_3D(shape, perm, layout, memory_config, dtype, device):
 
 
 def test_nil_volume_permute(device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand([1, 0, 30, 32], dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
@@ -273,6 +277,7 @@ def test_nil_volume_permute(device):
 
 
 def test_permute_5d_tiled_basic(device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand([10, 10, 10, 100, 100], dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 3, 4))
@@ -283,6 +288,7 @@ def test_permute_5d_tiled_basic(device):
 
 
 def test_permute_5d_tiled_swap(device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand([10, 10, 10, 100, 100], dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 4, 3))
@@ -296,6 +302,7 @@ def test_permute_5d_tiled_swap(device):
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
 def test_permute_4d_cn(shape, device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
@@ -309,6 +316,7 @@ def test_permute_4d_cn(shape, device):
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
 def test_permute_4d_wh(shape, device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
@@ -322,6 +330,7 @@ def test_permute_4d_wh(shape, device):
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
 def test_permute_4d_cnwh(shape, device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (1, 0, 3, 2))
@@ -334,6 +343,7 @@ def test_permute_4d_cnwh(shape, device):
 @pytest.mark.parametrize("shape", [[2, 2, 2, 2, 2, 2, 32, 32]])
 @pytest.mark.parametrize("dims", [(5, 4, 3, 2, 1, 0, 7, 6), (5, 4, 3, 2, 1, 0, 6, 7)])
 def test_permute_8d_swapped(shape, dims, device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, dims)
@@ -345,10 +355,78 @@ def test_permute_8d_swapped(shape, dims, device):
 
 @pytest.mark.parametrize("shape", [[1, 1, 32, 32]])
 def test_permute_identity(shape, device):
+    torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, (0, 1, 2, 3))
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[2, 2, 67, 67, 65]])
+@pytest.mark.parametrize("perm", [(0, 1, 3, 2, 4)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_permute_5d_xh_pad(shape, perm, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+def generate_fixed_w_permutations(N):
+    perms_Nd = generate_permutations(N - 1)
+    for perm in perms_Nd:
+        yield perm + (N - 1,)
+
+
+@pytest.mark.parametrize("shape", [[7, 7, 7, 33, 33]])
+@pytest.mark.parametrize("perm", generate_fixed_w_permutations(5))
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_permutations_5d_fixed_w(shape, perm, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.skip("#16575 to_layout from tiled to RM fails on reshape")
+@pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
+@pytest.mark.parametrize("perm", [[0, 3, 4, 1, 2]])
+def test_permute_adversarial(shape, perm, device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 32, 32], [32, 32, 64, 64]]
+)
+@pytest.mark.parametrize("perm", generate_fixed_w_permutations(4))
+def test_permute_4d_fixed_w(shape, perm, device):
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)

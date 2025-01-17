@@ -2,23 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
-#include "common/math.hpp"
+#include <tt-metalium/math.hpp>
 #include "erisc_datamover_builder.hpp"
-#include "sub_device/sub_device_types.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/assert.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/program/program.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 #include <iterator>
 #include <vector>

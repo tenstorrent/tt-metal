@@ -2,9 +2,6 @@ name: Prepare Metal Run
 description: "Installs Python Dependencies from cache or from PyPI if cache is not available."
 
 inputs:
-  arch:
-    description: "The architecture to use"
-    required: true
   is_profiler:
     description: "Whether to load with profiler"
     required: false
@@ -24,14 +21,14 @@ runs:
     - uses: actions/download-artifact@v4
       if: ${{ inputs.is_profiler == 'false' }}
       with:
-        name: TTMetal_build_${{ inputs.arch }}
+        name: TTMetal_build_any
     - uses: actions/download-artifact@v4
       if: ${{ inputs.is_profiler == 'true' }}
       with:
-        name: TTMetal_build_${{ inputs.arch }}_profiler
+        name: TTMetal_build_any_profiler
     - name: Extract files
       shell: bash
-      run: tar -xvf ttm_${{ inputs.arch }}.tar
+      run: tar -xvf ttm_any.tar
     - uses: ./.github/actions/install-python-deps
       with:
         python-version: ${{ inputs.python-version }}

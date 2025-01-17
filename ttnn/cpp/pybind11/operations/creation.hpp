@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
 
 namespace py = pybind11;
@@ -31,7 +31,7 @@ auto create_pybind_full_overload() {
            uint8_t queue_id) -> ttnn::Tensor {
             return self(
                 queue_id,
-                ttnn::Shape{tt::tt_metal::LegacyShape{shape}},
+                ttnn::SimpleShape(shape),
                 fill_value,
                 dtype,
                 layout,
@@ -58,7 +58,7 @@ auto create_pybind_full_with_hard_coded_value_overload() {
            const std::optional<Layout>& layout,
            const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-            return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+            return self(ttnn::SimpleShape{shape}, dtype, layout, device, memory_config);
         },
         py::arg("shape"),
         py::arg("dtype") = std::nullopt,
@@ -122,7 +122,7 @@ auto create_pybind_empty_overload() {
            const Layout& layout,
            device_t* device,
            const MemoryConfig& memory_config) -> ttnn::Tensor {
-            return self(ttnn::Shape{tt::tt_metal::LegacyShape{shape}}, dtype, layout, device, memory_config);
+            return self(ttnn::SimpleShape{shape}, dtype, layout, device, memory_config);
         },
         py::arg("shape"),
         py::arg("dtype") = DataType::BFLOAT16,

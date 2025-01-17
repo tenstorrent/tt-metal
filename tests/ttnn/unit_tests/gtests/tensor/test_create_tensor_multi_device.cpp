@@ -6,7 +6,7 @@
 #include <optional>
 #include <variant>
 
-#include "buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
@@ -32,7 +32,7 @@ TEST_P(MultiDeviceTensorCreationTest, Empty) {
     mesh_device->enable_async(GetParam());
 
     const Tensor mesh_replicated_tensor = ttnn::empty(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         mesh_device,
@@ -52,7 +52,7 @@ TEST_P(MultiDeviceTensorCreationTest, EmptyLike) {
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
     const Tensor tensor = ttnn::empty(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         mesh_device->get_devices().at(0),
@@ -80,7 +80,7 @@ TEST_P(MultiDeviceTensorCreationTest, Full) {
     mesh_device->enable_async(GetParam());
 
     const Tensor mesh_replicated_tensor = ttnn::full(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         /*fill_value=*/42,
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
@@ -104,7 +104,7 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
     Tensor tensor = ttnn::empty(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         mesh_device->get_devices().at(0),
@@ -137,7 +137,7 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     ASSERT_FALSE(mesh_device->get_devices().empty());
 
     Tensor tensor = ttnn::empty(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         mesh_device->get_devices().at(0),
@@ -147,7 +147,7 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
     EXPECT_EQ(tensor.get_workers().size(), 1);
 
     Tensor opt_output = ttnn::empty(
-        ttnn::Shape(std::array<uint32_t, 2>{32, 32}),
+        ttnn::SimpleShape({32, 32}),
         DataType::BFLOAT16,
         Layout::ROW_MAJOR,
         mesh_device,

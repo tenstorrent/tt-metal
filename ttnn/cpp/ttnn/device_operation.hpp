@@ -8,14 +8,14 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-#include "tt_metal/impl/device/program_cache.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
-#include "tt_stl/reflection.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/program_cache.hpp>
+#include <tracy/Tracy.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
 
@@ -362,11 +362,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{
-            DeviceStorage{storage.get_buffer_for_device(device)},
-            storage.get_tensor_shape_for_device(device),
-            tensor.get_dtype(),
-            tensor.get_layout()};
+        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
     };
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
@@ -436,33 +432,10 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    bool launch_shards_in_parallel = false;
-    if (launch_shards_in_parallel) {
-        std::vector<std::future<tensor_return_value_t>> shard_futures;
-        shard_futures.reserve(num_shards);
-
-        // Launch each shard
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            shard_futures.emplace_back(
-                std::async(
-                    std::launch::async,
-                    [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
-                        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-                        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-                        return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
-                    }));
-        }
-
-        // Combine shards into a multi-device storage
-        for (auto& shard_future : shard_futures) {
-            outputs.push_back(shard_future.get());
-        }
-    } else {
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            auto device = storage.get_buffer_for_device_id(shard_index)->device();
-            auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-            outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
-        }
+    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
+        auto device = storage.get_buffer_for_device_id(shard_index)->device();
+        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
+        outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }
 
     return make_tensor_return_value_from_shards(storage, outputs);

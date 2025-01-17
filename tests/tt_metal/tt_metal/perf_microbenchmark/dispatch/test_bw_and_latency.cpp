@@ -10,13 +10,13 @@
 
 #include "core_coord.hpp"
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;

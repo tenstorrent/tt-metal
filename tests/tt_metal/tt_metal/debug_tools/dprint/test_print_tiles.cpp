@@ -4,8 +4,8 @@
 
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat4.hpp"
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat4.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.

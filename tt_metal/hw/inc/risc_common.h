@@ -97,10 +97,15 @@ inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr
     return result;
 }
 
+// This definition of reg_read conflicts with the one in
+// tt_metal/third_party/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
+// kernels bring into the global namespace using "using namespace ckernel".
+#if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 inline __attribute__((always_inline)) uint32_t reg_read(uint32_t addr) {
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr);
     return p_reg[0];
 }
+#endif
 
 inline void assert_trisc_reset() {
     uint32_t soft_reset_0 = READ_REG(RISCV_DEBUG_REG_SOFT_RESET_0);

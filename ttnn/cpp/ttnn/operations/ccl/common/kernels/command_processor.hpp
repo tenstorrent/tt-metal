@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
-#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+#include "cpp/ttnn/tensor/enum_types.hpp"
 
 #include "dataflow_api.h"  // for interleaved addrgen
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 
 using shape_t = ttnn::ccl::Shape4D<uint32_t>;
 using ttnn::ccl::coord_t;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "common/utils.hpp"
+#include <tt-metalium/utils.hpp>
 
 #include "umd/device/device_api_metal.h"
 #include "umd/device/tt_cluster_descriptor.h"

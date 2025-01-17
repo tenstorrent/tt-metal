@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_fabric/routing_table_generator.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_fabric/hw/inc/routing_table.h"
+#include "routing_table_generator.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include "hw/inc/routing_table.h"
 
 namespace tt::tt_fabric {
 

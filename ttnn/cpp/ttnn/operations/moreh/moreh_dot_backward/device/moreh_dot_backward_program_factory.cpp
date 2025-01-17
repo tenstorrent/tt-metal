@@ -5,7 +5,7 @@
 #include <cstdio>
 
 #include "moreh_dot_backward_device_operation.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_dot_backward {

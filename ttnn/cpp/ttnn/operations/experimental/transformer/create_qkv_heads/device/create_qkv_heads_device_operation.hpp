@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 

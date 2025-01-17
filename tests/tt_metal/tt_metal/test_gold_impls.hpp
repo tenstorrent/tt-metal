@@ -7,8 +7,8 @@
 #include <vector>
 #include <cstdint>
 #include <limits>
-#include "test_tiles.hpp"
-#include "bfloat16.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::uint16_t;
 using std::uint32_t;

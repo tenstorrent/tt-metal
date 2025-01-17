@@ -4,7 +4,7 @@
 
 #include "sliding_window.hpp"
 #include <vector>
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 using namespace tt::tt_metal;
 

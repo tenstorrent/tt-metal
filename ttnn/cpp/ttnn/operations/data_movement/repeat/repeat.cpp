@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 
 #include "device/repeat_op.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/math.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"

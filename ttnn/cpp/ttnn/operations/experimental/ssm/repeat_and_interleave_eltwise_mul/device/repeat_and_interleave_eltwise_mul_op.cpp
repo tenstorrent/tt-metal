@@ -5,7 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul_op.hpp"
 
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 

@@ -8,8 +8,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"

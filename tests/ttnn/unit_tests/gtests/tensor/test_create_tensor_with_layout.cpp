@@ -4,12 +4,12 @@
 
 #include "gtest/gtest.h"
 
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

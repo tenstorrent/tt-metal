@@ -7,9 +7,9 @@
 #include <random>
 #include <string>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

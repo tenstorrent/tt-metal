@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <optional>
 #include <variant>
 

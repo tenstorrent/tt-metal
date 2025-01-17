@@ -4,7 +4,7 @@
 
 #include "events.hpp"
 
-#include "tt_metal/impl/event/event.hpp"
+#include <tt-metalium/event.hpp>
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 

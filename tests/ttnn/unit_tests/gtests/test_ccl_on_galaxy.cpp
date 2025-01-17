@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"

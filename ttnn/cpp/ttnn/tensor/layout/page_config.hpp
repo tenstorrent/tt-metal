@@ -9,7 +9,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/enum_types.hpp"
 
-#include "impl/tile/tile.hpp"
+#include <tt-metalium/tile.hpp>
 
 #include "alignment.hpp"
 #include "size.hpp"

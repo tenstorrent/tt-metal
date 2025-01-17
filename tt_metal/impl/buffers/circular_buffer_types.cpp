@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "circular_buffer_types.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
+#include <global_circular_buffer_impl.hpp>
 
 namespace tt::tt_metal {
 inline namespace v0 {

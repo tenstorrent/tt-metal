@@ -7,7 +7,7 @@
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <cstdint>
 

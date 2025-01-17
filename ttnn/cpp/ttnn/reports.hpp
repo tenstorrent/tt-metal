@@ -6,8 +6,8 @@
 #include <filesystem>
 #include <optional>
 
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 namespace ttnn {
 

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal {
 

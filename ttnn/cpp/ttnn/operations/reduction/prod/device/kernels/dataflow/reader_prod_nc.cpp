@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 void kernel_main() {
     const auto input_addr = get_arg_val<uint32_t>(0);

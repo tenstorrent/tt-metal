@@ -9,10 +9,10 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "ttnn/tools/profiler/op_profiler.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/reflection.hpp>
+#include "tools/profiler/op_profiler.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"

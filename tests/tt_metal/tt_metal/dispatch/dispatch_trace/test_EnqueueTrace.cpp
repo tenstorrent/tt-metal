@@ -8,16 +8,16 @@
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include "dispatch_test_utils.hpp"
-#include "detail/tt_metal.hpp"
-#include "tt_metal/common/env_lib.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/env_lib.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using std::vector;
 using namespace tt;

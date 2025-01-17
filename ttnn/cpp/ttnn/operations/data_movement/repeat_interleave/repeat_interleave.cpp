@@ -4,10 +4,10 @@
 
 #include "repeat_interleave.hpp"
 
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn {
 namespace operations {

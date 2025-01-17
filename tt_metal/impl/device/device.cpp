@@ -2,34 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/device.hpp"
+#include <device_impl.hpp>
 
 #include <string>
 #include <thread>
+#include <tt_align.hpp>
 #include "tt_metal/deprecated/device.hpp"
 #include "common/core_assignment.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/common/core_descriptor.hpp"
+#include <host_api.hpp>
+#include <trace.hpp>
+#include <core_descriptor.hpp>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <tt_metal.hpp>
+#include <dprint_server.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "common/utils.hpp"
-#include "llrt/llrt.hpp"
-#include "dev_msgs.h"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
+#include <utils.hpp>
+#include <llrt.hpp>
+#include <dev_msgs.h>
+#include <device_pool.hpp>
+#include <persistent_kernel_cache.hpp>
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/experimental/hal.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/tt_stl/span.hpp"
-#include "tt_metal/types.hpp"
+#include <hal.hpp>
+#include <hal_exp.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager_tracker.hpp>
+#include <sub_device_manager.hpp>
+#include <sub_device_types.hpp>
+#include <span.hpp>
+#include <types.hpp>
 #include "impl/dispatch/topology.hpp"
 
 namespace tt {
@@ -247,14 +248,14 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
          .dram_bank_size = soc_desc.dram_bank_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
-                                 hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base =
+             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
          .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::L1)),
-         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
+         .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),

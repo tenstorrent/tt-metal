@@ -6,10 +6,10 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat16.hpp"
-#include "common/test_tiles.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/test_tiles.hpp>
 
 using namespace tt;
 

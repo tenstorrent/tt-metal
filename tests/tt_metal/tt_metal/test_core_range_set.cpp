@@ -7,12 +7,12 @@
 #include <random>
 #include <optional>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/semaphore.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

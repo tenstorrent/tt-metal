@@ -6,13 +6,13 @@
 #include <cstdint>
 #include <utility>
 #include "conv2d_op.hpp"
-#include "common/math.hpp"
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/constants.hpp>
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 

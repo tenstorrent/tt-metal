@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "common/base_types.hpp"
+#include <tt-metalium/base_types.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

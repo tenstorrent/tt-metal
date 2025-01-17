@@ -9,6 +9,8 @@ target_sources(
         mesh_graph.cpp
 )
 
+target_include_directories(tt_fabric PRIVATE .)
+
 target_link_libraries(
     tt_fabric
     PRIVATE

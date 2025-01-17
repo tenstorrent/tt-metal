@@ -8,7 +8,7 @@
 #include <cstdint>
 
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"

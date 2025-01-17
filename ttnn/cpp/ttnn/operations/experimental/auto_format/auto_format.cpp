@@ -6,8 +6,8 @@
 
 #include <utility>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"

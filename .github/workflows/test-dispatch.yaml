@@ -52,7 +52,6 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '[ "${{ inputs.arch }}" ]'
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
     secrets: inherit
@@ -75,9 +74,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
+          name:  TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files
-        run: tar -xvf ttm_${{ inputs.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |

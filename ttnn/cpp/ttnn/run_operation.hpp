@@ -9,8 +9,8 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_stl/concepts.hpp"
-#include "tt_stl/type_name.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/type_name.hpp>
 
 namespace tt::tt_metal {
 

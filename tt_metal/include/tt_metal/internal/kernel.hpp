@@ -5,7 +5,7 @@
 #pragma once
 
 #include "types.hpp"
-#include "tt_metal/impl/kernels/kernel_types.hpp"
+#include <kernel_types.hpp>
 
 //==================================================
 //                INTERNAL KERNEL EXECUTION

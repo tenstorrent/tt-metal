@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
-#include "buffers/buffer.hpp"
-#include "buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_constants.hpp>
 #include "gtest/gtest.h"
 
 #include "device_fixture.hpp"

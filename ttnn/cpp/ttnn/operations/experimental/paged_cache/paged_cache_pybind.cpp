@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/experimental/paged_cache/paged_cache.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"

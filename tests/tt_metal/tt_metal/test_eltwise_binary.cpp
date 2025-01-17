@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt;

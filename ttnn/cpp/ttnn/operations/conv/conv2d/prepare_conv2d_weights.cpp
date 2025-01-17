@@ -5,7 +5,7 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 using namespace tt;

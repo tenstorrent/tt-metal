@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
 #include "debug/dprint.h"
 
