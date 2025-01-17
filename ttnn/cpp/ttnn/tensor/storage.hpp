@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace tt::tt_metal {
 
@@ -132,7 +133,7 @@ struct BorrowedStorage {
 struct MultiDeviceHostStorage {
     DistributedTensorConfig strategy;
     std::vector<OwnedBuffer> buffers;
-    std::vector<ttnn::Shape> shapes;
+    std::vector<TensorSpec> specs;
     mutable std::mutex mtx;
 
     friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) {
@@ -142,20 +143,20 @@ struct MultiDeviceHostStorage {
 
         swap(first.strategy, second.strategy);
         swap(first.buffers, second.buffers);
-        swap(first.shapes, second.shapes);
+        swap(first.specs, second.specs);
     }
 
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<ttnn::Shape> shapes_) :
-        strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
+        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<TensorSpec> specs_) :
+        strategy(strategy_), buffers(buffers_), specs(specs_) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage&& other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
     MultiDeviceHostStorage(const MultiDeviceHostStorage& other) {
         std::scoped_lock lock(other.mtx);
         strategy = other.strategy;
         buffers = other.buffers;
-        shapes = other.shapes;
+        specs = other.specs;
     }
 
     MultiDeviceHostStorage& operator=(const MultiDeviceHostStorage& other) {
@@ -170,7 +171,7 @@ struct MultiDeviceHostStorage {
     }
 
     bool operator==(const MultiDeviceHostStorage& other) {
-        return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
+        return this->strategy == other.strategy and this->buffers == other.buffers and this->specs == other.specs;
     }
 
     static constexpr auto attribute_names = std::forward_as_tuple();
@@ -178,10 +179,10 @@ struct MultiDeviceHostStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer& buffer, const ttnn::Shape shape) {
+    void insert_buffer_and_spec_for_device(int buffer_index, const OwnedBuffer& buffer, TensorSpec spec) {
         std::lock_guard<std::mutex> lock(mtx);
         buffers[buffer_index] = buffer;
-        shapes[buffer_index] = shape;
+        specs[buffer_index] = std::move(spec);
     }
 
     OwnedBuffer get_buffer(int buffer_index) const {
@@ -196,10 +197,10 @@ struct MultiDeviceHostStorage {
         return buffers[buffer_index];
     }
 
-    ttnn::Shape get_tensor_shape(int shape_index) const {
+    TensorSpec get_tensor_spec(int spec_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(shape_index < shapes.size(), "Buffer not found for device {}", shape_index);
-        return shapes[shape_index];
+        TT_ASSERT(spec_index < specs.size(), "Buffer not found for device {}", spec_index);
+        return specs[spec_index];
     }
 
     uint32_t num_buffers() const {
@@ -222,7 +223,7 @@ struct MultiDeviceStorage {
     DistributedTensorConfig strategy;
     std::vector<int> ordered_device_ids;
     std::unordered_map<int, DeviceBuffer> buffers;
-    std::unordered_map<int, ttnn::Shape> shapes;
+    std::unordered_map<int, TensorSpec> specs;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
     MultiDeviceStorage() = default;
@@ -233,18 +234,18 @@ struct MultiDeviceStorage {
         swap(first.strategy, second.strategy);
         swap(first.ordered_device_ids, second.ordered_device_ids);
         swap(first.buffers, second.buffers);
-        swap(first.shapes, second.shapes);
+        swap(first.specs, second.specs);
     }
 
     MultiDeviceStorage(
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
         std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, ttnn::Shape> shapes_) :
+        std::unordered_map<int, TensorSpec> specs_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
-        shapes(std::move(shapes_)) {}
+        specs(std::move(specs_)) {}
 
     MultiDeviceStorage(MultiDeviceStorage&& other) { swap(*this, other); }
 
@@ -253,7 +254,7 @@ struct MultiDeviceStorage {
         ordered_device_ids = other.ordered_device_ids;
         strategy = other.strategy;
         buffers = other.buffers;
-        shapes = other.shapes;
+        specs = other.specs;
     }
 
     MultiDeviceStorage& operator=(const MultiDeviceStorage& other) {
@@ -269,7 +270,7 @@ struct MultiDeviceStorage {
 
     bool operator==(const MultiDeviceStorage& other) {
         return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and
-               this->buffers == other.buffers and this->shapes == other.shapes;
+               this->buffers == other.buffers and this->specs == other.specs;
     }
 
     inline const MemoryConfig memory_config() const {
@@ -297,14 +298,13 @@ struct MultiDeviceStorage {
     // preinitialize empty tensor handles and use/populate them in the worker threads.
     std::vector<DeviceBuffer> get_buffers() const;
 
-    inline void insert_buffer_and_shape_for_device(
-        IDevice* device, const DeviceBuffer buffer, const ttnn::Shape shape) {
+    inline void insert_buffer_and_spec_for_device(IDevice* device, const DeviceBuffer buffer, TensorSpec spec) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
         TT_ASSERT(
             device == buffer->device(),
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
         buffers.insert({device->id(), buffer});
-        shapes.insert({device->id(), shape});
+        specs.insert({device->id(), std::move(spec)});
     }
 
     inline DeviceBuffer get_buffer_for_device(IDevice* device) const {
@@ -330,10 +330,10 @@ struct MultiDeviceStorage {
         return buffers.at(device_id);
     }
 
-    inline ttnn::Shape get_tensor_shape_for_device(IDevice* device) const {
+    inline TensorSpec get_tensor_spec_for_device(IDevice* device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
-        TT_ASSERT(shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
-        return shapes.at(device->id());
+        TT_ASSERT(specs.find(device->id()) != specs.end(), "Shape not found for device {}", device->id());
+        return specs.at(device->id());
     }
 
     inline uint32_t num_buffers() const {
