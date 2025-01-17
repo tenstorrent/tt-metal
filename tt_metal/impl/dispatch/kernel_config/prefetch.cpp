@@ -193,14 +193,14 @@ void PrefetchKernel::GenerateDependentConfigs() {
         }
         bool found_dispatch = false;
         bool found_dispatch_s = false;
-        for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        for (const auto& k : downstream_kernels_) {
+            if (auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 
@@ -228,11 +228,12 @@ void PrefetchKernel::GenerateDependentConfigs() {
 
         // Downstream, expect just one ROUTER
         TT_ASSERT(downstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
+        auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(downstream_kernels_[0]);
+        TT_ASSERT(router_kernel != nullptr);
         dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
-        uint32_t router_idx = router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+        uint32_t router_idx =
+            router_kernel->GetUpstreamPort(this->shared_from_this());  // Need the port that this connects to downstream
         dependent_config_.downstream_cb_base =
             (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
             (router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4) * router_idx;
@@ -241,10 +242,10 @@ void PrefetchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_d_variant.value()) {
         // Upstream, expect just one ROUTER
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
+        auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(upstream_kernels_[0]);
+        TT_ASSERT(router_kernel != nullptr);
         dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
-        int router_idx = router_kernel->GetDownstreamPort(this);
+        int router_idx = router_kernel->GetDownstreamPort(this->shared_from_this());
         dependent_config_.upstream_cb_sem_id =
             router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
 
@@ -256,14 +257,14 @@ void PrefetchKernel::GenerateDependentConfigs() {
         }
         bool found_dispatch = false;
         bool found_dispatch_s = false;
-        for (FDKernel* k : downstream_kernels_) {
-            if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        for (const auto& k : downstream_kernels_) {
+            if (auto dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
                 TT_ASSERT(!found_dispatch, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
-            } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
+            } else if (auto dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
 

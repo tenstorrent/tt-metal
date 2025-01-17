@@ -6,6 +6,7 @@
 #include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
+#include <memory>
 #include <tt_metal.hpp>
 
 namespace tt::tt_metal::dispatch {
@@ -29,7 +30,7 @@ void DemuxKernel::GenerateStaticConfigs() {
     static_config_.timeout_cycles = 0;
 
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
-        FDKernel* k = downstream_kernels_[idx];
+        const auto& k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
         static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
         static_config_.output_depacketize_cb_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
@@ -42,16 +43,17 @@ void DemuxKernel::GenerateStaticConfigs() {
 void DemuxKernel::GenerateDependentConfigs() {
     // Upstream, expect EthTunneler or DEMUX
     TT_ASSERT(upstream_kernels_.size() == 1);
-    if (auto us = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0])) {
+    if (const auto& us = std::dynamic_pointer_cast<EthTunnelerKernel>(upstream_kernels_[0])) {
         dependent_config_.remote_rx_x = us->GetVirtualCore().x;
         dependent_config_.remote_rx_y = us->GetVirtualCore().y;
         dependent_config_.remote_rx_queue_id = us->GetStaticConfig().vc_count.value() * 2 - 1;
-    } else if (auto us = dynamic_cast<DemuxKernel*>(upstream_kernels_[0])) {
+    } else if (const auto& us = std::dynamic_pointer_cast<DemuxKernel>(upstream_kernels_[0])) {
         dependent_config_.remote_rx_x = us->GetVirtualCore().x;
         dependent_config_.remote_rx_y = us->GetVirtualCore().y;
-        dependent_config_.remote_rx_queue_id = us->GetDownstreamPort(this) + 1;  // TODO: can this be cleaned up?
+        dependent_config_.remote_rx_queue_id =
+            us->GetDownstreamPort(this->shared_from_this()) + 1;  // TODO: can this be cleaned up?
         // TODO: why is just this one different? Just match previous implementation for now
-        if (us->GetDownstreamPort(this) == 1) {
+        if (us->GetDownstreamPort(this->shared_from_this()) == 1) {
             static_config_.endpoint_id_start_index =
                 static_config_.endpoint_id_start_index.value() + downstream_kernels_.size();
         }
@@ -63,11 +65,11 @@ void DemuxKernel::GenerateDependentConfigs() {
     TT_ASSERT(downstream_kernels_.size() <= MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
     dependent_config_.output_depacketize = 0;  // Populated per downstream kernel
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
-        FDKernel* k = downstream_kernels_[idx];
+        auto k = downstream_kernels_[idx];
         dependent_config_.remote_tx_x[idx] = k->GetVirtualCore().x;
         dependent_config_.remote_tx_y[idx] = k->GetVirtualCore().y;
         // Expect downstream to be either a DISPATCH or another DEMUX
-        if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
+        if (const auto& dispatch_kernel = std::dynamic_pointer_cast<DispatchKernel>(k)) {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 dispatch_kernel->GetStaticConfig().dispatch_cb_base.value() >> 4;
             dependent_config_.remote_tx_queue_size_words[idx] =
@@ -83,7 +85,7 @@ void DemuxKernel::GenerateDependentConfigs() {
             uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
-        } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(k)) {
+        } else if (const auto& demux_kernel = std::dynamic_pointer_cast<DemuxKernel>(k)) {
             dependent_config_.remote_tx_queue_start_addr_words[idx] =
                 demux_kernel->GetStaticConfig().rx_queue_start_addr_words.value();
             dependent_config_.remote_tx_queue_size_words[idx] = 0x1000;  // TODO: hard-coded on previous implementation

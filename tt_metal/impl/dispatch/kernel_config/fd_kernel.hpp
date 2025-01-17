@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <memory>
+
 #include <device_impl.hpp>
 #include <program_impl.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
@@ -41,7 +43,7 @@ static std::vector<string> dispatch_kernel_file_names = {
 
 // Top-level class describing a Fast Dispatch Kernel (kernel running on a specific core). All FD kernels should inherit
 // from this class and implement the virtual functions as required.
-class FDKernel {
+class FDKernel : public std::enable_shared_from_this<FDKernel> {
 public:
     FDKernel(
         int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
@@ -68,7 +70,7 @@ public:
     virtual void ConfigureCore() {};
 
     // Generator function to create a kernel of a given type. New kernels need to be added here.
-    static FDKernel* Generate(
+    static std::unique_ptr<FDKernel> Generate(
         int node_id,
         chip_id_t device_id,
         chip_id_t servicing_device_id,
@@ -77,8 +79,8 @@ public:
         tt::tt_metal::DispatchWorkerType type);
 
     // Register another kernel as upstream/downstream of this one
-    void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
-    void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
+    void AddUpstreamKernel(const std::shared_ptr<FDKernel>& upstream) { upstream_kernels_.push_back(upstream); }
+    void AddDownstreamKernel(const std::shared_ptr<FDKernel>& downstream) { downstream_kernels_.push_back(downstream); }
 
     virtual CoreType GetCoreType() {
         return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
@@ -90,8 +92,8 @@ public:
     chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
 
     // Get the port index for which a given kernel is upstream/downstream of this one
-    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
-    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
+    int GetUpstreamPort(const std::shared_ptr<FDKernel>& other) { return GetPort(other, this->upstream_kernels_); }
+    int GetDownstreamPort(const std::shared_ptr<FDKernel>& other) { return GetPort(other, this->downstream_kernels_); }
     void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
         device_ = device;
         program_ = program;
@@ -105,7 +107,7 @@ protected:
         bool is_active_eth_core,
         bool send_to_brisc,
         bool force_watcher_no_inline);
-    int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
+    int GetPort(const std::shared_ptr<FDKernel>& other, std::vector<std::shared_ptr<FDKernel>>& kernels) {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
                 return idx;
@@ -129,8 +131,8 @@ protected:
     uint8_t cq_id_;
     noc_selection_t noc_selection_;
 
-    std::vector<FDKernel*> upstream_kernels_;
-    std::vector<FDKernel*> downstream_kernels_;
+    std::vector<std::shared_ptr<FDKernel>> upstream_kernels_;
+    std::vector<std::shared_ptr<FDKernel>> downstream_kernels_;
 };
 
 }  // namespace tt::tt_metal::dispatch

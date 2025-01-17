@@ -8,6 +8,7 @@
 #include "mux.hpp"
 
 #include <host_api.hpp>
+#include <memory>
 #include <tt_metal.hpp>
 
 namespace tt::tt_metal::dispatch {
@@ -181,8 +182,8 @@ void DispatchKernel::GenerateDependentConfigs() {
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(prefetch_kernel);
+        const auto& prefetch_kernel = std::dynamic_pointer_cast<PrefetchKernel>(upstream_kernels_[0]);
+        TT_ASSERT(prefetch_kernel != nullptr);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
@@ -190,8 +191,8 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Downstream
         if (device_->dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 1);
-            auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
-            TT_ASSERT(dispatch_s_kernel);
+            const auto& dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(downstream_kernels_[0]);
+            TT_ASSERT(dispatch_s_kernel != nullptr);
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             // If no dispatch_s, no downstream
@@ -205,11 +206,11 @@ void DispatchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, expect DEMUX
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto demux_kernel = dynamic_cast<DemuxKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(demux_kernel);
+        const auto& demux_kernel = std::dynamic_pointer_cast<DemuxKernel>(upstream_kernels_[0]);
+        TT_ASSERT(demux_kernel != nullptr);
         dependent_config_.upstream_logical_core = demux_kernel->GetLogicalCore();
-        int demux_idx =
-            demux_kernel->GetDownstreamPort(this);  // Need to know which port this kernel connects to upstream
+        int demux_idx = demux_kernel->GetDownstreamPort(
+            this->shared_from_this());  // Need to know which port this kernel connects to upstream
         dependent_config_.upstream_dispatch_cb_sem_id =
             demux_kernel->GetStaticConfig().output_depacketize_local_sem_id[demux_idx].value();
         dependent_config_.upstream_sync_sem = 0;  // Unused
@@ -217,8 +218,8 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Downstream, no official downstream core but use the field to connect is to the PREFETCH_H that we need to
         // write to when resuming sending of commands post exec_buf stall.
         TT_ASSERT(downstream_kernels_.size() == 1);
-        auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(prefetch_h_kernel);
+        const auto& prefetch_h_kernel = std::dynamic_pointer_cast<PrefetchKernel>(downstream_kernels_[0]);
+        TT_ASSERT(prefetch_h_kernel != nullptr);
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
@@ -231,31 +232,32 @@ void DispatchKernel::GenerateDependentConfigs() {
     } else if (static_config_.is_d_variant.value()) {
         // Upstream, expect a PREFETCH_D
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(prefetch_kernel);
+        const auto& prefetch_kernel = std::dynamic_pointer_cast<PrefetchKernel>(upstream_kernels_[0]);
+        TT_ASSERT(prefetch_kernel != nullptr);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
         dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
         // Downstream, expect a MUX_D and a DISPATCH_S if enabled
-        auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
-        auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
+        auto dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(downstream_kernels_[0]);
+        auto mux_kernel = std::dynamic_pointer_cast<MuxKernel>(downstream_kernels_[0]);
         if (device_->dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
-            mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[1]);
+            mux_kernel = std::dynamic_pointer_cast<MuxKernel>(downstream_kernels_[1]);
             if (!dispatch_s_kernel) {
-                dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[1]);
-                mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
+                dispatch_s_kernel = std::dynamic_pointer_cast<DispatchSKernel>(downstream_kernels_[1]);
+                mux_kernel = std::dynamic_pointer_cast<MuxKernel>(downstream_kernels_[0]);
             }
-            TT_ASSERT(dispatch_s_kernel);
+            TT_ASSERT(dispatch_s_kernel != nullptr);
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             TT_ASSERT(downstream_kernels_.size() == 1);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
-        TT_ASSERT(mux_kernel);
+        TT_ASSERT(mux_kernel != nullptr);
         dependent_config_.downstream_logical_core = mux_kernel->GetLogicalCore();
         // Some configs depend on which port this kernel connects to on the downstream kernel
-        int dispatch_d_idx = mux_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+        int dispatch_d_idx =
+            mux_kernel->GetUpstreamPort(this->shared_from_this());  // Need the port that this connects to downstream
         dependent_config_.downstream_cb_size = mux_kernel->GetStaticConfig().rx_queue_size_words.value() << 4;
         // MUX queue id is "dependent_config_.downstream_cb_size.value()"
         // The address for that queue starts at "rx_queue_start_addr_words + i*rx_queue_size_words" (based on kernel

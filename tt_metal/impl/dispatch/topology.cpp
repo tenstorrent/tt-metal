@@ -14,6 +14,7 @@
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
+#include <memory>
 
 #define DISPATCH_MAX_UPSTREAM 4
 #define DISPATCH_MAX_DOWNSTREAM 4
@@ -396,7 +397,7 @@ static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_2cq = {
     {135, 8, x, 1, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-std::vector<FDKernel*> node_id_to_kernel;
+std::vector<std::shared_ptr<FDKernel>> node_id_to_kernel;
 
 // Helper function to get the nodes for this platform
 std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
@@ -529,9 +530,6 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
 void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
-        for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
-            delete node_id_to_kernel[idx];
-        }
         node_id_to_kernel.clear();
     }
 
@@ -539,13 +537,13 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
     for (const auto& node : nodes) {
         TT_ASSERT(node_id_to_kernel.size() == node.id);
-        node_id_to_kernel.push_back(FDKernel::Generate(
+        node_id_to_kernel.push_back(std::move(FDKernel::Generate(
             node.id,
             node.device_id,
             node.servicing_device_id,
             node.cq_id,
             {node.my_noc, node.upstream_noc, node.downstream_noc},
-            node.kernel_type));
+            node.kernel_type)));
     }
 
     // Connect the graph with upstream/downstream kernels
@@ -595,8 +593,8 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
 
     // Go through each mmio device, and set placement cq_ids to ensure that we stamp out the correct # of demux/routers
     // per tunnel. TODO: We can fix dispatch_core_manager so we don't hard-code separate channels for this.
-    std::map<chip_id_t, std::vector<FDKernel*>> mmio_device_id_to_kernels;
-    for (auto fd_kernel : node_id_to_kernel) {
+    std::map<chip_id_t, std::vector<std::shared_ptr<FDKernel>>> mmio_device_id_to_kernels;
+    for (const auto& fd_kernel : node_id_to_kernel) {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(fd_kernel->GetDeviceId());
         if (fd_kernel->GetDeviceId() == mmio_device_id) {
             mmio_device_id_to_kernels[mmio_device_id].push_back(fd_kernel);
@@ -606,10 +604,10 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
         chip_id_t mmio_device_id = mmio_device_id_and_kernels.first;
         int prefetch_h_id = 0, dispatch_h_id = 0;
         int demux_id = 0, router_id = 0, tunneler_id = 0;
-        for (auto fd_kernel : mmio_device_id_and_kernels.second) {
-            if (auto demux_kernel = dynamic_cast<DemuxKernel*>(fd_kernel)) {
+        for (const auto& fd_kernel : mmio_device_id_and_kernels.second) {
+            if (auto demux_kernel = std::dynamic_pointer_cast<DemuxKernel>(fd_kernel)) {
                 demux_kernel->SetPlacementCQID((demux_id++) % 3);
-            } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+            } else if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
                 router_kernel->SetPlacementCQID((router_id++) % num_hw_cqs);
             }
         }
@@ -619,8 +617,8 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     std::map<chip_id_t, uint32_t> device_id_to_num_routers;  // Need to build this first. TODO: in the future walk the
                                                              // graph to populate VC counts
     std::map<chip_id_t, uint32_t> device_id_to_remaining_routers;
-    for (auto fd_kernel : node_id_to_kernel) {
-        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+    for (auto& fd_kernel : node_id_to_kernel) {
+        if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
             chip_id_t router_device_id = router_kernel->GetDeviceId();
             chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(router_device_id);
 
@@ -632,9 +630,9 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
             device_id_to_num_routers[router_device_id]++;
         }
     }
-    for (auto fd_kernel : node_id_to_kernel) {
+    for (auto& fd_kernel : node_id_to_kernel) {
         uint32_t tunnel_stop = device_id_to_tunnel_stop[fd_kernel->GetDeviceId()];
-        if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(fd_kernel)) {
+        if (auto tunneler_kernel = std::dynamic_pointer_cast<EthTunnelerKernel>(fd_kernel)) {
             // Local tunneler needs to match remote tunneler on previous chip in the tunnel
             if (!tunneler_kernel->IsRemote()) {
                 TT_ASSERT(tunnel_stop != 0);
@@ -642,7 +640,7 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
             }
             // # of VCs is return VC + total VCs for tunnel (num_hw_cqs per remote) - num_hw_cqs VCs per remote stop
             tunneler_kernel->SetVCCount(1 + (tunnel_depth - 1) * num_hw_cqs - tunnel_stop * num_hw_cqs);
-        } else if (auto router_kernel = dynamic_cast<EthRouterKernel*>(fd_kernel)) {
+        } else if (auto router_kernel = std::dynamic_pointer_cast<EthRouterKernel>(fd_kernel)) {
             // Router has the same VCs as the remote tunneler for MMIO, same as local tunneler for remote
             if (tunnel_stop != 0) {
                 tunnel_stop--;
