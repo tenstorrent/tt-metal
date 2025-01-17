@@ -30,7 +30,8 @@ public:
         MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
         "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
-    SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
+    SubDeviceManager(
+        IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
     // Constructor used for regular sub-devices
     SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 

@@ -8,6 +8,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>
+#include <source_location>
 
 #include <logger.hpp>
 #include <host_api.hpp>
@@ -15,6 +16,11 @@
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>
 #include "tt_metal/distributed/mesh_command_queue.hpp"
+#include <device_impl.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager_tracker.hpp>
+#include <sub_device_manager.hpp>
+#include <sub_device_types.hpp>
 
 #include <hal.hpp>
 
@@ -25,7 +31,37 @@ MeshDeviceID generate_unique_mesh_id() {
     static std::atomic<MeshDeviceID> next_id{0};
     return next_id++;
 }
+
+// Helper function to verify all devices in the MeshDevice have the same value
+template <typename F>
+decltype(auto) validate_and_get_reference_value(
+    const std::vector<IDevice*>& devices, F&& func, const std::source_location& loc = std::source_location::current()) {
+    if (devices.empty()) {
+        TT_THROW("{} [{}:{}] failed: MeshDevice has no devices", loc.function_name(), loc.file_name(), loc.line());
+    }
+
+    // Get reference to first device's value
+    decltype(auto) reference_value = std::forward<F>(func)(devices.front());
+
+    // Validate all other devices match
+    for (auto it = devices.begin() + 1; it != devices.end(); ++it) {
+        const auto& current_value = std::forward<F>(func)(*it);
+        if (current_value != reference_value) {
+            TT_THROW(
+                "{} [{}:{}] failed: Device at index {} returned value that differs from reference. "
+                "Expected: {}, Actual: {}",
+                loc.function_name(),
+                loc.file_name(),
+                loc.line(),
+                std::distance(devices.begin(), it),
+                reference_value,
+                current_value);
+        }
+    }
+    return reference_value;
 }
+
+}  // namespace
 
 MeshDevice::ScopedDevices::ScopedDevices(
     size_t l1_small_size,
@@ -56,39 +92,58 @@ const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { re
 
 uint32_t MeshDevice::build_key() const {
     TT_FATAL(tt::tt_metal::hal.is_coordinate_virtualization_enabled(), "MeshDevice::build_key() expects coordinate virtualization to be enabled");
-    return reference_device()->build_key();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->build_key(); });
 }
 
-uint8_t MeshDevice::num_hw_cqs() const { return reference_device()->num_hw_cqs(); }
+uint8_t MeshDevice::num_hw_cqs() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->num_hw_cqs(); });
+}
 
 bool MeshDevice::is_initialized() const {
-    const auto& devices = this->get_devices();
-    return std::all_of(devices.begin(), devices.end(), [](const auto& device) { return device->is_initialized(); });
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->is_initialized(); });
 }
-uint32_t MeshDevice::l1_size_per_core() const { return reference_device()->l1_size_per_core(); }
 
-uint32_t MeshDevice::dram_size_per_channel() const { return reference_device()->dram_size_per_channel(); }
+uint32_t MeshDevice::l1_size_per_core() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->l1_size_per_core(); });
+}
+
+uint32_t MeshDevice::dram_size_per_channel() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->dram_size_per_channel(); });
+}
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-MeshDevice::MeshDevice(std::shared_ptr<ScopedDevices> mesh_handle, const MeshShape& mesh_shape, MeshType type, std::weak_ptr<MeshDevice> parent_mesh) :
+MeshDevice::MeshDevice(
+    std::shared_ptr<ScopedDevices> mesh_handle,
+    const MeshShape& mesh_shape,
+    MeshType type,
+    std::weak_ptr<MeshDevice> parent_mesh) :
     scoped_devices_(std::move(mesh_handle)),
     mesh_shape_(mesh_shape),
     type_(type),
     mesh_id_(generate_unique_mesh_id()),
-    parent_mesh_(std::move(parent_mesh)) {}
+    parent_mesh_(std::move(parent_mesh)) {
+    work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
+}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
     size_t l1_small_size,
     size_t trace_region_size,
     size_t num_command_queues,
-    const DispatchCoreConfig& dispatch_core_config) {
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     auto mesh_device = std::make_shared<MeshDevice>(
         std::make_shared<ScopedDevices>(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
         config.mesh_shape,
         config.mesh_type);
-    mesh_device->initialize();
+
+    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     return mesh_device;
 }
 
@@ -149,14 +204,6 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
     return submeshes;
 }
 
-void MeshDevice::initialize() {
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
-    SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
-    if (this->using_fast_dispatch()) {
-        mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
-    }
-}
-
 MeshDevice::~MeshDevice() {}
 
 IDevice* MeshDevice::get_device_index(size_t device_index) const {
@@ -199,11 +246,14 @@ const DeviceIds MeshDevice::get_device_ids() const {
 size_t MeshDevice::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDevice::compute_with_storage_grid_size() const {
-    return this->reference_device()->compute_with_storage_grid_size();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->compute_with_storage_grid_size(); });
 }
 
-
-tt::ARCH MeshDevice::arch() const { return this->reference_device()->arch(); }
+tt::ARCH MeshDevice::arch() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->arch(); });
+}
 
 size_t MeshDevice::num_rows() const { return mesh_shape_.num_rows; }
 
@@ -260,6 +310,8 @@ bool MeshDevice::close() {
     }
     parent_mesh_.reset();
     view_.reset();
+    sub_device_manager_tracker_.reset();
+    work_executor_.reset();
     return true;
 }
 
@@ -306,56 +358,100 @@ size_t MeshDevice::num_program_cache_entries() {
     return total_entries;
 }
 
+SubDeviceManagerId MeshDevice::create_sub_device_manager(
+    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
+}
+void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
+}
+void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
+    sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
+}
+void MeshDevice::clear_loaded_sub_device_manager() { sub_device_manager_tracker_->clear_loaded_sub_device_manager(); }
 
-SubDeviceManagerId MeshDevice::create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) { return reference_device()->create_sub_device_manager(sub_devices, local_l1_size); }
-void MeshDevice::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) { return reference_device()->remove_sub_device_manager(sub_device_manager_id); }
-void MeshDevice::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) { return reference_device()->load_sub_device_manager(sub_device_manager_id); }
-void MeshDevice::clear_loaded_sub_device_manager() { return reference_device()->clear_loaded_sub_device_manager(); }
-
-std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) { return reference_device()->create_sub_device_manager_with_fabric(sub_devices, local_l1_size); }
-CoreCoord MeshDevice::dram_grid_size() const { return reference_device()->dram_grid_size(); }
+std::tuple<SubDeviceManagerId, SubDeviceId> MeshDevice::create_sub_device_manager_with_fabric(
+    tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
+}
+CoreCoord MeshDevice::dram_grid_size() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->dram_grid_size(); });
+}
 
 bool MeshDevice::using_slow_dispatch() const {
-    const auto& devices = this->get_devices();
-    TT_FATAL(devices.size() > 0, "Expected at least one device in a Mesh to use slow dispatch.");
-    bool first_device_dispatch = devices[0]->using_slow_dispatch();
-    TT_FATAL(std::all_of(
-        devices.begin(),
-        devices.end(),
-        [first_device_dispatch](const IDevice* device) {
-            return device->using_slow_dispatch() == first_device_dispatch;
-        }), "Expected all devices in a Mesh to use identical dispatch modes.");
-    return first_device_dispatch;
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->using_slow_dispatch(); });
 }
 
 bool MeshDevice::using_fast_dispatch() const {
-    const auto& devices = this->get_devices();
-    TT_FATAL(devices.size() > 0, "Expected at least one device in a Mesh to use fast dispatch.");
-    bool first_device_dispatch = devices[0]->using_fast_dispatch();
-    TT_FATAL(std::all_of(
-        devices.begin(),
-        devices.end(),
-        [first_device_dispatch](const IDevice* device) {
-            return device->using_fast_dispatch() == first_device_dispatch;
-        }), "Expected all devices in a Mesh to use identical dispatch modes.");
-    return first_device_dispatch;
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->using_fast_dispatch(); });
 }
 
 // Device property methods that can be delegated to reference device
-CoreCoord MeshDevice::grid_size() const { return reference_device()->grid_size(); }
-CoreCoord MeshDevice::logical_grid_size() const { return reference_device()->logical_grid_size(); }
-CoreType MeshDevice::core_type_from_virtual_core(const CoreCoord& virtual_coord) const { return reference_device()->core_type_from_virtual_core(virtual_coord); }
-CoreCoord MeshDevice::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const { return reference_device()->virtual_noc_coordinate(noc_index, coord); }
-CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const { return reference_device()->virtual_noc0_coordinate(noc_index, coord); }
-std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const { return reference_device()->worker_cores_from_logical_cores(logical_cores); }
-std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const { return reference_device()->ethernet_cores_from_logical_cores(logical_cores); }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment() { return reference_device()->get_optimal_dram_bank_to_logical_worker_assignment(); }
-CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const { return reference_device()->virtual_core_from_logical_core(logical_coord, core_type); }
-CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const { return reference_device()->worker_core_from_logical_core(logical_core); }
-CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const { return reference_device()->ethernet_core_from_logical_core(logical_core); }
-CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const { return reference_device()->logical_core_from_ethernet_core(ethernet_core); }
+CoreCoord MeshDevice::grid_size() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->grid_size(); });
+}
+CoreCoord MeshDevice::logical_grid_size() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->logical_grid_size(); });
+}
+CoreType MeshDevice::core_type_from_virtual_core(const CoreCoord& virtual_coord) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [virtual_coord](const auto& device) {
+        return device->core_type_from_virtual_core(virtual_coord);
+    });
+}
+CoreCoord MeshDevice::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [noc_index, coord](const auto& device) {
+        return device->virtual_noc_coordinate(noc_index, coord);
+    });
+}
+CoreCoord MeshDevice::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [noc_index, coord](const auto& device) {
+        return device->virtual_noc0_coordinate(noc_index, coord);
+    });
+}
+std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [logical_cores](const auto& device) {
+        return device->worker_cores_from_logical_cores(logical_cores);
+    });
+}
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment() {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [](const auto& device) {
+        return device->get_optimal_dram_bank_to_logical_worker_assignment();
+    });
+}
+CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [logical_coord, core_type](const auto& device) {
+            return device->virtual_core_from_logical_core(logical_coord, core_type);
+        });
+}
+CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [logical_core](const auto& device) {
+        return device->worker_core_from_logical_core(logical_core);
+    });
+}
+CoreCoord MeshDevice::logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [ethernet_core](const auto& device) {
+        return device->logical_core_from_ethernet_core(ethernet_core);
+    });
+}
 
 // These methods require some change / or assert out for now
+std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
+    const std::vector<CoreCoord>& logical_cores) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [logical_cores](const auto& device) {
+        return device->ethernet_cores_from_logical_cores(logical_cores);
+    });
+}
+CoreCoord MeshDevice::ethernet_core_from_logical_core(const CoreCoord& logical_core) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [logical_core](const auto& device) {
+        return device->ethernet_core_from_logical_core(logical_core);
+    });
+}
 std::unordered_set<CoreCoord> MeshDevice::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
     TT_THROW("get_active_ethernet_cores() is not supported on MeshDevice - use individual devices instead");
 }
@@ -381,34 +477,107 @@ std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t connected_chip
 }
 
 // Core and worker management methods (These are OK)
-CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const { return reference_device()->worker_cores(core_type, sub_device_id); }
-uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const { return reference_device()->num_worker_cores(core_type, sub_device_id); }
-
+CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+}
+uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).num_cores(core_type);
+}
 
 // Bank and memory management methods
 int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels() * this->num_devices(); }
-uint32_t MeshDevice::num_banks(const BufferType& buffer_type) const { return reference_device()->num_banks(buffer_type); }
-uint32_t MeshDevice::num_banks(const BufferType& buffer_type, SubDeviceId sub_device_id) const { return reference_device()->num_banks(buffer_type, sub_device_id); }
-uint32_t MeshDevice::bank_size(const BufferType& buffer_type) const { return reference_device()->bank_size(buffer_type); }
-uint32_t MeshDevice::bank_size(const BufferType& buffer_type, SubDeviceId sub_device_id) const { return reference_device()->bank_size(buffer_type, sub_device_id); }
-uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id) const { return reference_device()->dram_channel_from_bank_id(bank_id); }
-uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const { return reference_device()->dram_channel_from_bank_id(bank_id, sub_device_id); }
-CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const { return reference_device()->logical_core_from_dram_channel(dram_channel); }
-uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const { return reference_device()->dram_channel_from_logical_core(logical_core); }
-int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id) const { return reference_device()->bank_offset(buffer_type, bank_id); }
-int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const { return reference_device()->bank_offset(buffer_type, bank_id, sub_device_id); }
-CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id) const { return reference_device()->logical_core_from_bank_id(bank_id); }
-CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const { return reference_device()->logical_core_from_bank_id(bank_id, sub_device_id); }
-const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(uint32_t dram_channel) const { return reference_device()->bank_ids_from_dram_channel(dram_channel); }
-const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const { return reference_device()->bank_ids_from_dram_channel(dram_channel, sub_device_id); }
-const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core) const { return reference_device()->bank_ids_from_logical_core(buffer_type, logical_core); }
-const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const { return reference_device()->bank_ids_from_logical_core(buffer_type, logical_core, sub_device_id); }
+uint32_t MeshDevice::num_banks(const BufferType& buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::num_banks(*allocator, buffer_type);
+}
+uint32_t MeshDevice::num_banks(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::num_banks(*allocator, buffer_type);
+}
+uint32_t MeshDevice::bank_size(const BufferType& buffer_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_size(*allocator, buffer_type);
+}
+uint32_t MeshDevice::bank_size(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::bank_size(*allocator, buffer_type);
+}
+uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+}
+uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+}
+CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [dram_channel](const auto& device) {
+        return device->logical_core_from_dram_channel(dram_channel);
+    });
+}
+uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [logical_core](const auto& device) {
+        return device->dram_channel_from_logical_core(logical_core);
+    });
+}
+int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_offset(*allocator, buffer_type, bank_id);
+}
+int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::bank_offset(*allocator, buffer_type, bank_id);
+}
+CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::logical_core_from_bank_id(*allocator, bank_id);
+}
+
+CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::logical_core_from_bank_id(*allocator, bank_id);
+}
+const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(uint32_t dram_channel) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
+}
+const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(
+    uint32_t dram_channel, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
+}
+const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord& logical_core) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
+}
+const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(
+    BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
+}
 
 // Core management and network operations
-const std::set<CoreCoord>& MeshDevice::ethernet_cores() const { return reference_device()->ethernet_cores(); }
-const std::set<CoreCoord>& MeshDevice::storage_only_cores() const { return reference_device()->storage_only_cores(); }
-uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const { return reference_device()->get_noc_unicast_encoding(noc_index, core); }
-uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const { return reference_device()->get_noc_multicast_encoding(noc_index, cores); }
+const std::set<CoreCoord>& MeshDevice::ethernet_cores() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(),
+        [](const auto& device) -> const std::set<CoreCoord>& { return device->ethernet_cores(); });
+}
+const std::set<CoreCoord>& MeshDevice::storage_only_cores() const {
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(),
+        [](const auto& device) -> const std::set<CoreCoord>& { return device->storage_only_cores(); });
+}
+uint32_t MeshDevice::get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [noc_index, core](const auto& device) {
+        return device->get_noc_unicast_encoding(noc_index, core);
+    });
+}
+uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const {
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [noc_index, cores](const auto& device) {
+        return device->get_noc_multicast_encoding(noc_index, cores);
+    });
+}
 
 // Floating point and build environment
 const JitBuildEnv& MeshDevice::build_env() const {
@@ -484,9 +653,26 @@ void MeshDevice::set_trace_buffers_size(uint32_t size) {
 
 // Dispatch and initialization
 bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
-    TT_THROW("initialize() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
+    work_executor_->initialize();
+    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
+
+    // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    auto sub_devices = {
+        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
+
+    const auto& allocator = reference_device()->get_initialized_allocator();
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
+        this, std::make_unique<L1BankingAllocator>(allocator->config), sub_devices);
+
+    if (this->using_fast_dispatch()) {
+        mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
+    }
+    return true;
 }
+
 void MeshDevice::build_firmware() {
     TT_THROW("build_firmware() is not supported on MeshDevice - use individual devices instead");
     reference_device()->build_firmware();
@@ -516,32 +702,20 @@ void MeshDevice::update_dispatch_cores_for_multi_cq_eth_dispatch() {
     reference_device()->update_dispatch_cores_for_multi_cq_eth_dispatch();
 }
 void MeshDevice::synchronize() {
-    TT_THROW("synchronize() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->synchronize();
+    TT_FATAL(
+        this->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS,
+        "MeshDevice must be in synchronous mode to synchronize");
+    this->work_executor_->synchronize();
 }
-WorkExecutorMode MeshDevice::get_worker_mode() {
-    TT_THROW("get_worker_mode() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_worker_mode();
-}
+WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->get_worker_mode(); }
 void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    TT_THROW("set_worker_queue_mode() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->set_worker_queue_mode(mode);
+    this->work_executor_->set_worker_queue_mode(mode);
 }
-WorkerQueueMode MeshDevice::get_worker_queue_mode() {
-    TT_THROW("get_worker_queue_mode() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_worker_queue_mode();
-}
-bool MeshDevice::is_worker_queue_empty() const {
-    TT_THROW("is_worker_queue_empty() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->is_worker_queue_empty();
-}
-bool MeshDevice::can_use_passthrough_scheduling() const {
-    TT_THROW("can_use_passthrough_scheduling() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->can_use_passthrough_scheduling();
-}
+WorkerQueueMode MeshDevice::get_worker_queue_mode() { return this->work_executor_->get_worker_queue_mode(); }
+bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
+bool MeshDevice::can_use_passthrough_scheduling() const { return this->work_executor_->use_passthrough(); }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
-    TT_THROW("push_work() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->push_work(std::move(work), blocking);
+    this->work_executor_->push_work(std::move(work), blocking);
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
@@ -550,67 +724,66 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_no
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 bool MeshDevice::dispatch_s_enabled() const {
-    TT_THROW("dispatch_s_enabled() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->dispatch_s_enabled();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->dispatch_s_enabled(); });
 }
 bool MeshDevice::distributed_dispatcher() const {
-    TT_THROW("distributed_dispatcher() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->distributed_dispatcher();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->distributed_dispatcher(); });
 }
 NOC MeshDevice::dispatch_go_signal_noc() const {
-    TT_THROW("dispatch_go_signal_noc() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->dispatch_go_signal_noc();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->dispatch_go_signal_noc(); });
 }
 size_t MeshDevice::get_device_kernel_defines_hash() {
     TT_THROW("get_device_kernel_defines_hash() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_device_kernel_defines_hash();
+    return validate_and_get_reference_value(
+        scoped_devices_->get_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
 }
 
 // Methods for SubDevice Management
 uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
-    TT_THROW("num_noc_mcast_txns() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->num_noc_mcast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
 }
 uint8_t MeshDevice::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    TT_THROW("num_noc_unicast_txns() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->num_noc_unicast_txns(sub_device_id);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_unicast_txns(sub_device_id);
 }
 uint8_t MeshDevice::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data, bool unicast_data) const {
-    TT_THROW("noc_data_start_index() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->noc_data_start_index(sub_device_id, mcast_data, unicast_data);
+    if (mcast_data) {
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_data_start_index(sub_device_id);
+    } else if (unicast_data) {
+        return sub_device_manager_tracker_->get_active_sub_device_manager()->noc_unicast_data_start_index(
+            sub_device_id);
+    } else {
+        return 0;
+    }
 }
 SubDeviceManagerId MeshDevice::get_active_sub_device_manager_id() const {
-    TT_THROW("get_active_sub_device_manager_id() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_active_sub_device_manager_id();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->id();
 }
 SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
-    TT_THROW("get_default_sub_device_manager_id() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_default_sub_device_manager_id();
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->id();
 }
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
-    TT_THROW("virtual_program_dispatch_core() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->virtual_program_dispatch_core(cq_id);
+    return validate_and_get_reference_value(scoped_devices_->get_devices(), [cq_id](const auto& device) {
+        return device->virtual_program_dispatch_core(cq_id);
+    });
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_ids() const {
-    TT_THROW("get_sub_device_ids() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_sub_device_ids();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_ids();
 }
 const std::vector<SubDeviceId>& MeshDevice::get_sub_device_stall_group() const {
-    TT_THROW("get_sub_device_stall_group() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_sub_device_stall_group();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_sub_device_stall_group();
 }
 void MeshDevice::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    TT_THROW("set_sub_device_stall_group() is not supported on MeshDevice - use individual devices instead");
-    this->reference_device()->set_sub_device_stall_group(sub_device_ids);
+    sub_device_manager_tracker_->get_active_sub_device_manager()->set_sub_device_stall_group(sub_device_ids);
 }
 void MeshDevice::reset_sub_device_stall_group() {
-    TT_THROW("reset_sub_device_stall_group() is not supported on MeshDevice - use individual devices instead");
-    this->reference_device()->reset_sub_device_stall_group();
+    sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
 }
 
 uint32_t MeshDevice::num_sub_devices() const {
-    TT_THROW("num_sub_devices() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->num_sub_devices();
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
 uint32_t MeshDevice::get_completion_queue_reader_core() const {
     TT_THROW("get_completion_queue_reader_core() is not supported on MeshDevice - use individual devices instead");
@@ -627,38 +800,85 @@ std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
 
 // Allocator methods
 // Memory statistics and buffer management
-uint32_t MeshDevice::get_allocator_alignment() const { return reference_device()->get_allocator_alignment(); }
-uint32_t MeshDevice::get_allocator_alignment(SubDeviceId sub_device_id) const { return reference_device()->get_allocator_alignment(sub_device_id); }
-std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const { return reference_device()->lowest_occupied_compute_l1_address(); }
-std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const { return reference_device()->lowest_occupied_compute_l1_address(sub_device_ids); }
-size_t MeshDevice::get_l1_small_size() const { return reference_device()->get_l1_small_size(); }
-size_t MeshDevice::get_l1_small_size(SubDeviceId sub_device_id) const { return reference_device()->get_l1_small_size(sub_device_id); }
-const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers() const { return reference_device()->get_allocated_buffers(); }
-const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers(SubDeviceId sub_device_id) const { return reference_device()->get_allocated_buffers(sub_device_id); }
+uint32_t MeshDevice::get_allocator_alignment() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator->config.alignment;
+}
+uint32_t MeshDevice::get_allocator_alignment(SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator->config.alignment;
+}
+
+std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
+}
+
+std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
+    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
+}
+
+size_t MeshDevice::get_l1_small_size() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator->config.l1_small_size;
+}
+size_t MeshDevice::get_l1_small_size(SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator->config.l1_small_size;
+}
+const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_allocated_buffers(*allocator);
+}
+const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers(SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::get_allocated_buffers(*allocator);
+}
 allocator::Statistics MeshDevice::get_memory_allocation_statistics(const BufferType& buffer_type) const {
-    return this->reference_device()->get_memory_allocation_statistics(buffer_type);
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_statistics(*allocator, buffer_type);
 }
 
 allocator::Statistics MeshDevice::get_memory_allocation_statistics(
     const BufferType& buffer_type, SubDeviceId sub_device_id) const {
-    // With current implementation, we assume that all devices have the same memory allocation statistics.
-    // This will be made more explicit in the future to have lock-step allocation across devices.
-    // Right now, we just return the statistics of the first device.
-    return this->reference_device()->get_memory_allocation_statistics(buffer_type, sub_device_id);
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::get_statistics(*allocator, buffer_type);
 }
-const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator() const { return reference_device()->get_initialized_allocator(); }
-const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator(SubDeviceId sub_device_id) const { return reference_device()->get_initialized_allocator(sub_device_id); }
-DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type) const { return reference_device()->get_base_allocator_addr(mem_type); }
-DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type, SubDeviceId sub_device_id) const { return reference_device()->get_base_allocator_addr(mem_type, sub_device_id); }
+const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator() const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->get_initialized_allocator(SubDeviceId{0});
+}
+const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_initialized_allocator(sub_device_id);
+}
+DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type) const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_unreserved_base_address(*allocator, mem_type);
+}
+DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator::get_unreserved_base_address(*allocator, mem_type);
+}
 // Buffer and memory management operations
-void MeshDevice::deallocate_buffers() { reference_device()->deallocate_buffers(); }
-void MeshDevice::deallocate_buffers(SubDeviceId sub_device_id) { reference_device()->deallocate_buffers(sub_device_id); }
-void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const { reference_device()->dump_memory_blocks(buffer_type, out); }
-void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const { reference_device()->dump_memory_blocks(buffer_type, out, sub_device_id); }
-
+void MeshDevice::deallocate_buffers() {
+    const auto& allocator = this->get_initialized_allocator();
+    allocator::deallocate_buffers(*allocator);
+}
+void MeshDevice::deallocate_buffers(SubDeviceId sub_device_id) {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    allocator::deallocate_buffers(*allocator);
+}
+void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
+    const auto& allocator = this->get_initialized_allocator();
+    allocator::dump_memory_blocks(*allocator, buffer_type, out);
+}
+void MeshDevice::dump_memory_blocks(
+    const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    allocator::dump_memory_blocks(*allocator, buffer_type, out);
+}
 MemoryBlockTable MeshDevice::get_memory_block_table(const BufferType& buffer_type) const {
-    TT_THROW("get_memory_block_table() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_memory_block_table(buffer_type);
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator::get_memory_block_table(*allocator, buffer_type);
 }
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(

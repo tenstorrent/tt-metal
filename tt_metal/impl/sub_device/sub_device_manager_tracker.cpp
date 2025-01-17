@@ -22,9 +22,10 @@
 
 namespace tt::tt_metal {
 
-SubDeviceManagerTracker::SubDeviceManagerTracker(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
+SubDeviceManagerTracker::SubDeviceManagerTracker(
+    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     device_(device) {
-    auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator));
+    auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator), sub_devices);
     default_sub_device_manager_ = sub_device_manager.get();
     active_sub_device_manager_ = default_sub_device_manager_;
     sub_device_managers_.insert_or_assign(sub_device_manager->id(), std::move(sub_device_manager));
@@ -121,6 +122,29 @@ SubDeviceManagerId SubDeviceManagerTracker::get_active_sub_device_manager_id() c
 
 SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() const {
     return default_sub_device_manager_->id();
+}
+
+std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
+    tt::stl::Span<const SubDeviceId> sub_device_ids) const {
+    constexpr uint32_t global_bank_id = 0;
+    if (sub_device_ids.empty()) {
+        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
+        // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
+        const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
+        return allocator::lowest_occupied_l1_address(*default_allocator, global_bank_id);
+    } else {
+        DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
+        for (const auto& sub_device_id : sub_device_ids) {
+            const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
+            if (allocator) {
+                auto found_addr = allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+                if (found_addr.has_value()) {
+                    lowest_addr = std::min(lowest_addr, *found_addr);
+                }
+            }
+        }
+        return lowest_addr;
+    }
 }
 
 }  // namespace tt::tt_metal

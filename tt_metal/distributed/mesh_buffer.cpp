@@ -59,10 +59,9 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
-    // Rely on the single device allocator to provide the address for the entire mesh buffer.
-    // TODO: use mesh allocator, when available.
+    // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
     std::shared_ptr<Buffer> backing_buffer = Buffer::create(
-        mesh_device->get_device(0, 0),
+        mesh_device,
         /*address=*/address.value_or(0),
         device_local_size,
         device_local_config.page_size,
@@ -104,7 +103,7 @@ void MeshBuffer::allocate() {
 
     auto allocate_device_buffer_at_address = [this](const Coordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            mesh_device_->get_device(coord.row, coord.col),
+            mesh_device_,
             address_,
             device_local_size_,
             device_local_config_.page_size,
