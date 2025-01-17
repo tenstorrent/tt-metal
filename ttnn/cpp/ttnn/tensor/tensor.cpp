@@ -1029,7 +1029,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_devices(
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
     const std::vector<IDevice*>& devices,
@@ -1037,7 +1037,9 @@ Tensor allocate_tensor_on_devices(
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
     Tensor device_tensor = Tensor(devices);
-    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config));
+    TensorSpec tensor_spec(
+        shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
 
     // Save the ref count to later re-set it:
     // 1. device_tensor is copied in the lambda by the main thread, which increments the ref count.

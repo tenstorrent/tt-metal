@@ -1651,14 +1651,15 @@ ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& shape) {
 }
 
 bool RunMultiInputReaderTestPropagateFullTensorIn(
-    const ttnn::SimpleShape& tensor_shape,
-    const Layout& layout,
-    const MemoryConfig& in0_memory_config,
-    const MemoryConfig& in1_memory_config,
-    const MemoryConfig& out0_memory_config,
-    const MemoryConfig& out1_memory_config,
+    ttnn::Shape const& tensor_shape,
+    Layout const& layout,
+    MemoryConfig const& in0_memory_config,
+    MemoryConfig const& in1_memory_config,
+    MemoryConfig const& out0_memory_config,
+    MemoryConfig const& out1_memory_config,
     TwoInputReaderKernelWriteMode test_writeback_mode) {
-    auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
+    auto logical_shape = tensor_shape.logical_shape();
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
     Tensor input_tensor1 =
@@ -1666,13 +1667,13 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
     output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
     output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -1720,7 +1721,7 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
-        ttnn::SimpleShape({1, 1, 32, 32}),
+        ttnn::Shape{1, 1, 32, 32},
         Layout::TILE,
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
@@ -1732,7 +1733,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile)
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
-        ttnn::SimpleShape({1, 1, 32, 64}),
+        ttnn::Shape{1, 1, 32, 64},
         Layout::TILE,
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
@@ -1743,13 +1744,14 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 64});
+    ttnn::Shape tensor_shape = {1, 1, 32, 64};
+    auto logical_shape = tensor_shape.logical_shape();
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3]},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1763,13 +1765,14 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
+    auto logical_shape = tensor_shape.logical_shape();
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3]},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1783,13 +1786,14 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded2) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
+    auto logical_shape = tensor_shape.logical_shape();
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3] / 4},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / 4},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1803,7 +1807,8 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded3) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 8192});
+    ttnn::Shape tensor_shape = {1, 1, 32, 8192};
+    auto logical_shape = tensor_shape.logical_shape();
     size_t ncores_x = 8;
     size_t ncores_y = 4;
     auto mem_config = MemoryConfig(
@@ -1811,7 +1816,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, ncores_y - 1}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3] / (ncores_x * ncores_y)},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (ncores_x * ncores_y)},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1825,7 +1830,8 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded4) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 1024});
+    ttnn::Shape tensor_shape = {1, 1, 32, 1024};
+    auto logical_shape = tensor_shape.logical_shape();
     size_t ncores_x = 8;
     size_t ncores_y = 4;
     auto mem_config = MemoryConfig(
@@ -1833,7 +1839,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{ncores_x - 1, ncores_y - 1}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3] / (ncores_x * ncores_y)},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / (ncores_x * ncores_y)},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1848,14 +1854,15 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
+    auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3]},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3]},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto output_mem_config = MemoryConfig(
@@ -1863,7 +1870,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         BufferType::L1,
         ShardSpec(
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 0}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2], tensor_shape[3] / 4},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2], logical_shape[3] / 4},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1878,7 +1885,8 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
+    auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
@@ -1890,8 +1898,8 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         ShardSpec(
             CoreRangeSet{
                 std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{in_shard_grid_x - 1, in_shard_grid_y - 1}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2],
-             tensor_shape[3] / (in_shard_grid_x * in_shard_grid_y)},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2],
+             logical_shape[3] / (in_shard_grid_x * in_shard_grid_y)},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto mem_config1 = MemoryConfig(
@@ -1900,8 +1908,8 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
         ShardSpec(
             CoreRangeSet{
                 std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{out_shard_grid_x - 1, out_shard_grid_y - 1}}}},
-            {tensor_shape[0] * tensor_shape[1] * tensor_shape[2],
-             tensor_shape[3] / (out_shard_grid_x * out_shard_grid_y)},
+            {logical_shape[0] * logical_shape[1] * logical_shape[2],
+             logical_shape[3] / (out_shard_grid_x * out_shard_grid_y)},
             ShardOrientation::ROW_MAJOR,
             ShardMode::LOGICAL));
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
@@ -1918,7 +1926,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 // Copying even slightly large tensors exposes issues in underlying tensor code
 // that isn't under test here
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 256, 256});
+    ttnn::Shape tensor_shape = {1, 1, 256, 256};
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1940,31 +1948,34 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
+    auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
-    auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
     Tensor input_tensor1 =
         ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
-    Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
 
     input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
     output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
     output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -2012,31 +2023,34 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
+    auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
-    auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
     Tensor input_tensor1 =
         ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
-    Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
 
     input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
     output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
     output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -2090,35 +2104,35 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 // ////////////////////////////////////////////////////////////////////
 
 void RunFabricMcastFullTensorPropagateTest(
-    const ttnn::SimpleShape& tensor_shape,
-    size_t distance_dest_device,
-    size_t num_devices,
-    bool enable_persistent_fabric) {
+    ttnn::Shape const& tensor_shape, size_t distance_dest_device, size_t num_devices, bool enable_persistent_fabric) {
+    auto logical_shape = tensor_shape.logical_shape();
     Layout const layout = Layout::TILE;
     MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const out1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
 
-    auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor1 =
         ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
     Tensor input_tensor0 =
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
-    Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
-    Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor1 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
+    Tensor output_tensor0 =
+        ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in0_memory_config)));
     input_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), in1_memory_config)));
     output_tensor0.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out0_memory_config)));
     output_tensor1.set_tensor_spec(TensorSpec(
-        tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
-    ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape);
-    ASSERT_EQ(output_tensor1.get_logical_shape(), tensor_shape);
+        logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), out1_memory_config)));
+    ASSERT_EQ(input_tensor0.get_logical_shape(), tensor_shape.logical_shape());
+    ASSERT_EQ(input_tensor1.get_logical_shape(), tensor_shape.logical_shape());
+    ASSERT_EQ(output_tensor0.get_logical_shape(), tensor_shape.logical_shape());
+    ASSERT_EQ(output_tensor1.get_logical_shape(), tensor_shape.logical_shape());
 
     size_t page_size = tile_size(DataFormat::RawUInt32);
 
@@ -2166,89 +2180,89 @@ void RunFabricMcastFullTensorPropagateTest(
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 128, 32});
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 64});
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 16384});
+    ttnn::Shape tensor_shape = {1, 1, 64, 16384};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, false);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape = {1, 1, 32, 32};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape = {1, 1, 32, 128};
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 128, 32});
+    ttnn::Shape tensor_shape = {1, 1, 128, 32};
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 64});
+    ttnn::Shape tensor_shape = {1, 1, 64, 64};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 16384});
+    ttnn::Shape tensor_shape = {1, 1, 64, 16384};
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
@@ -2256,7 +2270,7 @@ TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsP
 
 bool RunPipelinedWorkersTest(
 
-    ttnn::SimpleShape tensor_shape,
+    ttnn::Shape tensor_shape,
     const size_t split_dim,
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2282,6 +2296,7 @@ bool RunPipelinedWorkersTest(
         return true;
     }
 
+    auto logical_shape = tensor_shape.logical_shape();
     auto const cb_index = tt::CB::c_in0;
 
     auto programs = std::vector<Program>(1);
@@ -2318,7 +2333,7 @@ bool RunPipelinedWorkersTest(
     tensor_specs.reserve(num_stages + 1);
     for (size_t i = 0; i < num_stages + 1; ++i) {
         tensor_specs.push_back(TensorSpec(
-            tensor_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
+            logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
     }
 
     // Allocate the tensors - pull to function
@@ -2327,12 +2342,12 @@ bool RunPipelinedWorkersTest(
     std::vector<Tensor> device_tensors;
     host_tensors.reserve(num_tensors);
     device_tensors.reserve(num_tensors);
-    auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
+    auto num_elems = std::reduce(logical_shape.cbegin(), logical_shape.cend(), 1, std::multiplies<uint32_t>());
     host_tensors.push_back(
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout));
     for (size_t i = 1; i < num_tensors; ++i) {
         host_tensors.push_back(
-            ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape));
+            ttnn::experimental::view(ttnn::ones(tensor_shape.value, DataType::UINT32, layout), tensor_shape));
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
@@ -2555,7 +2570,8 @@ bool RunPipelinedWorkersTest(
 }
 
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 16384});
+    ttnn::Shape tensor_shape = {1, 1, 64, 16384};
+    auto logical_shape = tensor_shape.logical_shape();
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2602,7 +2618,8 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 128});
+    ttnn::Shape tensor_shape = {1, 1, 64, 128};
+    auto logical_shape = tensor_shape.logical_shape();
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2649,7 +2666,8 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly2) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 8192});
+    ttnn::Shape tensor_shape = {1, 1, 64, 8192};
+    auto logical_shape = tensor_shape.logical_shape();
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2700,13 +2718,8 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 TEST(
     WorkerCclCommandProcessingKernels,
     DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly_SmallSweep) {
-    std::vector<ttnn::SimpleShape> tensor_shapes = {
-        ttnn::SimpleShape({1, 1, 64, 8192}),
-        ttnn::SimpleShape({1, 4, 64, 768}),
-        ttnn::SimpleShape({4, 1, 64, 768}),
-        ttnn::SimpleShape({4, 4, 64, 768}),
-        ttnn::SimpleShape({1, 1, 64, 768}),
-        ttnn::SimpleShape({5, 3, 64, 768})};
+    std::vector<ttnn::Shape> tensor_shapes = {
+        {1, 1, 64, 8192}, {1, 4, 64, 768}, {4, 1, 64, 768}, {4, 4, 64, 768}, {1, 1, 64, 768}, {5, 3, 64, 768}};
 
     const size_t split_dim = 3;
 
