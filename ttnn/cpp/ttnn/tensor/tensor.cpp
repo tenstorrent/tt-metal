@@ -287,7 +287,9 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
             storage.strategy = distributed_tensor_config.value();
         }
         storage.buffers = std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
-        storage.shapes = std::vector<ttnn::Shape>(num_buffers, ttnn::Shape{});
+        storage.specs = std::vector<ttnn::TensorSpec>(
+            num_buffers,
+            TensorSpec(SimpleShape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
         return Storage(std::move(storage));
     }();
     tensor_attributes->num_shards_to_be_populated = num_buffers;
@@ -336,7 +338,7 @@ Tensor::~Tensor() {
 
 Tensor::Tensor(
     Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), ttnn::Shape(shape.view()), dtype, layout, tile) {}
+    Tensor(std::move(storage), shape, shape, dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
@@ -511,7 +513,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
                 std::is_same_v<StorageType, MultiDeviceHostStorage> or
                 std::is_same_v<StorageType, MultiDeviceStorage>) {
                 std::get<StorageType>(this->tensor_attributes->storage).buffers = storage.buffers;
-                std::get<StorageType>(this->tensor_attributes->storage).shapes = storage.shapes;
+                std::get<StorageType>(this->tensor_attributes->storage).specs = storage.specs;
             }
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the

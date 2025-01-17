@@ -62,7 +62,7 @@ void dump_multi_device_host_storage(
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
             },
             storage.get_buffer(0));
-        output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(ttnn::Shape));
+        output_stream.write(reinterpret_cast<const char*>(&storage.specs.at(0)), sizeof(ttnn::TensorSpec));
     } else {
         for (int i = 0; i < num_buffers; i++) {
             std::visit(
@@ -74,8 +74,8 @@ void dump_multi_device_host_storage(
                 },
                 storage.get_buffer(i));
         }
-        for (const auto& shape : storage.shapes) {
-            output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
+        for (const auto& spec : storage.specs) {
+            output_stream.write(reinterpret_cast<const char*>(&spec), sizeof(ttnn::TensorSpec));
         }
     }
 }
@@ -97,20 +97,21 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
     input_stream.read(reinterpret_cast<char*>(&strategy), sizeof(DistributedTensorConfig));
 
     std::vector<OwnedBuffer> buffers;
-    std::vector<ttnn::Shape> shapes;
+    std::vector<ttnn::TensorSpec> specs;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::size_t size = 0;
         input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
         auto buffer = owned_buffer::create<T>(size);
-        auto shape = ttnn::Shape{};
+        auto spec = ttnn::TensorSpec{
+            SimpleShape{}, TensorLayout{DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}}};
         input_stream.read(reinterpret_cast<char*>(buffer.begin()), sizeof(T) * size);
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+        input_stream.read(reinterpret_cast<char*>(&spec), sizeof(ttnn::TensorSpec));
         buffers.push_back(buffer);
-        shapes.push_back(shape);
+        specs.push_back(spec);
 
         for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
-            shapes.push_back(shape);
+            specs.push_back(spec);
         }
 
     } else {
@@ -124,13 +125,14 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
-            auto shape = ttnn::Shape{};
-            input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
-            shapes.push_back(shape);
+            auto spec = ttnn::TensorSpec{
+                SimpleShape{}, TensorLayout{DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}}};
+            input_stream.read(reinterpret_cast<char*>(&spec), sizeof(ttnn::TensorSpec));
+            specs.push_back(spec);
         }
     }
 
-    return {strategy, buffers, shapes};
+    return {strategy, buffers, specs};
 }
 
 OwnedStorage load_owned_storage(std::ifstream& input_stream, DataType data_type) {

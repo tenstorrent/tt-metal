@@ -32,20 +32,34 @@ Tensor tensor_reshape(
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 auto updated_storage = std::get<T>(tensor.get_storage());
-                auto shape = ttnn::Shape{tt::tt_metal::LegacyShape{new_logical_shape.view(), new_padded_shape.view()}};
-                for (int i = 0; i < updated_storage.shapes.size(); i++) {
-                    updated_storage.shapes[i] = shape;
+                TensorSpec spec(
+                    new_logical_shape,
+                    TensorLayout::fromPaddedShape(
+                        tensor.get_dtype(),
+                        tensor.get_tensor_spec().page_config(),
+                        tensor.memory_config(),
+                        new_logical_shape,
+                        new_padded_shape));
+                for (int i = 0; i < updated_storage.specs.size(); i++) {
+                    updated_storage.specs[i] = spec;
                 }
                 return Tensor(updated_storage, new_spec);
             }
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, ttnn::Shape> new_shapes;
-                auto shape = ttnn::Shape{tt::tt_metal::LegacyShape{new_logical_shape.view(), new_padded_shape.view()}};
+                std::unordered_map<int, ttnn::TensorSpec> new_specs;
+                TensorSpec spec(
+                    new_logical_shape,
+                    TensorLayout::fromPaddedShape(
+                        tensor.get_dtype(),
+                        tensor.get_tensor_spec().page_config(),
+                        tensor.memory_config(),
+                        new_logical_shape,
+                        new_padded_shape));
                 for (auto device_id : updated_storage.ordered_device_ids) {
-                    new_shapes.insert({device_id, shape});
+                    new_specs.insert({device_id, spec});
                 }
-                updated_storage.shapes = new_shapes;
+                updated_storage.specs = new_specs;
                 return Tensor(updated_storage, new_spec);
             }
             if constexpr (std::is_same_v<T, DeviceStorage>) {

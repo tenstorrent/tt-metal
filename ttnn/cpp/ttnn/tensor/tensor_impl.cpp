@@ -946,14 +946,14 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 return OwnedStorage{output_buffer};
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 std::vector<OwnedBuffer> output_buffers;
-                std::vector<ttnn::Shape> output_shapes;
+                std::vector<ttnn::TensorSpec> output_specs;
                 for (int i = 0; i < storage.num_buffers(); i++) {
                     const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
                     output_buffers.push_back(output_buffer);
-                    output_shapes.push_back(storage.shapes[i]);
+                    output_specs.push_back(storage.specs[i]);
                 }
-                return MultiDeviceHostStorage{storage.strategy, output_buffers, output_shapes};
+                return MultiDeviceHostStorage{storage.strategy, output_buffers, output_specs};
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
