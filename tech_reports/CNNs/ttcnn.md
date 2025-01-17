@@ -682,8 +682,8 @@ output tensor dimensions are shown in Figure 13 below.
 Each shard will be computed by a specific core.
 
 In this step, for each core, we determine:
-- start & end stick indices of the output shard computed on the core
-- start & end stick indices of the padded input tensor needed for the output shard
+- start and end stick indices of the output shard computed on the core
+- start and end stick indices of the padded input tensor needed for the output shard
 (indices generated in step 2)
 
 
@@ -745,12 +745,13 @@ _Figure 16: Padding chunks for core 0_
 ##### Local config
 
 This is a vector with following data:
-- core coordinates (2 vector elements)
-- number of elements describing chunks of local shard needed - 3*number of chunks (1 vector element)
-- for each chunk of consecutive sticks
-    - index of the first stick in the local input shard (see Figure 17)
-    - index in the first stick in the halo output shard (see Figure 18)
-    - chunk length
+- core coordinates (first 2 vector elements)
+- number of elements describing chunks of local shard needed (3rd vector element)
+     - this is basically count of the remaining elements in the vector and equals 3 * number of chunks
+- for each chunk of consecutive sticks (rest of the vector elements)
+    1. index of the first stick in the local input shard (see Figure 17)
+    2. index in the first stick in the halo output shard (see Figure 18)
+    3. chunk length
 
 
 <img src="media/inputshards.png" style="height:200px;">\
@@ -761,17 +762,8 @@ _Figure 18: Local input shard chunks for core 0_
 
 For core 0, this vector would describe 2 chunks needed by core 1 (see Figure 18):
 
-| Element| Note     |
-|--------|----------|
-| 18     | _core x_ |
-| 18     | _core y_ |
-| 6      | _remaining elements count_ |
-| 0      | _chunk 1 first stick index in the local input shard_ |
-| 9      | _chunk 1 first stick index in the halo output shard_ |
-| 6      | _chunk 1 length_ |
-| 6      | _chunk 2 first stick index in the local input shard_ |
-| 17     | _chunk 2 first stick index in the halo output shard_ |
-| 2      | _chunk 2 length_ |
+<img src="media/tablelocal.png" style="height:450px;">\
+_Figure 19: Local config_
 
 
 ##### Remote config
@@ -780,19 +772,11 @@ Remote config has the same structure as local config, only now for each chunk
 we also need core x,y info, since we are sending data to a remote core.
 
 <img src="media/remoteconfig.png" style="height:200px;">\
-_Figure 19: Remote input shard chunks for core 1_
+_Figure 20: Remote input shard chunks for core 1_
 
-| Element| Note     |
-|--------|----------|
-| 19     | _remote core x_ |
-| 18     | _remote core y_ |
-| 6      | _current remote core remaining elements count_ |
-| 1      | _chunk 1 first stick index in the local input shard (see Figure 17 above)_ |
-| 0      | _chunk 1 first stick index in the halo output shard_ |
-| 5      | _chunk 1 length_ |
-| 6      | _chunk 2 first stick index in the local input shard (see Figure 17 above)_ |
-| 7      | _chunk 2 first stick index in the halo output shard_ |
-| 2      | _chunk 2 length_ |
+
+<img src="media/tableremote.png" style="height:450px;">\
+_Figure 21: Remote config_
 
 
 CNN Models: ResNet-50 Benchmark
@@ -800,7 +784,7 @@ CNN Models: ResNet-50 Benchmark
 
 <img src="media/resnet1.png" style="width:200px;">\
 <img src="media/resnet2.png" style="width:200px;">\
-_Figure 20: Resnet Blocks_
+_Figure 22: Resnet Blocks_
 
 ResNet-50 is a CNN with 50 layers, part of
 the ResNet (Residual Network) family. Primarily to address the vanishing
