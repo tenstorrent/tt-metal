@@ -24,12 +24,15 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
 
 
 def get_buffer_address(tensor):
-    addr = []
-    for i, tensor_per_device in enumerate(ttnn.get_device_tensors(tensor)):
-        addr.append(tensor_per_device.buffer_address())
-        if len(addr) > 1:
-            assert addr[i - 1] == addr[i], f"Expected {addr[i-1]} == {addr[i]}"
-    return addr[0]
+    device_tensors = ttnn.get_device_tensors(tensor)
+    buffer_addr = device_tensors[0].buffer_address()
+
+    if len(device_tensors) > 1:
+        for i in range(1, len(device_tensors)):
+            addr = device_tensors[i].buffer_address()
+            assert addr == buffer_addr, f"Expected buffer address on device {i} to be same as device 0"
+
+    return buffer_addr
 
 
 def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
@@ -156,7 +159,6 @@ def run_prefetcher_mm(
     is_functional_test=False,
 ):
     is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
-    cluster_shape = device.shape if is_mesh_device else None
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
     assert num_tensors == len(input_shapes)
@@ -209,8 +211,13 @@ def run_prefetcher_mm(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
-    mesh_mapper = ReplicateTensorToMesh(device) if is_mesh_device else None
-    mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape) if is_mesh_device else None
+    cluster_shape = None
+    mesh_mapper = None
+    mesh_composer = None
+    if is_mesh_device:
+        cluster_shape = device.shape
+        mesh_mapper = ReplicateTensorToMesh(device)
+        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
 
     pt_tensors = []
     for l in range(num_layers):
