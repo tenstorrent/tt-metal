@@ -263,7 +263,6 @@ void kernel_main() {
                 uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
                 noc_async_read(
                     src_noc_addr + w_offset, src_buffer_l1_addr + page_offset + cb_w_offset, SUBTILE_LINE_BYTES);
-                // SUBTILE_LINE_BYTES);
             }
         }
         if constexpr (needs_x_padding) {

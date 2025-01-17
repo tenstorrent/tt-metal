@@ -238,21 +238,17 @@ void kernel_main() {
         for (uint32_t d = 0; d < N; ++d) {
             dest_multi_idx[d] = idxs[dims[d]];
         }
-
-        dprint_array<N>(idxs, "idxs");
-        dest_multi_idx[N - 1] = x_block;
-        dprint_array<N>(dest_multi_idx, "dest_multi_idx");
+        dest_multi_idx[permuted_w_dim] = w_start;
         uint32_t h = dest_multi_idx[N - 2];
         uint32_t sub_tile_line = h % FACE_HEIGHT;
         uint32_t face_h = (h % TILE_HEIGHT) / FACE_HEIGHT;
         uint32_t base_face_line_offset_bytes = face_h * FACE_H_STRIDE_BYTES + sub_tile_line * SUBTILE_LINE_BYTES;
-        dest_multi_idx[N - 2] /= TILE_HEIGHT;
-        dprint_array<N>(dest_multi_idx, "dest_multi_idx_tiled");
-        DPRINT << "output h: " << h << ENDL();
-        DPRINT << "sub_tile_line: " << sub_tile_line << ENDL();
-        DPRINT << "face_h: " << face_h << ENDL();
-        DPRINT << "base_face_line_offset_bytes: " << base_face_line_offset_bytes << ENDL();
+        dest_multi_idx[N - 2] /=
+            TILE_HEIGHT;  // if permuted_w_dim is w_start, then this is still the correct tile index
 
+        dprint_array<N>(idxs, "idxs");
+        dest_multi_idx[N - 1] = x_block;
+        dprint_array<N>(dest_multi_idx, "dest_multi_idx");
         // Compute final linear index for the current W
         uint32_t base_tile_offset = 0;
         for (uint32_t i = 0; i < N; ++i) {
@@ -264,15 +260,35 @@ void kernel_main() {
 
         cb_wait_front(cb_out, 1);
         uint32_t transposed_buffer_read_addr = get_read_ptr(cb_out);
-        print_bf16_pages(transposed_buffer_read_addr, 32, 32);
+        // print_bf16_pages(transposed_buffer_read_addr, 32, 32);
         uint32_t real_faces_x = x_block != X_t - 1 ? NUM_FACES_W : final_tile_real_faces_x;
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
             // Update indices for the current W
-            dest_multi_idx[permuted_w_dim] = w;
+            if (permuted_w_dim != N - 2) {
+                dest_multi_idx[permuted_w_dim] =
+                    w;  // if permuted_w_dim == N - 2 then we're overwriting the tiling, need to recalculate
+            } else {
+                h = w;
+                sub_tile_line = h % FACE_HEIGHT;
+                face_h = (h % TILE_HEIGHT) / FACE_HEIGHT;
+                base_face_line_offset_bytes = face_h * FACE_H_STRIDE_BYTES + sub_tile_line * SUBTILE_LINE_BYTES;
+            }
+
+            dprint_array<N>(dest_multi_idx, "dest_multi_idx_tiled");
+            DPRINT << "output h: " << h << ENDL();
+            DPRINT << "sub_tile_line: " << sub_tile_line << ENDL();
+            DPRINT << "face_h: " << face_h << ENDL();
+            DPRINT << "base_face_line_offset_bytes: " << base_face_line_offset_bytes << ENDL();
 
             // Compute final linear index for the current W
-            uint32_t tile = base_tile_offset + w * W_stride_tile;
+            uint32_t tile = 0;
+            if (permuted_w_dim != N - 2) {
+                tile = base_tile_offset + w * W_stride_tile;
+            } else {
+                tile = base_tile_offset + dest_multi_idx[permuted_w_dim] * W_stride_tile;
+            }
+            DPRINT << "tile: " << tile << ENDL();
 
             // Compute the NoC address for the output
             uint32_t page_offset = (w - w_start) * TILE_LINE_BYTES;
@@ -282,10 +298,9 @@ void kernel_main() {
             for (uint8_t i = 0; i < real_faces_x; i++) {
                 uint64_t w_offset = i * FACE_HW_BYTES;
                 uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
-                DPRINT << "w_offset: " << w_offset << ENDL();
-                DPRINT << "cb_w_offset: " << cb_w_offset << ENDL();
-                print_bf16_pages(
-                    transposed_buffer_read_addr + cb_w_offset + page_offset, SUBTILE_LINE_BYTES / element_size, 1);
+                // DPRINT << "w_offset: " << w_offset << ENDL();
+                // DPRINT << "cb_w_offset: " << cb_w_offset << ENDL();
+                print_bf16_pages(transposed_buffer_read_addr + cb_w_offset + page_offset, FACE_WIDTH, 1);
                 noc_async_write(
                     transposed_buffer_read_addr + cb_w_offset + page_offset,
                     dest_noc_addr + w_offset,
@@ -294,7 +309,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out, 1);
-        DPRINT << ENDL();
+        DPRINT << ENDL() << ENDL();
     }
     // add padding
     if constexpr (needs_y_padding) {
