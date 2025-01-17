@@ -15,6 +15,13 @@ bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value 
 
 using namespace tt;
 
+std::map<DataType, uint32_t> data_type_to_size = {
+    {DataType::BFLOAT16, 2},
+    {DataType::FLOAT32, 4},
+    {DataType::UINT32, 4},
+    {DataType::UINT8, 1},
+};
+
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value) {
@@ -26,7 +33,7 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
     tt::tt_metal::Buffer* tens_buffer = input_tensor.buffer();
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
-    uint32_t input_element_size_bytes = input_tensor.element_size();
+    uint32_t input_element_size_bytes = data_type_to_size[input_tensor.get_dtype()];
     uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
     uint32_t height = input_tensor.get_logical_shape()[-2];
     uint32_t width = input_tensor.get_logical_shape()[-1];
@@ -45,15 +52,10 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
-            .set_page_size(0, cb_page_size);
+            .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-
-    // bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(tt::constants::TILE_HW);
-    // uint32_t tile_size_bytes_log_2 = output_stick_size_is_power_of_two
-    //                                      ? (std::uint32_t)std::log2(tt::constants::TILE_HW *
-    //                                      input_element_size_bytes) : 0;
 
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
@@ -72,8 +74,6 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
-        // (std::uint32_t)output_stick_size_is_power_of_two,
-        // (std::uint32_t)tile_size_bytes_log_2,
         (std::uint32_t)packed_fill_value,
         (std::uint32_t)input_element_size_bytes,
         (std::uint32_t)height,

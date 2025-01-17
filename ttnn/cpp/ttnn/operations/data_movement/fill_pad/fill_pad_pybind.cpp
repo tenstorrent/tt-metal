@@ -17,7 +17,7 @@ void bind_fill_pad_op(py::module& module) {
     auto doc = fmt::format(
         R"doc(
 
-            Fills the padding of a tiled input tensor with the specified value.
+            Fills the implicit padding of a tiled input tensor with the specified value.
             Specifically, any nD tensor will have the implicit padding of the last 2 dims that exists from [height:tile_height, width:tile_width] filled with the specified value.
 
             +----------+-----------------------------------------+-----------------------+------------------------+----------+
@@ -40,12 +40,12 @@ void bind_fill_pad_op(py::module& module) {
                 ttnn.Tensor: the output tensor.
 
         )doc",
-        ttnn::fill_pad.base_name());
+        ttnn::fill_implicit_tile_padding.base_name());
 
-    using OperationType = decltype(ttnn::fill_pad);
+    using OperationType = decltype(ttnn::fill_implicit_tile_padding);
     ttnn::bind_registered_operation(
         module,
-        ttnn::fill_pad,
+        ttnn::fill_implicit_tile_padding,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,

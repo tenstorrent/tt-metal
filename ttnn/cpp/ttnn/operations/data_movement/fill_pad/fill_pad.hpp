@@ -26,6 +26,6 @@ struct FillPadOperation {
 }  // namespace data_movement
 }  // namespace operations
 
-constexpr auto fill_pad =
-    ttnn::register_operation<"ttnn::fill_pad", ttnn::operations::data_movement::FillPadOperation>();
+constexpr auto fill_implicit_tile_padding =
+    ttnn::register_operation<"ttnn::fill_implicit_tile_padding", ttnn::operations::data_movement::FillPadOperation>();
 }  // namespace ttnn

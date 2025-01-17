@@ -20,10 +20,11 @@ ttnn::Tensor FillPadOperation::invoke(
     float fill_value,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
-    if (tt::div_up(input_tensor.get_logical_shape()[-1], tt::constants::TILE_HEIGHT) ==
-            input_tensor.get_logical_shape()[-1] &&
-        tt::div_up(input_tensor.get_logical_shape()[-2], tt::constants::TILE_HEIGHT) ==
-            input_tensor.get_logical_shape()[-2]) {
+    uint32_t padded_height =
+        tt::div_up(input_tensor.get_logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    uint32_t padded_width =
+        tt::div_up(input_tensor.get_logical_shape()[-1], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    if (padded_width == input_tensor.get_logical_shape()[-1] && padded_height == input_tensor.get_logical_shape()[-2]) {
         return input_tensor;
     }
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
