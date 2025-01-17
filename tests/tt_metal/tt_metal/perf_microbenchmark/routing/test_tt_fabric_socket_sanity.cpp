@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/rtoptions.hpp>
 #include "tt_fabric/control_plane.hpp"
 // #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-#include "tt_metal/hw/inc/wormhole/eth_l1_address_map.h"
+#include "eth_l1_address_map.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
-            std::filesystem::path(tt::llrt::OptionsG.get_root_dir()) /
+            std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
             "tt_fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
         auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(tg_mesh_graph_desc_path.string());
 
@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error("Invalid Device Id.");
         }
 
-        std::map<chip_id_t, tt_metal::Device*> device_map;
+        std::map<chip_id_t, IDevice*> device_map;
 
         std::vector<chip_id_t> chip_ids;
         for (unsigned int id = 4; id < 36; id++) {
@@ -306,7 +306,7 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = device.second->get_ethernet_connected_device_ids();
+            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.first);
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -342,15 +342,17 @@ int main(int argc, char** argv) {
                 sem_count,    // 0: number of active fabric routers
                 router_mask,  // 1: active fabric router mask
             };
+
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
+            std::vector<uint32_t> router_runtime_args = runtime_args;
+            router_runtime_args.push_back((gk_phys_core.y << 10) | (gk_phys_core.x << 4));
             for (auto logical_core : device_router_cores) {
                 std::vector<uint32_t> router_compile_args = {
-                    (tunneler_queue_size_bytes >> 4),                // 0: rx_queue_size_words
-                    gk_interface_addr,                               // 1: gk_message_addr_l
-                    (gk_phys_core.y << 10) | (gk_phys_core.x << 4),  // 2: gk_message_addr_h
-                    tunneler_test_results_addr,                      // 3: test_results_addr
-                    tunneler_test_results_size,                      // 4: test_results_size
-                    0,                                               // 5: timeout_cycles
+                    (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                    gk_interface_addr,                 // 1: gk_message_addr_l
+                    tunneler_test_results_addr,        // 2: test_results_addr
+                    tunneler_test_results_size,        // 3: test_results_size
+                    0,                                 // 4: timeout_cycles
                 };
                 auto router_kernel = tt_metal::CreateKernel(
                     program_map[device.first],
@@ -359,7 +361,7 @@ int main(int argc, char** argv) {
                     tt_metal::EthernetConfig{
                         .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
 
-                tt_metal::SetRuntimeArgs(program_map[device.first], router_kernel, logical_core, runtime_args);
+                tt_metal::SetRuntimeArgs(program_map[device.first], router_kernel, logical_core, router_runtime_args);
 
                 log_debug(
                     LogTest,
@@ -636,7 +638,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "Test Passed");

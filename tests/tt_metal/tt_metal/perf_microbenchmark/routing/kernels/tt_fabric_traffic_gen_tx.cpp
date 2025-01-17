@@ -22,7 +22,8 @@ constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
 constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
 constexpr uint32_t gk_interface_addr_l = get_compile_time_arg_val(6);
-constexpr uint32_t gk_interface_addr_h = get_compile_time_arg_val(7);
+// constexpr uint32_t gk_interface_addr_h = get_compile_time_arg_val(7);
+uint32_t gk_interface_addr_h;
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
@@ -329,16 +330,18 @@ bool test_buffer_handler() {
 void kernel_main() {
     tt_fabric_init();
 
+    uint32_t rt_args_idx = 0;
     // TODO: refactor
-    src_endpoint_id = get_arg_val<uint32_t>(0);
-    noc_offset = get_arg_val<uint32_t>(1);
-    uint32_t router_x = get_arg_val<uint32_t>(2);
-    uint32_t router_y = get_arg_val<uint32_t>(3);
-    dest_device = get_arg_val<uint32_t>(4);
-    uint32_t rx_buf_size = get_arg_val<uint32_t>(5);
+    src_endpoint_id = get_arg_val<uint32_t>(rt_args_idx++);
+    noc_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t router_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t router_y = get_arg_val<uint32_t>(rt_args_idx++);
+    dest_device = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t rx_buf_size = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_interface_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     if (ASYNC_WR == test_command) {
-        base_target_address = get_arg_val<uint32_t>(6);
+        base_target_address = get_arg_val<uint32_t>(rt_args_idx++);
     }
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
