@@ -55,6 +55,13 @@ def get_physical_to_logical_core_mapping(device):
     return mapping
 
 
+def round_up(a, b):
+    """
+    Round up a to the nearest multiple of b
+    """
+    return b * math.ceil(a / b)
+
+
 # physical coords
 PREFETCHER_GRID = [
     (8, 11),
@@ -147,6 +154,9 @@ def run_multi_core_matmul_1d(
 
     M *= B  # Fuse batch always enabled
 
+    K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
+    K_padded = K_per_shard * num_cores
+
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
     out_block_h = M // ttnn.TILE_SIZE
@@ -217,7 +227,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [M, K // num_cores],
+            [M, K_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -227,7 +237,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [K, N // num_cores],
+            [K_padded, N // num_cores],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -311,6 +321,73 @@ def run_multi_core_matmul_1d(
 
     # Check program cache
     assert device.num_program_cache_entries() == 1  # Only 1 op
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    [
+        # 32, 2304, 3840
+        (1, 32, 2048, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 96, 64, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (2, 1)),
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_arbitrary_cores",
+    [
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        1,
+    ],
+)
+def test_multi_core_matmul_1d_pad_wh(
+    device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    activation,
+    grid,
+    use_arbitrary_cores,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        activation,
+        grid,
+        use_arbitrary_cores,
+        num_iters,
+    )
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -447,7 +524,6 @@ def test_multi_core_matmul_1d_wh(
     "num_iters",
     [1, 3],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,

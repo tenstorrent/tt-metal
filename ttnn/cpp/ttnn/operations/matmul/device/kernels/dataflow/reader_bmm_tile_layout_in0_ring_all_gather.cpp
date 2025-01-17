@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "debug/dprint.h"
+#include "debug/dprint_tile.h"
 
 void kernel_main() {
     // Compile time args
@@ -26,6 +27,8 @@ void kernel_main() {
     uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     bool is_hop_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);
     bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+    rt_args_idx += ring_size;
 
     volatile tt_l1_ptr uint32_t* l1_signal_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
@@ -38,7 +41,26 @@ void kernel_main() {
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
-    // Reserving/pushing the local shard is done in compute
+    bool use_padding = unpadded_in0_shard_widths_in_tiles[ring_idx] != shard_width_in_tiles;
+    // DPRINT << "use_padding: " << static_cast<uint32_t>(use_padding) << " and true shard width: " <<
+    // unpadded_in0_shard_widths_in_tiles[ring_idx] << ENDL();
+
+    // Zero out the data
+    if (use_padding) {
+        DeviceZoneScopedN("padding") uint32_t l1_local_write_addr = get_read_ptr(cb_id_in0);
+        volatile tt_l1_ptr uint16_t* l1_local_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_local_write_addr);
+        uint16_t start_addr = unpadded_in0_shard_widths_in_tiles[ring_idx] * shard_height_in_tiles *
+                              in0_single_tile_size_bytes / sizeof(uint16_t);
+        uint16_t end_addr = shard_size_bytes / sizeof(uint16_t);
+
+        for (uint16_t addr = start_addr; addr < end_addr; addr += 1) {
+            l1_local_ptr[addr] = 0;
+        }
+    }
+
+    // Reserving/pushing the local shard
+    cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
+    cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
     cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 
     uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);

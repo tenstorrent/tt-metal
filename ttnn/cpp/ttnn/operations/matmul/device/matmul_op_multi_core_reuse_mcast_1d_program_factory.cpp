@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -1697,6 +1698,18 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+template <typename T>
+void printVector(const std::vector<T>& vec) {
+    std::cout << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        std::cout << vec[i];
+        if (i != vec.size() - 1) {
+            std::cout << ", ";
+        }
+    }
+    std::cout << "]" << std::endl;
+}
+
 operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::Program& program,
     const Tensor& a,
@@ -1731,7 +1744,25 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
-    uint32_t num_blocks = K / in0_block_w;
+    /* Core setup */
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores = a.shard_spec().value().grid;
+    std::vector<CoreRange> ring_list = all_cores.ranges();
+    std::vector<CoreRange> hop_list = hop_cores.ranges();
+    ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
+
+    CoreRangeSet ring_cores = CoreRangeSet(ring_list);
+    const uint32_t num_cores = all_cores.num_cores();
+    const uint32_t ring_size = num_cores;
+
+    uint32_t num_hop_cores = hop_cores.num_cores();
+    bool use_hop_cores = num_hop_cores > 0;
+
+    /* Inner dim padding */
+    const uint32_t Kt_pad = round_up(K, num_cores);
+    in0_block_w = Kt_pad / num_cores;  // FIXME: in0_block_w does not need to equal shard width.
+
+    uint32_t num_blocks = Kt_pad / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -1747,20 +1778,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
-
-    /* Core setup */
-    constexpr bool row_major = true;
-    CoreRangeSet all_cores = a.shard_spec().value().grid;
-    std::vector<CoreRange> ring_list = all_cores.ranges();
-    std::vector<CoreRange> hop_list = hop_cores.ranges();
-    ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
-
-    CoreRangeSet ring_cores = CoreRangeSet(ring_list);
-    const uint32_t num_cores = all_cores.num_cores();
-    const uint32_t ring_size = num_cores;
-
-    uint32_t num_hop_cores = hop_cores.num_cores();
-    bool use_hop_cores = num_hop_cores > 0;
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1784,6 +1801,20 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
+
+    uint32_t K_ = K;
+    std::vector<uint32_t> unpadded_in0_shard_widths_in_tiles(num_cores, 0);
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        if (K_ > in0_shard_width_in_tiles) {
+            unpadded_in0_shard_widths_in_tiles[i] = in0_shard_width_in_tiles;
+            K_ -= in0_shard_width_in_tiles;
+        } else {
+            unpadded_in0_shard_widths_in_tiles[i] = K_;
+            break;
+        }
+    }
+
+    printVector(unpadded_in0_shard_widths_in_tiles);
 
     /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, ring_cores, INVALID);
@@ -2019,6 +2050,9 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)false,  // is_hop_core
             (std::uint32_t)false,  // end_of_hop
         };
+
+        mm_in0_args.insert(
+            mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* compute */

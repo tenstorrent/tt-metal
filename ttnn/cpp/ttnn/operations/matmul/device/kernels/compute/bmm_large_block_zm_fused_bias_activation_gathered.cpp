@@ -227,10 +227,10 @@ void MAIN {
 #endif
 
             // Wait to receive in0 block
-            if (block == 0) {
-                cb_reserve_back(input0_cb_id, in0_block_num_tiles);
-                cb_push_back(input0_cb_id, in0_block_num_tiles);
-            }
+            // if (block == 0) {
+            //     cb_reserve_back(input0_cb_id, in0_block_num_tiles);
+            //     cb_push_back(input0_cb_id, in0_block_num_tiles);
+            // }
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
 #ifdef ENABLE_GLOBAL_CB
