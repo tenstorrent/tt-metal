@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from regex import X
 import torch
 import ttnn
 import torch.nn.functional as F
@@ -59,6 +60,8 @@ def convnet_mnist(
             weights_format="OIHW",
             input_memory_config=x.memory_config(),
             input_layout=x.get_layout(),
+            input_tensor_dtype=x.dtype,
+            has_bias=True,
             **conv_kwargs,
         )
         tt_weight = ttnn.to_device(tt_weight, device)
@@ -120,6 +123,8 @@ def convnet_mnist(
             weights_format="OIHW",
             input_memory_config=x.memory_config(),
             input_layout=x.get_layout(),
+            input_tensor_dtype=x.dtype,
+            has_bias=True,
             **conv_kwargs,
         )
         tt_weight = ttnn.to_device(tt_weight, device)

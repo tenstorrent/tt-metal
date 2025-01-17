@@ -16,6 +16,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
@@ -320,11 +321,11 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_subblock_padding,
         use_non_tile_height);
 
-    const uint32_t post_op_l1_stats =
+    const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
-    auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
         arch,
         this->memory_config.memory_layout,
         input_dtype,
@@ -333,10 +334,11 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        ttnn::Shape(input_tensor_shape),
-        weights_shape,
-        sliding_window_config.get_output_shape(),
+        input_tensor_shape[3],
         output_channels,
+        weights_shape,
+        input_tensor_shape[0],
+        sliding_window_config.get_output_shape()[2],
         groups,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
@@ -348,21 +350,19 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         this->memory_config,
         has_bias,
         use_non_tile_height);
-    if (calc_CB_size != actual_cb_size) {
-        TT_FATAL(
-            actual_cb_size == calc_CB_size,
-            "Calculated CB size {} does not match with the actual CB size {}",
-            calc_CB_size,
-            actual_cb_size);
-    }
-    if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
-        TT_FATAL(
-            post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
-            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-            this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_stats,
-            calc_output_size);
-    }
+
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
+
+    TT_FATAL(
+        post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size),
+        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+        this->pre_op_l1_allocation_size_bytes,
+        post_op_l1_allocation_size,
+        l1_usage.tensor_allocation_size);
     return program_with_cbs;
 }
 

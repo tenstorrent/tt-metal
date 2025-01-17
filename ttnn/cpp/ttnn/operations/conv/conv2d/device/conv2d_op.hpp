@@ -299,6 +299,7 @@ Tensor optimized_conv_new(
 // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
 bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w);
 
+// Both CB and tensor allocation sizes are per per tensix core and in bytes.
 struct conv_op_l1_usage {
     uint32_t tensor_allocation_size;
     uint32_t CB_allocation_size;
@@ -316,10 +317,11 @@ conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const ttnn::Shape& input_shape,
-    const ttnn::Shape& padded_weights_shape,
-    const ttnn::Shape& output_shape,
-    uint32_t output_channels,
+    const uint32_t input_channels,
+    const uint32_t output_channels,
+    const ttnn::Shape& weights_shape,
+    const uint32_t batch_size,
+    const uint32_t output_width,
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,

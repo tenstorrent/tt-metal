@@ -274,6 +274,8 @@ class transformer_2d_model:
                 weights_format="OIHW",
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                input_tensor_dtype=hidden_states.dtype,
+                has_bias=True,
                 **conv_kwargs,
             )
             self.proj_in_conv_bias = ttnn.prepare_conv_bias(
@@ -341,6 +343,8 @@ class transformer_2d_model:
                         weights_format="OIHW",
                         input_memory_config=hidden_states.memory_config(),
                         input_layout=hidden_states.get_layout(),
+                        input_tensor_dtype=hidden_states.dtype,
+                        has_bias=True,
                         **conv_kwargs_1,
                     )
                     self.proj_out_conv_bias = ttnn.prepare_conv_bias(

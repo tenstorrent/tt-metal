@@ -497,6 +497,8 @@ class resnetBlock2D:
                     weights_format="OIHW",
                     input_memory_config=hidden_states.memory_config(),
                     input_layout=hidden_states.get_layout(),
+                    input_tensor_dtype=hidden_states.dtype,
+                    has_bias=True,
                     **conv_kwargs_1,
                 )
                 self.conv1s_bias[0] = ttnn.prepare_conv_bias(
@@ -595,6 +597,8 @@ class resnetBlock2D:
                         weights_format="OIHW",
                         input_memory_config=split_hidden_states[i].memory_config(),
                         input_layout=split_hidden_states[i].get_layout(),
+                        input_tensor_dtype=split_hidden_states[i].dtype,
+                        has_bias=True,
                         **conv_kwargs_2,
                     )
                     self.conv1s_bias[i] = ttnn.prepare_conv_bias(
@@ -750,6 +754,8 @@ class resnetBlock2D:
                 weights_format="OIHW",
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                input_tensor_dtype=hidden_states.dtype,
+                has_bias=True,
                 **conv_kwargs_3,
             )
             self.conv2_bias = ttnn.prepare_conv_bias(
@@ -822,6 +828,8 @@ class resnetBlock2D:
                     weights_format="OIHW",
                     input_memory_config=input_tensor.memory_config(),
                     input_layout=input_tensor.get_layout(),
+                    input_tensor_dtype=input_tensor.dtype,
+                    has_bias=True,
                     **conv_kwargs_4,
                 )
                 self.conv_shortcut_bias = ttnn.prepare_conv_bias(
