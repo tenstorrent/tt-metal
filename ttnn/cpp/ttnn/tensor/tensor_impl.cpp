@@ -724,7 +724,7 @@ Tensor to_device<bfloat8_b>(
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 // TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
-std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
+std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
     if (tensor_spec.memory_config().is_sharded()) {
         return {
             tensor_spec.tensor_layout().get_logical_shard_shape(),
@@ -732,13 +732,13 @@ std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tens
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
-    Size logical_shard_shape{logical_shape[-2], logical_shape[-1]};
+    Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
     auto physical_shard_shape = logical_shard_shape;
     if (tensor_spec.layout() == Layout::TILE) {
         const auto& tile = tensor_spec.tile();
         auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
         auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
-        physical_shard_shape = Size{physical_shard_height, physical_shard_width};
+        physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
     }
     return {logical_shard_shape, physical_shard_shape};
 }
@@ -746,9 +746,9 @@ std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tens
 using LogicalPhysicalIdxPairs = std::vector<std::pair<size_t, size_t>>;
 using LogicalPhysicalMapping = std::pair<LogicalPhysicalIdxPairs, size_t>;
 std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
-    const Size& logical_2D_shape,
-    const Size& logical_shard_shape,
-    const Size& physical_shard_shape,
+    const Shape2D& logical_2D_shape,
+    const Shape2D& logical_shard_shape,
+    const Shape2D& physical_shard_shape,
     const size_t physical_stride) {
     const auto logical_stride = logical_2D_shape.width();
 
