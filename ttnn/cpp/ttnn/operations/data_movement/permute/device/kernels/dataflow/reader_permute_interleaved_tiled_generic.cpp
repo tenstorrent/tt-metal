@@ -71,13 +71,13 @@ void kernel_main() {
     constexpr uint32_t ratio = sizeof(uint32_t) / element_size;
     constexpr uint32_t final_x_pad_write =
         final_face_real_w == 0 ? num_writes : (final_face_real_w + ratio - 1) / ratio;
+    constexpr uint32_t tile_bytes = TILE_HEIGHT * TILE_WIDTH * element_size;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t start_block = get_arg_val<uint32_t>(1);
     uint32_t end_block = get_arg_val<uint32_t>(2);
 
-    // Input shape and strides (excluding W dimension and measured in rows, not bytes)
-    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    // Input shape and dims
     uint32_t input_shape[N], dims[N];
     for (uint32_t i = 0; i < N; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + 3);
@@ -87,18 +87,14 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 4) Build padded and tiled shapes
     // ------------------------------------------------------------------------
-    uint32_t input_padded_shape[N];
     uint32_t input_tiled_shape[N];
     for (uint32_t i = 0; i < N; i++) {
         if (i < N - 2) {
-            input_padded_shape[i] = input_shape[i];
             input_tiled_shape[i] = input_shape[i];
         } else if (i == N - 2) {
-            input_padded_shape[i] = H_p;
             input_tiled_shape[i] = H_t;
         } else {
             // i == N - 1
-            input_padded_shape[i] = W_p;
             input_tiled_shape[i] = W_t;
         }
     }
@@ -106,13 +102,7 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 5) Build row strides for the destination padded shape
     // ------------------------------------------------------------------------
-    uint32_t src_padded_strides[N], src_tiled_strides[N];
-    src_padded_strides[N - 1] = 1;
-    src_padded_strides[N - 2] = 1;  // dimension X in output
-    for (int i = N - 3; i >= 0; i--) {
-        src_padded_strides[i] = src_padded_strides[i + 1] * input_padded_shape[i + 1];
-    }
-
+    uint32_t src_tiled_strides[N];
     src_tiled_strides[N - 1] = 1;
     for (int i = N - 2; i >= 0; i--) {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
@@ -149,9 +139,7 @@ void kernel_main() {
 
     dprint_array<N>(input_shape, "input_shape");
     dprint_array<N>(dims, "dims");
-    dprint_array<N>(input_padded_shape, "input_padded_shape");
     dprint_array<N>(input_tiled_shape, "input_tiled_shape");
-    dprint_array<N>(src_padded_strides, "src_padded_strides");
     dprint_array<N>(src_tiled_strides, "src_tiled_strides");
 
     /**
@@ -166,9 +154,7 @@ void kernel_main() {
      */
 
     // x_dim is the dimension along which we are reading the tensor, as it's the new W dimension in the output tensor
-    uint32_t X_stride = src_padded_strides[x_dim];
     uint32_t X_stride_tile = src_tiled_strides[x_dim];
-    constexpr uint32_t tile_bytes = TILE_HEIGHT * TILE_WIDTH * element_size;
 
     const DataFormat data_format = get_dataformat(tt::CBIndex::c_0);
     const InterleavedAddrGenFast<src0_is_dram> s = {

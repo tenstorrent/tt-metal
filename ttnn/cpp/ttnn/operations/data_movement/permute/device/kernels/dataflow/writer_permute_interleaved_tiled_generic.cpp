@@ -77,7 +77,7 @@ void kernel_main() {
     uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
     uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
 
-    uint32_t array_start_offset = 5;
+    constexpr uint32_t array_start_offset = 5;
     uint32_t input_shape[N], dims[N];
     for (uint32_t i = 0; i < N; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + array_start_offset);
@@ -184,9 +184,6 @@ void kernel_main() {
         uint32_t xw_block = rem % (non_x_rows);  // Which row set (beyond X dimension)?
         uint32_t remainder = xw_block;
 
-        // Compute X block boundaries
-        uint32_t x_start = x_block * x_block_size;
-
         // Compute W block boundaries
         uint32_t w_start = w_block * w_block_size;
         uint32_t w_end = min(w_start + w_block_size, input_shape[N - 1]);
@@ -201,11 +198,11 @@ void kernel_main() {
             idxs[d] = remainder % input_shape[d];
             remainder /= input_shape[d];
         }
-        idxs[N - 1] = w_start;  // Initialize W dimension index to zero if not already set
+        idxs[N - 1] = w_start;  // dest_multi_idx[permuted_w_dim] = w_start due to this
         for (uint32_t d = 0; d < N; ++d) {
             dest_multi_idx[d] = idxs[dims[d]];
         }
-        dest_multi_idx[permuted_w_dim] = w_start;
+
         if constexpr (permuted_w_dim != N - 2) {
             output_h = dest_multi_idx[N - 2];
             output_sub_tile_line = output_h % FACE_HEIGHT;
@@ -271,8 +268,8 @@ void kernel_main() {
 
         // We'll reuse 'dest_multi_idx' for tile indexing
         constexpr uint32_t y_t = output_H_t - 1;
-        uint8_t Y_in_tile = output_shape[N - 2] % TILE_HEIGHT;
-        uint8_t face_y_start = (Y_in_tile / FACE_HEIGHT);
+        constexpr uint8_t Y_in_tile = output_H % TILE_HEIGHT;
+        constexpr uint8_t face_y_start = (Y_in_tile / FACE_HEIGHT);
 
         dest_multi_idx[N - 2] = y_t;  // fix the tile dimension in output
 
@@ -291,7 +288,7 @@ void kernel_main() {
             // Flatten => linear_idx
             uint32_t linear_idx = 0;
             for (uint32_t i = 0; i < N; ++i) {
-                linear_idx = (linear_idx * output_tiled_shape[i]) + dest_multi_idx[i];
+                linear_idx += dest_tiled_strides[i] * dest_multi_idx[i];
             }
 
             // Write out padding lines
