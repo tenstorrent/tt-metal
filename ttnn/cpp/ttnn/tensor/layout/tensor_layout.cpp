@@ -154,7 +154,7 @@ void TensorLayout::validate_shard_spec() const {
             TT_FATAL(
                 (physical_shard_shape.height() % tile_shape[0] == 0 &&
                  physical_shard_shape.width() % tile_shape[1] == 0),
-                "Shard shape {} must be tile {} sized!",
+                "Physical shard shape {} must be tile {} sized!",
                 physical_shard_shape,
                 tile_shape);
         }
