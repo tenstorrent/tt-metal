@@ -732,7 +732,7 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
     sync_build_step(events);
 }
 
-void inline launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
     events.emplace_back(detail::async(build_func));
 }
 
