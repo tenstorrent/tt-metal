@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include "fd_kernel.hpp"
+#include <memory>
+
+namespace tt::tt_metal::dispatch {
 
 typedef struct eth_tunneler_static_config {
     std::optional<uint32_t> endpoint_id_start_index;
@@ -50,11 +53,13 @@ public:
     const eth_tunneler_static_config_t& GetStaticConfig() { return static_config_; }
     bool IsRemote() { return is_remote_; }
     void SetVCCount(uint32_t vc_count) { static_config_.vc_count = vc_count; }
-    uint32_t GetRouterQueueIdOffset(FDKernel* k, bool upstream);
-    uint32_t GetRouterId(FDKernel* k, bool upstream);
+    uint32_t GetRouterQueueIdOffset(const std::shared_ptr<FDKernel>& k, bool upstream);
+    uint32_t GetRouterId(const std::shared_ptr<FDKernel>& k, bool upstream);
 
 private:
     eth_tunneler_static_config_t static_config_;
     eth_tunneler_dependent_config_t dependent_config_;
     bool is_remote_;
 };
+
+}  // namespace tt::tt_metal::dispatch

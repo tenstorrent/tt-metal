@@ -4,6 +4,8 @@
 #pragma once
 #include "fd_kernel.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 typedef struct prefetch_static_config {
     std::optional<uint32_t> downstream_cb_log_page_size;
     std::optional<uint32_t> downstream_cb_pages;
@@ -90,3 +92,5 @@ private:
     prefetch_static_config_t static_config_;
     prefetch_dependent_config_t dependent_config_;
 };
+
+}  // namespace tt::tt_metal::dispatch

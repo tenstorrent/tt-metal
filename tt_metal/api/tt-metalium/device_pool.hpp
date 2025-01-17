@@ -38,7 +38,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {}) noexcept;
 
     IDevice* get_active_device(chip_id_t device_id) const;
-    std::vector<IDevice* > get_all_active_devices() const;
+    std::vector<IDevice*> get_all_active_devices() const;
+    std::set<chip_id_t> get_all_active_device_ids() const;
     bool close_device(chip_id_t device_id);
     void close_devices(const std::vector<IDevice*>& devices);
     bool is_device_active(chip_id_t id) const;

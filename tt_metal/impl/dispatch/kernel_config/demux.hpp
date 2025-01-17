@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+
 #include "fd_kernel.hpp"
+
+namespace tt::tt_metal::dispatch {
 
 typedef struct demux_static_config {
     std::optional<uint32_t> endpoint_id_start_index;
@@ -53,3 +56,5 @@ private:
     demux_dependent_config_t dependent_config_;
     int placement_cq_id_;  // TODO: remove channel hard-coding for dispatch core manager
 };
+
+}  // namespace tt::tt_metal::dispatch
