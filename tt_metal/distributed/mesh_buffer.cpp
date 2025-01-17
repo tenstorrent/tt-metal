@@ -3,9 +3,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <overloaded.hpp>
+#include <tt_metal.hpp>
+
 #include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/tt_stl/overloaded.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {

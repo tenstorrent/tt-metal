@@ -4,10 +4,12 @@
 
 #include <gtest/gtest.h>
 #include <memory>
-#include "allocator/allocator.hpp"
+
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
+
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_device_view.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {

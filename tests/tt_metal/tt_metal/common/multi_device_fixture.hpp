@@ -9,11 +9,11 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/llrt.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
 
 class MultiDeviceFixture : public DispatchFixture {
 protected:

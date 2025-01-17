@@ -5,9 +5,9 @@
 #pragma once
 
 #include <host_api.hpp>
+#include <mesh_device.hpp>
 
 #include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {

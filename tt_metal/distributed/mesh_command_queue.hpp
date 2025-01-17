@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/distributed/mesh_device.hpp"
+#include <mesh_device.hpp>
+
 #include "tt_metal/distributed/mesh_workload.hpp"
 
 namespace tt::tt_metal::distributed {

@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
-#include "tt_metal/distributed/mesh_device_view.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
+#include <buffer_constants.hpp>
+#include <mesh_device.hpp>
+#include <mesh_device_view.hpp>
 
 namespace tt::tt_metal::distributed {
 
