@@ -244,23 +244,22 @@ class TtTransformer(LightweightModule):
         )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out, B, S=1):
+    def process_output_decode(self, tt_out, B, S=1, argmax_on_device=False):
         """
-        Input is ttnn device tensor of logits. Output is torch logits tensor
+        Input is ttnn device tensor of logits. Output is torch logits tensor or the generated token if argmax on device
         """
-        if self.args.num_devices > 1:
-            if self.args.is_galaxy:
-                tt_out = ttnn.all_gather(
-                    tt_out,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.mesh_device,
-                    topology=self.args.ccl_topology(),
-                )
-            else:
-                tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=self.args.ccl_topology())
-        tt_out = ttnn.untilize(tt_out, use_multicore=True)
+        if argmax_on_device:
+            tt_out = ttnn.to_torch(
+                # tt_out.cpu(blocking=True, cq_id=1),
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device,
+                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
+                    mesh_shape=self.args.cluster_shape,
+                ),
+            )[0, 0, 0, :B]
+            return tt_out
+
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
