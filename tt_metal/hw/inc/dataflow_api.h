@@ -1363,9 +1363,9 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTD");
 }
 
-template<bool DRAM>
-FORCE_INLINE
-uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
+template <bool DRAM>
+FORCE_INLINE uint64_t
+get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
     // Use addrgen tables to convert bank_ids to physical NOC coordinates
     uint64_t noc_addr = 0;
     if constexpr (DRAM) {
