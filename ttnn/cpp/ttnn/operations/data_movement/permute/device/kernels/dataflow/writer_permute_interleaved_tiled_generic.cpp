@@ -5,25 +5,25 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-template <uint32_t N>
-void dprint_array(const uint32_t* arr, const char* name) {
-    DPRINT << name << ": ";
-    for (uint32_t i = 0; i < N; i++) {
-        DPRINT << arr[i] << " ";
-    }
-    DPRINT << ENDL();
-}
+// template <uint32_t N>
+// void dprint_array(const uint32_t* arr, const char* name) {
+//     DPRINT << name << ": ";
+//     for (uint32_t i = 0; i < N; i++) {
+//         DPRINT << arr[i] << " ";
+//     }
+//     DPRINT << ENDL();
+// }
 
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+// inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
+//     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start *
+//     elts_per_page; for (uint32_t page = 0; page < npages; ++page) {
+//         DPRINT << start + page << ": ";
+//         for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
+//             DPRINT << BF16(*ptr) << " ";
+//         }
+//         DPRINT << ENDL();
+//     }
+// }
 
 void kernel_main() {
     constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
@@ -222,11 +222,11 @@ void kernel_main() {
             uint64_t dest_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
 
             for (uint8_t i = 0; i < real_faces_x; i++) {
-                uint16_t w_offset = i * FACE_HW_BYTES;
-                uint16_t cb_w_offset = i * SUBTILE_LINE_BYTES;
+                uint16_t x_offset = i * FACE_HW_BYTES;
+                uint16_t cb_x_offset = i * SUBTILE_LINE_BYTES;
                 noc_async_write(
-                    transposed_buffer_read_addr + cb_w_offset + page_offset,
-                    dest_noc_addr + w_offset,
+                    transposed_buffer_read_addr + cb_x_offset + page_offset,
+                    dest_noc_addr + x_offset,
                     SUBTILE_LINE_BYTES);
             }
         }

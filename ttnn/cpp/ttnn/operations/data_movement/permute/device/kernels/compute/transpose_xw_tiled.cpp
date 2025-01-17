@@ -9,18 +9,6 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
-// #include "debug/dprint_tensix.h"
-
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
 
 namespace NAMESPACE {
 void MAIN {
@@ -31,13 +19,6 @@ void MAIN {
 
     uint32_t start_block = get_arg_val<uint32_t>(0);
     uint32_t end_block = get_arg_val<uint32_t>(1);
-
-    UNPACK(DPRINT << "N: " << N << ENDL());
-    UNPACK(DPRINT << "start_block: " << start_block << ENDL());
-    UNPACK(DPRINT << "end_block: " << end_block << ENDL());
-    UNPACK(DPRINT << "x_blocks: " << x_blocks << ENDL());
-    UNPACK(DPRINT << "w_blocks: " << w_blocks << ENDL());
-    UNPACK(DPRINT << "H: " << H << ENDL());
 
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_tilize = tt::CBIndex::c_1;
