@@ -328,6 +328,7 @@ def test_llama_demo_text(
     Simple Llama demo with limited dependence on reference code.
     """
     mesh_device.enable_async(True)
+    enable_trace = True  # Use tracing for better perf
 
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
@@ -440,7 +441,7 @@ def test_llama_demo_text(
 
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        # Set sampling mode
+        # TODO Argmax on device is only supported for batch_size=1
         argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
@@ -466,21 +467,26 @@ def test_llama_demo_text(
             logits = generator.decode_forward_text(
                 out_tok,
                 current_pos,
-                enable_trace=True,
+                enable_trace=enable_trace,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
+                argmax_on_device=argmax_on_device,
             )
 
-            # TODO Miguel - Re-add argmax on device
-            # Fix use case with temperature > 0
             # Get the next token
-            _, out_tok = sample_host(
-                logits,
-                None,
-                temperature=sampling_params["temperature"],
-                top_p=sampling_params["top_p"],
-                on_host=True,
-            )
+            if argmax_on_device:
+                out_tok = logits
+                if out_tok.dim() == 1:
+                    out_tok = out_tok.unsqueeze(0)
+            else:
+                # TODO Fix use case with temperature > 0
+                _, out_tok = sample_host(
+                    logits,
+                    None,
+                    temperature=sampling_params["temperature"],
+                    top_p=sampling_params["top_p"],
+                    on_host=True,
+                )
 
             if iteration == 0:  # First iteration will account the compile time
                 profiler.end(f"compile_decode_time", iteration=batch_idx)
