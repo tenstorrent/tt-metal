@@ -29,8 +29,4 @@ autograd::TensorPtr clip_grad_norm(
     return autograd::create_tensor(tt_result);
 }
 
-autograd::TensorPtr clip_grad_norm(const serialization::NamedParameters& parameters, const ClipGradNormConfig& config) {
-    return clip_grad_norm(parameters, config.max_norm, config.p_norm_type, config.error_if_nonfinite);
-}
-
 }  // namespace ttml::core

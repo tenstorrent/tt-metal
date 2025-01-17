@@ -330,8 +330,8 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-    std::optional<ttml::core::ClipGradNormConfig> clip_grad_norm_config;
-
+    bool use_clip_grad_norm = false;
+    float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -354,8 +354,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
-    config.clip_grad_norm_config =
-        training_config["clip_grad_norm_config"].as<std::optional<ttml::core::ClipGradNormConfig>>();
+    config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
+    config.clip_grad_norm_max_norm =
+        training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
@@ -420,15 +421,8 @@ int main(int argc, char **argv) {
                  ? "trainable"
                  : "fixed"},
             {"scheduler_type", config.scheduler_type},
-            {"using_clip_grad_norm", config.clip_grad_norm_config.has_value()},
-            {"clip_grad_norm_max_norm",
-             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->max_norm) : "n/a"},
-            {"clip_grad_norm_p_norm_type",
-             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->p_norm_type)
-                                                      : "n/a"},
-            {"clip_grad_norm_error_if_nonfinite",
-             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->error_if_nonfinite)
-                                                      : "n/a"},
+            {"using_clip_grad_norm", config.use_clip_grad_norm},
+            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
         });
     }
 
@@ -635,8 +629,8 @@ int main(int argc, char **argv) {
             float loss_float = get_loss_value(loss);
 
             loss->backward();
-            if (config.clip_grad_norm_config.has_value()) {
-                ttml::core::clip_grad_norm(model->parameters(), *config.clip_grad_norm_config);
+            if (config.use_clip_grad_norm) {
+                ttml::core::clip_grad_norm(model->parameters(), config.clip_grad_norm_max_norm);
             }
             ttml::autograd::ctx().reset_graph();
 
