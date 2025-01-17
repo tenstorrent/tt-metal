@@ -883,18 +883,7 @@ inline void dprint_tensix_pack_edge_offset_reserved(const ckernel::packer::pck_e
 }
 
 // Printing packer edge offset
-inline void dprint_tensix_pack_edge_offset_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1: reg_addr = PCK_EDGE_OFFSET_SEC0_mask_ADDR32; break;
-        case 2: reg_addr = PCK_EDGE_OFFSET_SEC1_mask_ADDR32; break;
-        case 3: reg_addr = PCK_EDGE_OFFSET_SEC2_mask_ADDR32; break;
-        case 4: reg_addr = PCK_EDGE_OFFSET_SEC3_mask_ADDR32; break;
-        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
-    }
-
-    ckernel::packer::pck_edge_offset_t edge = ckernel::packer::read_pack_edge_offset(reg_addr, cfg);
-
+inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edge_offset_t& edge) {
     DPRINT << "mask: ";
     dprint_tensix_pack_edge_offset_mask(edge);
     DPRINT << "mode: ";
@@ -936,18 +925,7 @@ inline void dprint_tensix_pack_counters_pack_per_xy_plane_offset(const ckernel::
 }
 
 // Printing packer counters
-inline void dprint_tensix_pack_counters_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1: reg_addr = PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32; break;
-        case 2: reg_addr = PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32; break;
-        case 3: reg_addr = PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32; break;
-        case 4: reg_addr = PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32; break;
-        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
-    }
-
-    ckernel::packer::pack_counters_t counters = ckernel::packer::read_pack_counters(reg_addr, cfg);
-
+inline void dprint_tensix_pack_counters_helper(const ckernel::packer::pack_counters_t& counters) {
     DPRINT << "pack_per_xy_plane: ";
     dprint_tensix_pack_counters_pack_per_xy_plane(counters);
     DPRINT << "pack_reads_per_xy_plane: ";
@@ -1215,18 +1193,17 @@ inline void dprint_tensix_dest_rd_ctrl() {
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
+    std::array<ckernel::packer::pck_edge_offset_t, 4> edge_vec;
     PACK(
-        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
-        if (reg_id) {
+        edge_vec = ckernel::packer::read_pack_edge_offset(); if (reg_id) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
-            dprint_tensix_pack_edge_offset_helper(reg_id, cfg);
+            dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1]);
         }
         // Print all registers
         else {
-            for (uint i = 1; i < 5; i++) {
+            for (uint i = 1; i <= 4; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
-                dprint_tensix_pack_edge_offset_helper(i, cfg);
+                dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1]);
                 if (i != 4) {
                     DPRINT << ENDL();
                 }
@@ -1236,19 +1213,17 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
+    std::array<ckernel::packer::pack_counters_t, 4> counters_vec;
     PACK(
-        // Get pointer to registers for current state ID
-        volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
-        if (reg_id) {
+        counters_vec = ckernel::packer::read_pack_counters(); if (reg_id) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
-            dprint_tensix_pack_counters_helper(reg_id, cfg);
+            dprint_tensix_pack_counters_helper(counters_vec[reg_id - 1]);
         }
         // Print all registers
         else {
-            for (uint i = 1; i < 5; i++) {
+            for (uint i = 1; i <= 4; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
-                dprint_tensix_pack_counters_helper(i, cfg);
+                dprint_tensix_pack_counters_helper(counters_vec[i - 1]);
                 if (i != 4) {
                     DPRINT << ENDL();
                 }
