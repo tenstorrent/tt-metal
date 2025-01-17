@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include "alignment.hpp"
-#include "size.hpp"
-#include "page_config.hpp"
+#include <tt-metalium/shape2d.hpp>
 
 #include "ttnn/tensor/enum_types.hpp"
-#include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/layout/alignment.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/types.hpp"
 
 namespace tt::tt_metal {
 
@@ -57,16 +57,21 @@ public:
     [[deprecated("Use of LegacyPaddedShape is deprecated. Please use get_physical_size() or get_strides() instead.")]]
     ttnn::SimpleShape compute_padded_shape(const ttnn::SimpleShape& shape) const;
 
+    // Flattens input shape into height and width
+    // - Height is accumulated over all dims except last
+    // - Width is equal to the last dim
+    Shape2D compute_logical_2d_shape(const ttnn::SimpleShape& shape) const;
+
     // Returns number of elements laid out in physically memory across H:W dimensions
     //  W is row width aligned to page width and shard width, depends on data type
     //  H is all dimensions except W multiplied and aligned to tile and shard height
-    Size compute_physical_shape(const ttnn::SimpleShape& shape) const;
+    Shape2D compute_physical_shape(const ttnn::SimpleShape& shape) const;
 
     // Returns logical shard shape from shard spec shape
-    Size get_logical_shard_shape() const;
+    Shape2D get_logical_shard_shape() const;
 
     // Returns physical shard shape based on ShardMode, shard shape, and alignment
-    Size get_physical_shard_shape() const;
+    Shape2D get_physical_shard_shape() const;
 
     TensorLayout with_memory_config(MemoryConfig memory_config) const {
         TensorLayout result = *this;
@@ -90,8 +95,8 @@ private:
     void initialize_alignment();
     void validate_alignment() const;
 
-    Size compute_page_shape(const Size& physical_size) const;
-    size_t compute_page_size_bytes(const Size& page_size) const;
+    Shape2D compute_page_shape(const Shape2D& physical_size) const;
+    size_t compute_page_size_bytes(const Shape2D& page_size) const;
 
     DataType dtype_ = DataType::BFLOAT16;
     PageConfig page_config_;

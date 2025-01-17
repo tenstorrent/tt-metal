@@ -125,7 +125,7 @@ def get_devices(object_value):
     devices = set()
     if isinstance(object_value, ttnn.Tensor):
         if ttnn.is_tensor_storage_on_device(object_value) and object_value.is_allocated():
-            devices.add(object_value.device())
+            devices.update(object_value.devices())
     elif isinstance(object_value, ttnn.Device):
         devices.add(object_value)
     elif isinstance(object_value, (list, tuple)):
