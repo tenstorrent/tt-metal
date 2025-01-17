@@ -168,16 +168,6 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
 
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
-void SubDeviceManager::set_fabric_sub_device_id(SubDeviceId fabric_sub_device_id) {
-    const auto& fabric_sub_device = this->sub_device(fabric_sub_device_id);
-    TT_FATAL(
-        fabric_sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() == 0,
-        "Fabric sub device must not have Tensix cores");
-    fabric_sub_device_id_ = fabric_sub_device_id;
-}
-
-std::optional<SubDeviceId> SubDeviceManager::fabric_sub_device_id() const { return fabric_sub_device_id_; }
-
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = sub_device_id.to_index();
     TT_FATAL(
