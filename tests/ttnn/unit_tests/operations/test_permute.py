@@ -504,7 +504,7 @@ def test_permute_5d_yw(shape, perm, dtype, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm, pad_value=float("-inf"))
+    output_tensor = ttnn.permute(input_tensor, perm, pad_value=None)
     print(ttnn.from_device(output_tensor).to_torch())
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
