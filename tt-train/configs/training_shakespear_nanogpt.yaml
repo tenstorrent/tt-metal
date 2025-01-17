@@ -20,10 +20,13 @@ training_config:
     runner_type: default
     experimental:
       use_composite_layernorm: false
-
-
+clip_grad_norm_config:
+    max_norm: 1.0
+    p_norm_type: 2.0
+    error_if_nonfinite: true
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
   top_k: 50
   top_p: 1.0
+  
