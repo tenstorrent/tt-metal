@@ -9,9 +9,9 @@
 #include <optional>
 
 #include "pybind11/cast.h"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace py = pybind11;
 
@@ -216,7 +216,7 @@ void py_module(py::module& module) {
     module.def(
         "allocate_tensor_on_device",
         py::overload_cast<
-            const ttnn::Shape&,
+            const ttnn::SimpleShape&,
             ttnn::DataType,
             ttnn::Layout,
             IDevice*,
@@ -230,7 +230,7 @@ void py_module(py::module& module) {
     module.def(
         "allocate_tensor_on_device",
         py::overload_cast<
-            const ttnn::Shape&,
+            const ttnn::SimpleShape&,
             ttnn::DataType,
             ttnn::Layout,
             MeshDevice*,

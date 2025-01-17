@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
 #include <cstddef>

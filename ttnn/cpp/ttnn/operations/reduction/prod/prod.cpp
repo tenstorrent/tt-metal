@@ -6,13 +6,13 @@
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::reduction {
@@ -68,7 +68,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::Shape(required);
+    auto ttnn_shape = ttnn::SimpleShape(required);
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(

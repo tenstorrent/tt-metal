@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -37,14 +37,14 @@ ttnn::Tensor to_device(
     uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
     const std::optional<MemoryConfig>& memory_config);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,

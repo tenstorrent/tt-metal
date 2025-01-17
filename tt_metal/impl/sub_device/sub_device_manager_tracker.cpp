@@ -7,17 +7,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
+#include <sub_device_manager_tracker.hpp>
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/kernels/data_types.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <device.hpp>
+#include <allocator.hpp>
+#include <buffer_constants.hpp>
+#include <command_queue.hpp>
+#include <data_types.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager.hpp>
+#include <sub_device_types.hpp>
+#include <span.hpp>
 
 namespace tt::tt_metal {
 

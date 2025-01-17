@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_op.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "common/base_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 #include <type_traits>
