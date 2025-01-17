@@ -709,7 +709,7 @@ After halo op is done, each core will contain all the input sticks needed to
 compute the assigned output shard (see Figure 15). Halo output is then passed
 to the convolution op as input.
 
-<img src="media/halo output.png" style="height:450px;">\
+<img src="media/halooutput.png" style="height:450px;">\
 _Figure 15: Convolution input per core (halo output)_
 
 #### Step 4 - Tensor metadata
