@@ -6,25 +6,14 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-#include "tt_metal/hw/inc/debug/dprint_pages.h"
-template <uint32_t N>
-void dprint_array(const uint32_t* arr, const char* name) {
-    DPRINT << name << ": ";
-    for (uint32_t i = 0; i < N; i++) {
-        DPRINT << arr[i] << " ";
-    }
-    DPRINT << ENDL();
-}
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+// template <uint32_t N>
+// void dprint_array(const uint32_t* arr, const char* name) {
+//     DPRINT << name << ": ";
+//     for (uint32_t i = 0; i < N; i++) {
+//         DPRINT << arr[i] << " ";
+//     }
+//     DPRINT << ENDL();
+// }
 
 void kernel_main() {
     constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
@@ -109,40 +98,6 @@ void kernel_main() {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
 
-    DPRINT << "start_block: " << start_block << ENDL();
-    DPRINT << "end_block: " << end_block << ENDL();
-    DPRINT << "N: " << N << ENDL();
-    DPRINT << "input_cb_page_size: " << input_cb_page_size << ENDL();
-    DPRINT << "element_size: " << element_size << ENDL();
-    DPRINT << "TILE_HEIGHT: " << TILE_HEIGHT << ENDL();
-    DPRINT << "TILE_WIDTH: " << TILE_WIDTH << ENDL();
-    DPRINT << "FACE_HEIGHT: " << FACE_HEIGHT << ENDL();
-    DPRINT << "FACE_WIDTH: " << FACE_WIDTH << ENDL();
-    DPRINT << "src_addr: " << src_addr << ENDL();
-    DPRINT << "start_block: " << start_block << ENDL();
-    DPRINT << "end_block: " << end_block << ENDL();
-    DPRINT << "x_dim: " << x_dim << ENDL();
-    DPRINT << "X: " << X << ENDL();
-    DPRINT << "W: " << W << ENDL();
-    DPRINT << "X_p: " << X_p << ENDL();
-    DPRINT << "W_p: " << W_p << ENDL();
-    DPRINT << "xw_blocks: " << xw_blocks << ENDL();
-    DPRINT << "x_block_size: " << x_block_size << ENDL();
-    DPRINT << "w_block_size: " << w_block_size << ENDL();
-    DPRINT << "w_blocks: " << w_blocks << ENDL();
-    DPRINT << "x_blocks: " << x_blocks << ENDL();
-    DPRINT << "final_tile_real_w: " << final_tile_real_w << ENDL();
-    DPRINT << "final_tile_real_faces_w: " << final_tile_real_faces_w << ENDL();
-    DPRINT << "needs_x_padding: " << (uint32_t)needs_x_padding << ENDL();
-    DPRINT << "num_writes: " << num_writes << ENDL();
-    DPRINT << "padding_val_packed: " << BF16(padding_val_packed >> 16) << ENDL();
-    DPRINT << "final_x_pad_write: " << final_x_pad_write << ENDL();
-
-    dprint_array<N>(input_shape, "input_shape");
-    dprint_array<N>(dims, "dims");
-    dprint_array<N>(input_tiled_shape, "input_tiled_shape");
-    dprint_array<N>(src_tiled_strides, "src_tiled_strides");
-
     /**
      * We have a multidimensional tensor:
      * - num_blocks_total = (rows * x_blocks * w_blocks) where rows = num_rows / X
@@ -164,7 +119,6 @@ void kernel_main() {
     uint32_t idxs[N];
     idxs[N - 1] = 0;
 
-    DPRINT << ENDL();
     uint32_t real_faces_w = 0;
     if constexpr (NUM_FACES_W == final_tile_real_faces_w) {
         real_faces_w = NUM_FACES_W;
