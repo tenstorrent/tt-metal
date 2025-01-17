@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// This file contains the common APIs needed by both dataflow_api.h and dataflow_addr_gen.h as well as library includes
+
 #pragma once
 
 #if __has_include("chlkc_unpack_data_format.h")
@@ -74,9 +76,22 @@ extern uint32_t tt_l1_ptr* rta_l1_base;
 extern uint32_t tt_l1_ptr* crta_l1_base;
 extern uint32_t tt_l1_ptr* sem_l1_base[];
 
-template <typename T>
-FORCE_INLINE T get_arg_val(int arg_idx);
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx);
+/**
+ * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
+ * SetRuntimeArgs() API.
+ *
+ * Return value: Associated L1 address of given unique runtime argument index
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range
+ * | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255 |
+ * True     |
+ */
+static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
+    return (uint32_t)&rta_l1_base[arg_idx];
+    ;
+}
 
 /**
  * Returns the value at a given runtime argument index for unique (per-core) runtime arguments set via SetRuntimeArgs()
