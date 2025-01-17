@@ -120,6 +120,8 @@ class Conv:
                 weights_format="OIHW",
                 input_memory_config=self.input_memory_config,
                 input_layout=ttnn.TILE_LAYOUT,
+                input_tensor_dtype=ttnn.bfloat16,
+                has_bias=True,
                 **self.conv_kwargs,
             )
 

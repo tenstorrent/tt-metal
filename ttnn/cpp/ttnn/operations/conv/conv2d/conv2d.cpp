@@ -53,7 +53,7 @@ Result conv2d(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
     const uint32_t output_height =
         ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
@@ -75,17 +75,27 @@ Result conv2d(
             output_height,
             output_width,
             weight_tensor.get_logical_shape()[3],
+            input_height,
             input_width,
             compute_grid_size,
             input_tensor.layout(),
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt);
+                                                                   : std::nullopt,
+            kernel_size,
+            device->arch(),
+            input_tensor.get_dtype(),
+            groups,
+            bias_tensor.has_value(),
+            compute_config);
         auto_shard = true;
+        if (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED) {
+            mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+        }
     }
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
+    bool is_non_tile_mul_width = check_non_tile_mul_width(compute_grid_size, conv_config, in_channels);
 
     auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
         shard_or_reshard_tensor_if_required(
@@ -112,7 +122,7 @@ Result conv2d(
         output_height,
         output_width,
         kernel_size,
-        device);
+        compute_grid_size);
 
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;

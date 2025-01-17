@@ -137,6 +137,8 @@ def ttnn_vgg16(
                     weights_format="OIHW",
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
+                    input_tensor_dtype=tt_x.dtype,
+                    has_bias=True,
                     **conv_kwargs,
                 )
 
@@ -289,6 +291,8 @@ def ttnn_vgg11(
                     weights_format="OIHW",
                     input_memory_config=ttnn.L1_MEMORY_CONFIG,
                     input_layout=tt_x.get_layout(),
+                    input_tensor_dtype=tt_x.dtype,
+                    has_bias=True,
                     **conv_kwargs,
                 )
 
