@@ -75,12 +75,12 @@ void MAIN {
     ckernel::topk_tile_init();
     transpose_wh_init(input_cb_index, input_transposed_cb_index);
 
-    bool ascending = !largest;
     bool switch_dir = (K == 64);
-    int target_tiles = (Wt * Ht == 1 || ((Wt == 1) && (tiles_per_seq == 1))) ? 1 : 2;
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {
+        bool ascending = !largest;
+
         cb_reserve_back(input_transposed_cb_index, Wt);
         cb_reserve_back(index_transposed_cb_index, Wt);
 
