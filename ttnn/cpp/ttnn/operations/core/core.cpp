@@ -85,7 +85,7 @@ ttnn::Tensor to_device(
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
@@ -95,7 +95,7 @@ ttnn::Tensor allocate_tensor_on_device(
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,

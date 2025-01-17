@@ -135,7 +135,7 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
-            ttnn::Shape(actual_shape, actual_shape),
+            ttnn::SimpleShape(actual_shape),
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.device(),
@@ -276,7 +276,8 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         TT_FATAL(on_device, "Host tensor slice cannot return a scalar or empty tensor");
         auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                                 : memory_config_arg.value_or(input.memory_config());
-        return ttnn::empty(output_shape, input.dtype(), input_tensor.layout(), input.device(), memory_config);
+        return ttnn::empty(
+            ttnn::SimpleShape(actual_shape), input.dtype(), input_tensor.layout(), input.device(), memory_config);
     }
 
     // Early exit if slice is a no-op
