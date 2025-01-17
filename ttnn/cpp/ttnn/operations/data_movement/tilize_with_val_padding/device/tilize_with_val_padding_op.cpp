@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 
 void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_shape = input_tensor_a.get_legacy_shape();
+    const auto& input_shape = input_tensor_a.get_logical_shape();
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
@@ -22,16 +22,25 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
         input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
             input_tensor_a.get_dtype() == DataType::FLOAT32,
         "Can only tilize bfloat16/float32 or uint32 tensors");
-    TT_FATAL(input_shape.rank() >= 2, "Input tensor must be of rank >2, but its shape is {}", input_shape);
 
-    for (auto i = 0; i < input_shape.rank(); i++) {
+    if (input_shape.rank() == 1) {
         TT_FATAL(
-            input_shape[i] <= this->output_padded_shape[i],
-            "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is smaller "
-            "in dimension {}",
+            input_shape[0] <= this->output_padded_shape[1],
+            "Output tensor shape {} must be greater than or equal to input shape {} , but is smaller "
+            "in dimension 0",
             this->output_padded_shape,
-            input_shape,
-            i);
+            input_shape);
+    } else {
+        for (auto i = 0; i < input_shape.rank(); i++) {
+            TT_FATAL(
+                input_shape[i] <= this->output_padded_shape[i],
+                "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
+                "smaller "
+                "in dimension {}",
+                this->output_padded_shape,
+                input_shape,
+                i);
+        }
     }
 
     uint32_t num_rows = this->output_padded_shape[-1];
@@ -50,7 +59,7 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
         TT_FATAL(
             this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout,
             "Output tensor must have the same memory layout as input tensor");
-        for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+        for (uint32_t i = 0; i < input_tensor_a.get_logical_shape().rank(); i++) {
             if (i != input_shape.rank() - 2) {
                 TT_FATAL(input_shape[i] == this->output_padded_shape[i], "Error");
             }
