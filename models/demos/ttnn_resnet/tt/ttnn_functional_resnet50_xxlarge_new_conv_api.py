@@ -194,6 +194,7 @@ class resnet50Bottleneck:
                     weights_format="OIHW",
                     input_memory_config=x.memory_config(),
                     input_layout=x.get_layout(),
+                    has_bias=True,
                     **conv_kwargs_1,
                 )
                 self.ds_conv_bias_tensor = ttnn.prepare_conv_bias(
@@ -274,6 +275,7 @@ class resnet50Bottleneck:
                 weights_format="OIHW",
                 input_memory_config=x.memory_config(),
                 input_layout=x.get_layout(),
+                has_bias=True,
                 **conv_kwargs_2,
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
@@ -409,6 +411,7 @@ class resnet50Bottleneck:
                 weights_format="OIHW",
                 input_memory_config=out.memory_config(),
                 input_layout=out.get_layout(),
+                has_bias=True,
                 **conv_kwargs_3,
             )
             self.conv2_bias_tensor = ttnn.prepare_conv_bias(
@@ -464,6 +467,7 @@ class resnet50Bottleneck:
                 weights_format="OIHW",
                 input_memory_config=out.memory_config(),
                 input_layout=out.get_layout(),
+                has_bias=True,
                 **conv_kwargs_4,
             )
             self.conv3_bias_tensor = ttnn.prepare_conv_bias(
@@ -719,6 +723,7 @@ class resnet50:
                 weights_format="OIHW",
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
@@ -1080,6 +1085,7 @@ class resnet50:
                 weights_format="OIHW",
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
