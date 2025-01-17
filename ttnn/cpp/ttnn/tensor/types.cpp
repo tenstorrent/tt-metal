@@ -252,16 +252,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
     return os;
 }
 
-std::vector<DeviceBuffer> MultiDeviceStorage::get_buffers() const {
-    std::lock_guard<std::mutex> lock(buffer_mtx);
-    std::vector<DeviceBuffer> buf_vec;
-    buf_vec.reserve(buffers.size());
-    for (const auto& pair : buffers) {
-        buf_vec.push_back(pair.second);
-    }
-    return buf_vec;
-}
-
 }  // namespace tt::tt_metal
 
 namespace ttnn::types {
