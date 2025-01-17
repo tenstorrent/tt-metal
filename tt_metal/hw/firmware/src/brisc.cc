@@ -78,6 +78,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
+    uint32_t doPush __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
@@ -381,6 +382,7 @@ int main() {
     kernel_profiler::init_profiler();
 
     while (1) {
+        DeviceZoneScopedMainN("BRISC-FW");
         init_sync_registers();
         reset_ncrisc_with_iram();
 
@@ -417,17 +419,15 @@ int main() {
 
             if (time_out++ > 4000000) {
                 if (kernel_profiler::wIndex > kernel_profiler::CUSTOM_MARKERS) {
-                    // kernel_profiler::wIndex -= kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-                    kernel_profiler::quick_push<true>();
+                    kernel_profiler::doPush = true;
                     time_out = 0;
+                    break;
                 }
             }
         }
 
         WAYPOINT("GD");
-
-        {
-            DeviceZoneScopedMainN("BRISC-FW");
+        if (!kernel_profiler::doPush) {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
@@ -550,6 +550,5 @@ int main() {
             }
         }
     }
-
     return 0;
 }

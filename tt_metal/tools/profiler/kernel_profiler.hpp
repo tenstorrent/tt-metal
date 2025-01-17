@@ -39,6 +39,7 @@
 namespace kernel_profiler {
 
 extern uint32_t wIndex;
+extern uint32_t doPush;
 extern uint32_t stackSize;
 
 extern uint32_t sums[SUM_COUNT];
@@ -353,11 +354,13 @@ struct profileScopeGuaranteed {
     inline __attribute__((always_inline)) ~profileScopeGuaranteed() {
         mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
-        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE))) {
-            SrcLocNameToHash("PROFILER-NOC-PUSH-MARK");
-            mark_time_at_index_inlined(start_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, hash);
-            mark_time_at_index_inlined(end_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, get_const_id(hash, ZONE_END));
-            quick_push();
+        if (wIndex >= (PROFILER_L1_VECTOR_SIZE - (QUICK_PUSH_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE)) ||
+            doPush) {
+            doPush = false;
+            // SrcLocNameToHash("PROFILER-NOC-PUSH-MARK");
+            // mark_time_at_index_inlined(start_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, hash);
+            // mark_time_at_index_inlined(end_index + 2 * PROFILER_L1_MARKER_UINT32_SIZE, get_const_id(hash, ZONE_END));
+            quick_push<true>();
             wIndex = CUSTOM_MARKERS;
         }
     }
