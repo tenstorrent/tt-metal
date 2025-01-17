@@ -14,7 +14,7 @@
 #include <string>
 #include <thread>
 
-#include "executor.hpp"
+#include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
 #include <common.hpp>

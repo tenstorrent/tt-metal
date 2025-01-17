@@ -54,6 +54,7 @@ target_link_libraries(
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
+        Metalium::Metal::Common
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
 )
