@@ -415,6 +415,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_local),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -435,6 +437,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_final),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
     };
 
     tt::tt_metal::KernelHandle topk_final_compute_kernel_id = tt::tt_metal::CreateKernel(
