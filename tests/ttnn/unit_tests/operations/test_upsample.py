@@ -288,7 +288,7 @@ def test_bilinear_multi_core(
         max_nshards = min(batch_size * height * width, max_grid_size[0] * max_grid_size[1])
         nshards = max_nshards
         while nshards > 0:
-            if batch_size * height * width % (nshards * TILE_WIDTH) == 0:
+            if batch_size * height % (nshards) == 0:
                 break
             nshards -= 1
         ncores = nshards
