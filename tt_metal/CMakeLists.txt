@@ -20,7 +20,6 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
         Reflect::Reflect
-        Taskflow::Taskflow
     PRIVATE
         Metalium::Metal::Impl
         Metalium::Metal::STL

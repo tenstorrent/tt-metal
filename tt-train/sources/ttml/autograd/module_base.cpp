@@ -4,6 +4,10 @@
 
 #include "module_base.hpp"
 
+#include <queue>
+#include <string>
+#include <unordered_set>
+
 namespace ttml::autograd {
 
 void ModuleBase::register_tensor(const TensorPtr& tensor_ptr, const std::string& name) {
