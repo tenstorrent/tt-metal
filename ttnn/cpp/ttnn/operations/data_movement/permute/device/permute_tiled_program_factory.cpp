@@ -620,6 +620,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    uint32_t non_x_rows = num_rows / x;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram,
@@ -648,6 +649,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         padding_val_packed,
         (uint32_t)needs_x_padding,
         (uint32_t)needs_y_padding,
+        non_x_rows,
     };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -673,8 +675,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .compile_args = compute_kernel_args,
         });
-
-    uint32_t non_x_rows = num_rows / x;
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,

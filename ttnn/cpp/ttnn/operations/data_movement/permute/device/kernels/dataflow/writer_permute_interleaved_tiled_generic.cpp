@@ -114,39 +114,6 @@ void kernel_main() {
         dest_tiled_strides[i] = dest_tiled_strides[i + 1] * output_tiled_shape[i + 1];
     }
     uint32_t W_stride_tile = dest_tiled_strides[permuted_w_dim];
-
-    DPRINT << "start_block: " << start_block << ENDL();
-    DPRINT << "end_block: " << end_block << ENDL();
-    DPRINT << "N: " << N << ENDL();
-    DPRINT << "input_cb_page_size: " << input_cb_page_size << ENDL();
-    DPRINT << "element_size: " << element_size << ENDL();
-    DPRINT << "TILE_HEIGHT: " << TILE_HEIGHT << ENDL();
-    DPRINT << "TILE_WIDTH: " << TILE_WIDTH << ENDL();
-    DPRINT << "FACE_HEIGHT: " << FACE_HEIGHT << ENDL();
-    DPRINT << "FACE_WIDTH: " << FACE_WIDTH << ENDL();
-    DPRINT << "dst_addr: " << dst_addr << ENDL();
-    DPRINT << "start_block: " << start_block << ENDL();
-    DPRINT << "end_block: " << end_block << ENDL();
-    DPRINT << "x_dim: " << x_dim << ENDL();
-    DPRINT << "X: " << X << ENDL();
-    DPRINT << "W: " << W << ENDL();
-    DPRINT << "X_p: " << X_p << ENDL();
-    DPRINT << "W_p: " << W_p << ENDL();
-    DPRINT << "xw_blocks: " << xw_blocks << ENDL();
-    DPRINT << "x_block_size: " << x_block_size << ENDL();
-    DPRINT << "w_block_size: " << w_block_size << ENDL();
-    DPRINT << "w_blocks: " << w_blocks << ENDL();
-    DPRINT << "x_blocks: " << x_blocks << ENDL();
-    DPRINT << "final_tile_real_x: " << final_tile_real_x << ENDL();
-    DPRINT << "final_tile_real_faces_x: " << final_tile_real_faces_x << ENDL();
-    DPRINT << "W_stride_tile: " << W_stride_tile << ENDL();
-
-    dprint_array<N>(input_shape, "input_shape");
-    dprint_array<N>(dims, "dims");
-    dprint_array<N>(output_shape, "output_shape");
-    dprint_array<N>(output_tiled_shape, "output_tiled_shape");
-    dprint_array<N>(dest_tiled_strides, "dest_tiled_strides");
-
     /**
      * We have a multidimensional tensor:
      * - num_blocks_total = (rows * x_blocks * w_blocks) where rows = num_rows / X
@@ -172,6 +139,10 @@ void kernel_main() {
     uint8_t output_sub_tile_line = 0;
     uint8_t output_face_h = 0;
     uint16_t base_face_line_offset_bytes = 0;
+    uint32_t real_faces_x = 0;
+    if constexpr (NUM_FACES_W == final_tile_real_faces_x) {
+        real_faces_x = NUM_FACES_W;
+    }
     for (uint32_t block = start_block; block < end_block; block++) {
         // Decompose block into w_block, x_block, and xw_block indices
         uint32_t rem = block;
@@ -226,9 +197,11 @@ void kernel_main() {
             base_tile_offset += dest_multi_idx[i] * dest_tiled_strides[i];
         }
 
+        if constexpr (NUM_FACES_W != final_tile_real_faces_x) {
+            real_faces_x = x_block != X_t - 1 ? NUM_FACES_W : final_tile_real_faces_x;
+        }
         cb_wait_front(cb_out, 1);
         uint32_t transposed_buffer_read_addr = get_read_ptr(cb_out);
-        uint32_t real_faces_x = x_block != X_t - 1 ? NUM_FACES_W : final_tile_real_faces_x;
         // Iterate over the W dimension elements
         for (uint32_t w = w_start; w < w_end; ++w) {
             // Compute final linear tile index for the current W
@@ -263,9 +236,6 @@ void kernel_main() {
 
     // add padding
     if constexpr (needs_y_padding) {
-        cb_wait_front(tt::CBIndex::c_3, 1);
-        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
-
         // We'll reuse 'dest_multi_idx' for tile indexing
         constexpr uint32_t y_t = output_H_t - 1;
         constexpr uint8_t Y_in_tile = output_H % TILE_HEIGHT;
@@ -273,6 +243,8 @@ void kernel_main() {
 
         dest_multi_idx[N - 2] = y_t;  // fix the tile dimension in output
 
+        cb_wait_front(tt::CBIndex::c_3, 1);
+        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Unflatten 'tile_idx' => dest_multi_idx in the output tiled shape
             size_t remaining = tile_idx;
@@ -293,14 +265,14 @@ void kernel_main() {
 
             // Write out padding lines
             for (uint8_t face_y = face_y_start; face_y < NUM_FACES_H; ++face_y) {
-                uint32_t face_y_offset = face_y * NUM_FACES_W * FACE_HW;
+                uint16_t face_y_offset = face_y * NUM_FACES_W * FACE_HW;
                 uint8_t sub_tile_line_start = (face_y == face_y_start) ? (Y_in_tile % FACE_HEIGHT) : 0;
 
                 for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
-                    uint32_t face_offset = face_y_offset + (face_w * FACE_HW);
+                    uint16_t face_offset = face_y_offset + (face_w * FACE_HW);
 
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
-                        uint32_t offset = (face_offset + (sub_tile_line * FACE_WIDTH)) * element_size;
+                        uint16_t offset = (face_offset + (sub_tile_line * FACE_WIDTH)) * element_size;
 
                         uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
 
