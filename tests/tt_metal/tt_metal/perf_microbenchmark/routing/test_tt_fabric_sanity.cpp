@@ -17,6 +17,7 @@
 #include <numeric>
 #include <algorithm>
 #include <random>
+#include <queue>
 
 using std::vector;
 using namespace tt;
