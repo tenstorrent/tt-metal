@@ -14,7 +14,7 @@
 #include <string>
 #include <thread>
 
-#include "tt_metal/common/executor.hpp"
+#include "executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
 #include <common.hpp>

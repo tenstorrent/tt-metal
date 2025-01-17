@@ -6,7 +6,7 @@
 #include <range/v3/view/transform.hpp>
 
 #include <circular_buffer_types.hpp>
-#include "tt_metal/common/executor.hpp"
+#include "executor.hpp"
 #include <profiler.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <persistent_kernel_cache.hpp>
