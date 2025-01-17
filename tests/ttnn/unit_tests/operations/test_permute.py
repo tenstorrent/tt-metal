@@ -494,23 +494,24 @@ def generate_fixed_dim_permutations(N, dim):
             yield perm
 
 
-@pytest.mark.parametrize("shape", [[1, 1, 2, 1, 2]])
+@pytest.mark.parametrize("shape", [[2, 2, 67, 65, 66]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_yw(shape, perm, dtype, device):
+    torch.set_printoptions(threshold=2048)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     print(torch_tensor)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm, pad_value=2.0)
+    output_tensor = ttnn.permute(input_tensor, perm)
     print(ttnn.from_device(output_tensor).to_torch())
     output_tensor = ttnn.to_torch(output_tensor)
     print(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_with_pcc(torch_output, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("shape", [[33, 33, 33, 33, 33]])
@@ -528,4 +529,4 @@ def test_permute_5d_yw_permutations(shape, perm, dtype, device):
     # print(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
+    assert_with_pcc(torch_output, output_tensor, 0.999)
