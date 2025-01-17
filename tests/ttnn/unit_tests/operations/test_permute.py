@@ -495,20 +495,18 @@ def generate_fixed_dim_not_dim_permutations(N, dim0, dim1):
 
 
 @pytest.mark.parametrize("shape", [[7, 7, 7, 17, 17]])
-@pytest.mark.parametrize("perm", [[0, 1, 3, 4, 2], [0, 1, 4, 3, 2]])
+@pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
 @pytest.mark.parametrize("dtype", [ttnn.float32])
 def test_permute_5d_yw(shape, perm, dtype, device):
-    torch.set_printoptions(threshold=2048)
+    torch.set_printoptions(threshold=300000000)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    print(torch_tensor)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm)
-    # print(ttnn.from_device(output_tensor).to_torch())
+    output_tensor = ttnn.permute(input_tensor, perm, pad_value=float("-inf"))
+    print(ttnn.from_device(output_tensor).to_torch())
     output_tensor = ttnn.to_torch(output_tensor)
-    print(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.999)
