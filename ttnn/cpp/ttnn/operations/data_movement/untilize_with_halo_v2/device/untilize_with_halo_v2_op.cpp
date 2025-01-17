@@ -99,7 +99,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         remote_config,
         remote_read_,
         transpose_mcast_,
-        output_tensor)};
+        output_tensor,
+        /*capture_buffers=*/false)};
 }
 
 }  // namespace ttnn::operations::data_movement

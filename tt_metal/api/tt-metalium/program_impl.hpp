@@ -65,8 +65,7 @@ namespace detail{
     void ValidateCircularBufferRegion(const Program &program, const IDevice* device);
     KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
-    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
+    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
 
     class Internal_;
 }
@@ -228,7 +227,6 @@ class Program {
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
     template<typename T> friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
