@@ -19,6 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& remote_config,
     const bool remote_read,
     const bool transpose_mcast,
-    Tensor& output_tensor);
+    Tensor& output_tensor,
+    const bool capture_buffers = false);  // Used only  by old halo operation
 
 }  // namespace ttnn::operations::data_movement::detail

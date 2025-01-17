@@ -439,6 +439,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
+    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+
     // out_subblock_h_ntiles = 8;
 
     tt::DataFormat act_df = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -1239,7 +1241,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         CircularBufferConfig cb_for_reader_indices_config =
             CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
-        cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
+        cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_buffer);
         auto cb_for_reader_indices_id =
             tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
@@ -1714,6 +1716,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     auto mcast_sender_cores_vec = grid_to_cores(mcast_sender_cores.start_coord, mcast_sender_cores.end_coord, true);
     auto mcast_receiver_cores_vec = corerange_to_cores(mcast_receiver_cores, std::nullopt, true);
+    // Capture conv_reader_indices_buffer to cache this with the program
     auto override_runtime_arguments_callback =
         [reader_kernel_id = reader_id,
          mcast_sender_cores = mcast_sender_cores_vec,
@@ -1725,7 +1728,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
          total_active_num_cores = total_active_num_cores,
          num_cores_x = num_cores_x,
          num_cores_y = num_cores_y,
-         has_bias = has_bias](
+         has_bias = has_bias,
+         conv_reader_indices_buffer = conv_reader_indices_buffer](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1836,8 +1840,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
         conv_reader_indices_tensor, parallel_config, is_block_sharded, a.device());
 
-    // add config tensor to program
-    tt::tt_metal::detail::AddConfigBuffer(program, conv_reader_indices_tensor.device_buffer());
     if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         return multi_core_optimized_conv_width_sharded_v2_impl(
             program,

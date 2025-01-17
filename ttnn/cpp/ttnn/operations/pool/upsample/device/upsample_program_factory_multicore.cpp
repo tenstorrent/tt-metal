@@ -242,10 +242,9 @@ operation::ProgramWithCallbacks upsample_multi_core(
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
     MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to(device, memory_config);
-    tt::tt_metal::detail::AddConfigBuffer(program, config_tensor_device.device_buffer());
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    Buffer* config_buffer = config_tensor_device.buffer();
+    auto config_buffer = config_tensor_device.device_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
     uint32_t config_cb_id = CBIndex::c_6;
     auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
@@ -311,7 +310,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         TT_THROW("Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb](
+    // Capture config_buffer to cache this with the program
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_buffer](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
