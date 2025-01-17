@@ -17,12 +17,12 @@ volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;   
 
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
-constexpr uint32_t gk_message_addr_l = get_compile_time_arg_val(1);
-constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(2);
-constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(3);
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(4);
+constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
+constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 uint32_t sync_val;
 uint32_t router_mask;
+uint32_t gk_message_addr_l;
 uint32_t gk_message_addr_h;
 
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
@@ -82,6 +82,7 @@ void kernel_main() {
     uint32_t rt_args_idx = 0;
     sync_val = get_arg_val<uint32_t>(rt_args_idx++);
     router_mask = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_message_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
     gk_message_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt_fabric_init();

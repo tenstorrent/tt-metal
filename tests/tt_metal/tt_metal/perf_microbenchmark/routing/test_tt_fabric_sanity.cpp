@@ -409,9 +409,10 @@ typedef struct test_device {
         for (auto i = 0; i < num_routers; i++) {
             // setup run time args
             std::vector<uint32_t> runtime_args = {
-                num_routers,    // 0: number of active fabric routers
-                router_mask,    // 1: active fabric router mask
-                gk_noc_offset,  // 2: gk_message_addr_h
+                num_routers,        // 0: number of active fabric routers
+                router_mask,        // 1: active fabric router mask
+                gk_interface_addr,  // 2: gk_message_addr_l
+                gk_noc_offset,      // 3: gk_message_addr_h
             };
 
             // initialize the semaphore
@@ -609,7 +610,8 @@ typedef struct test_traffic {
                 router_phys_core.y,                    // 3: router_y
                 mesh_chip_id,                          // 4: mesh and chip id
                 rx_buf_size,                           // 5: space in rx's L1
-                tx_device->gk_noc_offset,              // 6: gk_message_addr_h
+                gk_interface_addr,                     // 6: gk_message_addr_l
+                tx_device->gk_noc_offset,              // 7: gk_message_addr_h
             };
 
             if (ASYNC_WR == fabric_command) {
@@ -1201,10 +1203,9 @@ int main(int argc, char **argv) {
         // create router kernels
         std::vector<uint32_t> router_compile_args = {
             (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-            gk_interface_addr,                 // 1: gk_message_addr_l
-            tunneler_test_results_addr,        // 2: test_results_addr
-            tunneler_test_results_size,        // 3: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 4: timeout_cycles
+            tunneler_test_results_addr,        // 1: test_results_addr
+            tunneler_test_results_size,        // 2: test_results_size
+            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
         };
         for (auto& [chip_id, test_device] : test_devices) {
             test_device->create_router_kernels(router_compile_args, defines);
@@ -1212,7 +1213,7 @@ int main(int argc, char **argv) {
 
         // create gatekeeper kernel
         std::vector<uint32_t> gatekeeper_compile_args = {
-            gk_interface_addr,   // 0: gk_message_addr_l
+            gk_interface_addr,   // 0: gk info addr
             socket_info_addr,    // 1:
             routing_table_addr,  // 2:
             test_results_addr,   // 3: test_results_addr
@@ -1237,24 +1238,22 @@ int main(int argc, char **argv) {
             tx_queue_start_addr,         // 3: queue_start_addr_words
             (tx_queue_size_bytes >> 4),  // 4: queue_size_words
             routing_table_start_addr,    // 5: routeing table
-            gk_interface_addr,           // 6: gk_message_addr_l
-            0,                           // 7:
-            test_results_addr,           // 8: test_results_addr
-            test_results_size,           // 9: test_results_size
-            prng_seed,                   // 10: prng_seed
-            data_kb_per_tx,              // 11: total_data_kb
-            max_packet_size_words,       // 12: max_packet_size_words
-            timeout_mcycles * 1000 * 1000 * 4,  // 13: timeout_cycles
-            tx_skip_pkt_content_gen,            // 14: skip_pkt_content_gen
-            tx_pkt_dest_size_choice,            // 15: pkt_dest_size_choice
-            tx_data_sent_per_iter_low,          // 16: data_sent_per_iter_low
-            tx_data_sent_per_iter_high,         // 17: data_sent_per_iter_high
-            fabric_command,                     // 18: fabric_command
-            target_address,                     // 19: target_address
-            atomic_increment,                   // 20: atomic_increment
-            tx_signal_address,                  // 21: tx_signal_address
-            client_interface_addr,              // 22:
-            client_pull_req_buf_addr,           // 23:
+            test_results_addr,           // 6: test_results_addr
+            test_results_size,           // 7: test_results_size
+            prng_seed,                   // 8: prng_seed
+            data_kb_per_tx,              // 9: total_data_kb
+            max_packet_size_words,       // 10: max_packet_size_words
+            timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
+            tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
+            tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
+            tx_data_sent_per_iter_low,          // 14: data_sent_per_iter_low
+            tx_data_sent_per_iter_high,         // 15: data_sent_per_iter_high
+            fabric_command,                     // 16: fabric_command
+            target_address,                     // 17: target_address
+            atomic_increment,                   // 18: atomic_increment
+            tx_signal_address,                  // 19: tx_signal_address
+            client_interface_addr,              // 20:
+            client_pull_req_buf_addr,           // 21:
         };
 
         std::vector<uint32_t> rx_compile_args = {

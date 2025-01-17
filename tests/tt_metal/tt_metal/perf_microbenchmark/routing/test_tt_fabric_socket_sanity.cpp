@@ -338,22 +338,25 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
             uint32_t sem_count = device_router_cores.size();
             device_router_map[device.first] = device_router_phys_cores;
-            std::vector<uint32_t> runtime_args = {
-                sem_count,    // 0: number of active fabric routers
-                router_mask,  // 1: active fabric router mask
-            };
 
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
-            std::vector<uint32_t> router_runtime_args = runtime_args;
-            router_runtime_args.push_back((gk_phys_core.y << 10) | (gk_phys_core.x << 4));
+            uint32_t gk_noc_offset = tt_metal::hal.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+
+            std::vector<uint32_t> router_compile_args = {
+                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                tunneler_test_results_addr,        // 1: test_results_addr
+                tunneler_test_results_size,        // 2: test_results_size
+                0,                                 // 3: timeout_cycles
+            };
+
+            std::vector<uint32_t> router_runtime_args = {
+                sem_count,          // 0: number of active fabric routers
+                router_mask,        // 1: active fabric router mask
+                gk_interface_addr,  // 2: gk_message_addr_l
+                gk_noc_offset,      // 3: gk_message_addr_h
+            };
+
             for (auto logical_core : device_router_cores) {
-                std::vector<uint32_t> router_compile_args = {
-                    (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-                    gk_interface_addr,                 // 1: gk_message_addr_l
-                    tunneler_test_results_addr,        // 2: test_results_addr
-                    tunneler_test_results_size,        // 3: test_results_size
-                    0,                                 // 4: timeout_cycles
-                };
                 auto router_kernel = tt_metal::CreateKernel(
                     program_map[device.first],
                     "tt_fabric/impl/kernels/tt_fabric_router.cpp",
@@ -380,6 +383,11 @@ int main(int argc, char** argv) {
                 0,                   // 5: timeout_cycles
             };
 
+            std::vector<uint32_t> gk_runtime_args = {
+                sem_count,    // 0: number of active fabric routers
+                router_mask,  // 1: active fabric router mask
+            };
+
             auto kernel = tt_metal::CreateKernel(
                 program_map[device.first],
                 "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
@@ -390,7 +398,7 @@ int main(int argc, char** argv) {
                     .compile_args = gk_compile_args,
                     .defines = defines});
 
-            tt_metal::SetRuntimeArgs(program_map[device.first], kernel, gk_core, runtime_args);
+            tt_metal::SetRuntimeArgs(program_map[device.first], kernel, gk_core, gk_runtime_args);
         }
 
         if (check_txrx_timeout) {
