@@ -6,6 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/ccl/common/types/5d_type.hpp"
 
 using namespace tt::tt_metal;
 
@@ -14,10 +15,10 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
-    return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+    return {shape[-5], shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -55,13 +56,17 @@ void set_or_update_runtime_arguments(
 
     const auto ashape = a.padded_shape();
     const auto bshape = b.has_value() ? b->padded_shape() : SimpleShape{1, 1};
-    const auto cshape = c.padded_shape();
+    const auto cshape = c.padded_shape();  // check this shape
 
-    const auto [aN, aC, aHt, aWt] = extract_shape_dims(a);
-    const auto [bN, bC, bHt, bWt] = b.has_value() ? extract_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
-    const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
+    const auto [aD, aN, aC, aHt, aWt] = extract_shape_dims(a);
+    const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? extract_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
+    const auto [cD, cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    std::cout << " aN, aC, aHt, aWt : " << aN << aC << aHt << aWt << std::endl;
+    std::cout << " bN, bC, bHt, bWt : " << bN << bC << bHt << bWt << std::endl;
+    std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
+
+    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();  // check here
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -93,13 +98,22 @@ void set_or_update_runtime_arguments(
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
+            aHt * aWt * aC * aN * (aD > 1),
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
+            cD,
             cN,
             cC,
             cHt,
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        std::cout << "reader_runtime_args : " << std::endl;
+        std::cout << start_tile_id << " start_tile_id" << std::endl;
+        std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
+        std::cout << cHtWt << " cHtWt " << std::endl;
+        std::cout << aHt * aWt * aC * (aN > 1) << " aHt * aWt * aC * (aN > 1)" << std::endl;
+        std::cout << aHt * aWt * (aC > 1) << " aHt * aWt * (aC > 1)" << std::endl;
+        std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
 
         if (b.has_value()) {
             std::array writer_runtime_args = {
@@ -108,16 +122,29 @@ void set_or_update_runtime_arguments(
                 start_tile_id,
                 num_tiles_per_core,
                 cHtWt,
+                bHt * bWt * bC * bN * (bD > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
+                cD,
                 cN,
                 cC,
                 cHt,
                 cWt};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
+            std::cout << "writer_runtime_args : " << std::endl;
+            std::cout << start_tile_id << " start_tile_id" << std::endl;
+            std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
+            std::cout << cHtWt << " cHtWt " << std::endl;
+            std::cout << bHt * bWt * bC * (bN > 1) << " bHt * bWt * bC * (bN > 1)" << std::endl;
+            std::cout << bHt * bWt * (bC > 1) << " bHt * bWt * (bC > 1)" << std::endl;
+            std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, start_tile_id, cHtWt, cWt);
+
+            std::cout << "calculate_compute_kernel_args : freq " << freq << std::endl;
+            std::cout << "calculate_compute_kernel_args : counter " << counter << std::endl;
+
             std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
@@ -129,6 +156,7 @@ void set_or_update_runtime_arguments(
                 start_tile_id,
                 num_tiles_per_core,
                 cHtWt,
+                cD,
                 cN,
                 cC,
                 cHt,
@@ -171,7 +199,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
-    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
+    uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();  // check here
 
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;
