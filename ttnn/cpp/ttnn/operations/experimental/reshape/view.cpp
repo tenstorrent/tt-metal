@@ -49,7 +49,7 @@ Tensor tensor_reshape(
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
                 std::unordered_map<int, ttnn::TensorSpec> new_specs;
                 for (auto device_id : updated_storage.ordered_device_ids) {
-                    const auto& prev_spec = updated_storage.specs[device_id];
+                    const auto& prev_spec = updated_storage.specs.at(device_id);
                     TensorSpec spec(
                         new_logical_shape,
                         TensorLayout::fromPaddedShape(
