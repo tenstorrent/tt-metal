@@ -50,10 +50,11 @@ target_link_libraries(
     PUBLIC
         common
         Tracy::TracyClient
-        Taskflow::Taskflow
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
+        Metalium::Metal::Common
+        Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
 )
