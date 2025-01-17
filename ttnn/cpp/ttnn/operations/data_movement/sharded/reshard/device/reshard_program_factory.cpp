@@ -334,9 +334,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     }
 
     uint32_t read_stride_bytes = (is_reader && input.buffer()->buffer_type() == BufferType::DRAM)
-                                     ? align(unit_size, hal.get_alignment(HalMemType::DRAM))
-                                     : align(unit_size, hal.get_alignment(HalMemType::L1));
-    uint32_t write_stride_bytes = align(unit_size, hal.get_alignment(HalMemType::L1));
+                                     ? tt::align(unit_size, hal.get_alignment(HalMemType::DRAM))
+                                     : tt::align(unit_size, hal.get_alignment(HalMemType::L1));
+    uint32_t write_stride_bytes = tt::align(unit_size, hal.get_alignment(HalMemType::L1));
 
     const std::string kernel_name =
         is_reader
@@ -416,7 +416,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         }
     }
     // Set up scratch pad for unaligned DRAM access
-    uint32_t aligned_cb_bytes = align(unit_size, hal.get_alignment(HalMemType::DRAM));
+    uint32_t aligned_cb_bytes = tt::align(unit_size, hal.get_alignment(HalMemType::DRAM));
 
     tt::tt_metal::CircularBufferConfig scratch_cb_k0_config =
         tt::tt_metal::CircularBufferConfig(unit_size, {{scratch_cb_index_k0, data_format}})
