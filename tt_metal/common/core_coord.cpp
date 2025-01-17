@@ -225,13 +225,12 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     // By overallocating by one x entry, we can avoid needing to check for
     // boundary conditions when iterating, since there'll always be one
     // last false entry
-    bool grid[max_y + 1][max_x + 2];
-    memset(grid, 0, sizeof(grid));
+    std::vector<std::vector<uint8_t>> grid(max_y + 1, std::vector<uint8_t>(max_x + 2, 0));
 
     for (const auto& cr : crs) {
         for (unsigned y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
             for (unsigned x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
-                grid[y][x] = true;
+                grid[y][x] = 1;
             }
         }
     }
