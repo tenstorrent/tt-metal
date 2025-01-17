@@ -127,8 +127,9 @@ if(benchmark_ADDED)
     )
 endif()
 
-# TODO(afuller): Move this to CPM and use upstream's CMake file, AFTER we move to Ubuntu 22.04 and drop 20.04 and bump
-#                our minimum CMake version accordingly.  Taskflow's CMake wants v3.18+
-add_library(Taskflow INTERFACE)
+############################################################################################################################
+# taskflow : https://github.com/taskflow/taskflow
+############################################################################################################################
+
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
 add_library(Taskflow::Taskflow ALIAS Taskflow)
-target_include_directories(Taskflow SYSTEM INTERFACE ${PROJECT_SOURCE_DIR}/tt_metal/third_party/taskflow)
