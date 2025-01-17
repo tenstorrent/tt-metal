@@ -497,6 +497,14 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t H_t = H_p / tile_shape[0];
     uint32_t W_t = W_p / tile_shape[1];
 
+    uint32_t permuted_w_dim = 0;  // Will hold the position of w_dim in the permuted array
+    for (uint32_t i = 0; i < N; ++i) {
+        if (dims[i] == N - 1) {
+            permuted_w_dim = i;
+            break;
+        }
+    }
+
     uint32_t w_blocks = W_p / w_block_size;
     uint32_t x_blocks = X_p / x_block_size;
 
@@ -666,6 +674,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             .compile_args = compute_kernel_args,
         });
 
+    uint32_t non_x_rows = num_rows / x;
+
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
         N,
@@ -678,10 +688,10 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         x_dim,
         x,
         w,
-        input_shape[N - 2],
+        output_shape[N - 2],
         X_p,
         W_p,
-        H_p,
+        non_x_rows,
         H_t,
         W_t,
         final_tile_real_x,
@@ -690,6 +700,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         x_blocks,
         w_blocks,
         (uint32_t)needs_y_padding,
+        permuted_w_dim,
     };
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
