@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <memory>
+#include "allocator/allocator.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/distributed/mesh_buffer.hpp"
 #include "tt_metal/distributed/mesh_device_view.hpp"
@@ -71,6 +73,25 @@ TEST_F(MeshBufferTest, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
+}
+
+TEST_F(MeshBufferTest, Deallocation) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = false};
+
+    const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
+    std::shared_ptr<Buffer> buffer;
+    Allocator* allocator = nullptr;
+    {
+        auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+        buffer = replicated_buffer->get_device_buffer(Coordinate{0, 0});
+        allocator = buffer->allocator();
+        EXPECT_TRUE(allocator->allocated_buffers.contains(buffer.get()));
+    }
+    EXPECT_FALSE(allocator->allocated_buffers.contains(buffer.get()));
 }
 
 TEST_F(MeshBufferTest, GetDeviceBuffer) {

@@ -69,14 +69,28 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         device_local_config.buffer_layout,
         device_local_config.shard_parameters,
         device_local_config.bottom_up);
+    std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
         *address = tt::tt_metal::detail::AllocateBuffer(backing_buffer.get());
+        auto* backing_buffer_ptr = backing_buffer.get();
+        mesh_buffer = std::shared_ptr<MeshBuffer>(
+            new MeshBuffer(
+                mesh_buffer_config,
+                device_local_config,
+                *address,
+                device_local_size,
+                mesh_device,
+                std::move(backing_buffer)),
+            [backing_buffer_ptr](MeshBuffer*) { tt::tt_metal::detail::DeallocateBuffer(backing_buffer_ptr); });
+    } else {
+        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
+            mesh_buffer_config,
+            device_local_config,
+            *address,
+            device_local_size,
+            mesh_device,
+            std::move(backing_buffer)));
     }
-
-    auto mesh_buffer = std::shared_ptr<MeshBuffer>(
-        new MeshBuffer(
-            mesh_buffer_config, device_local_config, *address, device_local_size, mesh_device, backing_buffer),
-        [b = backing_buffer.get()](MeshBuffer*) { tt::tt_metal::detail::DeallocateBuffer(b); });
 
     mesh_buffer->allocate();
 
