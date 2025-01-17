@@ -17,8 +17,8 @@
 #include "compute_kernel_api/reduce.h"
 
 namespace NAMESPACE {
-template <uint32_t in0, uint32_t in1, uint32_t num_tiles>
-void max_block_inplace() {
+template <uint32_t num_tiles>
+void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     max_tile_init();
@@ -92,8 +92,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
-void sub_exp_block_bcast_cols_inplace() {
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols>
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -388,8 +388,8 @@ void MAIN {
     constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
     constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
     constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
-    constexpr uint32_t cb_cur_max = tt::CBIndex::c_27;
-    constexpr uint32_t cb_prev_max = tt::CBIndex::c_28;
+    constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
+    constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
     constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
     constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
     constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
@@ -430,6 +430,8 @@ void MAIN {
                 // Set up ping pong buffers
                 uint32_t alias_prev_sum = cb_sum_A;
                 uint32_t alias_cur_sum = cb_sum_B;
+                uint32_t alias_prev_max = cb_max_A;
+                uint32_t alias_cur_max = cb_max_B;
                 uint32_t alias_mm2_prev_out = cb_out_im_A;
                 uint32_t alias_mm2_cur_out = cb_out_im_B;
 
@@ -485,15 +487,15 @@ void MAIN {
                         cb_qk_im,
                         cb_identity_scale_in,
                         Sq_chunk_t,
-                        Sk_chunk_t>(cb_cur_max);
+                        Sk_chunk_t>(alias_cur_max);
 
                     if (k_chunk > 0) {
-                        max_block_inplace<cb_cur_max, cb_prev_max, Sq_chunk_t>();
+                        max_block_inplace<Sq_chunk_t>(alias_cur_max, alias_prev_max);
                     }
 
                     /* QK -= cb_cur_max */
                     /* QK = exp(QK)*/
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, cb_cur_max, Sq_chunk_t, Sk_chunk_t>();
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t>(alias_cur_max);
 
                     /* cb_cur_sum = sum(cb_qk_im, dim=-1) */
                     reduce_c<
@@ -526,8 +528,8 @@ void MAIN {
                     /* OUT_ACC += OUT_IM */
                     if (k_chunk > 0) {
                         /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
-                        sub_exp_block(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                        cb_pop_front(cb_prev_max, Sq_chunk_t);
+                        sub_exp_block(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                        cb_pop_front(alias_prev_max, Sq_chunk_t);
 
                         /* cb_prev_sum *= cb_exp_max_diff */
                         mul_block_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
@@ -542,21 +544,21 @@ void MAIN {
                     // Swap alias_prev_sum and alias_cur_sum
                     std::swap(alias_prev_sum, alias_cur_sum);
                     std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
-                    // Set cb_prev_sum and cb_prev_max
-                    copy_block(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    std::swap(alias_prev_max, alias_cur_max);
                 }
 
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
+                // NOTE: PCC bug if we modify below function to directy output to cb_out.
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
-                cb_pop_front(cb_prev_max, Sq_chunk_t);
+                cb_pop_front(alias_prev_max, Sq_chunk_t);
             }
         }
     }
