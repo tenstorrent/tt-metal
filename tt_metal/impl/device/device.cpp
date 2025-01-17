@@ -268,15 +268,17 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
          .dram_bank_size = soc_desc.dram_bank_size,
          .dram_bank_offsets = {},
-         .dram_unreserved_base = hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + \
-                                 hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
+         .dram_unreserved_base =
+             hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+         .l1_unreserved_base = align(
+             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+             hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
-         .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
