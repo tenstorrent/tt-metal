@@ -148,7 +148,12 @@ def run(
 
     start_time = start_measuring_time()
     ttnn.div_bw(
-        grad_tensor, input_tensor_a, input_tensor_b, round_mode=round_mode, input_grad=output_tensor_a, other_grad=output_tensor_b
+        grad_tensor,
+        input_tensor_a,
+        input_tensor_b,
+        round_mode=round_mode,
+        input_grad=output_tensor_a,
+        other_grad=output_tensor_b,
     )
     e2e_perf = stop_measuring_time(start_time)
     output_tensors = [output_tensor_a, output_tensor_b]
