@@ -13,7 +13,7 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 #include "noc_nonblocking_api.h"
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include "tunneling.h"
 
 /**

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include "hw/inc/tt_fabric.h"
 // clang-format on
 
