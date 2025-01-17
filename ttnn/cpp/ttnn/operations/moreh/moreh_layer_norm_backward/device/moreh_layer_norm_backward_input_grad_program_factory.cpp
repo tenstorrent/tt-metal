@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -30,7 +30,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////

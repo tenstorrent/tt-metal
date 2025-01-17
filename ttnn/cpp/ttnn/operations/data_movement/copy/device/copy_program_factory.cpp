@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include <algorithm>
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
 
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

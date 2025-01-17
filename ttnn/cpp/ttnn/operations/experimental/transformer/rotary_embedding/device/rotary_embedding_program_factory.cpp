@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rotary_embedding_program_factory.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 // We pull RotaryEmbedding from it to get token_idx from an operation
 // this is a circulas dependency and should be fixed
 #include "rotary_embedding_device_operation.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 
@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t HtWt = Ht * Wt;
     uint32_t Wbytes = input.get_legacy_shape()[-1] * sizeof(bfloat16);
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

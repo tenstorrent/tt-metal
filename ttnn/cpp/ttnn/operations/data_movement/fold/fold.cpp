@@ -8,10 +8,13 @@
 
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_metal/common/constants.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include <tt-metalium/constants.hpp>
+
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 #include "fold.hpp"
 
@@ -27,7 +30,7 @@ std::vector<Tensor> fold_with_transpose_(
     uint32_t pad_h,
     uint32_t pad_w) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE) {
@@ -61,13 +64,8 @@ std::vector<Tensor> fold_with_transpose_(
 
     tt::log_debug("pad_output: {}", pad_output.shape());
 
-    // transpose
-    auto transpose_hw_output = ttnn::transpose(pad_output, 2, 3, L1_mem_config);
-
-    tt::log_debug("transpose_hw_output: {}", transpose_hw_output.shape());
-
-    // transpose
-    auto transpose_hc_output = ttnn::transpose(transpose_hw_output, 1, 2, L1_mem_config);
+    auto transpose_hc_output = ttnn::prim::permute(
+        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     tt::log_debug("transpose_hc_output: {}", transpose_hc_output.shape());
 
@@ -140,8 +138,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
         .shard_spec = ShardSpec{
             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}}}},
             {shard_height, shard_width},
-            orientation,
-            false}};
+            orientation}};
 
     return sharded_memory_config;
 }
@@ -158,7 +155,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     CoreCoord grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
-    Device* device;
+    IDevice* device;
 
     // Get the device
     if (input.storage_type() != StorageType::DEVICE and input.storage_type() != StorageType::MULTI_DEVICE) {
@@ -221,7 +218,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], c = tt_output_tensor.shape()[2],
     h = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
+    tt_output_tensor =
+        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
 
     tt::log_debug("reshape_hc_output: {}", tt_output_tensor.shape());
 
@@ -234,7 +232,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], h = tt_output_tensor.shape()[2],
     c = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
+    tt_output_tensor =
+        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.shape());
 

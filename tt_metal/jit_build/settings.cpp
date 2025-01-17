@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/settings.hpp"
-#include "jit_build/build.hpp"
+#include <settings.hpp>
+#include <build.hpp>
 #include <iostream>
 #include <string>
 

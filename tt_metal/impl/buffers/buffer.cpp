@@ -2,25 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
 
 #include "tt_metal/buffer.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/types.hpp"
+#include <assert.hpp>
+#include <math.hpp>
+#include <tt_metal.hpp>
+#include <allocator.hpp>
+#include <device.hpp>
+#include <types.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <utility>
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <buffer_constants.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
-#include "tt_stl/reflection.hpp"
+#include <reflection.hpp>
 
 namespace tt {
 
@@ -206,7 +205,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     return buffer_page_mapping;
 }
 
-void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
+void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, IDevice *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
     // No need to validate if we're using the global allocator or not sharding
     if (!sub_device_id.has_value()) {
         return;
@@ -219,7 +218,7 @@ void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *de
 }
 
 Buffer::Buffer(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -254,7 +253,7 @@ Buffer::Buffer(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -294,7 +293,7 @@ std::shared_ptr<Buffer> Buffer::create(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr address,
     DeviceAddr size,
     DeviceAddr page_size,
@@ -413,6 +412,12 @@ bool Buffer::is_dram() const {
 bool Buffer::is_trace() const {
     return buffer_type() == BufferType::TRACE;
 
+}
+
+bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
+
+bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
+    return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
 }
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -549,14 +554,12 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
             physical_shard_shape.value(),
-            from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-            from_json<bool>(json_object.at("halo"))};
+            from_json<tt_metal::ShardOrientation>(json_object.at("orientation"))};
     }
     return tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-        from_json<bool>(json_object.at("halo")),
         shard_mode};
 }
 }

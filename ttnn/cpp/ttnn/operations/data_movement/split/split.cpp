@@ -6,7 +6,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
@@ -29,7 +29,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 
     const bool on_host =
         input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
-    std::optional<Device*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
+    std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
 
     Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
     dim += 4 - input_rank;                                      // convert to 4D index
@@ -88,7 +88,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 }
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};

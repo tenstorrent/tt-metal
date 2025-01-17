@@ -3,21 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "tt_metal/common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
 namespace ttnn::ccl::barrier::detail {
 
@@ -44,23 +46,22 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle> schedule_kernel_comp
 
 static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<uint32_t, 5>> get_rt_args(
     tt::tt_metal::Program& program,
-    Device* device,
+    IDevice* device,
     bool is_starting_core,
     CoreCoord const& eth_sender_core,
     CoreCoord const& eth_receiver_core,
     CoreCoord const& sem_init_core) {
     const uint32_t worker_sem0 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
     const uint32_t worker_sem1 = CreateSemaphore(program, sem_init_core, 0, CoreType::WORKER);
-    constexpr uint32_t start_semaphore_address =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + EriscDatamoverConfig::eth_word_size_bytes;
-    constexpr uint32_t erisc_semaphore_address =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes * 2);
-    constexpr uint32_t erisc_buffer_address =
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE + (EriscDatamoverConfig::eth_word_size_bytes * 3);
+    uint32_t start_semaphore_address = hal::get_erisc_l1_unreserved_base() + EriscDatamoverConfig::eth_word_size_bytes;
+    uint32_t erisc_semaphore_address =
+        hal::get_erisc_l1_unreserved_base() + (EriscDatamoverConfig::eth_word_size_bytes * 2);
+    uint32_t erisc_buffer_address =
+        hal::get_erisc_l1_unreserved_base() + (EriscDatamoverConfig::eth_word_size_bytes * 3);
 
     const std::array<uint32_t, 10> receiver_rt_args = {
         static_cast<uint32_t>(is_starting_core ? 1 : 0),
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        hal::get_erisc_l1_unreserved_base(),
         static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).x),
         static_cast<uint32_t>(device->ethernet_core_from_logical_core(eth_sender_core).y),
         erisc_semaphore_address,
@@ -70,8 +71,8 @@ static std::tuple<std::array<uint32_t, 7>, std::array<uint32_t, 10>, std::array<
         static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).y),
         worker_sem0};
     const std::array<uint32_t, 7> sender_rt_args = {
-        static_cast<uint32_t>(is_starting_core ? 1 : 0),    // is_ring_start
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,  // handshake_addr
+        static_cast<uint32_t>(is_starting_core ? 1 : 0),  // is_ring_start
+        hal::get_erisc_l1_unreserved_base(),              // handshake_addr
         erisc_buffer_address,
         erisc_semaphore_address,
         static_cast<uint32_t>(device->virtual_core_from_logical_core(sem_init_core, CoreType::WORKER).x),

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/device.hpp>
 
 using namespace tt::tt_metal;
 
@@ -24,7 +24,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) { return {}; }
 
-args_list_t emit_address_generator_runtime_args(tt::tt_metal::Device const* const d, tt::tt_metal::Tensor const& t) {
+args_list_t emit_address_generator_runtime_args(tt::tt_metal::IDevice const* const d, tt::tt_metal::Tensor const& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -72,7 +72,7 @@ args_list_t emit_address_generator_compile_time_args(tt::tt_metal::Tensor const&
     TT_ASSERT(false);
 }
 
-static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
+std::pair<CoreCoord, CoreCoord> shard_grid_from_shard_spec(const ShardSpec& shard_spec) {
     auto const& core_range = shard_spec.grid.bounding_box();
     log_trace(
         tt::LogOp,
@@ -89,7 +89,7 @@ static std::pair<tt_xy_pair, tt_xy_pair> shard_grid_from_shard_spec(const ShardS
 // non-transposed - always row-major layout
 // vec<logical row -> noc row>, vec<logicacal col -> noc col>
 static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_from_shard_spec(
-    Device const* d, const ShardSpec& shard_spec) {
+    IDevice const* d, const ShardSpec& shard_spec) {
     TT_ASSERT(d != nullptr);
     auto const& core_range = shard_spec.grid.bounding_box();
     std::vector<uint32_t> logical_to_noc_row_map;
@@ -106,7 +106,7 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
     return {logical_to_noc_row_map, logical_to_noc_col_map};
 }
 
-std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(Device const* d, Tensor const& t) {
+std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, Tensor const& t) {
     std::vector<uint32_t> args;
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
     args.push_back(row_map.size());

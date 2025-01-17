@@ -4,9 +4,9 @@
 
 #include "sharded_to_interleaved_partial_op.hpp"
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -43,13 +43,7 @@ void ShardedToInterleavedPartialDeviceOperation::validate(const std::vector<Tens
     // Divisibility of num_cores and shard size with tensor shape is done in tensor creation, so no need to assert here
 }
 
-std::vector<tt::tt_metal::LegacyShape> ShardedToInterleavedPartialDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& output_tensor = input_tensors.at(1);
-    return {output_tensor.get_legacy_shape()};
-}
-
-std::vector<Tensor> ShardedToInterleavedPartialDeviceOperation::create_output_tensors(
+std::vector<ttnn::TensorSpec> ShardedToInterleavedPartialDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // Don't create anything, we already passed in output tensor
     return {};

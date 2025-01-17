@@ -51,7 +51,10 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::optional<UnaryWithParam>& fused_activation,
     bool mcast_in0,
     bool gather_in0,
-    bool untilize_out);
+    const CoreRangeSet& hop_cores,
+    bool untilize_out,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
+    uint32_t num_global_cb_receivers);
 tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -140,6 +143,8 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     std::optional<UnaryWithParam> fused_activation;
     bool mcast_in0;
     bool gather_in0;
+    CoreRangeSet hop_cores;
+    std::size_t num_global_cb_receivers;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -164,7 +169,7 @@ using MatmulProgramConfig = std::variant<
 struct Matmul {
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const std::optional<bool> bcast_batch = std::nullopt;
-    const MemoryConfig output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+    const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     const std::optional<DataType> output_dtype = std::nullopt;
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     const bool untilize_out = false;
@@ -174,6 +179,7 @@ struct Matmul {
     const bool transpose_a = false;
     const bool transpose_b = false;
     const std::optional<const tt::tt_metal::Tile> output_tile;
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -185,7 +191,7 @@ struct Matmul {
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt}) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
@@ -201,7 +207,7 @@ Matmul create_matmul_struct(
     const struct Matmul& parameters,
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -211,8 +217,9 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helpe
     DeviceComputeKernelConfig compute_kernel_config,
     const MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
-operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb);
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,

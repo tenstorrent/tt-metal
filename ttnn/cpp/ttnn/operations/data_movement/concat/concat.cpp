@@ -5,19 +5,19 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/math.hpp>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "cpp/ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "cpp/ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 #include <ranges>
 #include <utility>
@@ -67,9 +67,9 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
         },
         .post_transform = [input_rank](const ttnn::Tensor& output) -> ttnn::Tensor {
             ttnn::Tensor res = output;
-            while (res.get_shape().rank() > input_rank) {
-                const auto shape = res.get_shape();
-                const auto full_shape = res.get_shape().with_tile_padding();
+            while (res.get_logical_shape().rank() > input_rank) {
+                const auto shape = res.get_logical_shape();
+                const auto full_shape = res.get_padded_shape();
                 SmallVector<uint32_t> shape_vec{};
                 SmallVector<uint32_t> full_shape_vec{};
                 for (int i = 1; i < shape.rank(); i++) {
@@ -146,7 +146,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                 auto padded = pad_to_tile_vol(queue_id, output, 0.0f, true, output.memory_config());
                 concat_db_print(true, "[DEBUG] padded to tile layout, now tilizing.");
                 auto tilized =
-                    ttnn::tilize_with_val_padding(padded, padded.get_legacy_shape(), 0.0f, output.memory_config());
+                    ttnn::tilize_with_val_padding(padded, padded.get_padded_shape(), 0.0f, output.memory_config());
                 concat_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical concat output shape
                 auto reshaped = ttnn::reshape(

@@ -8,10 +8,10 @@
 #include <functional>
 #include <random>
 
-#include "common/test_tiles.hpp"  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
+#include <tt-metalium/test_tiles.hpp>  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -26,7 +26,7 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -162,7 +162,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool single_tile_matmul(tt_metal::Device* device) {
+bool single_tile_matmul(tt_metal::IDevice* device) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -280,7 +280,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
-bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool single_block_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -433,7 +433,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);

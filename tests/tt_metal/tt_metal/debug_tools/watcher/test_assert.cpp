@@ -12,7 +12,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
+static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_type) {
     // Set up program
     Program program = Program();
 
@@ -187,7 +187,7 @@ TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
 
     // Only run on device 0 because this test takes the watcher server down.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugBrisc);},
         this->devices_[0]
     );
 }
@@ -197,7 +197,7 @@ TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugNCrisc);},
         this->devices_[0]
     );
 }
@@ -207,7 +207,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc0);},
         this->devices_[0]
     );
 }
@@ -217,7 +217,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc1);},
         this->devices_[0]
     );
 }
@@ -227,7 +227,7 @@ TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc2);},
         this->devices_[0]
     );
 }
@@ -237,7 +237,7 @@ TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugErisc);},
         this->devices_[0]
     );
 }
@@ -251,7 +251,7 @@ TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugIErisc);},
         this->devices_[0]
     );
 }

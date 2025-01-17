@@ -18,7 +18,6 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #define DEBUG_PRINT 0
-
 // #include "debug_macros.h"
 
 // SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
@@ -28,7 +27,7 @@
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -38,7 +37,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit(in_cb_id);
+    tilize_uninit(in_cb_id, out_cb_id);
 }  // tilize_in()
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, bool is_non_tile_height>

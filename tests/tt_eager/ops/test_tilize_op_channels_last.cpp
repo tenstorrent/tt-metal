@@ -6,12 +6,12 @@
 #include <functional>
 #include <random>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using namespace tt;
@@ -30,12 +30,12 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 32, 32, 64};
+        ttnn::SimpleShape shape({1, 32, 32, 64});
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::random::random(shape).to(device);
         Tensor b = ttnn::tilize(a);

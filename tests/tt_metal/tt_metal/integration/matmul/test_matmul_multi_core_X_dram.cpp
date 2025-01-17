@@ -5,12 +5,12 @@
 #include <algorithm>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
@@ -26,7 +26,7 @@ struct MatmulConfig {
 };
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -143,7 +143,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
-bool matmul_multi_core_single_dram(tt_metal::Device* device) {
+bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     bool pass = true;
     CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     int num_cores_r = compute_with_storage_grid_size.y;
@@ -317,7 +317,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
@@ -410,7 +410,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::Device* device) {
+bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* device) {
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;
@@ -541,11 +541,10 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::Device* de
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
-    const char* arch = getenv("ARCH_NAME");
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (strcasecmp(arch, "wormhole_b0") == 0) {
+    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         tt::log_info("This test is disabled in WH B0");
         GTEST_SKIP();
     }

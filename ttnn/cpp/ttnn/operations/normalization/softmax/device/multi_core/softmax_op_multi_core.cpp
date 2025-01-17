@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/logger.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 
@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     Program program = CreateProgram();
 
     // This should allocate input_tensor DRAM buffer on the device
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t in0_tile_size = tt::tt_metal::detail::TileSize(in0_cb_data_format);
@@ -563,7 +563,7 @@ operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     // convert data format
     tt::DataFormat in0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());

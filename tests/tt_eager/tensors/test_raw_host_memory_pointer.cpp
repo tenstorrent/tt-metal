@@ -6,15 +6,15 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 /*
@@ -64,7 +64,7 @@ void test_raw_host_memory_pointer() {
     using namespace tt::tt_metal::owned_buffer;
 
     int device_id = 0;
-    tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(device_id);
+    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 
     tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
 

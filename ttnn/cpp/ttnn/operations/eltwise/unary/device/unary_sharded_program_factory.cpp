@@ -6,9 +6,9 @@
 
 #include <algorithm>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::unary::program {
@@ -23,7 +23,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     const auto& input = tensor_args.input;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;

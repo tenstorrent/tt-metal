@@ -6,8 +6,10 @@
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+
+using namespace tt::tt_metal;
 
 void MuxKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
@@ -31,12 +33,8 @@ void MuxKernel::GenerateStaticConfigs() {
     static_config_.output_depacketize_info = 0x0;
 
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
-        // Only connected dispatchers need a semaphore. TODO: can initialize anyways, but this matches previous
-        // implementation
-        if (dynamic_cast<DispatchKernel*>(upstream_kernels_[idx])) {
-            static_config_.input_packetize_local_sem[idx] =
-                tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-        }
+        static_config_.input_packetize_local_sem[idx] =
+            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
     }
 }
 
@@ -121,8 +119,7 @@ void MuxKernel::CreateKernel() {
             compile_args[4 + idx] |= (static_config_.remote_rx_network_type[idx].value() & 0xFF) << 24;
         }
         if (dependent_config_.input_packetize[idx]) {
-            // Zero out if input packetize not set to match previous implementation. TODO: don't have to do this
-            if (dependent_config_.input_packetize[idx].value() != 0) {
+            if (dependent_config_.input_packetize[idx]) {
                 compile_args[19 + idx] |= (dependent_config_.input_packetize[idx].value() & 0xFF);
                 compile_args[19 + idx] |= (dependent_config_.input_packetize_log_page_size[idx].value() & 0xFF) << 8;
                 compile_args[19 + idx] |= (dependent_config_.input_packetize_upstream_sem[idx].value() & 0xFF) << 16;

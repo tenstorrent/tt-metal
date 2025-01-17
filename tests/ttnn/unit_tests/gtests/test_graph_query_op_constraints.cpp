@@ -13,13 +13,13 @@
 #include <variant>
 #include <vector>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "gtest/gtest.h"
-#include "impl/event/event.hpp"
-#include "impl/program/program.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include <nlohmann/json.hpp>
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_processor.hpp"
@@ -198,7 +198,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 
     // Run the test
     {
-        tt::Device* device = &getDevice();
+        tt::tt_metal::IDevice* device = &getDevice();
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -276,7 +276,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
 
     // Run the test
     {
-        tt::Device* device = &getDevice();
+        tt::tt_metal::IDevice* device = &getDevice();
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
@@ -358,7 +358,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
 
     // Run the test
     {
-        tt::Device* device = &getDevice();
+        tt::tt_metal::IDevice* device = &getDevice();
         const auto& output_spec = input_spec_a;
 
         auto query = ttnn::graph::query_op_constraints(
@@ -489,7 +489,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
 
     // Run the test
     {
-        tt::Device* device = &getDevice();
+        tt::tt_metal::IDevice* device = &getDevice();
 
         const auto output_spec = ttnn::TensorSpec(
             ttnn::SimpleShape(tt::tt_metal::Array4D{

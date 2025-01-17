@@ -5,7 +5,7 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::events {
@@ -15,7 +15,7 @@ struct MultiDeviceEvent {
     std::vector<std::shared_ptr<Event>> events;
 };
 // Single Device APIs
-std::shared_ptr<Event> create_event(Device* device);
+std::shared_ptr<Event> create_event(IDevice* device);
 void record_event(
     uint8_t cq_id,
     const std::shared_ptr<Event>& event,

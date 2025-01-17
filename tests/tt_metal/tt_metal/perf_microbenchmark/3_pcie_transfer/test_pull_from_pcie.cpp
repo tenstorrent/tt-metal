@@ -8,12 +8,12 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/dispatch/memcpy.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/memcpy.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
 
         // Device setup
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -90,7 +90,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto input_shape = input_tensor.get_legacy_shape();
 
     Program program{};
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     ////////////////////////////////////////////////////////////////////////////

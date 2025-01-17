@@ -6,8 +6,8 @@
 
 #include "moreh_linear_backward_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
@@ -46,7 +46,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     auto grid = device->compute_with_storage_grid_size();
     auto arch = device->arch();
     const auto num_cores_y = grid.y;

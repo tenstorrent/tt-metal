@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -29,7 +29,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
-    tt_metal::Device* device = input_tensor.device();
+    tt_metal::IDevice* device = input_tensor.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 
@@ -338,7 +338,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
 
     const auto& input_shape = input_tensor.get_legacy_shape();
 
-    tt_metal::Device* device = input_tensor.device();
+    tt_metal::IDevice* device = input_tensor.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 

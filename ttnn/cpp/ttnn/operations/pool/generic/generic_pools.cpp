@@ -4,13 +4,13 @@
 
 #include "generic_pools.hpp"
 
-#include "impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <limits>
 
@@ -113,7 +113,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     uint32_t output_nhw_padded = tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     log_debug(tt::LogOp, "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}", output_nhw, output_nhw_padded, output_shard_height_padded, output_shard_width_padded);
-    out_memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR, false};
+    out_memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR};
 
     sliding_window_config = sliding_window::SlidingWindowConfig{
             .batch_size = batch_size,

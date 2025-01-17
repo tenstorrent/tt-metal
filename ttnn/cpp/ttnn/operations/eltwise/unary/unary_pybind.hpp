@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
@@ -1519,76 +1519,6 @@ void bind_unary_composite_rpow(
 }
 
 
-template <typename unary_operation_t>
-void bind_dropout(py::module& module, const unary_operation_t& operation) {
-    auto doc = fmt::format(
-        R"doc(
-
-        Applies {0} to :attr:`input_tensor` element-wise.
-
-        .. math::
-            \verb|{0}|(\mathrm{{input\_tensor}}_i)
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            seed (uint32_t): seed used for RNG.
-            probability (float): Dropout probability. In average total_elems * probability elements will be zeroed out.
-            scale (float): Scales output tensor. In general scale = 1.0/(1.0-probability).
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16
-                 - TILE
-                 - 2, 3, 4
-
-        Example:
-            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> seed = 124
-            >>> prob = 0.2
-            >>> output = {1}(tensor, seed=seed, probability=prob, scale= 1.0/(1.0 - prob))
-        )doc",
-        ttnn::dropout.base_name(),
-        ttnn::dropout.python_fully_qualified_name());
-
-    bind_registered_operation(
-        module,
-        ttnn::dropout,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const Tensor& input,
-               const uint32_t seed,
-               const float probability,
-               const float scale,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const uint8_t queue_id) {
-                return self(queue_id, input, seed, probability, scale, memory_config, output_tensor);
-            },
-            py::arg("input_tensor"),
-            py::kw_only(),
-            py::arg("seed"),
-            py::arg("probability"),
-            py::arg("scale"),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
-}
 
 }  // namespace detail
 
@@ -1720,7 +1650,6 @@ void py_module(py::module& module) {
 
     // Other unaries (unary chain operations)
     detail::bind_softplus(module, ttnn::softplus);
-    detail::bind_dropout(module, ttnn::dropout);
     detail::bind_sigmoid_accurate(module, ttnn::sigmoid_accurate);
     detail::bind_unary_chain(module, ttnn::unary_chain);
     detail::bind_identity(module, ttnn::identity);

@@ -4,10 +4,10 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -34,7 +34,7 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
+bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
     bool pass = true;
 
     const uint32_t cb_id = 0;
@@ -162,7 +162,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
+bool reader_datacopy_writer(IDevice* device, const BankedConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

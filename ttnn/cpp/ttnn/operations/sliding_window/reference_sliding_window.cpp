@@ -8,7 +8,7 @@
 #include <numeric>
 #include <tuple>
 
-#include "impl/device/device.hpp"
+#include <tt-metalium/device_impl.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 
@@ -238,7 +238,7 @@ std::vector<uint32_t> input_indices_from_flattened_local_config(
 }
 
 std::vector<uint32_t> input_indices_from_flattened_remote_config(
-    tt::tt_metal::Device* device,
+    tt::tt_metal::IDevice* device,
     const std::vector<std::vector<uint16_t>>& flattened_remote_config,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     bool remote_read,

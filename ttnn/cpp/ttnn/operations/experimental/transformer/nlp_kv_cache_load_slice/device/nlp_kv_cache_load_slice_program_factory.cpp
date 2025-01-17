@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 using namespace tt::tt_metal;
@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     auto shard_spec = output.shard_spec().value();
     auto all_cores = shard_spec.grid;

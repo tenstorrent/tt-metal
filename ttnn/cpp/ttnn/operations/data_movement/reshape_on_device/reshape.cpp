@@ -5,18 +5,20 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/reshape_op.hpp"
+
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::data_movement {
 
 namespace detail {
 
 static Tensor manual_insertion(
-    const Tensor& input_tensor, const ttnn::Shape& shape, Device* device, const MemoryConfig& output_mem_config) {
+    const Tensor& input_tensor, const ttnn::Shape& shape, IDevice* device, const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
         shape.logical_shape().volume() == input_tensor.get_logical_volume(),
@@ -57,7 +59,7 @@ ttnn::Tensor ReshapeOperation::invoke(
          padded_output_shape[3] == input_tensor.get_padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        return input_tensor.reshape(output_shape);
+        return ttnn::experimental::view(input_tensor, output_shape);
     }
     if (input_tensor.get_padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(

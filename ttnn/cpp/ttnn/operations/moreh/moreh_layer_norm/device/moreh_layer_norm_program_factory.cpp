@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_layer_norm_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -58,7 +58,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = input.device();
+    IDevice* device = input.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////

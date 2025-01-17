@@ -7,11 +7,11 @@
 
 #include <optional>
 
-#include "impl/buffers/buffer.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -118,7 +118,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     Program program = CreateProgram();
 
-    Device* device = input_tensor_q.device();
+    IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);

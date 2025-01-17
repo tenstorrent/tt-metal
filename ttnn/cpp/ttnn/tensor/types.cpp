@@ -182,6 +182,14 @@ ttnn::SimpleShape LegacyShape::logical_shape() const {
     return ttnn::SimpleShape(std::move(values));
 }
 
+ttnn::SimpleShape LegacyShape::padded_shape() const {
+    ttnn::SmallVector<uint32_t> values(rank());
+    for (size_t i = 0; i < values.size(); i++) {
+        values[i] = (*this)[i];
+    }
+    return ttnn::SimpleShape(std::move(values));
+}
+
 const uint32_t LegacyShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank_);
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;
@@ -242,16 +250,6 @@ bool operator!=(const MemoryConfig& config_a, const MemoryConfig& config_b) { re
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config) {
     tt::stl::reflection::operator<<(os, config);
     return os;
-}
-
-std::vector<DeviceBuffer> MultiDeviceStorage::get_buffers() const {
-    std::lock_guard<std::mutex> lock(buffer_mtx);
-    std::vector<DeviceBuffer> buf_vec;
-    buf_vec.reserve(buffers.size());
-    for (const auto& pair : buffers) {
-        buf_vec.push_back(pair.second);
-    }
-    return buf_vec;
 }
 
 }  // namespace tt::tt_metal

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/event/event.hpp"
+#include <event.hpp>
 
 #include <thread>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 #include "tt_metal/event.hpp"
 
 namespace tt::tt_metal {
@@ -50,7 +50,7 @@ bool v1::EventQuery(const EventHandle& event) {
     return v0::EventQuery(static_cast<const std::shared_ptr<v0::Event>&>(event));
 }
 
-void v1::DeviceSynchronize(DeviceHandle device) { v0::Synchronize(device); }
+void v1::DeviceSynchronize(IDevice* device) { v0::Synchronize(device); }
 
 void v1::CommandQueueSynchronize(CommandQueueHandle cq) { v0::Synchronize(GetDevice(cq), GetId(cq)); }
 

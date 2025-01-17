@@ -5,11 +5,11 @@
 #include <algorithm>
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 
@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks indexed_fill_multi_core(
     const Tensor& batch_ids, const Tensor& input_a, const Tensor& input_b, const Tensor& output) {
     tt::tt_metal::Program program{};
-    Device* device = input_a.device();
+    IDevice* device = input_a.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

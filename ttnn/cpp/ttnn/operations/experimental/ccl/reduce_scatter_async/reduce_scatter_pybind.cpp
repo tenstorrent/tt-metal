@@ -7,9 +7,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
@@ -27,31 +28,73 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
+               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
                ttnn::operations::reduction::ReduceType math_op,
                const ttnn::MemoryConfig& memory_config,
                ttnn::ccl::Topology topology,
                const std::optional<size_t> num_links,
-               std::optional<SubDeviceId> worker_subdevice_id_opt,
-               bool create_semaphore_handles) -> ttnn::Tensor {
+               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
+                    from_remote_multi_device_global_semaphore,
+                    to_remote_multi_device_global_semaphore,
                     math_op,
                     memory_config,
                     topology,
                     num_links,
-                    worker_subdevice_id_opt,
-                    create_semaphore_handles);
+                    worker_subdevice_id_opt);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
+            py::arg("from_remote_multi_device_global_semaphore"),
+            py::arg("to_remote_multi_device_global_semaphore"),
             py::arg("math_op"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt,
-            py::arg("create_semaphore_handles") = true});
+            py::arg("subdevice_id") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t dim,
+               const uint32_t cluster_axis,
+               const MeshDevice& mesh_device,
+               const global_semaphore::MultiDeviceGlobalSemaphore& from_remote_multi_device_global_semaphore,
+               const global_semaphore::MultiDeviceGlobalSemaphore& to_remote_multi_device_global_semaphore,
+               ttnn::operations::reduction::ReduceType math_op,
+               const ttnn::MemoryConfig& memory_config,
+               ttnn::ccl::Topology topology,
+               const std::optional<size_t> num_links,
+               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    dim,
+                    cluster_axis,
+                    mesh_device,
+                    from_remote_multi_device_global_semaphore,
+                    to_remote_multi_device_global_semaphore,
+                    math_op,
+                    memory_config,
+                    topology,
+                    num_links,
+                    worker_subdevice_id_opt);
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("cluster_axis"),
+            py::arg("mesh_device"),
+            py::arg("from_remote_multi_device_global_semaphore"),
+            py::arg("to_remote_multi_device_global_semaphore"),
+            py::arg("math_op"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
+            py::arg("num_links") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt});
 }
 
 }  // namespace detail
@@ -59,7 +102,7 @@ void bind_reduce_scatter(pybind11::module& module, const ccl_operation_t& operat
 void py_bind_reduce_scatter_async(pybind11::module& module) {
     detail::bind_reduce_scatter(
         module,
-        ttnn::reduce_scatter_async,
+        ttnn::experimental::reduce_scatter_async,
         R"doc(
 
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent

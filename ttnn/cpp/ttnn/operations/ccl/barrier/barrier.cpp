@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "barrier.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
+#include "cpp/ttnn/operations/ccl/barrier/device/barrier_op.hpp"
 
 namespace ttnn::operations::ccl {
 

@@ -8,13 +8,13 @@
 #include <limits>
 #include <random>
 
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -65,7 +65,7 @@ public:
         }
     }
 
-    std::vector<tt::tt_metal::Device*> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -85,8 +85,8 @@ struct BankedConfig {
 bool RunWriteBWTest(
     std::string const& sender_kernel_path,
     std::string const& receiver_kernel_path,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
 
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,

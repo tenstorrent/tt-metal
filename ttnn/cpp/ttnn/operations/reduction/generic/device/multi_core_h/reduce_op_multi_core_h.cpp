@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();

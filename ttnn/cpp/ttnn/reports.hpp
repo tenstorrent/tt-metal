@@ -6,8 +6,8 @@
 #include <filesystem>
 #include <optional>
 
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 namespace ttnn {
 
@@ -33,7 +33,7 @@ struct DeviceInfo {
     size_t cb_limit;
 };
 
-DeviceInfo get_device_info(const Device& device) {
+DeviceInfo get_device_info(const IDevice& device) {
     DeviceInfo info{};
     const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device.id());
     const auto descriptor = tt::get_core_descriptor_config(device.id(), device.num_hw_cqs(), dispatch_core_config);

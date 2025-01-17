@@ -33,17 +33,16 @@ namespace ckernel {
  * than the size of the DST register buffer | True     | | idst1          | The index of the tile in DST register buffer
  * to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-enum { AND_BINARY = 0, OR_BINARY = 1, XOR_BINARY = 2 };
 ALWI void and_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, AND_BINARY>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND>(idst0, idst1)));
 }
 
 ALWI void or_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, OR_BINARY>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR>(idst0, idst1)));
 }
 
 ALWI void xor_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, XOR_BINARY>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR>(idst0, idst1)));
 }
 
 /**

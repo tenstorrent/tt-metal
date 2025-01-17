@@ -5,8 +5,10 @@
 #include "dispatch.hpp"
 #include "prefetch.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+
+using namespace tt::tt_metal;
 
 void DispatchSKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
@@ -25,7 +27,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             dispatch_s_buffer_base = dispatch_buffer_base;
         }
     }
-    logical_core_ = dispatch_core_manager::instance().dispatcher_s_core(device_->id(), channel, cq_id_);
+
     static_config_.cb_base = dispatch_s_buffer_base;
     static_config_.cb_log_page_size = dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();

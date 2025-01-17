@@ -10,8 +10,8 @@
 #include <cstring>
 #include <string>
 
-#include "impl/debug/dprint_server.hpp"
-#include "tools/profiler/profiler_state.hpp"
+#include <dprint_server.hpp>
+#include <profiler_state.hpp>
 
 using std::vector;
 
@@ -113,12 +113,6 @@ RunTimeOptions::RunTimeOptions() {
     const char* dispatch_data_collection_str = std::getenv("TT_METAL_DISPATCH_DATA_COLLECTION");
     if (dispatch_data_collection_str != nullptr) {
         enable_dispatch_data_collection = true;
-    }
-
-    if (getenv("TT_METAL_OLD_FD_INIT")) {
-        this->use_new_fd_init = false;
-    } else {
-        this->use_new_fd_init = true;
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {

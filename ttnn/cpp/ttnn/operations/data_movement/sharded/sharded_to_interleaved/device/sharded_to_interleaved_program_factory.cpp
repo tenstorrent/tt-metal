@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;
 
-    tt_metal::Device* device = input.device();
+    tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());

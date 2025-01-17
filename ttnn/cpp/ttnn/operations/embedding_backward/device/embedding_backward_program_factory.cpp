@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 
 using namespace tt;
@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     tt_metal::Buffer* grad_tensor_buffer = grad_tensor.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
-    Device* device = grad_tensor.device();
+    IDevice* device = grad_tensor.device();
     auto dst_addr = out_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////

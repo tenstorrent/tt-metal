@@ -6,12 +6,12 @@
 #include <functional>
 #include <random>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using namespace tt;
@@ -30,12 +30,12 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 32, 45, 64};
+        ttnn::SimpleShape shape({1, 32, 45, 64});
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::random::random(shape).to(device);
         Tensor b = ttnn::tilize_with_zero_padding(a);
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
         log_debug(LogTest, "Moving src data to host to validate");
         Tensor host_a = a.cpu();  // Move tensor a to host to validate
         // TODO: Update when tensor.pad_to_tile() function is added
-        auto padded_shape = a.get_legacy_shape();
+        auto padded_shape = a.get_padded_shape();
         padded_shape[2] = round_up(padded_shape[2], TILE_HEIGHT);
         padded_shape[3] = round_up(padded_shape[3], TILE_WIDTH);
         Tensor padded_host_a = host_a.pad(padded_shape, ttnn::SimpleShape{0, 0, 0, 0}, 0);

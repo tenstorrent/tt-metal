@@ -9,7 +9,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -22,6 +22,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -66,7 +67,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
         // input > 1, output is acosh(input)
         Tensor nan_res = ttnn::multiply(
             ttnn::le(input_a, t_one, std::nullopt, output_mem_config),
-            input_a.device()->sfpu_nan(),
+            tt::tt_metal::experimental::hal::get_nan(),
             std::nullopt,
             output_mem_config);
         t_result = ttnn::multiply(
@@ -403,7 +404,7 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.get_legacy_shape();
+    auto shape_wh = y.padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
@@ -599,10 +600,10 @@ Tensor ExecuteUnaryCompositeThreshold::invoke(
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
+    ttnn::SimpleShape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
@@ -821,13 +822,16 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
     Tensor t_inf = ttnn::multiply(
-        ttnn::sign(input_a, output_mem_config), input_a.device()->sfpu_inf(), std::nullopt, output_mem_config);
+        ttnn::sign(input_a, output_mem_config),
+        tt::tt_metal::experimental::hal::get_inf(),
+        std::nullopt,
+        output_mem_config);
     Tensor logit_result = ttnn::where(
         ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
         t_inf,
         ttnn::where(
             ttnn::ltz(log_input, output_mem_config),
-            input_a.device()->sfpu_nan(),
+            tt::tt_metal::experimental::hal::get_nan(),
             ttnn::log(log_input, output_mem_config)));
     return logit_result;
 }

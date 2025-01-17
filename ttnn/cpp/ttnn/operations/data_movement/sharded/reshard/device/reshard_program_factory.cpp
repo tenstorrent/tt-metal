@@ -6,11 +6,11 @@
 
 #include <algorithm>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include "ttnn/operations/math.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -553,7 +553,7 @@ compute_width_sharded_reshard_runtime_args(
     const std::vector<CoreCoord>& remote_cores,
     const BufferType& remote_buffer_type,
     const CoreType& remote_core_type,
-    Device* device,
+    IDevice* device,
     uint32_t element_size) {
     const uint32_t num_local_shards = local_cores.size();
     const uint32_t num_remote_shards = remote_cores.size();

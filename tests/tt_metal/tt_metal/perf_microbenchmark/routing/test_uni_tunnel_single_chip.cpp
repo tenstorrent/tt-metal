@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/traffic_gen_test.hpp"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
 
 using std::vector;
 using namespace tt;
@@ -172,7 +173,7 @@ int main(int argc, char** argv) {
         }
         int device_id = test_device_id;
 
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         auto const& device_active_eth_cores = device->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() < 2) {

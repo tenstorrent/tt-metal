@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::transformer::detail {
 
@@ -16,7 +16,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.get_legacy_shape();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

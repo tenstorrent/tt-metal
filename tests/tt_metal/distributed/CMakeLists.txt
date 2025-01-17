@@ -1,4 +1,8 @@
-set(UNIT_TESTS_DISTRIBUTED_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp)
+set(UNIT_TESTS_DISTRIBUTED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
+)
 
 add_executable(distributed_unit_tests ${UNIT_TESTS_DISTRIBUTED_SRC})
 target_link_libraries(
@@ -11,8 +15,8 @@ target_link_libraries(
 target_include_directories(
     distributed_unit_tests
     PRIVATE
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${PROJECT_SOURCE_DIR}/tt_metal/distributed
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
 )
 
 set_target_properties(

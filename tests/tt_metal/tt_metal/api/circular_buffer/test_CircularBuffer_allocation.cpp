@@ -5,10 +5,10 @@
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
 #include "circular_buffer_test_utils.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -17,7 +17,7 @@ namespace basic_tests::circular_buffer {
 
 void validate_cb_address(
     Program& program,
-    Device* device,
+    IDevice* device,
     const CoreRangeSet& cr_set,
     const std::map<CoreCoord, std::map<uint8_t, uint32_t>>& core_to_address_per_buffer_index) {
     detail::LaunchProgram(device, program);
@@ -310,7 +310,7 @@ TEST_F(DeviceFixture, TensixTestUpdateCircularBufferAddress) {
 
 TEST_F(DeviceFixture, TensixTestUpdateCircularBufferPageSize) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        Device* device = this->devices_.at(id);
+        IDevice* device = this->devices_.at(id);
         Program program;
         CBConfig cb_config;
         CoreCoord core0(0, 0);

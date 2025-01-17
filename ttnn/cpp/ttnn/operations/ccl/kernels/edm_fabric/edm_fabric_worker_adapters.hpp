@@ -7,8 +7,8 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 
@@ -168,7 +168,12 @@ struct WorkerToFabricEdmSender {
         noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_index_ptr);
 
         // Need to wait for the ack from edm
-        wait_for_empty_write_slot();
+        // We wait min because there is currently a race with worker <-> EDM teardown
+        // that will cause this to sometimes reach a value of 2 (because of the race)
+        // A proper fix requires for example adding an additional teardown semaphore on the
+        // worker side that the EDM writes to to acknowledge teardown. The problem here
+        // is that the flow control aliases the teardown.
+        noc_semaphore_wait_min(this->worker_sem_addr, 1);
 
         noc_async_write_barrier();
     }

@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
 #include <numeric>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -18,9 +20,9 @@ namespace {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
     TT_FATAL(stick_sizes.size() > 0, "Need at least one stick size to find page size");
-    uint32_t page_size = align(stick_sizes[0], alignment);
+    uint32_t page_size = tt::align(stick_sizes[0], alignment);
     for (size_t idx = 1; idx < stick_sizes.size(); idx++) {
-        const uint32_t padded_stick_size = align(stick_sizes[idx], alignment);
+        const uint32_t padded_stick_size = tt::align(stick_sizes[idx], alignment);
         page_size = std::gcd(page_size, padded_stick_size);
     }
     return page_size;
@@ -42,7 +44,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -169,7 +171,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     const bool is_height_concat = dim == 2;
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     const uint32_t num_input_tensors = input_tensors.size();
     const uint32_t cb_dst_id = 16;
@@ -288,7 +290,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -444,7 +446,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const std::vector<Tensor>& input_tensors, const uint32_t dim, const Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = output.device();
+    tt_metal::IDevice* device = output.device();
 
     const tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
@@ -456,7 +458,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     uint32_t single_page_size;
     if (rm_layout) {
         num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
+        single_page_size =
+            tt::align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt_metal::detail::TileSize(cb_data_format);

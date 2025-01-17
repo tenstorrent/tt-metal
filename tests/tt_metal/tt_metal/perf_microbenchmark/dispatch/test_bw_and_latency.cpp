@@ -10,13 +10,13 @@
 
 #include "core_coord.hpp"
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CommandQueue& cq = device->command_queue();
 

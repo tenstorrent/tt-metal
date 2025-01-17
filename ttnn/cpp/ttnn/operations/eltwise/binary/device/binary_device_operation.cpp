@@ -6,10 +6,12 @@
 
 #include <utility>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::binary {
 
@@ -83,10 +85,10 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         }
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
-                if (tensor_args.input_tensor_a.get_padded_shape()[0] ==
-                        tensor_args.input_tensor_b->get_padded_shape()[0] ||
-                    tensor_args.input_tensor_a.get_padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->get_padded_shape()[0] == 1) {
+                if (tensor_args.input_tensor_a.padded_shape()[0] ==
+                        tensor_args.input_tensor_b->padded_shape()[0] ||
+                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
@@ -336,6 +338,13 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
         tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
 #endif
     return result;
+}
+
+bool BinaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
 }
 
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
