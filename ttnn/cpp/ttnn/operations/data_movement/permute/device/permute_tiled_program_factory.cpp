@@ -564,8 +564,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     uint32_t num_input_pages_to_read = 2;
 
-    // auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    CoreCoord compute_with_storage_grid_size = {1u, 1u};
+    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
+    // CoreCoord compute_with_storage_grid_size = {1u, 1u};
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);
 
