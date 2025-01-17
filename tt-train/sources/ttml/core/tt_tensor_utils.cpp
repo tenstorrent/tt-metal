@@ -123,9 +123,9 @@ template <class T, DataType TensorType>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensors_to_host(
     const std::vector<xt::xarray<T>>& buffers, const std::unordered_map<std::string, std::string>& config) {
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<ttnn::Shape> host_owned_shapes;
+    std::vector<ttnn::TensorSpec> host_owned_specs;
     host_owned_buffers.reserve(buffers.size());
-    host_owned_shapes.reserve(buffers.size());
+    host_owned_specs.reserve(buffers.size());
     if (buffers.empty()) {
         throw std::runtime_error("Cannot create a host buffer from an empty vector of xtensors!");
     }
@@ -150,14 +150,15 @@ template <class T, DataType TensorType>
             host_owned_buffers.push_back(owned_buffer);
         }
 
-        host_owned_shapes.push_back(shape);
+        host_owned_specs.push_back(
+            TensorSpec(shape, TensorLayout(TensorType, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
     }
     auto distributed_tensor_config = get_distributed_tensor_config(config);
     auto storage = tt::tt_metal::MultiDeviceHostStorage(
-        distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes);
+        distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs);
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = Tensor(std::move(storage), host_owned_shapes[0], TensorType, Layout::ROW_MAJOR);
+    auto output = Tensor(std::move(storage), host_owned_specs[0]);
     return output;
 }
 
