@@ -12,6 +12,8 @@ from typing import List
 IS_CI_ENV = os.getenv("CI") == "true"
 if IS_CI_ENV:
     from infra.data_collection.pydantic_models import BenchmarkMeasurement, PartialBenchmarkRun
+else:
+    logger.warning("Skipping import of pydantic_models for benchmarking since not running in CI environment")
 
 
 class BenchmarkProfiler:
