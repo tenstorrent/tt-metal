@@ -27,7 +27,7 @@ public:
     constexpr static uint32_t pages_per_shard_width = PAGES_PER_SHARD_WIDTH;
     constexpr static uint32_t rows_per_shard_height = ROWS_PER_SHARD_HEIGHT;
 };
-
+namespace experimental {
 namespace shard_addr_gen_utils {
 
 struct shard_coord_info {
@@ -75,11 +75,11 @@ struct shard_coord_info get_height_sharded_coordinates(uint32_t page_num) {
 }
 
 template <uint32_t columns_per_shard, uint32_t rows_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
-shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
+experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     // Calculate how many cores are in the sharding grid
     constexpr uint32_t cores_per_block_row = (total_pages_last_dim - 1) / columns_per_shard + 1;
-    shard_addr_gen_utils::shard_coord_info coord_info;
+    experimental::shard_addr_gen_utils::shard_coord_info coord_info;
     // Get row and column ID of this page
     uint32_t page_row = page_num / total_pages_last_dim;
     uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_col = page_num%total_pages_last_dim;
@@ -147,7 +147,6 @@ function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* dev
     s = ShardedAddrGen <tensor_1_shard_info> {.bank_base_address = bank_base_address, .shard_array=shard_array_map};
     This object can then be used by the get_noc_addr api.
 */
-
 template <typename SHARDING_INFO_OBJECT>
 struct ShardedAddrGen {
     // Use this address generator for sharded tensors
@@ -184,19 +183,19 @@ struct ShardedAddrGen {
 
         // Resolve linear core id/bank address, the page offset in the core,
         // and the number of contiguous pages within that core
-        shard_addr_gen_utils::shard_coord_info sharding_coordinates{};
+        experimental::shard_addr_gen_utils::shard_coord_info sharding_coordinates{};
         if constexpr (CONSTANT_ARGS.shard_type == 0) {
-            sharding_coordinates = shard_addr_gen_utils::get_width_sharded_coordinates<
+            sharding_coordinates = experimental::shard_addr_gen_utils::get_width_sharded_coordinates<
                 CONSTANT_ARGS.pages_per_shard_width,
                 CONSTANT_ARGS.pages_per_tensor_row,
                 CONSTANT_ARGS.contiguity>(id);
         } else if constexpr (CONSTANT_ARGS.shard_type == 1) {
-            sharding_coordinates = shard_addr_gen_utils::get_height_sharded_coordinates<
+            sharding_coordinates = experimental::shard_addr_gen_utils::get_height_sharded_coordinates<
                 CONSTANT_ARGS.rows_per_shard_height,
                 CONSTANT_ARGS.pages_per_tensor_row,
                 CONSTANT_ARGS.contiguity>(id);
         } else {
-            sharding_coordinates = shard_addr_gen_utils::get_block_sharded_coordinates<
+            sharding_coordinates = experimental::shard_addr_gen_utils::get_block_sharded_coordinates<
                 CONSTANT_ARGS.pages_per_shard_width,
                 CONSTANT_ARGS.rows_per_shard_height,
                 CONSTANT_ARGS.pages_per_tensor_row,
@@ -223,6 +222,7 @@ struct ShardedAddrGen {
         noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
+}  // namespace experimental
 
 namespace interleaved_addr_gen {
 
@@ -587,7 +587,7 @@ struct InterleavedPow2AddrGenFast {
 
 template <typename SIC>
 FORCE_INLINE std::uint64_t get_noc_addr(
-    const uint32_t id, const ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
+    const uint32_t id, const experimental::ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     return s.get_noc_addr(id, offset, noc);
 }
 
@@ -634,7 +634,7 @@ FORCE_INLINE std::uint64_t get_noc_addr(
 
 template <typename SIC>
 FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
-    const uint32_t id, const ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
+    const uint32_t id, const experimental::ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     return s.get_contiguous_noc_addr(id, offset, noc);
 }
 
