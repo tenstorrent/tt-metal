@@ -23,6 +23,10 @@ inline namespace v0 {
 class IDevice;
 }  // namespace v0
 
+namespace distributed {
+class MeshDevice;
+}
+
 class SubDeviceManager {
 public:
     static constexpr uint32_t MAX_NUM_SUB_DEVICES = 16;
@@ -30,6 +34,7 @@ public:
         MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
         "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
+    SubDeviceManager(distributed::MeshDevice* device, std::unique_ptr<Allocator>&& global_allocator);
     SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
     // Constructor used for regular sub-devices
     SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
@@ -75,6 +80,7 @@ public:
 private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
+    void populate_ethernet_sub_device_id_to_device_id(chip_id_t device_id);
     void populate_sub_device_ids();
     void populate_num_cores();
     void populate_sub_allocators();
@@ -85,6 +91,7 @@ private:
     SubDeviceManagerId id_;
 
     // TODO: We have a max number of sub-devices, so we can use a fixed size array
+    std::unordered_map<SubDeviceId, chip_id_t> ethernet_sub_device_id_to_device_id_;
     std::vector<SubDevice> sub_devices_;
     std::vector<SubDeviceId> sub_device_ids_;
     std::vector<SubDeviceId> sub_device_stall_group_;

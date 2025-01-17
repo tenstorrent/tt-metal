@@ -16,7 +16,11 @@
 #include "sub_device_types.hpp"
 #include "span.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+
+class SubDeviceManagerTracker;
+
+namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
@@ -56,8 +60,7 @@ private:
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
-
-    void initialize();
+    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -292,7 +295,8 @@ public:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
@@ -305,4 +309,6 @@ struct MeshSubDeviceManagerId {
     std::vector<SubDeviceManagerId> sub_device_manager_ids;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+
+}  // namespace tt::tt_metal
