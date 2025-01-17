@@ -487,7 +487,7 @@ def test_permute_4d_fixed_w(shape, perm, device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
-def generate_fixed_dim_not_dim_permutations(N, dim0, dim1):
+def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
     perms_Nd = generate_permutations(N)
     for perm in perms_Nd:
         if perm[dim0] != dim1:
@@ -513,7 +513,7 @@ def test_permute_5d_yw(shape, perm, dtype, device):
 
 
 @pytest.mark.parametrize("shape", [[3, 33, 17, 33, 33]])
-@pytest.mark.parametrize("perm", generate_fixed_dim_not_dim_permutations(5, 4, 3))
+@pytest.mark.parametrize("perm", generate_fixed_no_dim0_dim1_transpose_permutations(5, 4, 3))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_yw_permutations(shape, perm, dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
