@@ -319,7 +319,7 @@ def to_torch(
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
         shape_without_tile_padding = tuple(tensor.shape)
-        logical_shape_rank = len(tensor.logical_shape)
+        logical_shape_rank = len(tensor.shape)
 
         tensor = tensor.to_torch()
         slices = [slice(None, x) for x in shape_without_tile_padding]

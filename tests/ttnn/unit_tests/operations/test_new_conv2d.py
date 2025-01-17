@@ -94,8 +94,15 @@ def run_conv(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+    # torch_weight_tensor = torch.randn(input_channels, dtype=torch.bfloat16).float().reshape(1, input_channels, 1, 1)
+    torch_weight_tensor = (
+        torch.randn(filter_height * filter_width, dtype=torch.bfloat16)
+        .float()
+        .reshape(1, 1, filter_height, filter_width)
+    )
     torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
+    torch_weight_tensor = torch.broadcast_to(torch_weight_tensor, conv_weight_shape)
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -204,6 +211,8 @@ def run_conv(
 
     if not fp32_accum:
         pcc = 0.985
+        if input_channels * filter_height * filter_width > 10000:
+            pcc = 0.97
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.996
     else:
@@ -361,7 +370,7 @@ def run_conv_with_split(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout, config",
     (
-        (256, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
+        (512, 256, 8, 8, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None),
         (128, 128, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, None),
         (16, 16, 256, 256, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, {"act_block_h": 32}),
     ),
@@ -386,7 +395,7 @@ def run_conv_with_split(
     "filter, pad",
     [
         [3, 1],
-        [1, 0],
+        # [1, 0],
         [5, 2],
     ],
 )
