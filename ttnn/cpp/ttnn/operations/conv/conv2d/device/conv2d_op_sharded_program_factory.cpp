@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -622,10 +623,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
     bool is_conv1d = filter_w == 1 && input_width == 1;
-    bool is_depthwise_conv = groups == input_channels && groups == output_channels;
+    bool is_conv_1d_depthwise_conv =
+        is_1d_deptwise_conv(groups, input_channels, output_channels, filter_w, input_width);
 
     if (has_bias) {
-        if (is_conv1d and is_depthwise_conv) {
+        if (is_conv_1d_depthwise_conv) {
             TT_THROW("Bias is not supported for depthwise conv1d");
         }
         // Tensor bias is of shape {output_channels}
@@ -636,7 +638,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
 
     // matrix multiplication shape check valid for all convs except depthwise conv1d
-    if (!is_conv1d and !is_depthwise_conv) {
+    if (!is_conv_1d_depthwise_conv) {
         TT_FATAL(
             act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
     }
@@ -701,7 +703,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = is_conv1d and is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
+    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
@@ -1103,7 +1105,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
     std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
-    if (is_conv1d and is_depthwise_conv) {
+    if (is_conv_1d_depthwise_conv) {
         input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,
             a,
@@ -1199,7 +1201,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
             tilize_in0 = false;
-        } else if (is_conv1d and is_depthwise_conv) {
+        } else if (is_conv_1d_depthwise_conv) {
             // 1D Depthwise Conv
             TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
             TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");
