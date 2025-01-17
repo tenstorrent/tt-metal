@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include <array>
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"

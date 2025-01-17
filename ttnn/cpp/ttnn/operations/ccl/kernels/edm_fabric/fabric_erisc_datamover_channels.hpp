@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include "debug/dprint.h"
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include <tt-metalium/risc_attribs.h>
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"

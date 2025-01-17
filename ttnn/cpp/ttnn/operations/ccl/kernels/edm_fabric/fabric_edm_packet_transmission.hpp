@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
