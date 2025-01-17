@@ -55,7 +55,6 @@ std::tuple<SubDeviceManagerId, SubDeviceId> SubDeviceManagerTracker::create_sub_
     new_sub_devices.push_back(fabric_sub_device);
     auto fabric_sub_device_id = SubDeviceId{static_cast<uint32_t>(new_sub_devices.size() - 1)};
     auto sub_device_manager_id = this->create_sub_device_manager(new_sub_devices, local_l1_size);
-    sub_device_managers_[sub_device_manager_id]->set_fabric_sub_device_id(fabric_sub_device_id);
     return {sub_device_manager_id, fabric_sub_device_id};
 }
 
