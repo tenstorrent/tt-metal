@@ -5,7 +5,9 @@
 #pragma once
 
 #include <filesystem>
+#include <mutex>
 #include <reflect>
+#include <stack>
 #include <tuple>
 #include <type_traits>
 

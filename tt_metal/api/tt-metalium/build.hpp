@@ -8,7 +8,6 @@
 #include <future>
 
 #include "tt_backend_api_types.hpp"
-#include "executor.hpp"
 #include "utils.hpp"
 #include "core_coord.hpp"
 #include "data_format.hpp"
@@ -178,9 +177,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
-inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
-    events.emplace_back(detail::async(build_func));
-}
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 
 inline void sync_build_step(std::vector<std::shared_future<void>>& events) {
     for (auto& f : events) {

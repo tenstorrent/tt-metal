@@ -14,7 +14,7 @@
 #include <string>
 #include <thread>
 
-#include <executor.hpp>
+#include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
 #include <common.hpp>
@@ -730,6 +730,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
     sync_build_step(events);
+}
+
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
+    events.emplace_back(detail::async(build_func));
 }
 
 }  // namespace tt::tt_metal
