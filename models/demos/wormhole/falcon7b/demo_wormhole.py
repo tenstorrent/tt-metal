@@ -54,13 +54,13 @@ def test_demo(
 
     batch_size = 32
     if perf_mode:
-        csv_perf_targets = {
+        json_perf_targets = {
             "prefill_t/s": {128: 2034, 1024: 9880, 2048: 9881}[max_seq_len],
             "decode_t/s": 26 * batch_size,
             "decode_t/s/u": 26,
         }  # performance targets that we aim for (wormhole)
     else:
-        csv_perf_targets = {}
+        json_perf_targets = {}
 
     return run_falcon_demo_kv(
         user_input=user_input,
@@ -74,6 +74,6 @@ def test_demo(
         greedy_sampling=greedy_sampling,
         expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
-        csv_perf_targets=csv_perf_targets,
+        json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
     )

@@ -1031,6 +1031,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 }
 
 void Device::push_work(std::function<void()> work, bool blocking) {
+    if (not this->initialized_) {
+        log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+        return;
+    }
     this->work_executor_.push_work(std::move(work), blocking);
 }
 
@@ -1048,7 +1052,7 @@ bool Device::close() {
     }
 
     this->work_executor_.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);
 
@@ -1523,6 +1527,10 @@ bool Device::can_use_passthrough_scheduling() const {
 }
 
 void Device::synchronize() {
+    if (not this->initialized_) {
+        log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
+        return;
+    }
     this->work_executor_.synchronize();
 }
 
@@ -1716,11 +1724,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
     }
 }
 
-LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_worker_launch_message_buffer_state(
-        sub_device_id);
-}
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     return this->hw_command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
 }
@@ -1895,9 +1898,8 @@ bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
 void v1::DeallocateBuffers(IDevice* device) { device->deallocate_buffers(); }
 
-void v1::DumpDeviceProfileResults(IDevice* device, const CoreRangeSet &worker_cores, bool last_dump) {
-    auto worker_cores_vec = corerange_to_cores(worker_cores);
-    detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
+void v1::DumpDeviceProfileResults(IDevice* device) {
+    detail::DumpDeviceProfileResults(device);
 }
 
 ARCH v1::GetArch(IDevice* device) { return device->arch(); }

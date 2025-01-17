@@ -4,12 +4,14 @@
 
 #pragma once
 
+
 #include "dataflow_api_common.h"
 #include "dataflow_addr_gen.h"
 
 /**
  * \private
  */
+
 
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via
@@ -55,6 +57,7 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
+
 
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.
@@ -397,6 +400,7 @@ std::uint64_t get_noc_addr(std::uint32_t noc_x, std::uint32_t noc_y, std::uint32
     return NOC_XY_ADDR(DYNAMIC_NOC_X(noc, noc_x), DYNAMIC_NOC_Y(noc, noc_y), addr);
 }
 
+
 FORCE_INLINE
 std::uint32_t get_noc_exclude_region(
     std::uint32_t exclude_start_x,
@@ -737,6 +741,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
     }
 }
 
+
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call. The destination is specified using
@@ -769,6 +774,7 @@ inline void noc_async_write(
         WAYPOINT("NAWD");
     }
 }
+
 
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
 FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
@@ -1376,3 +1382,4 @@ get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_
     }
     return (noc_addr << NOC_ADDR_COORD_SHIFT) | (bank_address_offset);
 }
+

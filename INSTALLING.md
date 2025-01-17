@@ -31,8 +31,6 @@ Note the current compatability matrix:
 ```sh
 sudo ./install_dependencies.sh
 ```
-- Note: `CMake 3.16` is the targetted required version of `CMake` as it aligns with the default from `Ubuntu 20.04`. Some advanced build configurations like unity builds require `CMake 3.20`.
-  - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
 ### Step 3. Install and start using TT-NN and TT-Metalium!

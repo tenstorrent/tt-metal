@@ -10,7 +10,6 @@ set(TENSOR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/shape/shape.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/alignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/page_config.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/layout/size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/xtensor/partition.cpp
     CACHE INTERNAL

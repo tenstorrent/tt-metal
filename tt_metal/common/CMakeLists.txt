@@ -3,6 +3,7 @@ set(COMMON_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
