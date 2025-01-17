@@ -215,6 +215,18 @@ void py_module(py::module& module) {
 
     module.def(
         "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::TensorSpec&, IDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("tensor_spec"),
+        py::arg("device"));
+
+    module.def(
+        "allocate_tensor_on_device",
+        py::overload_cast<const ttnn::TensorSpec&, MeshDevice*>(&ttnn::operations::core::allocate_tensor_on_device),
+        py::arg("tensor_spec"),
+        py::arg("mesh_device"));
+
+    module.def(
+        "allocate_tensor_on_device",
         py::overload_cast<
             const ttnn::SimpleShape&,
             ttnn::DataType,
