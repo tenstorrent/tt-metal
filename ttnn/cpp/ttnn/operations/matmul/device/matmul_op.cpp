@@ -15,6 +15,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -192,14 +193,6 @@ inline uint32_t get_estimated_size_of_cbs(
     return in0_size + in1_size + out_size + interm_size;
 }
 
-inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
-    return max_l1_space;
-}
-
 inline bool can_cbs_fit_in_l1(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -208,7 +201,7 @@ inline bool can_cbs_fit_in_l1(
     uint32_t in0_block_w,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t max_l1_space = ttnn::get_max_l1_space(input_tensor_a);
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
@@ -230,7 +223,7 @@ inline uint32_t get_per_core_factor(
     uint32_t in0_block_w,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t max_l1_space = ttnn::get_max_l1_space(input_tensor_a);
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
@@ -259,7 +252,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
     uint32_t in0_block_w,
     uint32_t interm_cb_size,
     const bool adjust_in0_block_w) {
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
+    uint32_t max_l1_space = ttnn::get_max_l1_space(input_tensor_a);
     tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
