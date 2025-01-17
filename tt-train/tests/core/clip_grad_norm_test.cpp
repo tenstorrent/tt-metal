@@ -40,13 +40,7 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     // Compute reference total p2 norm manually; the "total norm" in pytorch
     // parlance is the L2 norm of tensor obtained by concatenating all the grads
     // together.
-    auto p2_norm = [](const xt::xarray<float>& grad) {
-        float res = 0.0F;
-        for (auto it = grad.begin(); it != grad.end(); it++) {
-            res += std::pow(*it, 2);
-        }
-        return std::sqrt(res);
-    };
+    auto p2_norm = [](const xt::xarray<float>& grad) { return std::sqrt(xt::sum(grad * grad)()); };
 
     auto concatenated_grads = std::accumulate(
         expected_grads.begin() + 1,
@@ -59,10 +53,9 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     float expected_total_p2_norm = p2_norm(concatenated_grads);
 
     // reshape grads to 4D, required for compatibility with ttnn ops.
-    std::transform(
-        expected_grads.begin(), expected_grads.end(), expected_grads.begin(), [](const xt::xarray<float>& grad) {
-            return xt::xarray<float>(xt::reshape_view(grad, {1U, 1U, 1U, tensor_size}));
-        });
+    for (auto& grad : expected_grads) {
+        grad.reshape({1U, 1U, 1U, tensor_size});
+    }
 
     // Create tensors and set their gradients
     for (uint32_t i = 0; i < num_tensors; i++) {
