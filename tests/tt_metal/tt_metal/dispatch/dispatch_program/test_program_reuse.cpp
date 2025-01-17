@@ -247,7 +247,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
             detail::ReadFromDeviceL1(device, core_coord, sem_base_addr, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
                  i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
-                EXPECT_EQ(semaphore_vals[i], dummy_sems[expected_sem_idx]);
+                EXPECT_EQ(semaphore_vals[i], dummy_sems[expected_sem_idx]) << expected_sem_idx;
                 expected_sem_idx++;
             }
         }
@@ -264,10 +264,9 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
                 const uint32_t index = cb_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = cb_config.cb_config_vector[i].num_pages;
                 const uint32_t cb_size = cb_num_pages * cb_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
-                EXPECT_TRUE(addr_match and size_match and num_pages_match);
+                EXPECT_EQ(cb_config_vector.at(index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(index + 2), cb_num_pages);
 
                 cb_addr += cb_size;
             }
