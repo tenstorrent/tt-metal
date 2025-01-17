@@ -158,7 +158,6 @@ def run_prefetcher_mm(
     dtypes,
     is_functional_test=False,
 ):
-    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
     logger.info(f"Running test_run_prefetcher with num_tensors={num_tensors}, num_layers={num_layers}")
     assert len(input_shapes) == len(dtypes)
     assert num_tensors == len(input_shapes)
@@ -214,7 +213,7 @@ def run_prefetcher_mm(
     cluster_shape = None
     mesh_mapper = None
     mesh_composer = None
-    if is_mesh_device:
+    if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
         cluster_shape = device.shape
         mesh_mapper = ReplicateTensorToMesh(device)
         mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
