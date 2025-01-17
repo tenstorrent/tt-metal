@@ -61,7 +61,13 @@ void SystemMesh::Impl::initialize() {
 
     std::tie(logical_to_physical_coordinates_, logical_mesh_shape_) = get_system_mesh_coordinate_translation_map();
     for (const auto& [logical_coordinate, physical_coordinate] : logical_to_physical_coordinates_) {
-        logical_to_device_id_.emplace(logical_coordinate, physical_coordinate_to_device_id_.at(physical_coordinate));
+        auto physical_device_id_iter = physical_coordinate_to_device_id_.find(physical_coordinate);
+        TT_FATAL(
+            physical_device_id_iter != physical_coordinate_to_device_id_.end(),
+            "Physical (Ethernet) coordinate: {} not found. Have you used `tt-topology` to flash the ethernet "
+            "coordinates with the correct topology?",
+            physical_coordinate);
+        logical_to_device_id_.try_emplace(logical_coordinate, physical_device_id_iter->second);
     }
 }
 
