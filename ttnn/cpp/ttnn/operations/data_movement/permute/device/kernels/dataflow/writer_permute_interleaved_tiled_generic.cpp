@@ -48,6 +48,7 @@ void kernel_main() {
     constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
     constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
     constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
+    constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(22);
 
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t FACE_HW = FACE_HEIGHT * FACE_WIDTH;
@@ -68,13 +69,16 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_block = get_arg_val<uint32_t>(1);
     uint32_t end_block = get_arg_val<uint32_t>(2);
+    uint32_t start_padding_tile_idx = get_arg_val<uint32_t>(3);
+    uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
 
     // Input shape and strides (excluding W dimension and measured in rows, not bytes)
     // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    uint32_t array_start_offset = 5;  // input shape starts at arg #5
     uint32_t input_shape[N], dims[N];
     for (uint32_t i = 0; i < N; i++) {
-        input_shape[i] = get_arg_val<uint32_t>(i + 3);
-        dims[i] = get_arg_val<uint32_t>(i + N + 3);
+        input_shape[i] = get_arg_val<uint32_t>(i + array_start_offset);
+        dims[i] = get_arg_val<uint32_t>(i + N + array_start_offset);
     }
 
     uint32_t permuted_w_dim = 0;  // Will hold the position of w_dim in the permuted array
@@ -291,5 +295,57 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_out, 1);
         DPRINT << ENDL();
+    }
+    // add padding
+    if constexpr (needs_y_padding) {
+        cb_wait_front(tt::CBIndex::c_3, 1);
+        uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
+
+        // We'll reuse 'dest_multi_idx' for tile indexing
+        uint32_t y_t = output_tiled_shape[N - 2] - 1;
+        uint8_t Y_in_tile = output_shape[N - 2] % TILE_HEIGHT;
+        uint8_t face_y_start = (Y_in_tile / FACE_HEIGHT);
+
+        dest_multi_idx[N - 2] = y_t;  // fix the tile dimension in output
+
+        for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
+            // Unflatten 'tile_idx' => dest_multi_idx in the output tiled shape
+            size_t remaining = tile_idx;
+            for (uint32_t i = 0; i < N; ++i) {
+                size_t dim = N - 1 - i;
+                if (dim == (N - 2)) {
+                    continue;  // already set y_t
+                }
+                dest_multi_idx[dim] = (remaining % output_tiled_shape[dim]);
+                remaining /= output_tiled_shape[dim];
+            }
+
+            // Flatten => linear_idx
+            uint32_t linear_idx = 0;
+            for (uint32_t i = 0; i < N; ++i) {
+                linear_idx = (linear_idx * output_tiled_shape[i]) + dest_multi_idx[i];
+            }
+
+            // Write out padding lines
+            for (uint8_t face_y = face_y_start; face_y < NUM_FACES_H; ++face_y) {
+                uint32_t face_y_offset = face_y * NUM_FACES_W * FACE_HW;
+                uint8_t sub_tile_line_start = (face_y == face_y_start) ? (Y_in_tile % FACE_HEIGHT) : 0;
+
+                for (uint8_t face_w = 0; face_w < NUM_FACES_W; ++face_w) {
+                    uint32_t face_offset = face_y_offset + (face_w * FACE_HW);
+
+                    for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
+                        uint32_t offset = (face_offset + (sub_tile_line * FACE_WIDTH)) * element_size;
+
+                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+
+                        // Perform asynchronous write
+                        noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
+                    }
+                }
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(tt::CBIndex::c_3, 1);
     }
 }
