@@ -18,6 +18,8 @@
 #define DISPATCH_MAX_UPSTREAM 4
 #define DISPATCH_MAX_DOWNSTREAM 4
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 typedef struct {
@@ -753,3 +755,5 @@ void configure_dispatch_cores(IDevice* device) {
         }
     }
 }
+
+}  // namespace tt::tt_metal::dispatch

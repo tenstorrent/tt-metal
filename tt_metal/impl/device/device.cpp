@@ -848,7 +848,7 @@ void Device::compile_command_queue_programs() {
     auto command_queue_program_ptr = std::make_unique<Program>();
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
         // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
         if (tt::Cluster::instance().get_mmio_device_tunnel_count(this->id_) > 0) {
@@ -864,7 +864,7 @@ void Device::compile_command_queue_programs() {
             }
         }
     } else {
-        auto command_queue_program_ptr = create_and_compile_cq_program(this);
+        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
     }
 }
@@ -909,7 +909,7 @@ void Device::configure_command_queue_programs() {
     }
 
     // Write device-side cq pointers
-    configure_dispatch_cores(this);
+    dispatch::configure_dispatch_cores(this);
 
     // Run the cq program
     program_dispatch::finalize_program_offsets(command_queue_program, this);

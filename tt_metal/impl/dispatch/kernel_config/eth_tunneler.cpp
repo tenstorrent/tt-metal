@@ -9,6 +9,8 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 void EthTunnelerKernel::GenerateStaticConfigs() {
@@ -347,3 +349,5 @@ uint32_t EthTunnelerKernel::GetRouterId(FDKernel* k, bool upstream) {
     TT_ASSERT(false, "Couldn't find router kernel");
     return router_id;
 }
+
+}  // namespace tt::tt_metal::dispatch

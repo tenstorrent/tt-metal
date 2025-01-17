@@ -358,7 +358,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
-        populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+        dispatch::populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
     }
 }
 

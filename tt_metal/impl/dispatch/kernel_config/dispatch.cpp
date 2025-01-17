@@ -10,6 +10,8 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 void DispatchKernel::GenerateStaticConfigs() {
@@ -364,3 +366,5 @@ void DispatchKernel::ConfigureCore() {
         detail::WriteToDeviceL1(device_, logical_core_, completion_q1_last_event_ptr, zero, GetCoreType());
     }
 }
+
+}  // namespace tt::tt_metal::dispatch

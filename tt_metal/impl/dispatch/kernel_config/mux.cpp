@@ -9,6 +9,8 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 void MuxKernel::GenerateStaticConfigs() {
@@ -149,3 +151,5 @@ void MuxKernel::CreateKernel() {
         {"SKIP_NOC_LOGGING", "1"}};
     configure_kernel_variant(dispatch_kernel_file_names[MUX_D], compile_args, defines, false, false, false);
 }
+
+}  // namespace tt::tt_metal::dispatch

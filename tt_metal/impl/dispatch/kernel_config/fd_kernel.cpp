@@ -15,6 +15,8 @@
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
+namespace tt::tt_metal::dispatch {
+
 using namespace tt::tt_metal;
 
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
@@ -147,3 +149,5 @@ void FDKernel::configure_kernel_variant(
                 .defines = defines});
     }
 }
+
+}  // namespace tt::tt_metal::dispatch
