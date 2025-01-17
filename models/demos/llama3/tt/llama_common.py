@@ -295,6 +295,8 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             pt_out = torch.argmax(pt_input, dim=-1)
 
     if mesh_device is None:
+        if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
+            pt_out = pt_out.unsqueeze(0)
         return None, pt_out
     if on_host:
         return (

@@ -176,12 +176,14 @@ class LlamaGenerator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
+        argmax_on_device=False,
     ):
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
+            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs)
@@ -189,7 +191,7 @@ class LlamaGenerator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0])
+            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
         else:
             return tt_logits
 
@@ -199,6 +201,7 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -215,6 +218,26 @@ class LlamaGenerator:
             kv_cache=kv_cache,
         )
 
+        # Gather the output across all devices and untilize the tensor (for argmax)
+        if self.model.args.num_devices > 1:
+            if self.model.args.is_galaxy:
+                tt_logits = ttnn.all_gather(
+                    tt_logits,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.model.mesh_device,
+                    topology=ttnn.Topology.Linear,
+                )
+            else:
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+        if argmax_on_device:
+            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
+                tt_logits, dim=3, use_multicore=False if tokens.shape[0] > 1 else True  # ,output_tensor=tokens
+            )
+
         return tt_logits
 
     def _capture_trace_text(
@@ -223,13 +246,16 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
+        self._decode_forward_no_trace_text(
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
@@ -241,9 +267,27 @@ class LlamaGenerator:
         transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
         tt_out_trace = self.model.ttnn_decode_forward(*transformed_inputs, kv_cache=kv_cache)
 
+        if self.model.args.num_devices > 1:
+            if self.model.args.is_galaxy:
+                tt_out_trace = ttnn.all_gather(
+                    tt_out_trace,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.model.mesh_device,
+                    topology=ttnn.Topology.Linear,
+                )
+            else:
+                tt_out_trace = ttnn.all_gather(tt_out_trace, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        tt_out_trace = ttnn.untilize(tt_out_trace, use_multicore=True)
+
+        if argmax_on_device:
+            tt_out_trace = ttnn.argmax(  # TODO Add multicore support to batch > 1
+                tt_out_trace, dim=3, use_multicore=False if tokens.shape[0] > 1 else True  # , output_tensor=tokens
+            )
+
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-
         return trace_id, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
@@ -275,13 +319,14 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
@@ -461,8 +506,8 @@ class LlamaGenerator:
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
         return logits
 
     def _decode_forward_no_trace(
@@ -516,6 +561,20 @@ class LlamaGenerator:
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
         )
+
+        if self.model.args.num_devices > 1:
+            if self.model.args.is_galaxy:
+                tt_logits = ttnn.all_gather(
+                    tt_logits,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.model.mesh_device,
+                    topology=ttnn.Topology.Linear,
+                )
+            else:
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         return tt_logits
 
