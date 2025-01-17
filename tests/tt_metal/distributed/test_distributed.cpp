@@ -1,13 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tests/tt_metal/distributed/distributed_fixture.hpp"
 #include <tt-metalium/system_mesh.hpp>
 
-namespace tt::tt_metal::distributed::test {
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-TEST_F(MeshDevice_T3000, SimpleMeshDeviceTest) {
+namespace tt::tt_metal::distributed::test {
+namespace {
+
+TEST_F(T3000MultiDeviceFixture, SimpleMeshDeviceTest) {
     EXPECT_EQ(mesh_device_->num_devices(), 8);
     EXPECT_EQ(mesh_device_->num_rows(), 2);
     EXPECT_EQ(mesh_device_->num_cols(), 4);
@@ -25,4 +27,5 @@ TEST(MeshDeviceSuite, Test1x1SystemMeshInitialize) {
     });
 }
 
+}  // namespace
 }  // namespace tt::tt_metal::distributed::test
