@@ -7,7 +7,7 @@
 
 #include "ttml.hpp"
 
-ttnn::device::Device* device = nullptr;
+ttnn::device::IDevice* device = nullptr;
 
 void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // IMPORTANT. This function prints the tensor data assuming the tensor is in ROW_MAJOR layout
@@ -24,12 +24,14 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
     tt::tt_metal::memcpy(device->command_queue(), data.data(), tensor);
 
     // print the data
-    for (size_t i = 0; i < shape[0]; i++) {
-        for (size_t j = 0; j < shape[1]; j++) {
-            for (size_t k = 0; k < shape[2]; k++) {
-                for (size_t l = 0; l < shape[3]; l++) {
-                    std::cout << data[i * shape[1] * shape[2] * shape[3] + j * shape[2] * shape[3] + k * shape[3] + l]
-                                     .to_float()
+    for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {
+        for (size_t dim1 = 0; dim1 < shape[1]; dim1++) {
+            for (size_t dim2 = 0; dim2 < shape[2]; dim2++) {
+                for (size_t dim3 = 0; dim3 < shape[3]; dim3++) {
+                    std::cout << data
+                                     [dim0 * shape[1] * shape[2] * shape[3] + dim1 * shape[2] * shape[3] +
+                                      dim2 * shape[3] + dim3]
+                                         .to_float()
                               << " ";
                 }
                 std::cout << std::endl;
@@ -49,9 +51,7 @@ int main() {
     size_t num_devices_ = 0;
 
     std::srand(0);
-    arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-    std::cout << "Arch:" << tt::test_utils::get_env_arch_name() << std::endl;
     std::cout << "num_devices:" << num_devices_ << std::endl;
     device = tt::tt_metal::CreateDevice(0);
     std::cout << "Device created" << std::endl;

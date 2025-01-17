@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -15,14 +16,14 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
-    const Tensor& input, const Tensor& output, uint32_t num_slices, uint32_t slice_index) {
+    const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
 
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
 
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -71,7 +72,13 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
         num_units_per_shard_width_last =
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
-        padded_offset_bytes = align(input_unit_size, input.buffer()->alignment());
+        //Adjust accordingly to l1 alignment, do it for all archs
+        if(keep_l1_aligned){
+            padded_offset_bytes = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
+        }
+        else {
+            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
+        }
     }
 
 
@@ -80,10 +87,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = align(output_unit_size, dst_buffer->alignment());
+    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = align(input_unit_size, src_buffer->alignment());
+        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
@@ -95,14 +102,14 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
-    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole) {
+    if (src_is_dram && input_unit_size % dram_alignment != 0 or is_blackhole or keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
-            scratch_cb_page_size = align(input_unit_size, hal.get_alignment(HalMemType::L1));
+            scratch_cb_page_size = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
-            scratch_cb_page_size = align(input_unit_size, dram_alignment);
+            scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
         }
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
@@ -246,7 +253,8 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
             bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
-            aligned = aligned and !(is_blackhole);
+            //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
+            aligned = aligned and !(is_blackhole) and !(keep_l1_aligned);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate

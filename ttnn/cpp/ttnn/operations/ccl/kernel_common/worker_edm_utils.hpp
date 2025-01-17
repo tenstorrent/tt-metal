@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::WorkerXY;
@@ -21,6 +21,7 @@ static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
 }
 
 enum EDM_IO_BLOCKING_MODE {
+    FLUSH_BLOCKING,
     BLOCKING,
     NON_BLOCKING
 };
@@ -30,12 +31,12 @@ enum EDM_IO_BLOCKING_MODE {
 
 
 FORCE_INLINE void push_filler_pages_to_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < cb_interface[cb_id].fifo_num_pages);
+    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
     cb_reserve_back(cb_id, num_pages);
     cb_push_back(cb_id, num_pages);
 }
 FORCE_INLINE void pop_filler_pages_from_cb(const uint32_t& cb_id, uint32_t num_pages) {
-    ASSERT(num_pages < cb_interface[cb_id].fifo_num_pages);
+    ASSERT(num_pages < get_local_cb_interface(cb_id).fifo_num_pages);
     cb_wait_front(cb_id, num_pages);
     cb_pop_front(cb_id, num_pages);
 }
@@ -64,7 +65,10 @@ FORCE_INLINE void send_chunk(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
-    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
+        noc_async_writes_flushed();
+        cb_pop_front(cb_id, num_pages);
+    } else if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
         noc_async_write_barrier();
         cb_pop_front(cb_id, num_pages);
     }

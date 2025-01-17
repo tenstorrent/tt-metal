@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat8.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat8.hpp>
 // //#include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/util.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -52,9 +52,6 @@ int main(int argc, char** argv) {
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;
@@ -114,13 +111,17 @@ int main(int argc, char** argv) {
             program,
             unary_reader_kernel,
             core,
-            {dram_buffer_src_addr, (std::uint32_t)dram_src_noc_xy.x, (std::uint32_t)dram_src_noc_xy.y, num_tiles});
+            {dram_buffer_src_addr,
+            0,
+            num_tiles});
 
         tt_metal::SetRuntimeArgs(
             program,
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles});
+            {dram_buffer_dst_addr,
+            0,
+            num_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
 

@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -24,16 +24,23 @@ ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank);
 
-ttnn::Tensor to_device(const ttnn::Tensor& tensor, Device* device, const std::optional<MemoryConfig>& memory_config);
+ttnn::Tensor to_device(
+    const ttnn::Tensor& tensor,
+    IDevice* device,
+    const std::optional<MemoryConfig>& memory_config,
+    uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor, MeshDevice* mesh_device, const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor,
+    MeshDevice* mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor allocate_tensor_on_device(
     const Shape& shape,
     DataType data_type,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const std::optional<MemoryConfig>& memory_config);
 
 ttnn::Tensor allocate_tensor_on_device(
@@ -53,13 +60,13 @@ void deallocate(Tensor& tensor, bool force = true);
 Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config);
 
 // Trace APIs - Single Device
-uint32_t begin_trace_capture(Device* device, const uint8_t cq_id);
+uint32_t begin_trace_capture(IDevice* device, const uint8_t cq_id);
 
-void end_trace_capture(Device* device, const uint32_t tid, const uint8_t cq_id);
+void end_trace_capture(IDevice* device, const uint32_t tid, const uint8_t cq_id);
 
-void execute_trace(Device* device, const uint32_t tid, const uint8_t cq_id, bool blocking);
+void execute_trace(IDevice* device, const uint32_t tid, const uint8_t cq_id, bool blocking);
 
-void release_trace(Device* device, const uint32_t tid);
+void release_trace(IDevice* device, const uint32_t tid);
 
 // Trace APIs - Multi Device
 uint32_t begin_trace_capture(MeshDevice* device, const uint8_t cq_id = ttnn::DefaultQueueId);

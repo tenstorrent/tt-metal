@@ -5,13 +5,13 @@
 #include <algorithm>
 #include <functional>
 #include <random>
-#include <ttnn/operations/numpy/functions.hpp>
+#include <ttnn/operations/functions.hpp>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 using namespace tt_metal;
@@ -75,14 +75,14 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH});
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::numpy::random::random(shape).to(Layout::TILE).to(device);
+        Tensor a = ttnn::random::random(shape).to(Layout::TILE).to(device);
 
         tt_metal::Tensor c = ttnn::transpose(a, -2, -1);
 

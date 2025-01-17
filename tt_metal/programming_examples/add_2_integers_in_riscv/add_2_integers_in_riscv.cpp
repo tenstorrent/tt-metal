@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_api.hpp"
-#include "impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    Device* device = CreateDevice(0);
+    IDevice* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();
@@ -25,15 +25,10 @@ int main(int argc, char** argv) {
     std::shared_ptr<Buffer> src1_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
-    auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-    auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
-    auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-    uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-    uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-    uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-    uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
-    uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
-    uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
+    // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
+    uint32_t src0_bank_id = 0;
+    uint32_t src1_bank_id = 0;
+    uint32_t dst_bank_id = 0;
 
     /* Create source data and write to DRAM */
     std::vector<uint32_t> src0_vec(1, 14);
@@ -67,17 +62,12 @@ int main(int argc, char** argv) {
         program,
         binary_reader_kernel_id,
         core,
-        {
-            src0_dram_buffer->address(),
-            src1_dram_buffer->address(),
-            dst_dram_buffer->address(),
-            src0_dram_noc_x,
-            src0_dram_noc_y,
-            src1_dram_noc_x,
-            src1_dram_noc_y,
-            dst_dram_noc_x,
-            dst_dram_noc_y,
-        });
+        {src0_dram_buffer->address(),
+         src1_dram_buffer->address(),
+         dst_dram_buffer->address(),
+         src0_bank_id,
+         src1_bank_id,
+         dst_bank_id});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);

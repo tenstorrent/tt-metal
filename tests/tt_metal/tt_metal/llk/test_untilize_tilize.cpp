@@ -10,8 +10,8 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -60,7 +60,7 @@ struct TestConfig {
     GoldenFunc golden_function;
 };
 
-void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& test_config) {
+void run_single_core_tilize_program(tt_metal::IDevice* device, const TestConfig& test_config) {
     Program program = tt::tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -87,9 +87,6 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(output_dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    CoreCoord dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-    CoreCoord dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles;
     tt_metal::CircularBufferConfig cb_src0_config =
@@ -105,7 +102,6 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         src1_dram_buffer = CreateBuffer(input_dram_config);
         dram_buffer_src1_addr = src1_dram_buffer->address();
-        dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
 
         uint32_t src1_cb_index = tt::CBIndex::c_1;
         uint32_t num_input_tiles = num_tiles;
@@ -195,18 +191,17 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
 
     std::vector<uint32_t> src1_vec;
 
-    if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
+    if(test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
+        // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel,
             core,
             {
                 dram_buffer_src0_addr,
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
+                (uint32_t)0,  // dram bank id
                 dram_buffer_src1_addr,
-                (std::uint32_t)dram_src1_noc_xy.x,
-                (std::uint32_t)dram_src1_noc_xy.y,
+                (uint32_t)0,  // dram bank id
                 (uint32_t)num_tiles,
             });
 
@@ -214,24 +209,20 @@ void run_single_core_tilize_program(tt_metal::Device* device, const TestConfig& 
         tt_metal::detail::WriteToBuffer(src1_dram_buffer, src1_vec);
 
     } else {
+        // tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp
         tt_metal::SetRuntimeArgs(
             program,
             reader_kernel,
             core,
             {dram_buffer_src0_addr,
-             (std::uint32_t)dram_src0_noc_xy.x,
-             (std::uint32_t)dram_src0_noc_xy.y,
+             (uint32_t)0,  // dram bank id
              num_tiles,
              src0_cb_index,
              test_config.num_tiles_c,
              false});
     }
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_writer_kernel,
-        core,
-        {dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles});
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
     tt_metal::detail::LaunchProgram(device, program);
 

@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <array>
 #include <bit>
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 
 /*
  *    ------   ATTENTION  ATTENTION  ATTENTION  ATTENTION  ATTENTION   ------
@@ -43,6 +43,29 @@ struct WorkerToNocCoordLookup {
 };
 
 
+struct VirtualCoordWormholeWorkerToNocLookup
+    : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup> {
+    VirtualCoordWormholeWorkerToNocLookup() : address_generators::WorkerToNocCoordLookup<VirtualCoordWormholeWorkerToNocLookup>() {}
+    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
+        #if defined(KERNEL_BUILD)
+        return worker_x + VIRTUAL_TENSIX_START_X;
+        #else
+        constexpr noc_grid_index_t HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_X = 18;
+        return worker_x + HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_X;
+        #endif
+    }
+
+    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
+        #if defined(KERNEL_BUILD)
+        return worker_y + VIRTUAL_TENSIX_START_Y
+        #else
+        constexpr noc_grid_index_t HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_Y = 18;
+        return worker_y + HOST_PLACEHOLDER_VIRTUAL_TENSIX_START_Y;
+        #endif
+        ;
+    }
+};
+
 /* A worker coord to noc coord lookup
  * It is marked "Harvested" in the type name because a non-harvested Wormhole part has a
  * fixed coordinate mapping, whereas the harvested part has potentially unique mapping per device
@@ -51,8 +74,8 @@ struct WorkerToNocCoordLookup {
  * used on both harvested and non-harvested parts.
  */
 struct HarvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<HarvestedWormholeWorkerToNocLookup>{
-    HarvestedWormholeWorkerToNocLookup(uint32_t nrows, const uint32_t *const row_map, uint32_t ncols, const uint32_t *const col_map) :
-        nrows(nrows), row_map(row_map), ncols(ncols), col_map(col_map) {}
+    HarvestedWormholeWorkerToNocLookup(uint8_t nrows, const uint32_t *const row_map, uint8_t ncols, const uint32_t *const col_map) :
+        row_map(row_map), col_map(col_map), nrows(nrows), ncols(ncols) {}
 
     noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
         // ASSERT worker_x < worker_to_routing_x_wormhole.size()
@@ -64,10 +87,10 @@ struct HarvestedWormholeWorkerToNocLookup : WorkerToNocCoordLookup<HarvestedWorm
         return row_map[worker_y];
     }
 
-    uint32_t nrows;
     const uint32_t *const row_map;
-    uint32_t ncols;
     const uint32_t *const col_map;
+    uint8_t nrows;
+    uint8_t ncols;
 };
 
 
@@ -82,7 +105,7 @@ struct test_shard_location_t {
 struct test_shard_location_with_contig_t {
     device_core_location_t core_location;
     std::uint32_t page_offset;
-    std::uint32_t contig_pages_in_row;
+    std::uint16_t contig_pages_in_row;
 };
 
 /* Similar to interleaved address generators found in dataflow API, this acts
@@ -186,11 +209,11 @@ template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 struct WidthShardedAddressGenerator {
     worker_to_noc_lookup_t worker_to_noc_lookup;
     DEVICE_SHARD_SPEC_T tensor_shard_spec;
-    uint32_t page_size;
     uint32_t bank_base_address;
+    uint16_t page_size;
 
    public:
-    constexpr WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr WidthShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint16_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), bank_base_address(base_address), page_size(page_size) {}
 
     /*
      * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
@@ -243,7 +266,7 @@ struct WidthShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, static_cast<uint16_t>(tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x)};
     }
 
     /*
@@ -251,7 +274,7 @@ struct WidthShardedAddressGenerator {
      * iterating through the tensor in a row-major order.
      */
     test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
-        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        auto const result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
         return test_shard_location_t{result.core_location, result.page_offset};
     }
 
@@ -315,11 +338,11 @@ template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 struct HeightShardedAddressGenerator {
     worker_to_noc_lookup_t worker_to_noc_lookup;
     DEVICE_SHARD_SPEC_T tensor_shard_spec;
-    uint32_t page_size;
     uint32_t bank_base_address;
+    uint16_t page_size;
 
    public:
-    constexpr HeightShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr HeightShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), bank_base_address(base_address), page_size(page_size) {}
 
     /*
      * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
@@ -367,7 +390,7 @@ struct HeightShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, 1};//tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, static_cast<uint16_t>(1)};//tensor_shard_spec.get_pages_per_shard_x() - page_in_shard_x};
     }
 
     /*
@@ -375,7 +398,7 @@ struct HeightShardedAddressGenerator {
      * iterating through the tensor in a row-major order.
      */
     test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
-        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        auto const result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
         return test_shard_location_t{result.core_location, result.page_offset};
     }
 
@@ -440,11 +463,11 @@ template <typename worker_to_noc_lookup_t, typename DEVICE_SHARD_SPEC_T>
 struct BlockShardedAddressGenerator {
     worker_to_noc_lookup_t worker_to_noc_lookup;
     DEVICE_SHARD_SPEC_T tensor_shard_spec;
-    uint32_t page_size;
     uint32_t bank_base_address;
+    uint16_t page_size;
 
    public:
-    constexpr BlockShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), page_size(page_size), bank_base_address(base_address) {}
+    constexpr BlockShardedAddressGenerator(worker_to_noc_lookup_t lookup, DEVICE_SHARD_SPEC_T const& tensor_shard_spec, uint32_t page_size, uint32_t base_address) : worker_to_noc_lookup(lookup), tensor_shard_spec(tensor_shard_spec), bank_base_address(base_address), page_size(page_size) {}
 
     /*
      * This function is an alternative API that allows the caller to implement a more efficient traversal/iteration of their tensor
@@ -499,7 +522,7 @@ struct BlockShardedAddressGenerator {
         noc_grid_index_t noc_x = worker_to_noc_lookup.get_noc_x_from_worker_x(worker_x_logical);
         noc_grid_index_t noc_y = worker_to_noc_lookup.get_noc_y_from_worker_y(worker_y_logical);
 
-        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, tensor_shard_spec.get_pages_per_shard_x() - page_offset_in_shard_x};
+        return test_shard_location_with_contig_t{device_core_location_t{noc_y, noc_x}, page_offset_in_shard, static_cast<uint16_t>(tensor_shard_spec.get_pages_per_shard_x() - page_offset_in_shard_x)};
     }
 
     /*
@@ -507,7 +530,7 @@ struct BlockShardedAddressGenerator {
      * iterating through the tensor in a row-major order.
      */
     test_shard_location_t get_page_location(std::uint32_t global_page_id) const {
-        auto const& result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
+        auto const result = get_page_location_with_contiguous_pages_in_row_in_bank(global_page_id);
         return test_shard_location_t{result.core_location, result.page_offset};
     }
 
@@ -585,6 +608,10 @@ struct DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED> {
 using DefaultWidthShardedAddressGenerator = WidthShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceWidthShardSpec>;
 using DefaultHeightShardedAddressGenerator = HeightShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
 using DefaultBlockShardedAddressGenerator = BlockShardedAddressGenerator<HarvestedWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
+
+using DefaultVirtualCoordWidthShardedAddressGenerator = WidthShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceWidthShardSpec>;
+using DefaultVirtualCoordHeightShardedAddressGenerator = HeightShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceHeightShardSpec>;
+using DefaultVirtualCoordBlockShardedAddressGenerator = BlockShardedAddressGenerator<VirtualCoordWormholeWorkerToNocLookup, DeviceBlockShardSpec>;
 
 
 }  // namespace address_generators

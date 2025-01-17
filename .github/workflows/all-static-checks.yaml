@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check kernel count in base metal is less than maximum
-        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 7 )); then exit 1; fi
+        run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
     runs-on: ubuntu-latest
     steps:
@@ -104,7 +104,7 @@ jobs:
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
-        cmakeVersion: "~3.16.0"
+        cmakeVersion: "~3.18.0"
     - name: Check CMake version
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version

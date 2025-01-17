@@ -4,8 +4,11 @@
 
 #pragma once
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -13,7 +16,7 @@
 namespace ttnn {
 namespace types {
 
-using Device = tt::tt_metal::Device;
+using IDevice = tt::tt_metal::IDevice;
 
 constexpr auto TILE_SIZE = 32;
 
@@ -54,6 +57,11 @@ static std::ostream& operator<<(std::ostream& os, const CoreGrid& core_grid) {
     os << "ttnn.CoreGrid(x=" << core_grid.x << ", y=" << core_grid.y << ")";
     return os;
 }
+
+using tt::tt_metal::GlobalSemaphore;
+using tt::tt_metal::SubDevice;
+using tt::tt_metal::SubDeviceManagerId;
+using tt::tt_metal::v1::experimental::GlobalCircularBuffer;
 
 }  // namespace types
 

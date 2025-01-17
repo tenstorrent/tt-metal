@@ -41,9 +41,14 @@
 #define MEM_NCRISC_LOCAL_SIZE (8 * 1024)
 #define MEM_TRISC_LOCAL_SIZE (4 * 1024)
 
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+#define MEM_BANK_TO_NOC_XY_SIZE 1024
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+#define MEM_BANK_OFFSET_SIZE 1024
+
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024)
+#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 128)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1536
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
@@ -91,6 +96,9 @@
 #define MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 #define MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 
+#define MEM_BANK_TO_NOC_SCRATCH (MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
+#define MEM_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+
 /////////////
 // Stack info
 // Increasing the stack size comes at the expense of less local memory for globals
@@ -129,6 +137,12 @@
 #define MEM_SLAVE_IERISC_STACK_SIZE 1024
 #define MEM_IERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE - MEM_IERISC_STACK_SIZE)
 #define MEM_SLAVE_IERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_SLAVE_IERISC_LOCAL_SIZE - MEM_SLAVE_IERISC_STACK_SIZE)
+
+#define MEM_IERISC_BANK_TO_NOC_SCRATCH (MEM_SLAVE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_SLAVE_IERISC_LOCAL_SIZE)
+#define MEM_IERISC_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+
+#define IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
+#define SLAVE_IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

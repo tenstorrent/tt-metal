@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
@@ -26,10 +26,10 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
 
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Reshape does not currently support sharding");
+        "Use ttnn::reshape for reshaping sharded inputs");
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Reshape does not currently support sharding");
+        "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
@@ -48,20 +48,17 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
     }
 }
 
-std::vector<ttnn::SimpleShape> ReshapeDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    return {output_shape.logical_shape()};
-}
-
-std::vector<Tensor> ReshapeDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    return {create_device_tensor(
-        output_shape,
-        input_tensor_a.get_dtype(),
-        input_tensor_a.get_layout(),
-        input_tensor_a.device(),
-        this->output_mem_config,
-        input_tensor_a.get_tensor_spec().tile())};
+    const auto& input_tensor = input_tensors.at(0);
+    return {TensorSpec(
+        output_shape.logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            input_tensor.get_tensor_spec().page_config(),
+            output_mem_config,
+            output_shape.logical_shape(),
+            output_shape.padded_shape()))};
 }
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(

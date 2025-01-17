@@ -14,7 +14,7 @@ using namespace tt::constants;
 namespace ttnn::operations::embedding {
 
 enum class EmbeddingsType { GENERIC, PADDED, BINARY };
-enum class EmbeddingsIndexType { UINT32, BFP16};
+enum class EmbeddingsIndexType { UINT32, BFP16 };
 
 struct Embeddings {
     const MemoryConfig output_mem_config;

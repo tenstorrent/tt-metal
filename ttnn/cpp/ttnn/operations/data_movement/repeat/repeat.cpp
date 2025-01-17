@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 
 #include "device/repeat_op.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/math.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -31,8 +31,8 @@ ttnn::Tensor RepeatOperation::invoke(
         repeated_logical_shape[dim] *= repeat_dims[dim];
     }
 
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    operation::launch_op(
+    std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
+    tt::tt_metal::operation::launch_op(
         [&input_rank, &input_tensor, &repeat_dims, &memory_config_arg, &padded_input_shape](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,

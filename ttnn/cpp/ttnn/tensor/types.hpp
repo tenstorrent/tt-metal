@@ -11,15 +11,16 @@
 #include <vector>
 #include <algorithm>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/tt_stl/concepts.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/span.hpp>
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
-#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
+#include "cpp/ttnn/tensor/enum_types.hpp"
 
 #include "ttnn/tensor/shape/shape.hpp"
 
@@ -27,7 +28,7 @@ namespace tt {
 
 namespace tt_metal {
 
-static constexpr std::uint8_t VERSION_ID = 3;
+static constexpr std::uint8_t VERSION_ID = 4;
 
 enum class DataType {
     BFLOAT16 = 0,
@@ -41,15 +42,28 @@ enum class DataType {
     INVALID = 8,
 };
 
-inline bool is_floating_point(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16:
-        case DataType::FLOAT32:
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: return true;
-        default: return false;
+template <typename T>
+consteval inline DataType convert_to_data_type() {
+    if constexpr (std::is_same_v<T, uint8_t>) {
+        return DataType::UINT8;
+    } else if constexpr (std::is_same_v<T, uint16_t>) {
+        return DataType::UINT16;
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        return DataType::INT32;
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return DataType::UINT32;
+    } else if constexpr (std::is_same_v<T, float>) {
+        return DataType::FLOAT32;
+    } else if constexpr (std::is_same_v<T, ::bfloat16>) {
+        return DataType::BFLOAT16;
+    } else {
+        static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported DataType!");
     }
 }
+
+bool is_floating_point(DataType dtype);
+
+bool is_block_float(DataType dtype);
 
 enum class StorageType {
     OWNED,
@@ -58,31 +72,6 @@ enum class StorageType {
     MULTI_DEVICE,       // on-device storage for multi-device context
     MULTI_DEVICE_HOST,  // host storage for multi-device context
 };
-
-struct AllGatherTensor {};
-bool operator==(const AllGatherTensor &, const AllGatherTensor &);
-struct ReplicateTensor {
-    int replication_factor = 1;
-    ReplicateTensor() = default;
-    ReplicateTensor(int replication_factor) : replication_factor(replication_factor) {}
-};
-bool operator==(const ReplicateTensor &, const ReplicateTensor &);
-struct ShardTensor {
-    int shard_dimension;
-    ShardTensor(int shard_dimension) : shard_dimension(shard_dimension) {}
-};
-bool operator==(const ShardTensor &lhs, const ShardTensor &rhs);
-
-using ShardMesh = std::pair<std::uint16_t, std::uint16_t>;  // (y,x)
-struct ShardTensor2D {
-    ShardMesh shard_mesh;  // logic 2D grid that defines the mapping of shards to devices
-    ShardTensor2D(ShardMesh mesh) : shard_mesh(std::move(mesh)) {}
-};
-bool operator==(const ShardTensor2D &lhs, const ShardTensor2D &rhs);
-
-// DistributedTensorConfig is a variant of different ways in which a tensor can be distributed across devices.
-using DistributedTensorConfig = std::variant<ReplicateTensor, ShardTensor, ShardTensor2D, AllGatherTensor>;
-DistributedTensorConfig get_distributed_tensor_config(const std::unordered_map<std::string, std::string> &metadata);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 
@@ -211,14 +200,13 @@ class LegacyShape {
         }
     }
     explicit LegacyShape(tt::stl::Span<const uint32_t> shape, tt::stl::Span<const uint32_t> shape_with_tile_padding) :
-        rank_(shape.size()), dimensions_{}, padding_{shape.size()} {
-        TT_ASSERT(
-            shape.size() == shape_with_tile_padding.size(),
-            "Shape and shape_with_tile_padding must have the same size");
-        for (auto index = 0; index < shape.size(); index++) {
-            auto padded_dimension = shape_with_tile_padding[index];
+    rank_(shape_with_tile_padding.size()), dimensions_{}, padding_{shape_with_tile_padding.size()} {
+        for (int index = 0; index < shape_with_tile_padding.size(); index++) {
+            int shape_index = index + static_cast<int>(shape.size()) - static_cast<int>(shape_with_tile_padding.size());
+            int dimension = shape_index >= 0 ? shape[shape_index] : 1;
+            int padded_dimension = shape_with_tile_padding[index];
             this->dimensions_[index] = padded_dimension;
-            this->padding_[index] = {.front = 0, .back = padded_dimension - shape[index]};
+            this->padding_[index] = {.front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
         }
     }
     explicit LegacyShape(const ttnn::SmallVector<uint32_t>& shape, const ttnn::SmallVector<uint32_t>& shape_with_tile_padding)
@@ -239,6 +227,7 @@ class LegacyShape {
     const LegacyShape without_padding() const;
 
     ttnn::SimpleShape logical_shape() const;
+    ttnn::SimpleShape padded_shape() const;
 
     const uint32_t get_normalized_index(std::int64_t index) const;
 
@@ -284,133 +273,6 @@ std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
 
 bool operator==(const MemoryConfig &config_a, const MemoryConfig &config_b);
 bool operator!=(const MemoryConfig &config_a, const MemoryConfig &config_b);
-
-void dump_memory_config(std::ostream &output_stream, const MemoryConfig &memory_config);
-void dump_memory_config(const std::string &file_name, const MemoryConfig &memory_config);
-
-MemoryConfig load_memory_config(std::ifstream &input_stream);
-MemoryConfig load_memory_config(const std::string &file_name);
-
-using OwnedBuffer = std::variant<
-    owned_buffer::Buffer<uint8_t>,
-    owned_buffer::Buffer<uint16_t>,
-    owned_buffer::Buffer<int32_t>,
-    owned_buffer::Buffer<uint32_t>,
-    owned_buffer::Buffer<float>,
-    owned_buffer::Buffer<bfloat16>>;
-
-// HostDataType supports all types included in OwnedBuffer as well as void*
-static_assert(
-    std::variant_size_v<OwnedBuffer> + 1 == std::variant_size_v<tt::tt_metal::HostDataType>,
-    "The data types supported in OwnedBuffer must match those in HostDataType.");
-struct OwnedStorage {
-    OwnedBuffer buffer;
-    OwnedStorage() = default;
-    OwnedStorage(OwnedBuffer buffer_) : buffer(std::move(buffer_)) {}
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
-
-    inline void insert_buffer(const OwnedBuffer &buffer_) { this->buffer = buffer_; }
-
-    inline OwnedBuffer get_buffer() const { return this->buffer; }
-
-    inline bool is_allocated() const {
-        return std::visit([](auto &&buffer) -> bool { return buffer.is_allocated(); }, buffer);
-    }
-};
-
-using DeviceBuffer = std::shared_ptr<Buffer>;
-struct DeviceStorage {
-    DeviceBuffer buffer;
-    DeviceStorage() = default;
-    DeviceStorage(DeviceBuffer buffer_) : buffer(std::move(buffer_)) {}
-
-    const MemoryConfig memory_config() const {
-        if (this->buffer.get() == nullptr) {
-            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
-        }
-
-        std::optional<ShardSpec> shard_spec = std::nullopt;
-        if (is_sharded(this->buffer->buffer_layout())) {
-            shard_spec = this->buffer->shard_spec().tensor_shard_spec;
-        }
-        return MemoryConfig{
-            .memory_layout = this->buffer->buffer_layout(),
-            .buffer_type = this->buffer->buffer_type(),
-            .shard_spec = shard_spec};
-    }
-
-    inline void insert_buffer(DeviceBuffer buffer_) { this->buffer = buffer_; }
-
-    inline DeviceBuffer get_buffer() const { return this->buffer; }
-    static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
-    const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
-
-    inline bool is_allocated() const { return buffer && buffer->is_allocated(); }
-};
-
-using BorrowedBuffer = std::variant<
-    borrowed_buffer::Buffer<uint8_t>,
-    borrowed_buffer::Buffer<uint16_t>,
-    borrowed_buffer::Buffer<int32_t>,
-    borrowed_buffer::Buffer<uint32_t>,
-    borrowed_buffer::Buffer<float>,
-    borrowed_buffer::Buffer<bfloat16>>;
-struct BorrowedStorage {
-    BorrowedBuffer buffer;
-
-    BorrowedStorage() = default;
-    std::function<void()> on_creation_callback = [] {};
-    std::function<void()> on_destruction_callback = [] {};
-
-    explicit BorrowedStorage(
-        const BorrowedBuffer &buffer,
-        const std::function<void()> &on_creation_callback,
-        const std::function<void()> &on_destruction_callback) :
-        buffer(buffer), on_creation_callback(on_creation_callback), on_destruction_callback(on_destruction_callback) {
-        this->on_creation_callback();
-    }
-
-    BorrowedStorage(const BorrowedStorage &other) :
-        buffer(other.buffer),
-        on_creation_callback(other.on_creation_callback),
-        on_destruction_callback(other.on_destruction_callback) {
-        this->on_creation_callback();
-    }
-
-    BorrowedStorage operator=(const BorrowedStorage &other) {
-        this->buffer = other.buffer;
-        this->on_creation_callback = other.on_creation_callback;
-        this->on_destruction_callback = other.on_destruction_callback;
-        this->on_creation_callback();
-        return *this;
-    }
-
-    BorrowedStorage(BorrowedStorage &&other) :
-        buffer(other.buffer),
-        on_creation_callback(other.on_creation_callback),
-        on_destruction_callback(other.on_destruction_callback) {
-        other.on_creation_callback = [] {};
-        other.on_destruction_callback = [] {};
-    }
-
-    BorrowedStorage operator=(BorrowedStorage &&other) {
-        this->buffer = other.buffer;
-        this->on_creation_callback = other.on_creation_callback;
-        this->on_destruction_callback = other.on_destruction_callback;
-        other.on_creation_callback = [] {};
-        other.on_destruction_callback = [] {};
-        return *this;
-    }
-
-    ~BorrowedStorage() { this->on_destruction_callback(); }
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
-
-    inline bool is_allocated() const { return true; }
-};
 
 } // namespace tt_metal
 } // namespace tt
@@ -562,251 +424,3 @@ static std::ostream &operator<<(std::ostream &os, const Shape &shape) {
 using types::Shape;
 
 }  // namespace ttnn
-
-namespace tt {
-namespace tt_metal {
-
-struct MultiDeviceHostStorage {
-    DistributedTensorConfig strategy;
-    std::vector<OwnedBuffer> buffers;
-    std::vector<ttnn::Shape> shapes;
-    mutable std::mutex mtx;
-
-    friend void swap(MultiDeviceHostStorage &first, MultiDeviceHostStorage &second) {
-        std::scoped_lock lock(first.mtx, second.mtx);
-        // enable ADL (not necessary, but good practice)
-        using std::swap;
-
-        swap(first.strategy, second.strategy);
-        swap(first.buffers, second.buffers);
-        swap(first.shapes, second.shapes);
-    }
-
-    MultiDeviceHostStorage() = default;
-    MultiDeviceHostStorage(
-        DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<ttnn::Shape> shapes_) :
-        strategy(strategy_), buffers(buffers_), shapes(shapes_) {}
-    MultiDeviceHostStorage(MultiDeviceHostStorage &&other) { swap(*this, other); }
-    // unfotunately we need to have this code written manually.
-    MultiDeviceHostStorage(const MultiDeviceHostStorage &other) {
-        std::scoped_lock lock(other.mtx);
-        strategy = other.strategy;
-        buffers = other.buffers;
-        shapes = other.shapes;
-    }
-
-    MultiDeviceHostStorage &operator=(const MultiDeviceHostStorage &other) {
-        MultiDeviceHostStorage temp(other);
-        swap(*this, temp);
-        return *this;
-    }
-
-    MultiDeviceHostStorage &operator=(MultiDeviceHostStorage &&other) {
-        swap(*this, other);
-        return *this;
-    }
-
-    bool operator==(const MultiDeviceHostStorage &other) {
-        return this->strategy == other.strategy and this->buffers == other.buffers and this->shapes == other.shapes;
-    }
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
-
-    // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
-    // preinitialize empty tensor handles and use/populate them in the worker threads.
-    void insert_buffer_and_shape_for_device(int buffer_index, const OwnedBuffer &buffer, const ttnn::Shape shape) {
-        std::lock_guard<std::mutex> lock(mtx);
-        buffers[buffer_index] = buffer;
-        shapes[buffer_index] = shape;
-    }
-
-    OwnedBuffer get_buffer(int buffer_index) const {
-        std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}",buffer_index);
-        return buffers[buffer_index];
-    }
-
-    OwnedBuffer &get_buffer(int buffer_index) {
-        std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
-        return buffers[buffer_index];
-    }
-
-    ttnn::Shape get_tensor_shape(int shape_index) const {
-        std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(shape_index < shapes.size(), "Buffer not found for device {}", shape_index);
-        return shapes[shape_index];
-    }
-
-    uint32_t num_buffers() const {
-        std::lock_guard<std::mutex> lock(mtx);
-        return buffers.size();
-    }
-
-    inline bool is_allocated() const {
-        // not sure what is better mutex for each buffer 10 times or one here.
-        // I think this one is better.
-        std::lock_guard<std::mutex> lock(mtx);
-
-        return std::all_of(buffers.begin(), buffers.end(), [](auto &&buffer) {
-            return std::visit([](auto &&buffer) -> bool { return buffer.is_allocated(); }, buffer);
-        });
-    }
-};
-
-struct MultiDeviceStorage {
-    DistributedTensorConfig strategy;
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, DeviceBuffer> buffers;
-    std::unordered_map<int, ttnn::Shape> shapes;
-    mutable std::mutex buffer_mtx;
-    mutable std::mutex shape_mtx;
-    MultiDeviceStorage() = default;
-
-    friend void swap(MultiDeviceStorage &first, MultiDeviceStorage &second) {
-        std::scoped_lock lock(first.buffer_mtx, first.shape_mtx, second.buffer_mtx, second.shape_mtx);
-
-        swap(first.strategy, second.strategy);
-        swap(first.ordered_device_ids, second.ordered_device_ids);
-        swap(first.buffers, second.buffers);
-        swap(first.shapes, second.shapes);
-    }
-
-    MultiDeviceStorage(
-        DistributedTensorConfig strategy_,
-        std::vector<int> ordered_device_ids_,
-        std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, ttnn::Shape> shapes_) :
-        strategy(std::move(strategy_)),
-        ordered_device_ids(std::move(ordered_device_ids_)),
-        buffers(std::move(buffers_)),
-        shapes(std::move(shapes_)) {}
-
-    MultiDeviceStorage(MultiDeviceStorage &&other) { swap(*this, other); }
-
-    MultiDeviceStorage(const MultiDeviceStorage &other) {
-        std::scoped_lock lock(other.buffer_mtx, other.shape_mtx);
-        ordered_device_ids = other.ordered_device_ids;
-        strategy = other.strategy;
-        buffers = other.buffers;
-        shapes = other.shapes;
-    }
-
-    MultiDeviceStorage &operator=(const MultiDeviceStorage &other) {
-        MultiDeviceStorage tmp(other);
-        swap(*this, tmp);
-        return *this;
-    }
-
-    MultiDeviceStorage &operator=(MultiDeviceStorage &&other) {
-        swap(*this, other);
-        return *this;
-    }
-
-    bool operator==(const MultiDeviceStorage &other) {
-        return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and
-               this->buffers == other.buffers and this->shapes == other.shapes;
-    }
-
-    inline const MemoryConfig memory_config() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_FATAL(!this->ordered_device_ids.empty(), "No device ids in list. Please ensure fields are initialized properly.");
-        auto first_device_id = this->ordered_device_ids[0];
-        if (this->buffers.at(first_device_id).get() == nullptr) {
-            TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
-        }
-        std::optional<ShardSpec> shard_spec = std::nullopt;
-        if (is_sharded(this->buffers.at(first_device_id)->buffer_layout())) {
-            shard_spec = this->buffers.at(first_device_id)->shard_spec().tensor_shard_spec;
-        }
-        return MemoryConfig{
-            .memory_layout = this->buffers.at(first_device_id)->buffer_layout(),
-            .buffer_type = this->buffers.at(first_device_id)->buffer_type(),
-            .shard_spec = shard_spec};
-    }
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    const auto attribute_values() const { return std::forward_as_tuple(); }
-
-    // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
-    // preinitialize empty tensor handles and use/populate them in the worker threads.
-    std::vector<DeviceBuffer> get_buffers() const;
-
-    inline void insert_buffer_and_shape_for_device(Device *device, const DeviceBuffer buffer, const ttnn::Shape shape) {
-        std::scoped_lock lock(buffer_mtx, shape_mtx);
-        TT_ASSERT(
-            device == buffer->device(),
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        buffers.insert({device->id(), buffer});
-        shapes.insert({device->id(), shape});
-    }
-
-    inline DeviceBuffer get_buffer_for_device(Device *device) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}",device->id());
-        TT_ASSERT(
-            buffers.at(device->id())->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffers.at(device->id());
-    }
-
-    inline DeviceBuffer &get_buffer_for_device(Device *device) {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(
-            buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
-        TT_ASSERT(
-            buffers.at(device->id())->device() == device,
-            "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffers.at(device->id());
-    }
-
-    inline DeviceBuffer get_buffer_for_device_id(uint32_t device_id) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.at(device_id);
-    }
-
-    inline ttnn::Shape get_tensor_shape_for_device(Device *device) const {
-        std::lock_guard<std::mutex> lock(shape_mtx);
-        TT_ASSERT(
-            shapes.find(device->id()) != shapes.end(), "Shape not found for device {}", device->id());
-        return shapes.at(device->id());
-    }
-
-    inline uint32_t num_buffers() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.size();
-    }
-
-    inline bool has_buffer_for_device(Device *device) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.find(device->id()) != buffers.end();
-    }
-
-    inline bool has_buffer_for_device_id(uint32_t device_id) const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-        return buffers.find(device_id) != buffers.end();
-    }
-
-    inline bool is_allocated() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-
-        return std::all_of(
-            ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto &&device_id) {
-                const auto &buffer = buffers.at(device_id);
-                return buffer && buffer->is_allocated();
-            });
-    }
-};
-
-using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
-
-template <typename T>
-constexpr void raise_unsupported_storage() {
-    static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
-}
-
-}  // namespace tt_metal
-
-}  // namespace tt

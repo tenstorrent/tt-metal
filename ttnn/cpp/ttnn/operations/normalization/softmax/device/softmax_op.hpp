@@ -5,8 +5,8 @@
 #pragma once
 
 #include <cmath>
-#include "common/base_types.hpp"
-#include "common/core_coord.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -30,7 +30,7 @@ struct Softmax {
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
+    std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,

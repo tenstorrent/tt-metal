@@ -123,11 +123,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
@@ -139,7 +137,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -149,7 +146,7 @@ jobs:
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -161,7 +158,7 @@ jobs:
         with:
           name: changelog
       - name: Assert wheels exist
-        run: ls -arhl metal_libs-*+*.whl
+        run: ls -arhl ttnn-*+*.whl
       - name: Release
         # A major release has not been tagged yet, so we need to do this to avoid
         # Node 16 deprecation warning message
@@ -177,35 +174,18 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
-            infra/machine_setup/scripts/setup_hugepages.py
-            metal_libs-*+*.whl
+            ttnn-*+*.whl
           fail_on_unmatched_files: true
-  create-docker-image:
+  create-docker-release-image:
     needs: [
       create-tag,
       create-and-upload-draft-release
     ]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
-        env:
-          TT_METAL_DOCKER_IMAGE: tt-metalium/ubuntu-20.04-amd64
-        uses: docker/build-push-action@v6
-        with:
-          push: true
-          tags: ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-20.04-amd64:${{ needs.create-tag.outputs.version }}-dev
-          context: .
-          file: dockerfile/ubuntu-20.04-amd64.Dockerfile
+    uses: ./.github/workflows/publish-release-image.yaml
+    secrets: inherit
+    with:
+      version: ${{ needs.create-tag.outputs.version }}
+      is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:
     needs: [
       get-params,

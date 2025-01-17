@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_collection.hpp"
-#include "llrt/rtoptions.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <rtoptions.hpp>
+#include <kernel.hpp>
+#include <core_coord.hpp>
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -255,7 +255,7 @@ namespace tt {
 
 void RecordDispatchData(Program& program, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -265,7 +265,7 @@ void RecordDispatchData(Program& program, data_collector_t type, uint32_t transa
 
 void RecordKernelGroups(Program& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 
@@ -275,7 +275,7 @@ void RecordKernelGroups(Program& program, CoreType core_type, std::vector<Kernel
 
 void RecordProgramRun(Program& program) {
     // Do nothing if we're not enabling data collection.
-    if (!tt::llrt::OptionsG.get_dispatch_data_collection_enabled()) {
+    if (!tt::llrt::RunTimeOptions::get_instance().get_dispatch_data_collection_enabled()) {
         return;
     }
 

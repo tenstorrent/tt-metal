@@ -126,7 +126,7 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31 | False |
  */
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16) {
+void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     if constexpr (tBcastOp == ELWMUL) {
         MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
     } else {

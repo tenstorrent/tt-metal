@@ -6,12 +6,12 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/constants.hpp>
 //////////////////////////////////////////////////////////////////////////////////////////
 // This test is similar to test_matmul_large_block.
 // The only difference is that it uses generic_binary_reader_kernel instead of reader_matmul_blocked kernel.
@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -184,10 +184,6 @@ int main(int argc, char** argv) {
         auto src0_dram_buffer = CreateBuffer(act_config);
         auto src1_dram_buffer = CreateBuffer(weights_config);
         auto dst_dram_buffer = CreateBuffer(dst_config);
-
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
@@ -247,11 +243,9 @@ int main(int argc, char** argv) {
 
         const std::array generic_binary_reader_args{
             src0_dram_buffer->address(),
-            (uint32_t)dram_src0_noc_xy.x,
-            (uint32_t)dram_src0_noc_xy.y,
+            (uint32_t) 0,
             src1_dram_buffer->address(),
-            (uint32_t)dram_src1_noc_xy.x,
-            (uint32_t)dram_src1_noc_xy.y,
+            (uint32_t) 0,
             (uint32_t)source_addresses.size(),
             (uint32_t)source_addresses_in_l1_addr,
             (uint32_t)num_blocks,
@@ -270,17 +264,14 @@ int main(int argc, char** argv) {
 
         const std::array writer_rt_args{
             dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
-            (std::uint32_t)out_subblock_h,      // num tiles per sub block m
-            (std::uint32_t)out_subblock_w,      // num tiles per sub block n
-            (std::uint32_t)M / out_subblock_h,  // num sub blocks m
-            (std::uint32_t)N / out_subblock_w,  // num sub blocks n
-            (std::uint32_t)out_subblock_w * single_tile_size *
-                (N / out_subblock_w),  // bytes offset to next row within sub-block
-            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size *
-                (N / out_subblock_w),                           // bytes offset to next row of sub-blocks
-            (std::uint32_t)out_subblock_w * single_tile_size};  // bytes offset to next sub-block
+            (std::uint32_t) 0,
+            (std::uint32_t)out_subblock_h, // num tiles per sub block m
+            (std::uint32_t)out_subblock_w, // num tiles per sub block n
+            (std::uint32_t)M/out_subblock_h, // num sub blocks m
+            (std::uint32_t)N/out_subblock_w, // num sub blocks n
+            (std::uint32_t)out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row within sub-block
+            (std::uint32_t)out_subblock_h * out_subblock_w * single_tile_size * (N/out_subblock_w), // bytes offset to next row of sub-blocks
+            (std::uint32_t)out_subblock_w*single_tile_size}; // bytes offset to next sub-block
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,

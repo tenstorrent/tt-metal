@@ -78,12 +78,13 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -100,7 +101,6 @@ def test_rotary_embedding_prefill(W, Z, Y, X, cache_size, in_sharded, out_sharde
     assert p
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "W, Z, Y, X",
     ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
@@ -151,12 +151,13 @@ def test_rotary_embedding_decode(
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -224,12 +225,13 @@ def test_rotary_embedding_prefill_fp32(
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 
@@ -246,7 +248,6 @@ def test_rotary_embedding_prefill_fp32(
     assert p
 
 
-@skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
@@ -295,12 +296,13 @@ def test_rotary_embedding_decode_fp32(
                     xt.shape.with_tile_padding()[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
             )
             xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
     else:
         xt = xt.to(device)
 

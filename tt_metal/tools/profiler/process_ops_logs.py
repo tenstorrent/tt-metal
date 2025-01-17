@@ -65,11 +65,16 @@ OPS_CSV_HEADER = [
     "OUTPUTS",
     "METAL TRACE ID",
     "METAL TRACE REPLAY SESSION ID",
-    "COMPUTE KERNEL PATH",
     "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
+    "BRISC MAX KERNEL SIZE [B]",
+    "NCRISC MAX KERNEL SIZE [B]",
+    "TRISC 0 MAX KERNEL SIZE [B]",
+    "TRISC 1 MAX KERNEL SIZE [B]",
+    "TRISC 2 MAX KERNEL SIZE [B]",
+    "ERISC MAX KERNEL SIZE [B]",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -311,7 +316,7 @@ def append_device_data(ops, traceReplays, logFolder):
                 else:
                     assert (
                         False
-                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
@@ -610,6 +615,9 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                     for dmKernel in opData["kernel_info"]["datamovement_kernels"]:
                         rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
                         rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
+
+                    for kernel, kernelSize in opData["kernel_info"]["kernel_sizes"].items():
+                        rowDict[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
 
                 if "core_usage" in opData.keys():
                     rowDict["CORE COUNT"] = opData["core_usage"]["count"]

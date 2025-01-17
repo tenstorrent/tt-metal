@@ -5,11 +5,11 @@
 #include <cstdint>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 
@@ -19,7 +19,7 @@ namespace conv2d {
 
 using namespace tt;
 
-operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -56,14 +56,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     bool pass = true;
     enable_split_reader = false;
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
-    uint32_t weight_block_w_ntiles = parallelization_config.per_core_out_matrix_width_ntiles;
-    uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntiles;
+    uint32_t weight_block_w_ntiles =
+        div_up(parallelization_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
+    uint32_t out_block_h_ntiles = div_up(parallelization_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
@@ -80,6 +81,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     log_debug(LogOp, "weight_df: {}", weight_df);
     log_debug(LogOp, "out_df: {}", out_df);
     log_debug(LogOp, "bias_df: {}", bias_df);
+    log_debug(LogOp, "tilized_act_df: {}", tilized_act_df);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -168,9 +170,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_cores_y = p_config.grid_size.y;
     TT_FATAL(num_cores_x < 13, "Error");
     TT_FATAL(num_cores_y < 10, "Error");
-    uint32_t per_core_out_matrix_height_ntiles = p_config.per_core_out_matrix_height_ntiles;
-    uint32_t per_core_out_matrix_width_ntiles = p_config.per_core_out_matrix_width_ntiles;
-
+    uint32_t per_core_out_matrix_height_ntiles =
+        div_up(p_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
+    uint32_t per_core_out_matrix_width_ntiles = div_up(p_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
     // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
     bool weight_width_sliced = per_core_out_matrix_width_ntiles < weight_matrix_width_ntiles;
     // uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
@@ -302,6 +304,16 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         "Number of Act Blocks along the Width {} should be divisible by the number of cores {}",
         num_blocks_act_w,
         input_num_cores);
+    bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, num_blocks_act_w);
+    tt::DataFormat interm0_df =
+        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
+    log_debug(LogOp, "interm0_df: {}", interm0_df);
+
+    TT_FATAL(
+        num_blocks_act_w % input_num_cores == 0,
+        "Number of Act Blocks along the Width {} should be divisible by the number of cores {}",
+        num_blocks_act_w,
+        input_num_cores);
     uint32_t per_core_num_blocks_act_w = num_blocks_act_w / input_num_cores;
 
     // act block info
@@ -367,7 +379,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
-    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, input_num_cores * TILE_WIDTH);
+    uint32_t output_channels_padded_to_tile_width = round_up(output_channels, output_num_cores * TILE_WIDTH);
     TT_FATAL(
         output_channels_padded_to_tile_width <= weight_matrix_width,
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
@@ -406,9 +418,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
 
     // act
     uint32_t act_dram_addr = src0_dram_buffer->address();
-    auto act_dram_noc_xy = src0_dram_buffer->noc_coordinates();
-    uint32_t act_noc_x = act_dram_noc_xy.x;
-    uint32_t act_noc_y = act_dram_noc_xy.y;
 
     TT_FATAL(
         act_block_h_ntiles % out_subblock_h_ntiles == 0,
@@ -432,10 +441,15 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
     if (has_bias) {
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
-        bias_ntiles =
-            bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+        bias_ntiles = weight_block_w_ntiles;
         bias_in_dram = bias_buffer->buffer_type() == BufferType::DRAM;
     }
+
+    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
+    uint32_t num_blocks_act_h_per_core =
+        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
+    uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
+    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t conv_output_size_h = output_shape[1];
@@ -465,7 +479,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         out_block_h_ntiles * act_block_w_ntiles * tt::tt_metal::detail::TileSize(act_df);
     uint32_t dst_l1_weight_buffer_size_bytes =
         weight_block_h_ntiles * weight_block_w_ntiles * tt::tt_metal::detail::TileSize(weight_df);
-
     // Number of bytes to be read from the channel dimension in one block.
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
@@ -484,6 +497,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
         log_debug(LogOp, "out_subblock_h_ntiles_padded: {}", out_subblock_h_ntiles_padded);
         log_debug(LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+        log_debug(LogOp, "num_blocks_weight_w_per_core: {}", num_blocks_weight_w_per_core);
     }
 
     // For debug
@@ -578,6 +592,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         (uint32_t)act_block_h_datums,
         (uint32_t)act_block_num_tiles,
         (uint32_t)input_num_cores,
+        (uint32_t)num_blocks_act_h_per_core,
         (uint32_t)per_core_num_blocks_act_w,
         (uint32_t)act_mcast_sender_semaphore,
         (uint32_t)act_mcast_receiver_semaphore,
@@ -600,14 +615,9 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
             per_core_num_blocks_act_w,
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
+        num_blocks_act_h_per_core,
         bias_cb,
         bias_in_dram};
-
-    uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
-    uint32_t num_blocks_act_h_per_core =
-        (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
-    uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
-    uint32_t bias_ntiles_per_core = bias_ntiles / num_weight_slices_width;
 
     std::map<string, string> writer_defines;
     std::map<string, string> writer_mcast_sender_defines;
@@ -664,25 +674,26 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         tilize_in0,    // tilize_in0
         untilize_out,  // untilize_out
 
-        bias_ntiles_per_core,
+        bias_ntiles,
 
+        out0_cb,
         num_output_tiles,
         use_non_tile_height,
 
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
     };
 
-    bool packer_l1_acc_en = packer_l1_acc && ((has_bias && num_blocks_act_w > 1) || (num_blocks_act_w > 2));
-
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
 
     // Local L1 to store temp vars
+    // Used for act_mcast_sender_semaphore_valid_addr_ptr
     CircularBufferConfig cb_for_l1_array_config =
-        CircularBufferConfig(32 * 2, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
-            .set_page_size(cb_for_l1_array, 32 * 2);
+        CircularBufferConfig(l1_scratchpad_CB_size, {{cb_for_l1_array, tt::DataFormat::Float16_b}})
+            .set_page_size(cb_for_l1_array, l1_scratchpad_CB_size);
     tt_metal::CreateCircularBuffer(program, all_cores, cb_for_l1_array_config);
+    log_debug(LogOp, "CB for L1 Array CB: {}, npages: {}, pagesize: {}", cb_for_l1_array, 1, 32 * 2);
 
     CircularBufferConfig cb_sharded_act_config =
         CircularBufferConfig(shard_shape[0] * shard_shape[1] * datum_size(act_df), {{sharded_act_cb, act_df}})
@@ -745,9 +756,6 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
         log_debug(LogOp, "Bias CB: {}, npages: {}, pagesize: {}", bias_cb, bias_ntiles, bias_pagesize);
     }
 
-    tt::DataFormat interm0_df =
-        packer_l1_acc_en ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b) : out_df;
-
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
@@ -763,13 +771,14 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
                 .set_page_size(matmul_partials_cb, out_tile_size);
         if (output.is_sharded()) {
             cb_matmul_partials_config = cb_matmul_partials_config.set_globally_allocated_address(*output.buffer());
+        } else {
+            log_debug(
+                LogOp,
+                "Matmul Partials CB: {}, npages: {}, pagesize: {}",
+                matmul_partials_cb,
+                num_output_tiles,
+                out_tile_size);
         }
-        log_debug(
-            LogOp,
-            "Matmul Partials CB: {}, npages: {}, pagesize: {}",
-            matmul_partials_cb,
-            num_output_tiles,
-            out_tile_size);
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
     } else {
         // Separate buffer if not same data format

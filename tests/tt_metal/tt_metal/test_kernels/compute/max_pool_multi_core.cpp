@@ -31,13 +31,13 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 inline void print_cb_details(uint32_t cb_id) {
     PDPRINT(
         "cb_id " << cb_id << ": { "
-                 << "size: " << cb_interface[cb_id].fifo_size << ", "
-                 << "limit: " << cb_interface[cb_id].fifo_limit << ", "
-                 << "page_size: " << cb_interface[cb_id].fifo_page_size << ", "
-                 << "num_pages: " << cb_interface[cb_id].fifo_num_pages << ", "
-                 << "rd_ptr: " << cb_interface[cb_id].fifo_rd_ptr << ", "
-                 << "wr_ptr: " << cb_interface[cb_id].fifo_wr_ptr << ", "
-                 << "wr_tile_ptr: " << cb_interface[cb_id].fifo_wr_tile_ptr << " }");
+                 << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
+                 << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
+                 << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
+                 << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
+                 << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
+                 << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
+                 << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }");
 }
 #endif
 
@@ -49,7 +49,7 @@ inline void tilize(
     uint32_t in_ntiles_hwc,
     uint32_t window_hw_padded,
     uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_ntiles_hwc);
+    tilize_init_short(in_cb_id, in_ntiles_hwc, out_cb_id);
     for (uint32_t out_elem_i = 0; out_elem_i < out_nelems; ++out_elem_i) {
         cb_wait_front(in_cb_id, 1);
         cb_reserve_back(out_cb_id, in_ntiles_hwc);
@@ -63,7 +63,7 @@ inline void tilize(
         cb_push_back(out_cb_id, in_ntiles_hwc);
         cb_pop_front(in_cb_id, 1);
     }
-    tilize_uninit(in_cb_id);
+    tilize_uninit(in_cb_id, out_cb_id);
 }
 
 inline void reduce_h(
@@ -77,7 +77,7 @@ inline void reduce_h(
     uint32_t out_cb_id) {
     cb_wait_front(in_cb_id, in_ntiles_hwc * out_nelems);
     cb_reserve_back(out_cb_id, out_ntiles_c * out_nelems);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_COL>(out_cb_id, in_cb_id, in_scalar_cb_id);
     uint32_t base_tile_id = 0;
     for (uint32_t c_i = 0; c_i < in_ntiles_c * out_nelems; ++c_i) {
         // add to accumulator all the in_ntiles_hw in a column of tiles

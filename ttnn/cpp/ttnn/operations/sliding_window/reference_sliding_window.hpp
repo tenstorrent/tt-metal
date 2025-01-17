@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -87,7 +87,7 @@ std::vector<uint32_t> input_indices_from_flattened_local_config(
 
 // Calculate Indices of valid inputs in padded input buffer using halo kernel config's flattened remote configs.
 std::vector<uint32_t> input_indices_from_flattened_remote_config(
-    tt::tt_metal::Device* device,
+    tt::tt_metal::IDevice* device,
     const std::vector<std::vector<uint16_t>>& flattened_remote_config,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     bool remote_read = false,

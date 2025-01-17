@@ -7,12 +7,27 @@ The current version supports the following Llama3 models:
 - Llama3.2-3B
 - Llama3.1-8B
 - Llama3.2-11B
-- Llama3.1-70B (T3000-only)
+- Llama3.1-70B (T3000 and TG-only)
 
 All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
 - N150 (1-chip)
 - N300 (2-chips)
 - T3000 (8-chips)
+- TG (32-chips)
+
+**Max Context Lengths (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
+
+Max Prefill Chunk Sizes (text-only):
+|              |      N150     |      N300     |      T3K       |      TG     |
+|--------------|---------------|---------------|----------------|-------------|
+| Llama3.2-1B  | 128k tokens   | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.2-3B  | 8k tokens     | 128k tokens   | 128k tokens    | 128k tokens |
+| Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
+| Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+
+**Max Context Lengths (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
 
 ## How to Run
 
@@ -62,35 +77,56 @@ These cache files only need to be created once for each model and each weight (i
 $LLAMA_DIR/N150  # For N150
 $LLAMA_DIR/N300  # For N300
 $LLAMA_DIR/T3K   # For T3000
+$LLAMA_DIR/TG   # For TG
 ```
 
 
 ### Run the demo
 
-The current demo is setup for a single user (batch=1) that loads a prompt file (around 128 tokens), prefills the encoded prompt and then runs decode for 120 iterations.
+The Llama3 demo includes 3 main modes of operation and is fully parametrized to support other configurations.
 
-The demo is also parametrized to run for 1 or 3 continuous batch of users, i.e. to simulate multiple users generating text one after another.
+- `batch-1`: Runs a small prompt for a single user
+- `batch-32`: Runs a small prompt for a a batch of 32 users
+- `long-context`: Runs a large prompt (64k tokens) for a single user
 
-The input prompts are based on the general or instruct (fine-tuned) weights. The prompts are included in the demo folder `models/demos/llama3/demo`.
+If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/demo.py`. For convenience we list all the supported params below:
+
+- `input_prompts (string)`: input json file with prompts to process. See `models/demos/llama3/demo/*.json` for a list of input files
+- `instruct (bool)`: Whether to use Llama instruct weights or general weights
+- `repeat_batches (int)`: Number of consecutive batches of users to run (default: 1)
+- `max_seq_len (int)`: Maximum context length supported by the model (refer to the table above)
+- `batch_size (int)`: Number of users in a batch (Supports 1/2/4/8/16/32 batches)
+- `max_generated_tokens (int)`: Maximum number of tokens to generate for each user (Note that the users will stop generation before this limit if they reach a eos token)
+- `paged_attention (bool)`: Whether to use paged attention or default attention (vLLM support (WIP) requires paged attention)
+- `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
+- `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
+- `optimization (LlamaOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
+
+Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
 When running the demo, do not forget to setup the `$LLAMA_DIR` environment variable to the corresponding Llama3 model weights.
+
+Additionally, we also support the use of a fake device. This enables running a smaller chip demo in a larger multichip device.
+Supported devices: [`N150`, `N300`, `T3K`, `TG`].
+
+Example: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 
 ```
 # Examples of how to run the demo for any supported Llama3 models
 
-# Run a single continuous batch with instruct weights
-pytest models/demos/llama3/demo/demo.py -k 'instruct and 1_batch'
+# Batch-1
+pytest models/demos/llama3/demo/demo.py -k "performance and batch-1"
 
-# Run 2 continuous batches with general weights
-pytest models/demos/llama3/demo/demo.py -k 'general and 2_batch'
+# Batch-32
+pytest models/demos/llama3/demo/demo.py -k "performance and batch-32"
+
+# Long-context
+pytest models/demos/llama3/demo/demo.py -k "performance and long"
 ```
 
-By default we run the models in `LlamaOptimizations.performance` mode. You can override this by setting the `optimizations` argument in the demo. To compare the two on a long prompt, you can run:
+The above examples are run in `LlamaOptimizations.performance` mode.
+You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
-```
-pytest models/demos/llama3/demo/demo.py -k 'long-performance'
-pytest models/demos/llama3/demo/demo.py -k 'long-accuracy'
-```
 
 ### Expected performance and accuracy
 

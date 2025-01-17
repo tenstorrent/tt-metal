@@ -5,12 +5,12 @@
 #include <memory>
 
 #include "multi_command_queue_fixture.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "dispatch_test_utils.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -29,7 +29,7 @@ namespace basic_tests {
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events,
 // wrap issue queue)
 TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};

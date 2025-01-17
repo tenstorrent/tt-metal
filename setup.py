@@ -35,7 +35,7 @@ def get_is_srcdir_build():
 
 
 def get_arch_name():
-    return attempt_get_env_var("ARCH_NAME")
+    return "any"
 
 
 def get_metal_local_version_scheme(metal_build_config, version):

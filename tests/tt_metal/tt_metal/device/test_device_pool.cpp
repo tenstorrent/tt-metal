@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include "host_api.hpp"
-#include "impl/device/device_pool.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 using namespace tt;
 
@@ -13,7 +13,7 @@ TEST(DevicePool, DevicePoolOpenClose) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -41,7 +41,7 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -73,7 +73,7 @@ TEST(DevicePool, DevicePoolAddDevices) {
     std::vector<chip_id_t> device_ids{0};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {
@@ -107,7 +107,7 @@ TEST(DevicePool, DevicePoolReduceDevices) {
     std::vector<chip_id_t> device_ids{0, 1, 2, 3};
     int num_hw_cqs = 1;
     int l1_small_size = 1024;
-    const auto& dispatch_core_config = llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     DevicePool::initialize(device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = DevicePool::instance().get_all_active_devices();
     for (const auto& dev : devices) {

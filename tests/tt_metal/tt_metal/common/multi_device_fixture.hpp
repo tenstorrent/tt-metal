@@ -6,11 +6,14 @@
 
 #include <gtest/gtest.h>
 
-#include "host_api.hpp"
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/llrt.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
 #include "dispatch_fixture.hpp"
-#include "umd/device/tt_cluster_descriptor_types.h"
+#include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
 
 class MultiDeviceFixture : public DispatchFixture {
 protected:
@@ -38,11 +41,41 @@ protected:
                 ids.push_back(id);
             }
 
-            const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+            const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
             tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
             this->devices_ = tt::DevicePool::instance().get_all_active_devices();
         } else {
             GTEST_SKIP();
         }
     }
+};
+
+class T3000MultiDeviceFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        using tt::tt_metal::distributed::MeshDevice;
+        using tt::tt_metal::distributed::MeshDeviceConfig;
+        using tt::tt_metal::distributed::MeshShape;
+
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (slow_dispatch) {
+            GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
+        }
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+    }
+
+    void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+
+        mesh_device_->close();
+        mesh_device_.reset();
+    }
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
 };

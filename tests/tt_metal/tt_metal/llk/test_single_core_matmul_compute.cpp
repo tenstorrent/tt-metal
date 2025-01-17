@@ -8,10 +8,10 @@
 #include <functional>
 #include <random>
 
-#include "common/test_tiles.hpp"  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
+#include <tt-metalium/test_tiles.hpp>  // FIXME: Remove dependency on this or move to test_utils like tilize/untilize
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -26,7 +26,7 @@ namespace unit_tests::compute::matmul {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -162,7 +162,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool single_tile_matmul(tt_metal::Device* device) {
+bool single_tile_matmul(tt_metal::IDevice* device) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -179,13 +179,10 @@ bool single_tile_matmul(tt_metal::Device* device) {
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config);
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
     const uint32_t out_dram_addr = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
@@ -256,11 +253,9 @@ bool single_tile_matmul(tt_metal::Device* device) {
         core,
         {
             (uint32_t)in0_dram_addr,
-            (uint32_t)input0_dram_noc_xy.x,
-            (uint32_t)input0_dram_noc_xy.y,
+            (uint32_t)0,  // in_0 dram bank id
             (uint32_t)in1_dram_addr,
-            (uint32_t)input1_dram_noc_xy.x,
-            (uint32_t)input1_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)1,  // num_tiles
         });
     tt_metal::SetRuntimeArgs(
@@ -269,9 +264,8 @@ bool single_tile_matmul(tt_metal::Device* device) {
         core,
         {
             (uint32_t)out_dram_addr,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
-            (uint32_t)1,
+            (uint32_t)0,
+            (uint32_t)1,  // num_tiles
         });
 
     tt_metal::detail::LaunchProgram(device, program);
@@ -286,7 +280,7 @@ bool single_tile_matmul(tt_metal::Device* device) {
     return pass;
 }
 // blocked matmul has blocking, but still fits within dst, so no spill/reloads or intermediates
-bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool single_block_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -323,12 +317,9 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config_1);
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config_out);
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =
@@ -403,11 +394,9 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         core,
         {
             (uint32_t)in0_dram_addr,
-            (uint32_t)input0_dram_noc_xy.x,
-            (uint32_t)input0_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)in1_dram_addr,
-            (uint32_t)input1_dram_noc_xy.x,
-            (uint32_t)input1_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)1,              // num_blocks
             (uint32_t)M * K,          // in0_block_tile_cnt
             (uint32_t)K * N,          // in1_block_tile_cnt
@@ -420,8 +409,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
         core,
         {
             (uint32_t)out_dram_addr,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)M * N,
         });
 
@@ -445,7 +433,7 @@ bool single_block_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint3
     return pass;
 }
 // blocked matmul has blocking on output, spill/reloads using intermediate
-bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N) {
+bool blocked_matmul(tt_metal::IDevice* device, uint32_t M, uint32_t K, uint32_t N) {
     bool pass = true;
     // FIXME: Convert to config
     CoreCoord core(0, 0);
@@ -483,18 +471,13 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
     tt_metal::Program program = tt_metal::CreateProgram();
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
     const uint32_t in0_dram_addr = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
     auto input1_dram_buffer = CreateBuffer(dram_config_1);
     const uint32_t in1_dram_addr = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config_out);
     const uint32_t out_dram_addr = output_dram_buffer->address();
 
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
-    tt_metal::CircularBufferConfig l1_input0_cb_config =
-        tt_metal::CircularBufferConfig(in0_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(in0_cb_index, cb_page_size);
+    tt_metal::CircularBufferConfig l1_input0_cb_config = tt_metal::CircularBufferConfig(in0_byte_size, {{in0_cb_index, tt::DataFormat::Float16_b}})
+        .set_page_size(in0_cb_index, cb_page_size);
     auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
@@ -580,11 +563,9 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
         core,
         {
             (uint32_t)in0_dram_addr,
-            (uint32_t)input0_dram_noc_xy.x,
-            (uint32_t)input0_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)in1_dram_addr,
-            (uint32_t)input1_dram_noc_xy.x,
-            (uint32_t)input1_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)1,              // num_blocks
             (uint32_t)M * K,          // in0_block_tile_cnt
             (uint32_t)K * N,          // in1_block_tile_cnt
@@ -597,8 +578,7 @@ bool blocked_matmul(tt_metal::Device* device, uint32_t M, uint32_t K, uint32_t N
         core,
         {
             (uint32_t)out_dram_addr,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            (uint32_t)0,
             (uint32_t)M * N,
         });
 

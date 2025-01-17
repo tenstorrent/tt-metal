@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "bernoulli_device_operation.hpp"
-#include "common/constants.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::bernoulli {
@@ -23,7 +23,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     tensor_return_value_t& output) {
     const Tensor& input = tensor_args.input;
 
-    Device* device = output.device();
+    IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
     auto core_h = grid.y;
 
@@ -103,7 +103,8 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         });
 
     uint32_t tile_offset = 0;
-    for (const auto& core : cores) {
+    for (int i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
         uint32_t units_per_core;
         if (core_group_1.contains(core)) {
             units_per_core = units_per_core_group_1;
@@ -116,7 +117,10 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
         std::vector<uint32_t> reader_runtime_args = {input.buffer()->address(), tile_offset, units_per_core};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
 
-        std::vector<uint32_t> compute_runtime_args = {get_random_seed(), tile_offset, units_per_core};
+        // Each core has its own seed to increase the number of generated random numbers
+        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+
+        std::vector<uint32_t> compute_runtime_args = {seed, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
@@ -147,17 +151,17 @@ void BernoulliDeviceOperation::ProgramFactory::override_runtime_arguments(
     const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t output_addr = output.buffer()->address();
 
-    for (const auto& core : cores) {
+    for (int i = 0; i < cores.size(); ++i) {
         {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, cores[i]);
             runtime_args[0] = input_addr;
         }
         {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
-            runtime_args[0] = get_random_seed();
+            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
+            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         }
         {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
             runtime_args[0] = output_addr;
         }
     }

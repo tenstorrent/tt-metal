@@ -7,10 +7,11 @@
 #include <random>
 
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/cq_commands.hpp>
 #include "common.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -203,7 +204,7 @@ bool is_paged_test() {
 // Unicast or Multicast Linear Write Test.
 void gen_linear_or_packed_write_test(
     uint32_t& cmd_count,
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -280,7 +281,7 @@ void gen_linear_or_packed_write_test(
 void gen_paged_write_test(
     uint32_t& cmd_count,
     bool is_dram,
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -349,7 +350,7 @@ void gen_paged_write_test(
 
 // Generate Dispatcher Commands based on the type of test.
 void gen_cmds(
-    Device* device,
+    IDevice* device,
     vector<uint32_t>& dispatch_cmds,
     CoreRange worker_cores,
     DeviceData& device_data,
@@ -384,27 +385,18 @@ void gen_cmds(
 }
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
-void initialize_dram_banks(Device* device) {
+void initialize_dram_banks(IDevice* device) {
     auto num_banks = device->num_banks(BufferType::DRAM);
     auto bank_size = device->bank_size(BufferType::DRAM);  // Or can hardcode to subset like 16MB.
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->dram_core_from_dram_channel(dram_channel);
         log_info(
             tt::LogTest,
-            "Initializing DRAM {} bytes for bank_id: {} core: {} at addr: 0x{:x}",
+            "Initializing DRAM {} bytes for bank_id: {}",
             bank_size,
-            bank_id,
-            bank_core,
-            offset);
-        tt::Cluster::instance().write_core(
-            static_cast<const void*>(fill.data()),
-            fill.size() * sizeof(uint32_t),
-            tt_cxy_pair(device->id(), bank_core),
-            offset);
+            bank_id);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, 0, fill);
     }
 }
 
@@ -427,7 +419,7 @@ int main(int argc, char** argv) {
     bool pass = true;
     try {
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CommandQueue& cq = device->command_queue();
 
@@ -446,7 +438,7 @@ int main(int argc, char** argv) {
         uint32_t dispatch_l1_unreserved_base =
             dispatch_constants::get(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        uint32_t l1_buf_base = align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
+        uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.
@@ -697,7 +689,7 @@ int main(int argc, char** argv) {
         log_fatal(e.what());
     }
 
-    tt::llrt::OptionsG.set_kernels_nullified(false);
+    tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(false);
 
     if (pass) {
         log_info(LogTest, "test_dispatcher.cpp - Test Passed");

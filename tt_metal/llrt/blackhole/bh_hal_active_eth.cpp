@@ -9,7 +9,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "dev_msgs.h"
+#include "core_config.h"
+#include <dev_msgs.h>
 #include "eth_l1_address_map.h"
 
 #include "hal.hpp"
@@ -43,8 +44,18 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = GET_ETH_MAILBOX_ADDRESS_HOST(go_message);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] =
         GET_ETH_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] =
-        eth_l1_mem::address_map::FW_VERSION_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
+        eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
+        eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
+        eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
+        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -63,16 +74,27 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(std::uint32_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FW_VERSION_ADDR)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
+        eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
+        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+    for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
         // BH active ethernet runs idle erisc FW on the second ethernet
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,  // this will be uplifted in subsequent commits
                                                                         // enabling active erisc
+            .fw_launch_addr = SLAVE_IERISC_RESET_PC,
+            .fw_launch_addr_value = (uint32_t)eth_l1_mem::address_map::FIRMWARE_BASE,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

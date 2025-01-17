@@ -5,7 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "sharded_to_interleaved.hpp"
 #include "ttnn/types.hpp"
 
@@ -27,18 +27,21 @@ void bind_sharded_to_interleaved(
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType>& output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
+               uint8_t queue_id,
+               const std::optional<bool>& is_l1_aligned) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor,
                     memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
-                    output_dtype);
+                    output_dtype,
+                    is_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
             py::arg("queue_id") = 0,
+            py::arg("is_l1_aligned") = false,
         });
 }
 

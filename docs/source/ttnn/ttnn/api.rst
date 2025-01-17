@@ -98,9 +98,6 @@ Pointwise Unary
    ttnn.asinh
    ttnn.atan
    ttnn.atanh
-   ttnn.bitwise_and
-   ttnn.bitwise_or
-   ttnn.bitwise_xor
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
@@ -114,7 +111,7 @@ Pointwise Unary
    ttnn.cosh
    ttnn.deg2rad
    ttnn.digamma
-   ttnn.dropout
+   ttnn.experimental.dropout
    ttnn.elu
    ttnn.eqz
    ttnn.erf
@@ -162,7 +159,6 @@ Pointwise Unary
    ttnn.normalize_global
    ttnn.normalize_hw
    ttnn.polygamma
-   ttnn.pow
    ttnn.prelu
    ttnn.rad2deg
    ttnn.rdiv
@@ -175,7 +171,6 @@ Pointwise Unary
    ttnn.remainder
    ttnn.round
    ttnn.rsqrt
-   ttnn.rsub
    ttnn.selu
    ttnn.sigmoid
    ttnn.sigmoid_accurate
@@ -309,10 +304,14 @@ Pointwise Binary
    ttnn.logical_or_
    ttnn.logical_xor_
    ttnn.rpow
+   ttnn.rsub
    ttnn.ldexp
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
+   ttnn.bitwise_and
+   ttnn.bitwise_or
+   ttnn.bitwise_xor
    ttnn.logaddexp
    ttnn.logaddexp2
    ttnn.hypot
@@ -335,6 +334,7 @@ Pointwise Binary
    ttnn.maximum
    ttnn.minimum
    ttnn.outer
+   ttnn.pow
    ttnn.polyval
    ttnn.scatter
    ttnn.atan2
@@ -444,6 +444,7 @@ Normalization
    ttnn.group_norm
    ttnn.layer_norm
    ttnn.rms_norm
+   ttnn.batch_norm
 
 
 Moreh Operations

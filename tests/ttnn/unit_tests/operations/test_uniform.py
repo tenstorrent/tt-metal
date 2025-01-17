@@ -52,8 +52,8 @@ def benchmark_uniform(cpu_input, npu_input, rand_from, rand_to):
     logger.info(f"NPU avg time: {npu_total_time / iter_num}ns")
 
 
-def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel_config):
-    ttnn.uniform(npu_input, rand_from, rand_to, compute_kernel_config=compute_kernel_config)
+def validate_uniform(npu_input, shape, rand_from, rand_to, seed, dtype, compute_kernel_config):
+    ttnn.uniform(npu_input, rand_from, rand_to, seed, compute_kernel_config=compute_kernel_config)
     tt_input = ttnn.to_torch(npu_input).reshape(shape)
     elem_cnt = Counter(tt_input.flatten().tolist())
 
@@ -75,7 +75,8 @@ def validate_uniform(npu_input, shape, rand_from, rand_to, dtype, compute_kernel
     assert np.allclose(npu_var, expected_var, rtol=0.5)
 
 
-def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, mode=TestMode.VALIDATE):
+# Due to the issue with tensix instruction to generated pseudo-random numbers: #13904, the seed is temporarily fixed to make the test result consistent.
+def run_uniform(shape, rand_range, dtype, device, seed=0, compute_kernel_options=None, mode=TestMode.VALIDATE):
     compute_kernel_config = get_compute_kernel_options(compute_kernel_options)
     rand_from, rand_to = rand_range[0], rand_range[1]
     cpu_input = torch.ones(shape, dtype=get_lib_dtype(torch, dtype))
@@ -89,6 +90,7 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
             shape=shape,
             rand_from=rand_from,
             rand_to=rand_to,
+            seed=seed,
             dtype=dtype,
             compute_kernel_config=compute_kernel_config,
         )
@@ -107,9 +109,10 @@ def run_uniform(shape, rand_range, dtype, device, compute_kernel_options=None, m
 )
 @pytest.mark.parametrize("rand_range", [[0, 1], [2.1, 9], [-5.1, 1.2]])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_uniform(shape, rand_range, dtype, device):
-    torch.manual_seed(0)
-    run_uniform(shape, rand_range, dtype, device)
+@pytest.mark.parametrize("seed", [2024, 19, 522021])
+def test_uniform(shape, rand_range, dtype, seed, device):
+    torch.manual_seed(seed)
+    run_uniform(shape, rand_range, dtype, device, seed=seed)
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -119,14 +122,19 @@ def test_uniform(shape, rand_range, dtype, device):
 )
 @pytest.mark.parametrize("rand_range", [[-3, 4]])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
-    torch.manual_seed(0)
+@pytest.mark.parametrize("seed", [0])
+def test_uniform_callback(shape, rand_range, dtype, seed, device, use_program_cache):
+    torch.manual_seed(seed)
     num_program_cache_entries_list = []
-    for i in range(2):
-        run_uniform(shape, rand_range, dtype, device)
+    for _ in range(2):
+        run_uniform(shape, rand_range, dtype, device, seed=seed)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
+
+        # Cache must hit when we change seed and seed runtime arg is overrode
+        seed = seed + 1
+
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
@@ -137,9 +145,10 @@ def test_uniform_callback(shape, rand_range, dtype, device, use_program_cache):
     "shape",
     [[512, 512], [5, 2, 4, 70, 40]],
 )
+@pytest.mark.parametrize("seed", [1408])
 @pytest.mark.parametrize("rand_range", [[0, 1]])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
-def test_uniform_with_compute_kernel_options(shape, rand_range, dtype, device, compute_kernel_options):
-    torch.manual_seed(0)
-    run_uniform(shape, rand_range, dtype, device, compute_kernel_options)
+def test_uniform_with_compute_kernel_options(shape, seed, rand_range, dtype, device, compute_kernel_options):
+    torch.manual_seed(seed)
+    run_uniform(shape, rand_range, dtype, device, seed=seed, compute_kernel_options=compute_kernel_options)

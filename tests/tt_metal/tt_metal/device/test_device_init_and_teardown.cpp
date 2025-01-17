@@ -4,12 +4,12 @@
 
 #include <gtest/gtest.h>
 
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_pool.hpp>
 
 using std::vector;
 using namespace tt;
@@ -22,7 +22,7 @@ protected:
 
 namespace unit_tests_common::basic::test_device_init {
 
-void launch_program(tt_metal::Device* device, tt_metal::Program& program) {
+void launch_program(tt_metal::IDevice* device, tt_metal::Program& program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
@@ -35,7 +35,7 @@ void launch_program(tt_metal::Device* device, tt_metal::Program& program) {
 /// @brief load_blank_kernels into all cores and will launch
 /// @param device
 /// @return
-bool load_all_blank_kernels(tt_metal::Device* device) {
+bool load_all_blank_kernels(tt_metal::IDevice* device) {
     bool pass = true;
     tt_metal::Program program = tt_metal::CreateProgram();
     CoreCoord compute_grid_size = device->compute_with_storage_grid_size();
@@ -67,17 +67,12 @@ TEST_P(DeviceParamFixture, DeviceInitializeAndTeardown) {
         GTEST_SKIP();
     }
 
-    // see issue #9594
-    if (arch == tt::ARCH::WORMHOLE_B0 && num_devices > 1) {
-        GTEST_SKIP();
-    }
-
     ASSERT_TRUE(num_devices > 0);
     vector<chip_id_t> ids;
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {
@@ -96,7 +91,7 @@ TEST_P(DeviceParamFixture, TensixDeviceLoadBlankKernels) {
     for (unsigned int id = 0; id < num_devices; id++) {
         ids.push_back(id);
     }
-    const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
     tt::DevicePool::initialize(ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto device : devices) {

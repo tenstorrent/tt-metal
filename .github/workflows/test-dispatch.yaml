@@ -52,7 +52,6 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      arch: '[ "${{ inputs.arch }}" ]'
       build-type: ${{ inputs.build-type }}
       tracy: ${{ inputs.tracy }}
     secrets: inherit
@@ -67,21 +66,17 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Ensure weka mount is active
+      - uses: ./.github/actions/ensure-active-weka-mount
         timeout-minutes: 3
         if: ${{ inputs.arch != 'blackhole' }}
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name:  TTMetal_build_${{ inputs.arch }}${{ (inputs.tracy && '_profiler') || '' }}
+          name:  TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
       - name: Extract files
-        run: tar -xvf ttm_${{ inputs.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run pre/post regression tests in a loop
         run: |

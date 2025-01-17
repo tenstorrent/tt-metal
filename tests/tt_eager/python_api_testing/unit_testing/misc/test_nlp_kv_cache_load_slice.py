@@ -24,16 +24,12 @@ def unpadding_test(
     else:
         inp = torch.rand(*kv_cache_shape, dtype=torch.bfloat16)
 
-    test_tensor = (
-        ttnn.Tensor(
-            inp.reshape(-1).tolist(),
-            inp.shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    test_tensor = ttnn.Tensor(
+        inp.reshape(-1).tolist(),
+        inp.shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device)
     test_tensor_tt = ttnn.experimental.nlp_kv_cache_load_slice(
         test_tensor, seq_len_start=seq_len_start, seq_len_end=seq_len_end
     )
@@ -88,16 +84,12 @@ def test_run_unpadding_test(
     for i in range(3):
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
-        test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                dtype,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
-        )
+        test_tensor = ttnn.Tensor(
+            inp.reshape(-1).tolist(),
+            inp.shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+        ).to(device)
         shard_spec_1_cores_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -116,7 +108,6 @@ def test_run_unpadding_test(
                     32,  # head dim
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)
@@ -174,13 +165,9 @@ def test_run_unpadding_test(
 
         # shift input/output tensor by creating very small tensor between loop
         inp = torch.rand(1, 1, 32, 32)
-        test_tensor = (
-            ttnn.Tensor(
-                inp.reshape(-1).tolist(),
-                inp.shape,
-                dtype,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
-        )
+        test_tensor = ttnn.Tensor(
+            inp.reshape(-1).tolist(),
+            inp.shape,
+            dtype,
+            ttnn.TILE_LAYOUT,
+        ).to(device)

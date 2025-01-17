@@ -2,14 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_log.h"
-
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_log.h>
 
 namespace ttnn::operations::reduction::detail {
 
@@ -179,6 +176,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t max_dim,
     CoreCoord grid,
     uint16_t k,
+    const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
     const auto max_cores = grid.y - 1;  // reserve one core for the gather - switch to grid.x as it allows for more
@@ -193,7 +191,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < L1_SIZE && num_cores > 1) {
+        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
             return {num_cores + 1, split_size, rem, num_cores * k};
         }
     }
@@ -237,6 +235,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         input_shape[dim] / 2,
         device->compute_with_storage_grid_size(),
         k,
+        device->l1_size_per_core(),
         value_tile_size,
         index_tile_size);
 

@@ -5,8 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -59,16 +59,17 @@ void kernel_main() {
         const InterleavedAddrGen<gamma_is_dram> gamma = {.bank_base_address = gamma_addr, .page_size = page_size};
 #endif
 
-        uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
-        uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
+        constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
+        constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
         uint32_t l1_write_addr_gamma = get_write_ptr(cb_gamma);
         cb_reserve_back(cb_gamma, block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
             uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, mask_read_tile_face_bytes);
-            gamma_noc_addr += mask_read_tile_face_bytes;
+            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, mask_read_tile_face_bytes * 2);
+            gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + mask_read_tile_face_bytes);
+            noc_async_read_barrier();
             noc_async_read(
                 gamma_noc_addr, l1_write_addr_gamma + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
             l1_write_addr_gamma += gamma_tile_bytes;
@@ -94,8 +95,9 @@ void kernel_main() {
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
             uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
-            noc_async_read(beta_noc_addr, l1_write_addr_beta, mask_read_tile_face_bytes);
-            beta_noc_addr += mask_read_tile_face_bytes;
+            noc_async_read(beta_noc_addr, l1_write_addr_beta, mask_read_tile_face_bytes * 2);
+            beta_noc_addr = get_noc_addr(l1_write_addr_beta + mask_read_tile_face_bytes);
+            noc_async_read_barrier();
             noc_async_read(beta_noc_addr, l1_write_addr_beta + mask_read_tile_offset_bytes, mask_read_tile_face_bytes);
             l1_write_addr_beta += beta_tile_bytes;
         }

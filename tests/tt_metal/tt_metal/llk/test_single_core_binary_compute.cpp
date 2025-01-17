@@ -10,8 +10,8 @@
 #include <bit>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -80,7 +80,7 @@ void set_math_fid_masks(
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& test_config) {
+bool single_core_binary(tt_metal::IDevice* device, const SingleCoreBinaryConfig& test_config) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -92,19 +92,15 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     auto input0_dram_buffer = CreateBuffer(dram_config);
     uint32_t input0_dram_byte_address = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
 
     auto input1_dram_buffer = CreateBuffer(dram_config);
     uint32_t input1_dram_byte_address = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
 
     auto input2_dram_buffer = CreateBuffer(dram_config);
     uint32_t input2_dram_byte_address = input2_dram_buffer->address();
-    auto input2_dram_noc_xy = input2_dram_buffer->noc_coordinates();
 
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
@@ -244,15 +240,12 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         test_config.core,
         {
             (uint32_t)input0_dram_byte_address,
-            (uint32_t)input0_dram_noc_xy.x,
-            (uint32_t)input0_dram_noc_xy.y,
+            (uint32_t)0,  // dram bank id
             (uint32_t)input1_dram_byte_address,
-            (uint32_t)input1_dram_noc_xy.x,
-            (uint32_t)input1_dram_noc_xy.y,
+            (uint32_t)0,  // dram bank id
             (uint32_t)test_config.num_tiles,
             (uint32_t)input2_dram_byte_address,
-            (uint32_t)input2_dram_noc_xy.x,
-            (uint32_t)input2_dram_noc_xy.y,
+            (uint32_t)0,  // dram bank id
         });
     tt_metal::SetRuntimeArgs(
         program,
@@ -260,8 +253,7 @@ bool single_core_binary(tt_metal::Device* device, const SingleCoreBinaryConfig& 
         test_config.core,
         {
             (uint32_t)output_dram_byte_address,
-            (uint32_t)output_dram_noc_xy.x,
-            (uint32_t)output_dram_noc_xy.y,
+            (uint32_t)0,  // dram bank id
             (uint32_t)test_config.num_tiles,
         });
 

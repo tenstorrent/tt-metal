@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prefix_scan_op.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "prefix_scan_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -46,15 +46,12 @@ void PrefixScan::validate(const std::vector<Tensor>& input_tensors) const {
         "Expected h tensor to be row major orientation");
 }
 
-std::vector<tt::tt_metal::LegacyShape> PrefixScan::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> PrefixScan::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& a = input_tensors.at(0);
-    return {a.get_legacy_shape()};
-}
-
-std::vector<Tensor> PrefixScan::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->dtype, Layout::TILE, this->memory_config);
+    return {TensorSpec(
+        a.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            dtype, PageConfig(Layout::TILE), memory_config, a.get_logical_shape(), a.get_padded_shape()))};
 }
 
 operation::ProgramWithCallbacks PrefixScan::create_program(

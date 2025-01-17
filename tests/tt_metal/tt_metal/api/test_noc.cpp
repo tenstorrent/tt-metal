@@ -5,9 +5,12 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
+
+// FIXME: ARCH_NAME
+#include "noc/noc_parameters.h"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -16,7 +19,7 @@ namespace unit_tests::basic::test_noc {
 
 const uint32_t init_value = 0x1234B33F;
 
-uint32_t read_reg(Device* device, CoreCoord logical_node, uint32_t reg_addr) {
+uint32_t read_reg(IDevice* device, CoreCoord logical_node, uint32_t reg_addr) {
     // Read and return reg value form reading
     uint32_t reg_data = unit_tests::basic::test_noc::init_value;
     tt_metal::detail::ReadRegFromDevice(device, logical_node, reg_addr, reg_data);
@@ -24,7 +27,7 @@ uint32_t read_reg(Device* device, CoreCoord logical_node, uint32_t reg_addr) {
 }
 
 void read_translation_table(
-    Device* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
+    IDevice* device, CoreCoord logical_node, std::vector<unsigned int>& x_remap, std::vector<unsigned int>& y_remap) {
 #ifdef NOC_X_ID_TRANSLATE_TABLE_0
     std::vector<uint32_t> x_reg_addrs = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
@@ -64,7 +67,7 @@ void read_translation_table(
 
 TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
-    tt::tt_metal::Device* device;
+    tt::tt_metal::IDevice* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
     CoreCoord unharvested_logical_grid_size;
@@ -82,8 +85,8 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
         tt::log_info("Number of Harvested Rows={}", unharvested_logical_grid_size.y - logical_grid_size.y);
     }
 
-    tt::log_info("Logical -- Noc Coordinates Mapping");
-    tt::log_info("[Logical <-> NOC0] Coordinates");
+    tt::log_info("Logical -- Virtual Mapping");
+    tt::log_info("[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
         string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
@@ -91,7 +94,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
             const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
             output_row += "{L[x" + std::to_string(c);
             output_row += "-y" + std::to_string(r);
-            output_row += "]:N[x" + std::to_string(noc_coord.x);
+            output_row += "]:V[x" + std::to_string(noc_coord.x);
             output_row += "-y" + std::to_string(noc_coord.y);
             output_row += "]}, ";
         }
@@ -102,9 +105,15 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
 TEST(NOC, TensixVerifyNocNodeIDs) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
-    tt::tt_metal::Device* device;
+    tt::tt_metal::IDevice* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
+
+#if COORDINATE_VIRTUALIZATION_ENABLED != 0
+    uint32_t MY_NOC_ENCODING_REG = NOC_CFG(NOC_ID_LOGICAL);
+#else
+    uint32_t MY_NOC_ENCODING_REG = NOC_NODE_ID;
+#endif
     // Ping all the Noc Nodes
     auto logical_grid_size = device->logical_grid_size();
     for (size_t y = 0; y < logical_grid_size.y; y++) {
@@ -112,7 +121,7 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
             auto worker_core = device->worker_core_from_logical_core(CoreCoord(x, y));
             // Read register from specific node
             uint32_t node_id_regval;
-            node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), NOC_NODE_ID);
+            node_id_regval = unit_tests::basic::test_noc::read_reg(device, CoreCoord(x, y), MY_NOC_ENCODING_REG);
             ASSERT_NE(
                 node_id_regval, unit_tests::basic::test_noc::init_value);  // Need to make sure we read in valid reg
             // Check it matches software translated xy
@@ -133,7 +142,7 @@ TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     // If the translation tables are not defined, we should skip :)
     GTEST_SKIP();
 #endif
-    tt::tt_metal::Device* device;
+    tt::tt_metal::IDevice* device;
     const unsigned int device_id = 0;
     device = tt::tt_metal::CreateDevice(device_id);
     // Ping all the registers for NOC
@@ -167,7 +176,7 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
     const uint32_t stream_id = 0;
     const uint32_t stream_reg = 4;
 
-    for (tt_metal::Device* device : this->devices_) {
+    for (tt_metal::IDevice* device : this->devices_) {
         tt_metal::Program program = tt_metal::CreateProgram();
         CoreCoord logical_grid_size = device->compute_with_storage_grid_size();
         CoreCoord end_core{logical_grid_size.x - 1, logical_grid_size.y - 1};

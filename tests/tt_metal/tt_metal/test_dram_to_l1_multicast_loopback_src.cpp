@@ -6,9 +6,9 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -51,7 +51,6 @@ int main(int argc, char** argv) {
             .buffer_type = tt_metal::BufferType::DRAM};
         auto dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_addr = dram_buffer->address();
-        auto dram_noc_xy = dram_buffer->noc_coordinates();
 
         CoreCoord core_start = {0, 0};
         CoreCoord grid_size = device->logical_grid_size();
@@ -60,8 +59,7 @@ int main(int argc, char** argv) {
         auto core_end_physical = device->worker_core_from_logical_core(core_end);
         const std::array mcast_reader_args = {
             (std::uint32_t)dram_buffer_addr,
-            (std::uint32_t)dram_noc_xy.x,
-            (std::uint32_t)dram_noc_xy.y,
+            0,
             (std::uint32_t)dram_buffer_size,
             (std::uint32_t)local_buffer_addr,
             (std::uint32_t)dest_buffer_addr,

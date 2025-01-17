@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/semaphore.hpp"
+#include <semaphore.hpp>
 
 namespace tt {
 
@@ -30,13 +30,13 @@ Semaphore& Semaphore::operator=(const Semaphore& other) {
     return *this;
 }
 
-Semaphore::Semaphore(Semaphore&& other) :
+Semaphore::Semaphore(Semaphore&& other) noexcept :
     core_range_set_(other.core_range_set_),
     id_(other.id_),
     initial_value_(other.initial_value_),
     core_type_(other.core_type_) {}
 
-Semaphore& Semaphore::operator=(Semaphore&& other) {
+Semaphore& Semaphore::operator=(Semaphore&& other) noexcept {
     if (this != &other) {
         this->core_range_set_ = other.core_range_set_;
         this->id_ = other.id_;

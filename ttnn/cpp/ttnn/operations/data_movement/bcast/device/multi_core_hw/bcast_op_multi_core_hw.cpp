@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt;
 using namespace constants;
@@ -42,7 +42,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::Device* device = a.device();
+    tt::tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();

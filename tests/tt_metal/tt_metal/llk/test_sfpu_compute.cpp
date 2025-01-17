@@ -10,8 +10,8 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -116,7 +116,7 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(tt_metal::IDevice* device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     tt_metal::Program program = tt_metal::CreateProgram();
     tt::tt_metal::InterleavedBufferConfig dram_config{
@@ -124,10 +124,8 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
 
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
     auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
-    auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
 
     vector<uint32_t> compute_kernel_args = {
         uint32_t(test_config.num_tiles),  // per_core_block_cnt
@@ -149,15 +147,13 @@ bool run_sfpu_all_same_buffer(tt_metal::Device* device, const SfpuConfig& test_c
     // Same runtime args for every core
     vector<uint32_t> reader_rt_args = {
         (uint32_t)input_dram_byte_address,
-        (uint32_t)input_dram_noc_xy.x,
-        (uint32_t)input_dram_noc_xy.y,
+        (uint32_t)0,
         (uint32_t)test_config.num_tiles,
     };
 
     vector<uint32_t> writer_rt_args = {
         (uint32_t)output_dram_byte_address,
-        (uint32_t)output_dram_noc_xy.x,
-        (uint32_t)output_dram_noc_xy.y,
+        (uint32_t)0,
         (uint32_t)test_config.num_tiles,
     };
 

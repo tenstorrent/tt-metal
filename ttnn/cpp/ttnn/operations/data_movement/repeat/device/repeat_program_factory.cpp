@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::constants;
@@ -16,7 +17,7 @@ operation::ProgramWithCallbacks repeat_multi_core(
     const Tensor& input_tensor, const uint32_t repeat_dim, const uint32_t num_repeats, const Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::Device* device = output.device();
+    tt::tt_metal::IDevice* device = output.device();
 
     const tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
@@ -28,7 +29,8 @@ operation::ProgramWithCallbacks repeat_multi_core(
     uint32_t single_page_size;
     if (rm_layout) {
         num_output_pages = output.volume() / output.get_legacy_shape()[-1];
-        single_page_size = align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
+        single_page_size =
+            tt::align(output.element_size() * output.get_legacy_shape()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt::tt_metal::detail::TileSize(cb_data_format);

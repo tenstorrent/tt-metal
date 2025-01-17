@@ -6,9 +6,9 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 // #include "tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         bool profile_kernel = true;
 
@@ -64,7 +64,6 @@ int main(int argc, char** argv) {
         auto src_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
         assert(src_dram_buffer->size() % (num_cores_r * num_cores_c) == 0);
         uint32_t per_core_l1_size = src_dram_buffer->size() / (num_cores_r * num_cores_c);
         std::unordered_map<CoreCoord, uint32_t> core_to_l1_addr;
@@ -108,11 +107,10 @@ int main(int argc, char** argv) {
                     unary_reader_kernel,
                     core,
                     {core_to_l1_addr.at(core),
-                     dram_buffer_src_addr + (core_index * stick_size),
-                     (std::uint32_t)dram_src_noc_xy.x,
-                     (std::uint32_t)dram_src_noc_xy.y,
-                     (std::uint32_t)1,
-                     (std::uint32_t)stick_size});
+                    dram_buffer_src_addr + (core_index * stick_size),
+                    0,
+                    (std::uint32_t) 1,
+                    (std::uint32_t) stick_size});
                 core_index++;
             }
         }

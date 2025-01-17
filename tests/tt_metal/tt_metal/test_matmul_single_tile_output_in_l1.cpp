@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -29,7 +29,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -58,9 +58,9 @@ int main(int argc, char** argv) {
         auto src1_dram_buffer = CreateBuffer(dram_config);
         auto dst_l1_buffer = CreateBuffer(l1_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto l1_dst_noc_xy = dst_l1_buffer->noc_coordinates();
+        auto l1_dst_noc_xy =
+            device->virtual_core_from_logical_core(dst_l1_buffer->logical_core_from_bank_id(0), CoreType::WORKER);
+        ;
 
         uint32_t src0_cb_index = 0;
         uint32_t num_input_tiles = 1;
@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            "tt_metal/kernels/dataflow/writer_unary_1.cpp",
             core,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
@@ -143,16 +143,14 @@ int main(int argc, char** argv) {
             mm_reader_kernel,
             core,
             {src0_dram_buffer->address(),
-             (std::uint32_t)dram_src0_noc_xy.x,
-             (std::uint32_t)dram_src0_noc_xy.y,
-             src1_dram_buffer->address(),
-             (std::uint32_t)dram_src1_noc_xy.x,
-             (std::uint32_t)dram_src1_noc_xy.y,
-             1,
-             1,
-             1,
-             1 * single_tile_size,
-             1 * single_tile_size});
+            0,
+            src1_dram_buffer->address(),
+            0,
+            1,
+            1,
+            1,
+            1 * single_tile_size,
+            1 * single_tile_size});
 
         tt_metal::SetRuntimeArgs(
             program,

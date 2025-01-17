@@ -7,7 +7,7 @@
 #include "umd/device/blackhole_implementation.h"
 #include "umd/device/grayskull_implementation.h"
 #include "umd/device/wormhole_implementation.h"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 
 namespace ll_api {
 
@@ -208,8 +208,6 @@ void configure_static_tlbs(
             device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
         }
     }
-
-    device_driver.setup_core_to_tlb_map(mmio_device_id, get_static_tlb_index);
 }
 
 }  // namespace ll_api

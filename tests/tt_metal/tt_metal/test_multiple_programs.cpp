@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 using std::vector;
 using namespace tt;
@@ -45,7 +45,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(
-    tt_metal::Device* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -98,7 +98,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(
-    tt_metal::Device* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -156,7 +156,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 void write_program_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
@@ -165,27 +165,13 @@ void write_program_runtime_args_to_device(
     tt_metal::Buffer& src0_dram_buffer,
     tt_metal::Buffer& src1_dram_buffer,
     tt_metal::Buffer& dst_dram_buffer) {
-    auto dram_src0_noc_xy = src0_dram_buffer.noc_coordinates();
-    auto dram_src1_noc_xy = src1_dram_buffer.noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer.noc_coordinates();
-
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {src0_dram_buffer.address(),
-         (std::uint32_t)dram_src0_noc_xy.x,
-         (std::uint32_t)dram_src0_noc_xy.y,
-         src1_dram_buffer.address(),
-         (std::uint32_t)dram_src1_noc_xy.x,
-         (std::uint32_t)dram_src1_noc_xy.y,
-         num_tiles});
+        {src0_dram_buffer.address(), (uint32_t)0, src1_dram_buffer.address(), (uint32_t)0, num_tiles});
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        writer_kernel_id,
-        core,
-        {dst_dram_buffer.address(), (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles});
+    tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer.address(), (uint32_t)0, num_tiles});
 }
 //////////////////////////////////////////////////////////////////////////////////////////
 // 1. First program runs eltwise binary on logical core {0, 0}
@@ -203,7 +189,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

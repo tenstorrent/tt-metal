@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     /* Silicon accelerator setup */
-    Device* device = CreateDevice(0);
+    IDevice* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
     CommandQueue& cq = device->command_queue();
@@ -29,15 +29,10 @@ int main(int argc, char** argv) {
     std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
     std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 
-    auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-    auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
-    auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-    uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-    uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-    uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-    uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
-    uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
-    uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
+    // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
+    uint32_t src0_bank_id = 0;
+    uint32_t src1_bank_id = 0;
+    uint32_t dst_bank_id = 0;
 
     /* Use L1 circular buffers to set input and output buffers that the compute engine will use */
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -102,14 +97,9 @@ int main(int argc, char** argv) {
         program,
         binary_reader_kernel_id,
         core,
-        {src0_dram_buffer->address(),
-         src1_dram_buffer->address(),
-         src0_dram_noc_x,
-         src0_dram_noc_y,
-         src1_dram_noc_x,
-         src1_dram_noc_y});
+        {src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id});
 
     EnqueueProgram(cq, program, false);
     Finish(cq);

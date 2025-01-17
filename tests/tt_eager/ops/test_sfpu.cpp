@@ -8,12 +8,12 @@
 #include <cmath>
 #include <sstream>
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 // #include "tt_gdb/tt_gdb.hpp"
@@ -66,7 +66,7 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -93,9 +93,6 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
         uint32_t dram_buffer_src_addr = src_dram_buffer->address();
         auto dst_dram_buffer = CreateBuffer(buff_config);
         uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
         // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input
         // CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math
@@ -167,8 +164,7 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
             core,
             {
                 dram_buffer_src_addr,
-                (std::uint32_t)dram_src_noc_xy.x,
-                (std::uint32_t)dram_src_noc_xy.y,
+                0,
                 num_tiles,
                 0,
                 0,
@@ -181,7 +177,7 @@ bool run_sfpu_test(const string& sfpu_name, int tile_factor = 1, bool use_DRAM =
             program,
             unary_writer_kernel,
             core,
-            {dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles});
+            {dram_buffer_dst_addr, 0, num_tiles});
 
         tt_metal::detail::LaunchProgram(device, program);
 

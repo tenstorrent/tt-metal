@@ -7,9 +7,8 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::operations::ccl {
@@ -18,10 +17,6 @@ namespace detail {
 
 template <typename ccl_operation_t>
 void bind_all_gather(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    py::enum_<ttnn::ccl::Topology>(module, "Topology")
-        .value("Ring", ttnn::ccl::Topology::Ring)
-        .value("Linear", ttnn::ccl::Topology::Linear);
-
     bind_registered_operation(
         module,
         operation,

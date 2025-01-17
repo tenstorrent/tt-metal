@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/detail/reports/memory_reporter.hpp"
+#include <memory_reporter.hpp>
 #include "tt_metal/detail/reports/report_utils.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/program/program.hpp"
+#include <allocator.hpp>
+#include <device.hpp>
+#include <program_impl.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -47,7 +47,7 @@ void write_headers(
 }
 
 void write_detailed_report_info(
-    const Device* device,
+    const IDevice* device,
     const BufferType& buffer_type,
     std::ofstream& detailed_memory_usage_report,
     size_t total_allocatable,
@@ -69,7 +69,7 @@ void write_detailed_report_info(
 }
 
 void write_memory_usage(
-    const Device* device,
+    const IDevice* device,
     const BufferType& buffer_type,
     std::ofstream& memory_usage_summary_report,
     std::ofstream& detailed_memory_usage_report,
@@ -93,7 +93,7 @@ void write_memory_usage(
 }
 
 void populate_reports(
-    const Device* device,
+    const IDevice* device,
     std::ofstream& memory_usage_summary_report,
     std::ofstream& detailed_memory_usage_report,
     std::ofstream& l1_usage_summary_report) {
@@ -104,7 +104,7 @@ void populate_reports(
         device, BufferType::L1, memory_usage_summary_report, detailed_memory_usage_report, l1_usage_summary_report);
 }
 
-void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Device* device) {
+void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const IDevice* device) {
     if (not this->program_memory_usage_summary_report_.is_open()) {
         this->init_reports();
     }
@@ -120,7 +120,7 @@ void MemoryReporter::flush_program_memory_usage(uint64_t program_id, const Devic
         this->program_l1_usage_summary_report_);
 }
 
-void MemoryReporter::dump_memory_usage_state(const Device* device, const std::string& prefix) const {
+void MemoryReporter::dump_memory_usage_state(const IDevice* device, const std::string& prefix) const {
     std::ofstream memory_usage_summary_report, l1_usage_summary_report, detailed_memory_usage_report;
 
     fs::create_directories(metal_reports_dir());
@@ -144,8 +144,25 @@ void MemoryReporter::init_reports() {
     write_headers(
         this->program_memory_usage_summary_report_, this->program_l1_usage_summary_report_, /*add_program_id=*/true);
 }
-void DumpDeviceMemoryState(const Device* device, const std::string& prefix) {
+void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix) {
     MemoryReporter::inst().dump_memory_usage_state(device, std::move(prefix));
+}
+
+MemoryView MemoryReporter::get_memory_view(const IDevice* device, const BufferType& buffer_type) const {
+    auto stats = device->get_memory_allocation_statistics(buffer_type);
+    auto num_banks_ = device->num_banks(buffer_type);
+
+    return MemoryView{
+        .num_banks = num_banks_,
+        .total_bytes_per_bank = stats.total_allocatable_size_bytes,
+        .total_bytes_allocated_per_bank = stats.total_allocated_bytes,
+        .total_bytes_free_per_bank = stats.total_free_bytes,
+        .largest_contiguous_bytes_free_per_bank = stats.largest_free_block_bytes,
+        .block_table = device->get_memory_block_table(buffer_type)};
+}
+
+MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type) {
+    return MemoryReporter::inst().get_memory_view(device, buffer_type);
 }
 
 bool MemoryReporter::enabled() { return is_enabled_; }

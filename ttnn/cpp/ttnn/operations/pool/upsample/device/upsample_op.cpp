@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <cmath>
 
-#include "detail/util.hpp"
+#include <tt-metalium/util.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::upsample {
 using namespace tt;
@@ -45,7 +45,7 @@ void UpSample::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     // NOTE1: data is packed in { N, H , W, C }
     // NOTE2: Mapping it into in 2D format should be {N*H*W, C}
     // NOTE3: Assuming output data type is same as input
@@ -56,55 +56,46 @@ std::vector<tt::tt_metal::LegacyShape> UpSample::compute_output_shapes(const std
     uint32_t out_h = input_shape[1] * scale_factor_h_;
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
-    const ttnn::SmallVector<uint32_t> out_dims({out_n, out_h, out_w, out_c});  // in the NHWC format
 
-    return {tt::tt_metal::LegacyShape{out_dims}};
-}
+    auto output_shape = ttnn::SimpleShape({out_n, out_h, out_w, out_c});
 
-std::vector<Tensor> UpSample::create_output_tensors(const std::vector<Tensor>& inputs) const {
-    const auto& input = inputs.at(0);
     if (output_mem_config_.is_sharded()) {
-        if (input.memory_config().is_sharded()) {
-            auto mem_config = output_mem_config_;
-            auto input_shard_spec = input.memory_config().shard_spec.value();
-            auto output_shape = compute_output_shapes(inputs).at(0);
-            if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-                auto ncores = input_shard_spec.num_cores();
-                std::array<uint32_t, 2> output_shard_shape = {
-                    div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
-                auto output_shard_spec = input_shard_spec;
-                output_shard_spec.shape = output_shard_shape;
-                mem_config.shard_spec = output_shard_spec;
-                log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-                log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
-                return {create_device_tensor(
-                    output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
-            } else if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-                auto shard_grid = input_shard_spec.grid.ranges();
-                TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
-                auto core_range = *shard_grid.begin();
-                uint32_t ncores_w = core_range.end_coord.x + 1;
-                uint32_t ncores_h = core_range.end_coord.y + 1;
-                // std::array<uint32_t, 2> output_shard_shape = {output_shape[0] * output_shape[1] * output_shape[2] /
-                // ncores_h, output_shape[-1] / ncores_w}; auto output_shard_spec = input_shard_spec;
-                // output_shard_spec.shape = output_shard_shape;
-                // mem_config.shard_spec = output_shard_spec;
-                auto output_shard_spec = mem_config.shard_spec.value();
-                auto output_shard_shape = output_shard_spec.shape;
-                log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
-                log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
-                return {create_device_tensor(
-                    output_shape, input.get_dtype(), input.get_layout(), input.device(), mem_config)};
-            } else {
-                TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
-            }
-        } else {
+        if (!input.memory_config().is_sharded()) {
             TT_THROW("Output memory config is sharded but input memory config is not sharded");
         }
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, inputs, input.get_dtype(), input.get_layout(), output_mem_config_);
+        auto mem_config = output_mem_config_;
+        auto input_shard_spec = input.memory_config().shard_spec.value();
+        if (input.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+            auto ncores = input_shard_spec.num_cores();
+            std::array<uint32_t, 2> output_shard_shape = {
+                div_up(output_shape[0] * output_shape[1] * output_shape[2], ncores), output_shape[-1]};
+            auto output_shard_spec = input_shard_spec;
+            output_shard_spec.shape = output_shard_shape;
+            mem_config.shard_spec = output_shard_spec;
+            log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
+            log_debug(LogOp, "output_shard_spec: {}", output_shard_spec);
+            return {
+                TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
+        }
+        if (input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto shard_grid = input_shard_spec.grid.ranges();
+            TT_FATAL(shard_grid.size() == 1, "Block sharded input should have only one CoreRange");
+            auto core_range = *shard_grid.begin();
+            uint32_t ncores_w = core_range.end_coord.x + 1;
+            uint32_t ncores_h = core_range.end_coord.y + 1;
+            auto output_shard_spec = mem_config.shard_spec.value();
+            auto output_shard_shape = output_shard_spec.shape;
+            log_debug(LogOp, "ncores_w, ncores_h: {} {}", ncores_w, ncores_h);
+            log_debug(LogOp, "output_shard_shape: {}", output_shard_shape);
+            return {
+                TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), mem_config))};
+        }
+
+        TT_THROW("input memory config is not HEIGHT or BLOCK sharded");
     }
+
+    return {
+        TensorSpec(output_shape, TensorLayout(input.get_dtype(), PageConfig(input.get_layout()), output_mem_config_))};
 }
 
 operation::ProgramWithCallbacks UpSample::create_program(

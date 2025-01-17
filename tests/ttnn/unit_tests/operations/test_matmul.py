@@ -35,7 +35,7 @@ def find_max_subblock(out_block_h, out_block_w):
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [384])
 @pytest.mark.parametrize("w", [768])
-@pytest.mark.parametrize("tile_h", [4, 8, 16, 32])
+@pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("transpose_tile", [True, False])
@@ -93,6 +93,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
     assert_with_pcc(z_t, z)
 
 
+@run_for_wormhole_b0()
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("m", [256])
 @pytest.mark.parametrize("k", [256])
@@ -358,7 +359,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     )
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
@@ -375,7 +376,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
-        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
@@ -958,6 +959,232 @@ def test_matmul_1d_tiny_tile(
     assert device.num_program_cache_entries() == 1
 
 
+def run_matmul_1d_multiple_output_blocks_per_core(
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    in_sharded,
+    out_sharded,
+    num_out_block_h,
+    num_out_block_w,
+    mcast_in0,
+    uneven_width,
+):
+    if in_sharded or out_sharded:
+        fuse_batch = True
+    else:
+        fuse_batch = False
+
+    if out_sharded and num_out_block_w > 1:
+        pytest.skip("out sharded not support multiple blocks on w dim")
+
+    if not mcast_in0:
+        tmp = m
+        m = n
+        n = tmp
+
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    bias_shape = [1, 1, n]
+
+    num_cores = grid_size[0] * grid_size[1]
+
+    if mcast_in0:
+        in0_block_w = k // num_cores // 32
+        per_core_M = m // 32
+        per_core_N = n // num_cores // 32 + uneven_width
+    else:
+        in0_block_w = k // 32 // 2  # test exracting shards
+        per_core_M = m // 32 // num_cores
+        per_core_N = n // 32
+    out_block_h = per_core_M // num_out_block_h
+    out_block_w = per_core_N // num_out_block_w
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
+
+    logger.info(f"m: {m}")
+    logger.info(f"k: {k}")
+    logger.info(f"n: {n}")
+    logger.info(f"in0_block_w: {in0_block_w}")
+    logger.info(f"per_core_M: {per_core_M}")
+    logger.info(f"per_core_N: {per_core_N}")
+    logger.info(f"out_block_h: {out_block_h}")
+    logger.info(f"out_block_w: {out_block_w}")
+    logger.info(f"out_subblock_h: {out_subblock_h}")
+    logger.info(f"out_subblock_w: {out_subblock_w}")
+
+    in0 = torch.randn(in0_shape).bfloat16().float()
+    in1 = torch.randn(in1_shape).bfloat16().float()
+
+    if in_sharded:
+        if mcast_in0:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (1, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+        else:
+            in0_memory_config = ttnn.create_sharded_memory_config(
+                (1, 1, m, k),
+                core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+    else:
+        in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    in1_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    in0_t = ttnn.from_torch(
+        in0,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    if has_bias:
+        bias = torch.randn(bias_shape).bfloat16().float()
+        bias_padded = bias.unsqueeze(2)
+        bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        bias_t = ttnn.from_torch(
+            bias_padded,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=mcast_in0,
+    )
+
+    if is_grayskull():
+        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+        )
+    else:
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    if out_sharded:
+        if mcast_in0:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
+        else:
+            out_mem_config = ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            )
+    else:
+        out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    if has_bias:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=out_mem_config,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+    output_tensor = ttnn.to_torch(output_t)
+    pt_out = in0 @ in1
+    if has_bias:
+        pt_out += bias
+
+    assert_with_pcc(pt_out, output_tensor, 0.999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("m", [256])
+@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("n", [2048])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("grid_size", [(8, 2)])
+@pytest.mark.parametrize("in_sharded", [True, False])
+@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("num_out_block_h", [1, 2])
+@pytest.mark.parametrize("num_out_block_w", [1, 2])
+@pytest.mark.parametrize("mcast_in0", [True, False])
+@pytest.mark.parametrize("uneven_width", [0, 2])
+def test_matmul_1d_multiple_output_blocks_per_core(
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    in_sharded,
+    out_sharded,
+    num_out_block_h,
+    num_out_block_w,
+    mcast_in0,
+    uneven_width,
+    use_program_cache,
+):
+    for _ in range(2):
+        run_matmul_1d_multiple_output_blocks_per_core(
+            device,
+            m,
+            k,
+            n,
+            has_bias,
+            grid_size,
+            in_sharded,
+            out_sharded,
+            num_out_block_h,
+            num_out_block_w,
+            mcast_in0,
+            uneven_width,
+        )
+        # dummy tensor to change tensor alloc
+        dummy_shape = [1, 1, 32, 32]
+        py_dummy_tensor = torch.randn(dummy_shape)
+        tt_dummy_tensor = ttnn.from_torch(
+            py_dummy_tensor,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    assert device.num_program_cache_entries() == 1
+
+
 # fmt: off
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("m_size,k_size,n_size", [
@@ -1003,14 +1230,14 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand((k_size), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand((1, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = input_tensor_a @ input_tensor_b
-    output = ttnn.to_torch(output, torch_rank=1)
+    output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
@@ -1492,7 +1719,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
 
 # @skip_for_grayskull()
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
@@ -1662,7 +1888,6 @@ def test_matmul_in0_in1_bias_sharded(
                 N_padded // num_compute_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -1677,7 +1902,6 @@ def test_matmul_in0_in1_bias_sharded(
                     N_padded // num_compute_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -1692,7 +1916,6 @@ def test_matmul_in0_in1_bias_sharded(
                 K // num_activation_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -1852,4 +2075,49 @@ def test_interleaved_input_sharded_output_matmul(device):
 
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=out_mem_config)
     output_tensor = ttnn.to_torch(output3)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "n_size, c, m, k, n",
+    [
+        (1, 1, 1024, 64, 512),
+    ],
+)
+def test_optional_output_argument(device, n_size, c, m, k, n):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((n_size, c, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n_size, c, k, n), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    torch_opt_output_tensor = torch.zeros_like(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    optional_output_tensor = ttnn.from_torch(torch_opt_output_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert len(output.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
+    assert output.shape == torch_output_tensor.shape == optional_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
+    assert_with_pcc(output, optional_output_tensor, 0.999)
+
+
+def test_small_matmul_pcc(device):
+    torch.manual_seed(0)
+    pcc = 0.99
+    torch_input_tensor_a = torch.rand([1, 2048], dtype=torch.float32)
+    torch_input_tensor_b = torch.rand([2048, 1000], dtype=torch.float32)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output1)
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)

@@ -2,14 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
 #define DATUMS_PER_ROW 16
 
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // DEST_REGISTER_FULL_SIZE
+// This parameter is the same for all supported architectures
+// Check this invariant when adding new architectures
+#define DEST_REGISTER_FULL_SIZE 64 * 16
 
 namespace ttnn {
 
@@ -72,6 +73,26 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
             TT_THROW("arch not supported");
         }
     }
+}
+
+tt::ARCH get_arch_from_compute_config(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    if (not compute_kernel_config.has_value()) {
+        return tt::ARCH::Invalid;
+    }
+    return std::visit(
+        [](auto&& compute_kernel_config) -> tt::ARCH {
+            using T = std::decay_t<decltype(compute_kernel_config)>;
+            if constexpr (std::is_same_v<T, GrayskullComputeKernelConfig>) {
+                return tt::ARCH::GRAYSKULL;
+            } else if constexpr (std::is_same_v<T, WormholeComputeKernelConfig>) {
+                return tt::ARCH::WORMHOLE_B0;
+            } else if constexpr (std::is_same_v<T, BlackholeComputeKernelConfig>) {
+                return tt::ARCH::BLACKHOLE;
+            } else {
+                TT_THROW("arch not supported");
+            }
+        },
+        compute_kernel_config.value());
 }
 
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

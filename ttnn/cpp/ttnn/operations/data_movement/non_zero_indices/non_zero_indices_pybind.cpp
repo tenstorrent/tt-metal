@@ -7,7 +7,7 @@
 
 #include "non_zero_indices_pybind.hpp"
 #include "non_zero_indices.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -27,7 +27,7 @@ void bind_non_zero(py::module& module) {
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                List of ttnn.Tensor: the output tensors.
 
             Example:
 

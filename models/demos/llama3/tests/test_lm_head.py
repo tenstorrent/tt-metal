@@ -24,6 +24,10 @@ from models.utility_functions import skip_for_grayskull
     (32,),
 )
 @pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -32,18 +36,19 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_lm_head_inference(mesh_device, seq_len, use_program_cache, reset_seeds):
+def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
+    state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
-        "weight": state_dict["output.weight"],
+        "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
 
     model_args.WEIGHTS_DTYPE = dtype
@@ -55,7 +60,7 @@ def test_llama_lm_head_inference(mesh_device, seq_len, use_program_cache, reset_
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        state_dict_prefix="",
+        state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 
@@ -64,7 +69,9 @@ def test_llama_lm_head_inference(mesh_device, seq_len, use_program_cache, reset_
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+        ),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
         layout=ttnn.TILE_LAYOUT,
@@ -72,8 +79,13 @@ def test_llama_lm_head_inference(mesh_device, seq_len, use_program_cache, reset_
 
     logger.info("Run Llama_LM_Head")
     tt_output = tt_model(tt_input)
-
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
+        ),
+    )
+    tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

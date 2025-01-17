@@ -18,6 +18,8 @@ option(TTNN_BUILD_TESTS "Enables build of ttnn tests" OFF)
 option(ENABLE_CCACHE "Build with compiler cache" FALSE)
 option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
+option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
+
 ###########################################################################################
 
 if(CMAKE_CXX_CLANG_TIDY AND TT_UNITY_BUILDS)

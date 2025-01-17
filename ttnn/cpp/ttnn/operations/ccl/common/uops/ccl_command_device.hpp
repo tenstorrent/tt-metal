@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 
 #ifdef DEBUG_PRINT_ENABLED
 #include "debug/dprint.h"
@@ -44,19 +44,21 @@ auto build_from_args<Shape4D<uint32_t>>(std::size_t &rt_arg_idx) -> Shape4D<uint
 
 namespace cmd {
 
-void update_command_tensor(std::size_t &arg_idx, CclCommandTensor &cmd_tensor) {
+CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &cmd_tensor) {
     auto cmd = CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
     #ifdef DEBUG_PRINT_ENABLED
-    DPRINT << "CMD (code=" << (uint32_t)cmd.code << ", arg_count=" << (uint32_t)cmd.arg_count << ")\n";
+    DPRINT << "CMD (code=" << (uint32_t)cmd.code << ", dst_t=" << (uint32_t)cmd.dest_type << ", arg_count=" << (uint32_t)cmd.arg_count << ")\n";
     #endif
 
-    for (std::size_t i = 0; i < cmd.arg_count; i++) {
+    for (size_t i = 0; i < cmd.arg_count; i++) {
 
         // Note that we choose to reinterpret our pointers as volatile so that in the future we can add streaming
         // of additional commands from some backing memory (e.g. dram or L1), potentially by another core, without
         // having to track down this code and add volatile casts later (which would be a potentially tricky bug to
         // root cause).
-        switch (static_cast<CclCommandArgCode>(get_arg_val<uint32_t>(arg_idx++))) {
+        const CclCommandArgHeader command_arg_header = CclCommandArgHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+        const CclCommandArgCode command_arg_code = command_arg_header.code;
+        switch (command_arg_code) {
             case CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES:
                 CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_shape);
                 #ifdef DEBUG_PRINT_ENABLED
@@ -105,7 +107,11 @@ void update_command_tensor(std::size_t &arg_idx, CclCommandTensor &cmd_tensor) {
         };
     }
 
+    return cmd;
 }
+
+
+
 
 } // namespace cmd
 

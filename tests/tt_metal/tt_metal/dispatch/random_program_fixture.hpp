@@ -5,12 +5,13 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "impl/device/device.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "dispatch_test_utils.hpp"
 
 class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
@@ -63,7 +64,7 @@ protected:
 
     static const uint32_t NUM_PROGRAMS = 75;
 
-    Device* device_;
+    IDevice* device_;
 
     void SetUp() override {
         CommandQueueSingleCardProgramFixture::SetUp();
@@ -141,13 +142,14 @@ protected:
         const uint32_t num_cbs = this->generate_random_num(min, max);
         std::vector<uint32_t> cb_page_sizes;
         for (uint32_t cb_idx = 0; cb_idx < num_cbs; cb_idx++) {
-            const uint32_t cb_page_size = this->generate_random_num(MIN_CB_PAGE_SIZE, MAX_CB_PAGE_SIZE, 16);
+            const uint32_t cb_page_size =
+                this->generate_random_num(MIN_CB_PAGE_SIZE, MAX_CB_PAGE_SIZE, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE);
             const uint32_t cb_total_size =
                 this->generate_random_num(MIN_CB_TOTAL_SIZE, MAX_CB_TOTAL_SIZE, cb_page_size);
             CircularBufferConfig config = CircularBufferConfig(cb_total_size, {{cb_idx, tt::DataFormat::Float16_b}})
                                               .set_page_size(cb_idx, cb_page_size);
             CreateCircularBuffer(program, cores, config);
-            cb_page_sizes.push_back(cb_page_size / 16);
+            cb_page_sizes.push_back(cb_page_size);
         }
         return cb_page_sizes;
     }

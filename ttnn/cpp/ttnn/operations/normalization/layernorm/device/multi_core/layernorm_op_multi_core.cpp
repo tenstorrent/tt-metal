@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 
@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     //                       Device Setup
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
-    Device* device = a.device();
+    IDevice* device = a.device();
     auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -481,7 +481,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -555,7 +555,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool mcast_1d = M == block_h;
     bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = shard_spec.grid.bounding_box();
-    CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
+    CoreCoord grid_size = {bbox.end_coord.x - bbox.start_coord.x + 1, bbox.end_coord.y - bbox.start_coord.y + 1};
+    std::optional<CoreCoord> grid_offset = std::nullopt;
+    if (bbox.start_coord.x != 0 || bbox.start_coord.y != 0) {
+        grid_offset = bbox.start_coord;
+    }
     if (mcast_1d) {
         num_blocks = shard_spec.num_cores();
     } else if (row_wise) {
@@ -568,7 +572,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool use_two_stage_reduce = false;
     if (mcast_1d) {
         // only do this for row/col dim are full length
-        if (row_wise && grid_size.x == device->compute_with_storage_grid_size().x &&
+        if (row_wise && grid_size.x > 1 && grid_size.x <= device->compute_with_storage_grid_size().x &&
             grid_size.y > 1) {  // row major and multiple rows
             use_two_stage_reduce = true;
         } else if (
@@ -844,6 +848,31 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             num_cores_x_mcast = 1;
             num_cores_y_mcast = num_cores_y;
         }
+    }
+    auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
+        if (input_set.empty()) {
+            return input_set;
+        }
+
+        std::vector<CoreRange> new_ranges;
+        new_ranges.reserve(input_set.size());
+
+        for (const CoreRange& range : input_set.ranges()) {
+            CoreCoord new_start = {range.start_coord.x + grid_offset.x, range.start_coord.y + grid_offset.y};
+            CoreCoord new_end = {range.end_coord.x + grid_offset.x, range.end_coord.y + grid_offset.y};
+            new_ranges.emplace_back(new_start, new_end);
+        }
+
+        return CoreRangeSet(std::move(new_ranges));
+    };
+    if (grid_offset.has_value()) {
+        start_core = {start_core.x + grid_offset.value().x, start_core.y + grid_offset.value().y};
+        sender_cores = {
+            {sender_cores.start_coord.x + start_core.x, sender_cores.start_coord.y + start_core.y},
+            {sender_cores.end_coord.x + start_core.x, sender_cores.end_coord.y + start_core.y}};
+        all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
+        all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
+        not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
     }
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1160,12 +1189,21 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // in1 sharded
     uint32_t in1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_in1 = 0;
+    CBHandle cb_add_out = 0;
     if (b) {
         tt::tt_metal::CircularBufferConfig in1_cb_config =
             tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in1_cb_index, in_data_format}})
                 .set_page_size(in1_cb_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
+        if (is_pre_all_gather) {
+            uint32_t add_out_cb_index = tt::CBIndex::c_14;
+            tt::tt_metal::CircularBufferConfig add_out_cb_config =
+                tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
+                    .set_page_size(add_out_cb_index, in_single_tile_size)
+                    .set_globally_allocated_address(*a.buffer());
+            cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
+        }
     }
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1304,7 +1342,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     } else {
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
-    const auto& cores = grid_to_cores(all_cores.num_cores(), num_cores_x, num_cores_y, row_wise);
+    const auto& cores = corerange_to_cores(all_cores, all_cores.num_cores(), row_wise = row_wise);
 
     // Runtime Args
     std::vector<KernelHandle> writer_kernel_ids;
@@ -1328,11 +1366,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::vector<uint32_t> in0_mcast_noc_y;
     in0_mcast_noc_x.reserve(num_cores_x);
     in0_mcast_noc_y.reserve(num_cores_y);
-    for (uint32_t core_idx_x = 0; core_idx_x < num_cores_x; ++core_idx_x) {
-        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+    CoreCoord core_start_offset = grid_offset.value_or(CoreCoord{0, 0});
+    for (uint32_t core_idx_x = core_start_offset.x; core_idx_x < num_cores_x + core_start_offset.x; ++core_idx_x) {
+        in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, core_start_offset.y}).x);
     }
-    for (uint32_t core_idx_y = 0; core_idx_y < num_cores_y; ++core_idx_y) {
-        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+    for (uint32_t core_idx_y = core_start_offset.y; core_idx_y < num_cores_y + core_start_offset.y; ++core_idx_y) {
+        in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, core_idx_y}).y);
     }
 
     uint32_t last_core_width_index = 0;
@@ -1567,9 +1606,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
          writer_mcast_sender_kernels_id,
          writer_mcast_receiver_kernels_id,
          num_none_all_to_all_workers,
+         is_pre_all_gather,
          cb_in0,
          cb_in1,
          cb_stats,
+         cb_add_out,
          cb_output,
          cores](
             const void* operation,
@@ -1588,6 +1629,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
+                if (is_pre_all_gather) {
+                    UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                }
             }
             if (stats_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());

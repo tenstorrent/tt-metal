@@ -14,7 +14,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -65,7 +65,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            log_info(LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
+            log_info(
+                LogTest, "Running on eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         erisc_kid = CreateKernel(
@@ -82,7 +83,11 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
         KernelHandle ierisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            log_info(LogTest, "Running on inactive eth core {}({})", core.str(), device->ethernet_core_from_logical_core(core).str());
+            log_info(
+                LogTest,
+                "Running on inactive eth core {}({})",
+                core.str(),
+                device->ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         ierisc_kid = CreateKernel(
@@ -135,7 +140,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherPause) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -154,7 +154,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     int num_cores_r,
     int num_cores_c,
     int per_core_M,
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         int num_cores_r = compute_with_storage_grid_size.y;
@@ -383,10 +383,6 @@ int main(int argc, char** argv) {
                 TT_FATAL(dram_buffer_src1_addr + dram_buffer_size_weights < 1024 * 1024 * 1024, "Error");
                 TT_FATAL(dram_buffer_dst_addr + dram_buffer_size_out < 1024 * 1024 * 1024, "Error");
 
-                auto dram_src0_noc_xy = device->dram_core_from_dram_channel(dram_src0_channel_id);
-                auto dram_src1_noc_xy = device->dram_core_from_dram_channel(dram_src1_channel_id);
-                auto dram_dst_noc_xy = device->dram_core_from_dram_channel(dram_dst_channel_id);
-
                 auto activations_tilized = tilize(activation_slice, per_core_M * 32, K * 32);
                 auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
                 auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -402,11 +398,9 @@ int main(int argc, char** argv) {
 
                 const std::array mm_reader_args = {
                     (std::uint32_t)dram_buffer_src0_addr,
-                    (std::uint32_t)dram_src0_noc_xy.x,
-                    (std::uint32_t)dram_src0_noc_xy.y,
+                    (std::uint32_t)0,
                     (std::uint32_t)dram_buffer_src1_addr,
-                    (std::uint32_t)dram_src1_noc_xy.x,
-                    (std::uint32_t)dram_src1_noc_xy.y,
+                    (std::uint32_t)0,
                     (std::uint32_t)(K / in0_block_w),                            // num_blocks
                     (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
                     (std::uint32_t)per_core_N * in0_block_w,                     // input 1 block num tiles
@@ -415,8 +409,7 @@ int main(int argc, char** argv) {
 
                 const std::array writer_args = {
                     (std::uint32_t)dram_buffer_dst_addr,
-                    (std::uint32_t)dram_dst_noc_xy.x,
-                    (std::uint32_t)dram_dst_noc_xy.y,
+                    (std::uint32_t)0,
                     (std::uint32_t)out_subblock_h,               // num tiles per sub block m
                     (std::uint32_t)out_subblock_w,               // num tiles per sub block n
                     (std::uint32_t)per_core_M / out_subblock_h,  // num sub blocks m

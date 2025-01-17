@@ -2,7 +2,7 @@
 
 ## Contents
 
--[Introduction](#introduction)
+- [Introduction](#introduction)
 - [1. Metal Trace](#1-metal-trace)
   - [1.1 Overview](#11-overview)
   - [1.2 APIs](#12-apis)
@@ -107,6 +107,8 @@ ttnn.copy_host_to_device_tensor(host_tensor, input_dram_tensor, cq_id=0)
 ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 host_output_tensor = output_tensor.cpu(blocking=False)
 
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```
 
 #### 1.3.2 Trace with Non-Persistent L1 Input
@@ -143,6 +145,8 @@ ttnn.copy_host_to_device_tensor(host_tensor, input_l1_tensor, cq_id=0)
 ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
 host_output_tensor = output_tensor.cpu(blocking=False)
 
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```
 
 ## 2. Multiple Command Queues
@@ -232,6 +236,8 @@ for iter in range(0, 2):
     output_tensor = run_model(input_l1_tensor)
     outputs.append(output_tensor.cpu(blocking=False))
 
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```
 
 #### 2.3.2 Ops on CQ 0, Input Writes and Output Readback on CQ 1
@@ -328,6 +334,8 @@ outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
 # Signal that the read has finished on CQ 1
 ttnn.record_event(1, read_event)
 
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```
 
 ## 3. Putting Trace and Multiple Command Queues Together
@@ -351,7 +359,7 @@ Refer to [1.2 Metal Trace APIs](#12-apis) and [2.2 Multiple Command Queues APIs]
 
 ### 3.3 Programming Examples
 
-#### 3.3.1 Trace with Non-Persistent L1 Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1
+#### 3.3.1 Trace with Persistent DRAM Input, Ops and Output Readback on CQ 0, Input Writes on CQ 1
 
 The following example shows using 2 cqs with trace, where we use CQ 1 only for writing inputs, and CQ 0 for running programs/reading outputs.
 We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
@@ -429,9 +437,12 @@ for iter in range(0, 2):
     # Run the rest of the model and issue output readback on the default CQ (0)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     outputs.append(output_tensor.cpu(blocking=False))
+
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```
 
-#### 3.3.2 Trace with Non-Persistent L1 Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1
+#### 3.3.2 Trace with Persistent DRAM Input, Ops on CQ 0, Input Writes and Output Readback on CQ 1
 
 The following example shows using 2 cqs with trace, where we use CQ 1 for writing inputs and reading outputs, and CQ 0 only for running programs.
 We use a persistent DRAM tensor to write our input, and we make the input to our trace as an L1 tensor which is the output of the first op.
@@ -563,4 +574,7 @@ ttnn.wait_for_event(1, last_op_event)
 outputs.append(output_dram_tensor.cpu(blocking=False, cq_id=1))
 # Signal that the read has finished on CQ 1
 ttnn.record_event(1, read_event)
+
+# Final synchronize to wait for all outputs to be read to host since we used non-blocking reads
+ttnn.synchronize_device(device)
 ```

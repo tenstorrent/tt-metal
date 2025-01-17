@@ -10,19 +10,22 @@
 #include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "ttnn/any_device.hpp"
 #include "ttnn/common/constants.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/tile/tile.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -62,13 +65,13 @@ struct Tensor {
         // Update the main thread ref count with the recorded value after the tensor is pushed to the queue(s),
         // since pushing to the queue requires an extra datacopy in the main thread, that gets balanced by the
         // worker, however the worker cannot modify main_thread_ref_count.
-        void increment_main_thread_ref_count(Device* worker);
+        void increment_main_thread_ref_count(IDevice* worker);
 
-        void decrement_main_thread_ref_count(Device* worker);
+        void decrement_main_thread_ref_count(IDevice* worker);
 
         uint32_t record_main_thread_ref_count();
 
-        void update_main_thread_ref_count(Device* worker, uint32_t ref_count);
+        void update_main_thread_ref_count(IDevice* worker, uint32_t ref_count);
     };
 
     std::optional<std::int64_t> tensor_id = std::nullopt;
@@ -77,7 +80,7 @@ struct Tensor {
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
     // Tensor gets worker queue handle through the device
-    std::vector<Device*> workers = {};
+    std::vector<IDevice*> workers = {};
     bool deallocate_through_destructor = false;
 
     // ======================================================================================
@@ -97,13 +100,20 @@ struct Tensor {
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
+    Tensor(
+        Storage storage,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        DataType dtype,
+        Layout layout,
+        const std::optional<Tile>& tile = std::nullopt);
     Tensor(Storage storage, TensorSpec tensor_spec);
 
     // Constructors to initialize unpopulated tensor with workers and storage specified. Use this when creating tensor
     // handles in async mode.
     explicit Tensor(
         uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
-    explicit Tensor(const std::vector<Device*>& workers);
+    explicit Tensor(const std::vector<IDevice*>& workers);
 
     Tensor(const Tensor& other);
 
@@ -130,42 +140,72 @@ struct Tensor {
 
     void perform_cleanup_for_async_mode();
 
-    void deepcopy(const Tensor& other);
-
     void populate_buffers_and_metadata(const Tensor& other);
 
     void deallocate(bool force = false);
 
-    std::vector<Device*> get_workers(bool blocking = false) const;
+    std::vector<IDevice*> get_workers(bool blocking = false) const;
+
+    // Converts a buffer of elements of type `T` to a `Tensor`.
+    // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
+    // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    //
+    // The data in the buffer is copied into a tensor with an owned storage.
+    //
+    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
+    // TODO: handle tilization and padding in face of sharding.
+    template <typename T>
+    static Tensor from_span(
+        tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Same as `from_span`, but operates on a vector instead.
+    template <typename T>
+    static Tensor from_vector(
+        const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
+        return from_span(tt::stl::Span<const T>(buffer), spec, device);
+    }
+
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
+    // type conversion is needed.
+    template <typename T>
+    static Tensor from_vector(
+        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Converts a `Tensor` to a `std::vector<T>`.
+    // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
+    // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
+    //
+    // If the tensor resides on a device, it will be brough back to host.
+    //
+    // TODO: handle tilization and padding in face of sharding.
+    template <typename T>
+    std::vector<T> to_vector() const;
 
     Tensor to(
-        Device* target_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        IDevice* target_device,
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to(
-        CommandQueue& queue,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
+        const std::vector<IDevice*>& workers,
+        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
+        uint8_t cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(
-        const std::vector<Device*>& workers,
-        const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED}) const;
-
-    Tensor to(Layout target_layout, Device* worker = nullptr) const;
+    Tensor to(Layout target_layout, IDevice* worker = nullptr) const;
 
     Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
     Tensor pad(
-        const tt::tt_metal::LegacyShape& output_tensor_shape,
+        const ttnn::SimpleShape& output_padded_shape,
         const ttnn::SimpleShape& input_tensor_start,
         float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
-
-    Tensor cpu_sharded() const;
 
     Tensor unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const;
 
@@ -184,7 +224,6 @@ struct Tensor {
     // ======================================================================================
     Tensor reshape(const ttnn::SimpleShape& new_shape) const;
     Tensor reshape(const ttnn::Shape& new_shape) const;
-
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
@@ -243,7 +282,7 @@ struct Tensor {
 
     bool is_contiguous() const {
         if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
+            return this->get_logical_shape() == this->get_padded_shape();
         } else {
             return false;
         }
@@ -276,7 +315,7 @@ struct Tensor {
     }
     DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
-    Device* device() const {
+    IDevice* device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
             auto buffer = this->buffer();
             if (buffer == nullptr) {
@@ -325,24 +364,24 @@ private:
     void init(Storage storage, TensorSpec tensor_spec);
 };
 
-Tensor create_device_tensor(const TensorSpec& tensor_spec, Device* device);
+Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]]
 Tensor create_device_tensor(
     const ttnn::SimpleShape& shape,
     DataType dtype,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 
 // TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
-[[deprecated("Use create_device_tensor(const TensorSpec&, Device*) instead")]]
+[[deprecated("Use create_device_tensor(const TensorSpec&, IDevice*) instead")]]
 Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType dtype,
     Layout layout,
-    Device* device,
+    IDevice* device,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 
@@ -354,30 +393,34 @@ void memcpy(
     CommandQueue& queue,
     void* dst,
     const Tensor& src,
-    const std::optional<std::size_t> transfer_size = std::nullopt,
+    const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
 
 void memcpy(
-    void* dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt, bool blocking = true);
-void memcpy(Tensor& dst, const void* src, const std::optional<std::size_t> transfer_size = std::nullopt);
-void memcpy(Tensor& dst, const Tensor& src, const std::optional<std::size_t> transfer_size = std::nullopt);
+    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(
+    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(
+    void* dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt, bool blocking = true);
+
+void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
+
+void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
     const std::optional<Tile>& tile = std::nullopt);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 
-bool validate_worker_modes(const std::vector<Device*>& workers);
+bool validate_worker_modes(const std::vector<IDevice*>& workers);
 
 }  // namespace tt_metal
 

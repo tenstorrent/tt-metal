@@ -8,11 +8,11 @@
 #include <vector>
 #include <map>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 #include "test_gold_impls.hpp"
 #include "constants.hpp"
 
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
                 //                      Device Setup
                 ////////////////////////////////////////////////////////////////////////////
                 int device_id = 0;
-                tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+                tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
                 ////////////////////////////////////////////////////////////////////////////
                 //                      Application Setup
@@ -124,8 +124,6 @@ int main(int argc, char** argv) {
                 uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
                 auto dst_dram_buffer = CreateBuffer(buff_config);
                 uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-                auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-                auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
                 uint32_t src0_cb_index = 0;
                 uint32_t num_buffer_tiles = 2;
@@ -154,28 +152,30 @@ int main(int argc, char** argv) {
 
                 vector<uint16_t> tiled_bcast_values;
                 vector<uint16_t> ref_bcast_values;
-                vector<uint32_t> ref_bcast_shape = {N, C, 1, 1};
                 float bcast_1value = 10.0f;
                 uint16_t bcast_1value16 = bfloat16(bcast_1value).to_uint16();
                 unsigned num_bcast_tiles = 0;
                 // build the constant tiles to be broadcast
                 if (bcast_dim == BcastDim::HW) {
-                    num_bcast_tiles = NC;
                     ref_bcast_values.resize(NC, 0);
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, TILE_WIDTH};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * TILE_WIDTH, 0);
                     for (int j = 0; j < NC; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j * TILE_HEIGHT * TILE_WIDTH] = val;
                     }
                     // convert the reference broadcast tensor to tiled format
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     TT_FATAL(tiled_bcast_values[0] == bcast_1value16, "Error");
+                    num_bcast_tiles = NC;
                     // restore ref values and shape to 1
-                    ref_bcast_shape[3] = 1;
-                    ref_bcast_shape[4] = 1;
                 } else if (bcast_dim == BcastDim::H) {
                     // For bcast_h a.k.a. Dim::R we broadcast _over_ H, meaning we take a W vector and += it over each
                     // element in the H dimension At least that's the behavior i've seen from a single tile bcast-H So
@@ -185,14 +185,18 @@ int main(int argc, char** argv) {
                     // generate broadcast values along the W axis with one extra tile (needed by the kernel I believe)
                     // TODO(AP): need to figure out why the extra tile in broadcast inputs is expected by the kernel
                     ref_bcast_values.resize(NC * W, 0);
-                    ref_bcast_shape[3] = W;
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, TILE_HEIGHT, W};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * TILE_HEIGHT * W, 0);
                     for (int j = 0; j < NC * W; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Wt;
@@ -200,14 +204,18 @@ int main(int argc, char** argv) {
                 } else if (bcast_dim == BcastDim::W) {
                     // see the comments above for BCAST_H
                     ref_bcast_values.resize(NC * H, 0);
-                    ref_bcast_shape[2] = H;
+                    vector<uint32_t> ref_bcast_shape_with_tile_padding = {N, C, H, TILE_WIDTH};
+                    vector<uint16_t> ref_bcast_values_with_tile_padding;
+                    ref_bcast_values_with_tile_padding.resize(NC * H * TILE_WIDTH, 0);
                     for (int j = 0; j < NC * H; j++) {
                         // add something not too large but different between tiles
-                        ref_bcast_values[j] = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        auto val = bfloat16(bcast_1value + (j % 7)).to_uint16();
+                        ref_bcast_values[j] = val;
+                        ref_bcast_values_with_tile_padding[j * TILE_WIDTH] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
-                        ref_bcast_values,
-                        ref_bcast_shape,
+                        ref_bcast_values_with_tile_padding,
+                        ref_bcast_shape_with_tile_padding,
                         tests::utils::TensorLayoutType::LIN_ROW_MAJOR,
                         tests::utils::TensorLayoutType::TILED_NFACES);
                     num_bcast_tiles = NC * Ht;
@@ -228,7 +236,6 @@ int main(int argc, char** argv) {
 
                 auto src1_dram_buffer = CreateBuffer(src1_config);
                 uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-                auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
                 tt_metal::detail::WriteToBuffer(src1_dram_buffer, bcast_tiled_u32);
 
                 bool src0_is_dram = true;
@@ -258,28 +265,20 @@ int main(int argc, char** argv) {
                     program,
                     binary_reader_kernel,
                     core,
-                    {dram_buffer_src0_addr,              // 0
-                     (std::uint32_t)dram_src0_noc_xy.x,  // 1
-                     (std::uint32_t)dram_src0_noc_xy.y,  // 2
-                     num_tensor_tiles,                   // 3
-                     dram_buffer_src1_addr,              // 4
-                     (std::uint32_t)dram_src1_noc_xy.x,  // 5
-                     (std::uint32_t)dram_src1_noc_xy.y,  // 6
+                    {dram_buffer_src0_addr,  // 0
+                     (std::uint32_t)0,       // 1
+                     num_tensor_tiles,       // 2
+                     dram_buffer_src1_addr,  // 3
+                     (std::uint32_t)0,       // 4
                      num_bcast_tiles,
                      NC * Ht * Wt,
                      NC,
                      Ht,
                      Wt,
-                     nc1});  // 7 8 9 10 11 12
+                     nc1});  // 5 6 7 8 9 10
 
                 tt_metal::SetRuntimeArgs(
-                    program,
-                    unary_writer_kernel,
-                    core,
-                    {dram_buffer_dst_addr,
-                     (std::uint32_t)dram_dst_noc_xy.x,
-                     (std::uint32_t)dram_dst_noc_xy.y,
-                     num_tensor_tiles});
+                    program, unary_writer_kernel, core, {dram_buffer_dst_addr, (std::uint32_t)0, num_tensor_tiles});
 
                 std::map<string, string> compute_defines = {
                     {"BCAST_DIM", bdim_to_llkdim_define[bcast_dim]},

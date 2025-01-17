@@ -9,8 +9,24 @@
 #include "modules/embedding_module.hpp"
 #include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
+#include "modules/positional_embeddings.hpp"
 
 namespace ttml::models::gpt2 {
+
+enum class PositionalEmbeddingType {
+    Trainable,
+    Fixed,
+};
+
+enum class RunnerType {
+    MemoryEfficient,
+    Default,
+};
+
+enum class WeightTyingType {
+    Disabled,
+    Enabled,
+};
 
 struct TransformerConfig {
     uint32_t num_heads = 6;
@@ -19,6 +35,9 @@ struct TransformerConfig {
     uint32_t num_blocks = 6;
     uint32_t vocab_size = 256;
     uint32_t max_sequence_length = 256;
+    RunnerType runner_type = RunnerType::Default;
+    WeightTyingType weight_tying = WeightTyingType::Disabled;
+    PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
 
     struct Experimental {
         bool use_composite_layernorm = false;
@@ -28,8 +47,9 @@ struct TransformerConfig {
 
 class Transformer : public ttml::autograd::ModuleBase {
 private:
+    RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::Embedding> tok_emb;
-    std::shared_ptr<ttml::modules::Embedding> pos_emb;
+    std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
     std::vector<std::shared_ptr<ttml::modules::GPTBlock>> blocks;
     std::shared_ptr<ttml::modules::LayerNormLayer> ln_fc;
     std::shared_ptr<ttml::modules::LinearLayer> fc;
@@ -37,10 +57,7 @@ private:
 public:
     explicit Transformer(const TransformerConfig& config);
 
-    ttml::autograd::TensorPtr operator()(
-        const ttml::autograd::TensorPtr& x,
-        const ttml::autograd::TensorPtr& positions,
-        const ttml::autograd::TensorPtr& mask);
+    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
 };
 
 [[nodiscard]] TransformerConfig read_config(const YAML::Node& config);

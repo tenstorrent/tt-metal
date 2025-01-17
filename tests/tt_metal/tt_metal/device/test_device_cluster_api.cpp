@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "multi_device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -45,7 +45,7 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     }
 
     // Check conversion to noc coords
-    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(9, 6), CoreCoord(1, 6)};
+    std::vector<CoreCoord> chip_0_eth_noc_coords_expected = {CoreCoord(25, 17), CoreCoord(18, 17)};
 
     std::vector<CoreCoord> chip_0_eth_logical_coords;
     std::copy(
@@ -59,7 +59,7 @@ TEST_F(N300DeviceFixture, EthValidateEthernetConnectivity) {
     std::sort(chip_0_eth_noc_coords_returned.begin(), chip_0_eth_noc_coords_returned.end());
     ASSERT_TRUE(chip_0_eth_noc_coords_returned == chip_0_eth_noc_coords_expected);
 
-    std::vector<CoreCoord> chip_1_eth_noc_coords_expected = {CoreCoord(9, 0), CoreCoord(1, 0)};
+    std::vector<CoreCoord> chip_1_eth_noc_coords_expected = {CoreCoord(25, 16), CoreCoord(18, 16)};
 
     std::vector<CoreCoord> chip_1_eth_logical_coords;
     std::copy(
@@ -82,22 +82,22 @@ TEST_F(N300DeviceFixture, EthInvalidLogicalEthernetCore) {
 
 TEST_F(N300DeviceFixture, EthValidateAllEthernetCoreMapping) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
-        {CoreCoord(0, 0), CoreCoord(9, 0)},
-        {CoreCoord(0, 1), CoreCoord(1, 0)},
-        {CoreCoord(0, 2), CoreCoord(8, 0)},
-        {CoreCoord(0, 3), CoreCoord(2, 0)},
-        {CoreCoord(0, 4), CoreCoord(7, 0)},
-        {CoreCoord(0, 5), CoreCoord(3, 0)},
-        {CoreCoord(0, 6), CoreCoord(6, 0)},
-        {CoreCoord(0, 7), CoreCoord(4, 0)},
-        {CoreCoord(0, 8), CoreCoord(9, 6)},
-        {CoreCoord(0, 9), CoreCoord(1, 6)},
-        {CoreCoord(0, 10), CoreCoord(8, 6)},
-        {CoreCoord(0, 11), CoreCoord(2, 6)},
-        {CoreCoord(0, 12), CoreCoord(7, 6)},
-        {CoreCoord(0, 13), CoreCoord(3, 6)},
-        {CoreCoord(0, 14), CoreCoord(6, 6)},
-        {CoreCoord(0, 15), CoreCoord(4, 6)},
+        {CoreCoord(0, 0), CoreCoord(25, 16)},
+        {CoreCoord(0, 1), CoreCoord(18, 16)},
+        {CoreCoord(0, 2), CoreCoord(24, 16)},
+        {CoreCoord(0, 3), CoreCoord(19, 16)},
+        {CoreCoord(0, 4), CoreCoord(23, 16)},
+        {CoreCoord(0, 5), CoreCoord(20, 16)},
+        {CoreCoord(0, 6), CoreCoord(22, 16)},
+        {CoreCoord(0, 7), CoreCoord(21, 16)},
+        {CoreCoord(0, 8), CoreCoord(25, 17)},
+        {CoreCoord(0, 9), CoreCoord(18, 17)},
+        {CoreCoord(0, 10), CoreCoord(24, 17)},
+        {CoreCoord(0, 11), CoreCoord(19, 17)},
+        {CoreCoord(0, 12), CoreCoord(23, 17)},
+        {CoreCoord(0, 13), CoreCoord(20, 17)},
+        {CoreCoord(0, 14), CoreCoord(22, 17)},
+        {CoreCoord(0, 15), CoreCoord(21, 17)},
     };
     const auto& device_0 = this->devices_.at(0);
     for (const auto& logical_core : device_0->ethernet_cores()) {
@@ -109,31 +109,31 @@ TEST_F(N300DeviceFixture, EthValidateAllEthernetCoreMapping) {
 
 TEST_F(N300DeviceFixture, EthValidatePhysicalCoreConversion) {
     static std::map<CoreCoord, CoreCoord> expected_mapping_logical_to_physical = {
-        {CoreCoord(0, 0), CoreCoord(9, 0)},
-        {CoreCoord(0, 1), CoreCoord(1, 0)},
-        {CoreCoord(0, 2), CoreCoord(8, 0)},
-        {CoreCoord(0, 3), CoreCoord(2, 0)},
-        {CoreCoord(0, 4), CoreCoord(7, 0)},
-        {CoreCoord(0, 5), CoreCoord(3, 0)},
-        {CoreCoord(0, 6), CoreCoord(6, 0)},
-        {CoreCoord(0, 7), CoreCoord(4, 0)},
-        {CoreCoord(0, 8), CoreCoord(9, 6)},
-        {CoreCoord(0, 9), CoreCoord(1, 6)},
-        {CoreCoord(0, 10), CoreCoord(8, 6)},
-        {CoreCoord(0, 11), CoreCoord(2, 6)},
-        {CoreCoord(0, 12), CoreCoord(7, 6)},
-        {CoreCoord(0, 13), CoreCoord(3, 6)},
-        {CoreCoord(0, 14), CoreCoord(6, 6)},
-        {CoreCoord(0, 15), CoreCoord(4, 6)},
+        {CoreCoord(0, 0), CoreCoord(25, 16)},
+        {CoreCoord(0, 1), CoreCoord(18, 16)},
+        {CoreCoord(0, 2), CoreCoord(24, 16)},
+        {CoreCoord(0, 3), CoreCoord(19, 16)},
+        {CoreCoord(0, 4), CoreCoord(23, 16)},
+        {CoreCoord(0, 5), CoreCoord(20, 16)},
+        {CoreCoord(0, 6), CoreCoord(22, 16)},
+        {CoreCoord(0, 7), CoreCoord(21, 16)},
+        {CoreCoord(0, 8), CoreCoord(25, 17)},
+        {CoreCoord(0, 9), CoreCoord(18, 17)},
+        {CoreCoord(0, 10), CoreCoord(24, 17)},
+        {CoreCoord(0, 11), CoreCoord(19, 17)},
+        {CoreCoord(0, 12), CoreCoord(23, 17)},
+        {CoreCoord(0, 13), CoreCoord(20, 17)},
+        {CoreCoord(0, 14), CoreCoord(22, 17)},
+        {CoreCoord(0, 15), CoreCoord(21, 17)},
     };
     const auto& device_0 = this->devices_.at(0);
     for (const auto& logical_core : device_0->ethernet_cores()) {
         ASSERT_TRUE(
-            device_0->physical_core_from_logical_core(logical_core, CoreType::ETH) ==
+            device_0->virtual_core_from_logical_core(logical_core, CoreType::ETH) ==
             expected_mapping_logical_to_physical.at(logical_core));
     }
     // Check an invalid core type
-    EXPECT_ANY_THROW(device_0->physical_core_from_logical_core(CoreCoord(0, 0), CoreType::PCIE));
+    EXPECT_ANY_THROW(device_0->virtual_core_from_logical_core(CoreCoord(0, 0), CoreType::PCIE));
 }
 
 TEST_F(N300DeviceFixture, ActiveEthValidateEthernetSockets) {

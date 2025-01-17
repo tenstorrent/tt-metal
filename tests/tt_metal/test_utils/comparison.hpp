@@ -7,7 +7,7 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt {
@@ -20,8 +20,8 @@ namespace test_utils {
 //! to_packed() - get packed (into an integral type that is of the bitwidth specified by SIZEOF)
 //! Constructor(float in) - constructor with a float as the initializer
 //! Constructor(uint32_t in) - constructor with a uint32_t as the initializer -- only lower bits needed
-
-// this follows the implementation of numpy::is_close
+//
+// this follows the implementation of numpy's is_close
 template <typename ValueType>
 bool is_close(const ValueType a, const ValueType b, float rtol = 0.01f, float atol = 0.001f) {
     float af = 0.0f;

@@ -25,7 +25,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize("fill_value", [1, 0, 5.5, -2.235])
 def test_fill(device, input_shapes, fill_value):
     torch_input_tensor = torch.randn((input_shapes), dtype=torch.bfloat16)
-    torch_output_tensor = torch.full((input_shapes), fill_value, dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    torch_output_tensor = golden_function(torch_input_tensor, fill_value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.fill(input_tensor, fill_value)
@@ -46,7 +47,8 @@ def test_fill(device, input_shapes, fill_value):
 @pytest.mark.parametrize("fill_value", [5.88, -9.76])
 def test_fill_fp32(device, input_shapes, fill_value):
     torch_input_tensor = torch.randn((input_shapes), dtype=torch.float32)
-    torch_output_tensor = torch.full((input_shapes), fill_value, dtype=torch.float32)
+    golden_function = ttnn.get_golden_function(ttnn.fill)
+    torch_output_tensor = golden_function(torch_input_tensor, fill_value)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.fill(input_tensor, fill_value)

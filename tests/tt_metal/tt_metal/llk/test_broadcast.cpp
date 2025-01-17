@@ -155,7 +155,7 @@ std::vector<bfloat16> gold_broadcast(
     return golden;
 }
 
-void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& test_config) {
+void run_single_core_broadcast(tt_metal::IDevice* device, const BroadcastConfig& test_config) {
     if (test_config.eltwise_op == EltwiseOp::SUB && test_config.broadcast_dim == BroadcastDim::ROW &&
         test_config.api_convention != ApiConvention::DEFAULT) {
         GTEST_SKIP();  // FIXME sub_tiles_bcast_rows and sub_bcast_rows_init_short dont exist
@@ -178,26 +178,20 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
 
     auto src_a_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
-    auto src_a_dram_noc_xy = src_a_dram_buffer->noc_coordinates();
-    tt_metal::CircularBufferConfig l1_src_a_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
-            .set_page_size(0, single_tile_size);
+    tt_metal::CircularBufferConfig l1_src_a_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{0, tt::DataFormat::Float16_b}})
+        .set_page_size(0, single_tile_size);
     auto l1_src_a_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_a_cb_config);
 
     auto src_b_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
-    auto src_b_dram_noc_xy = src_b_dram_buffer->noc_coordinates();
-    tt_metal::CircularBufferConfig l1_src_b_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
-            .set_page_size(1, single_tile_size);
+    tt_metal::CircularBufferConfig l1_src_b_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{1, tt::DataFormat::Float16_b}})
+        .set_page_size(1, single_tile_size);
     auto l1_src_b_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_b_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-    auto dst_dram_noc_xy = dst_dram_buffer->noc_coordinates();
-    tt_metal::CircularBufferConfig l1_dst_cb_config =
-        tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
-            .set_page_size(16, single_tile_size);
+    tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(single_tile_size, {{16, tt::DataFormat::Float16_b}})
+        .set_page_size(16, single_tile_size);
     auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
     std::map<string, string> defines = {
@@ -259,12 +253,10 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         core,
         {
             (uint32_t)dram_buffer_src_a_addr,
-            (uint32_t)src_a_dram_noc_xy.x,
-            (uint32_t)src_a_dram_noc_xy.y,
+            (uint32_t)0,  // dram bank id
             (uint32_t)dram_buffer_src_b_addr,
-            (uint32_t)src_b_dram_noc_xy.x,
-            (uint32_t)src_b_dram_noc_xy.y,
-            (uint32_t)1,
+            (uint32_t)0,  // dram bank id
+            (uint32_t)1,  // num tiles
         });
 
     tt_metal::SetRuntimeArgs(
@@ -273,9 +265,8 @@ void run_single_core_broadcast(tt_metal::Device* device, const BroadcastConfig& 
         core,
         {
             (uint32_t)dram_buffer_dst_addr,
-            (uint32_t)dst_dram_noc_xy.x,
-            (uint32_t)dst_dram_noc_xy.y,
-            (uint32_t)1,
+            (uint32_t)0,  // dram bank id
+            (uint32_t)1,  // num tiles
         });
 
     std::vector<bfloat16> input0 = generate_uniform_random_vector<bfloat16>(

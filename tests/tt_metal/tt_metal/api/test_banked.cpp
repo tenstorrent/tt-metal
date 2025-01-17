@@ -4,10 +4,10 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -34,7 +34,7 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
+bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
     bool pass = true;
 
     const uint32_t cb_id = 0;
@@ -82,17 +82,9 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     auto output_buffer = CreateBuffer(out_config);
 
     tt::log_debug(
-        tt::LogTest,
-        "Input buffer: [address: {} B, size: {} B] at noc coord {}",
-        input_buffer->address(),
-        input_buffer->size(),
-        input_buffer->noc_coordinates().str());
+        tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
     tt::log_debug(
-        tt::LogTest,
-        "Output buffer: [address: {} B, size: {} B] at noc coord {}",
-        output_buffer->address(),
-        output_buffer->size(),
-        output_buffer->noc_coordinates().str());
+        tt::LogTest, "Output buffer: [address: {} B, size: {} B]", output_buffer->address(), output_buffer->size());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");
     constexpr uint32_t num_pages_cb = 1;
@@ -103,6 +95,10 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
+    std::map<std::string, std::string> reader_defines = {
+        {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not input_is_dram))}};
+    std::map<std::string, std::string> writer_defines = {
+        {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not output_is_dram))}};
 
     auto reader_kernel = CreateKernel(
         program,
@@ -111,7 +107,8 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
+            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram},
+            .defines = reader_defines});
     auto writer_kernel = CreateKernel(
         program,
         writer_kernel_name,
@@ -119,15 +116,15 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::NOC_1,
-            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
+            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram},
+            .defines = writer_defines});
 
     if (banked_reader) {
         reader_runtime_args = {(uint32_t)input_buffer->address(), (uint32_t)cfg.num_tiles};
     } else {
         reader_runtime_args = {
             (uint32_t)input_buffer->address(),
-            (uint32_t)input_buffer->noc_coordinates().x,
-            (uint32_t)input_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -136,8 +133,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     } else {
         writer_runtime_args = {
             (uint32_t)output_buffer->address(),
-            (uint32_t)output_buffer->noc_coordinates().x,
-            (uint32_t)output_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -166,7 +162,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
+bool reader_datacopy_writer(IDevice* device, const BankedConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;

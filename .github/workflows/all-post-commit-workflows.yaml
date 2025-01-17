@@ -2,6 +2,11 @@ name: "All post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      build-type:
+        required: false
+        default: Release
+        type: string
   workflow_dispatch:
     inputs:
       build-type:
@@ -35,11 +40,9 @@ jobs:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
         # The full 22.04 flow can be tested without precompiled
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: true
     secrets: inherit
   test-wheels:
@@ -69,25 +72,10 @@ jobs:
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      tracy: true
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: true
     secrets: inherit
-  # UMD Unit Tests
-  umd-unit-tests:
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: grayskull, runner-label: E150 },
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    uses: ./.github/workflows/umd-unit-tests.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
@@ -118,6 +106,7 @@ jobs:
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
+      os: ubuntu-20.04
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
@@ -174,6 +163,7 @@ jobs:
     secrets: inherit
     with:
       os: ubuntu-22.04-amd64
+      build-docker: false
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -182,7 +172,8 @@ jobs:
       matrix:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          # Disabled due to https://github.com/tenstorrent/tt-metal/issues/16012
+          # { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:

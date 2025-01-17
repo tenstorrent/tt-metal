@@ -8,7 +8,7 @@
 #include <iostream>
 #include <string>
 
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include "umd/device/cluster.h"
 #include "yaml-cpp/yaml.h"
 
@@ -357,7 +357,8 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
         return;
     }
     switch (board_type) {
-        case DEFAULT: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
+        case P100:
+        case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
             this->pcie_cores = {CoreCoord(11, 0)};
         } break;
         case P150A: {

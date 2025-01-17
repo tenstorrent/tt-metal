@@ -9,35 +9,41 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
+#include <assert.hpp>
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <dev_msgs.h>
 
-// FIXME: Avoid dependence on ARCH_NAME specific includes
-#include "dev_mem_map.h"         // for MEM_BRISC_STAC...
-#include "eth_l1_address_map.h"  // for address_map
-#include "hw/inc/dev_msgs.h"
-
-#include "umd/device/tt_arch_types.h"
-#include "umd/device/xy_pair.h"
+#include "umd/device/types/arch.h"
+#include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
-#include "llrt/llrt.hpp"
-#include "llrt/tt_cluster.hpp"
+#include <llrt.hpp>
+#include <tt_cluster.hpp>
 
-#include "common/core_coord.hpp"
+#include <core_coord.hpp>
 #include "hw/inc/debug/ring_buffer.h"
-#include "impl/device/device.hpp"
-#include "llrt/rtoptions.hpp"
-#include "noc/noc_overlay_parameters.h"
-#include "noc/noc_parameters.h"
+#include <device_impl.hpp>
+#include <rtoptions.hpp>
 
 #include "watcher_device_reader.hpp"
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 using namespace tt::tt_metal;
-
 using std::string;
+
+#define NOC_MCAST_ADDR_START_X(addr) (hal.get_noc_mcast_addr_start_x(addr))
+#define NOC_MCAST_ADDR_START_Y(addr) (hal.get_noc_mcast_addr_start_y(addr))
+#define NOC_MCAST_ADDR_END_X(addr) (hal.get_noc_mcast_addr_end_x(addr))
+#define NOC_MCAST_ADDR_END_Y(addr) (hal.get_noc_mcast_addr_end_y(addr))
+#define NOC_UNICAST_ADDR_X(addr) (hal.get_noc_ucast_addr_x(addr))
+#define NOC_UNICAST_ADDR_Y(addr) (hal.get_noc_ucast_addr_y(addr))
+#define NOC_LOCAL_ADDR(addr) (hal.get_noc_local_addr(addr))
+#define NOC_OVERLAY_START_ADDR (hal.get_noc_overlay_start_addr())
+#define NOC_STREAM_REG_SPACE_SIZE (hal.get_noc_stream_reg_space_size())
+#define STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX (hal.get_noc_stream_remote_dest_buf_size_reg_index())
+#define STREAM_REMOTE_DEST_BUF_START_REG_INDEX (hal.get_noc_stream_remote_dest_buf_start_reg_index())
+
 namespace {  // Helper functions
 
 // Helper function to get string rep of riscv type
@@ -58,33 +64,22 @@ static const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
 
 // Helper function to get stack size by riscv core type
 static uint32_t get_riscv_stack_size(const CoreDescriptor& core, uint32_t type) {
-    switch (type) {
-        case DebugBrisc: return MEM_BRISC_STACK_SIZE;
-        case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
-        case DebugErisc: return 0;  // Not managed/checked by us.
-        case DebugIErisc: return MEM_IERISC_STACK_SIZE;
-        case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
-        case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
-        case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
-        case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
-        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
+    auto stack_size = hal.get_stack_size(type);
+    if (stack_size == 0xdeadbeef) {
+        TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.coord.str(), type);
     }
-    return 0;
+    return stack_size;
 }
 
 // Helper function to get string rep of noc target.
 static string get_noc_target_str(
-    Device* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
-    auto get_core_and_mem_type = [](Device* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
-        // Get the physical coord from the noc coord
-        const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-        CoreCoord phys_core = {
-            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, noc_coord.x),
-            tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, noc_coord.y)};
-
+    IDevice* device, CoreDescriptor& core, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+    auto get_core_and_mem_type = [](IDevice* device, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
+        // Get the virtual coord from the noc coord
+        CoreCoord virtual_core = device->virtual_noc_coordinate(noc, noc_coord);
         CoreType core_type;
         try {
-            core_type = device->core_type_from_physical_core(phys_core);
+            core_type = device->core_type_from_virtual_core(virtual_core);
         } catch (std::runtime_error& e) {
             // We may not be able to get a core type if the physical coords are bad.
             return {"Unknown", ""};
@@ -140,15 +135,18 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 namespace tt::watcher {
 
 WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f, Device* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
+    FILE* f, IDevice* device, std::vector<string>& kernel_names, void (*set_watcher_exception_message)(const string&)) :
     f(f), device(device), kernel_names(kernel_names), set_watcher_exception_message(set_watcher_exception_message) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
-    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
@@ -156,12 +154,15 @@ WatcherDeviceReader::WatcherDeviceReader(
 
 WatcherDeviceReader::~WatcherDeviceReader() {
     // On close, read out eth link retraining register so that we can see if retraining has occurred.
-    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
             CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
-                device->id(), phys_core, eth_l1_mem::address_map::RETRAIN_COUNT_ADDR, sizeof(uint32_t));
+                device->id(),
+                phys_core,
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
+                sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(
@@ -276,7 +277,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
         log_info(LogLLRuntime, "{}Press ENTER to unpause core(s) and continue...", paused_cores_str);
-        if (!tt::llrt::OptionsG.get_watcher_auto_unpause()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().get_watcher_auto_unpause()) {
             while (std::cin.get() != '\n') {
                 ;
             }
@@ -304,13 +305,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
     CoreDescriptor core;
-    core.coord = device->physical_core_from_logical_core(logical_core.coord, logical_core.type);
+    core.coord = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
     core.type = logical_core.type;
 
     // Print device id, core coords (logical)
     string core_type = is_eth_core ? "ethnet" : "worker";
     string core_str = fmt::format(
-        "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2})",
+        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         device->id(),
         core_type,
         logical_core.coord.x,
@@ -347,7 +348,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
-        if (!tt::llrt::OptionsG.watcher_status_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_status_disabled()) {
             DumpWaypoints(core, mbox_data, false);
         }
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
@@ -355,15 +356,16 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         if (!is_eth_core) {
             DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
         }
-        if (!tt::llrt::OptionsG.watcher_noc_sanitize_disabled()) {
-            for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_noc_sanitize_disabled()) {
+            const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
+            for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
                 DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
             }
         }
-        if (!tt::llrt::OptionsG.watcher_assert_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_assert_disabled()) {
             DumpAssertStatus(core, core_str, mbox_data);
         }
-        if (!tt::llrt::OptionsG.watcher_pause_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_pause_disabled()) {
             DumpPauseStatus(core, core_str, mbox_data);
         }
     }
@@ -372,7 +374,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     if (!is_eth_core) {
         // Dump state always available
         DumpLaunchMessage(core, mbox_data);
-        if (tt::llrt::OptionsG.get_watcher_dump_all()) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
             // requested explicitly
             DumpSyncRegs(core);
@@ -380,7 +382,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     } else {
         fprintf(f, "rmsg:");
         DumpRunState(core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
-        fprintf(f, " ");
+        fprintf(f, " h_id:%d ", mbox_data->launch[launch_msg_read_ptr].kernel_config.host_assigned_id);
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
@@ -400,10 +402,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
-        if (!tt::llrt::OptionsG.watcher_stack_usage_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_stack_usage_disabled()) {
             DumpStackUsage(core, mbox_data);
         }
-        if (!tt::llrt::OptionsG.watcher_ring_buffer_disabled()) {
+        if (!tt::llrt::RunTimeOptions::get_instance().watcher_ring_buffer_disabled()) {
             DumpRingBuffer(core, mbox_data, false);
         }
     }
@@ -416,8 +418,11 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t* launch_msg) {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, MEM_L1_BASE, sizeof(uint32_t));
-    if (data[0] != llrt::generate_risc_startup_addr(false)) {
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
+    TT_ASSERT(core.type == CoreType::WORKER);
+    uint32_t core_type_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    auto fw_launch_value = hal.get_jit_build_config(core_type_idx, 0, 0).fw_launch_addr_value;
+    if (data[0] != fw_launch_value) {
         LogRunningKernels(core, launch_msg);
         TT_THROW("Watcher found corruption at L1[0] on core {}: read {}", core.coord.str(), data[0]);
     }
@@ -474,6 +479,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocAlignment:
             error_msg = get_noc_target_str(device, core, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
+            break;
+        case DebugSanitizeNocMixedVirtualandPhysical:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += " (mixing virtual and physical coordinates in Mcast).";
             break;
         default:
             error_msg = fmt::format(
@@ -684,7 +693,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
         fprintf(f, "t");
     }
 
-    fprintf(f, " ");
+    fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
 
     fprintf(f, "smsg:");
     DumpRunState(core, launch_msg, slave_sync->dm1);

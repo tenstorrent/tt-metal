@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <allocator.hpp>
 
-#include <magic_enum.hpp>
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <magic_enum/magic_enum.hpp>
+#include <math.hpp>
+#include <util.hpp>
+#include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
+#include <buffer.hpp>
 
 namespace tt {
 
@@ -27,8 +27,8 @@ static char const* get_memory_pool_name(BufferType buffer_type) {
 #endif
 
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
-    this->allocator_ =
-        std::make_unique<FreeList>(size_bytes, offset, alignment_bytes, alignment_bytes, FreeList::SearchPolicy::FIRST);
+    this->allocator_ = std::make_unique<FreeListOpt>(
+        size_bytes, offset, alignment_bytes, alignment_bytes, FreeListOpt::SearchPolicy::FIRST);
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
@@ -37,7 +37,7 @@ void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool 
     // Dataflow API does not have a working implementation of generic modulo to determine bank_id for interleaved
     // address gen For non pow2 num banks, special cases need to be added to avoid falling back to generic
     // implementation. See https://github.com/tenstorrent/tt-metal/issues/3321
-    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 70, 80, 94, 124, 130, 140};
+    std::unordered_set<uint32_t> acceptable_num_non_pow2_mem_banks = {12, 56, 63, 70, 80, 94, 124, 130, 140};
     bool custom_mod_bank_id_calculation_exists = acceptable_num_non_pow2_mem_banks.count(num_banks) > 0;
     bool valid_num_banks = (is_pow2_num_banks or custom_mod_bank_id_calculation_exists or doesnt_support_interleaved);
     if (not valid_num_banks) {
@@ -169,7 +169,7 @@ BankManager::~BankManager() {
     this->allocator_.reset(nullptr);
 }
 
-BankManager&& BankManager::operator=(BankManager&& that) {
+BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = that.allocated_buffers_;
     bank_id_to_bank_offset_ = that.bank_id_to_bank_offset_;
@@ -199,6 +199,15 @@ void BankManager::dump_blocks(std::ofstream& out) const {
     if (this->allocator_) {
         this->allocator_->dump_blocks(out);
     }
+}
+
+MemoryBlockTable BankManager::get_memory_block_table() const {
+    if (this->allocator_) {
+        return this->allocator_->get_memory_block_table();
+    }
+
+    log_warning("allocator is not initialized, cannot get block table for memory");
+    return {};
 }
 
 void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
@@ -375,6 +384,18 @@ void dump_memory_blocks(const Allocator& allocator, const BufferType& buffer_typ
     }
 }
 
+MemoryBlockTable get_memory_block_table(const Allocator& allocator, const BufferType& buffer_type) {
+    switch (buffer_type) {
+        case BufferType::DRAM: return allocator.dram_manager.get_memory_block_table();
+        case BufferType::L1: return allocator.l1_manager.get_memory_block_table();
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.get_memory_block_table();
+        case BufferType::TRACE: return allocator.trace_buffer_manager.get_memory_block_table();
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
 std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator& allocator, uint32_t bank_id) {
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     return allocator.l1_manager.lowest_occupied_address(bank_id);
@@ -437,9 +458,10 @@ void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type) {
     }
 }
 
-DeviceAddr allocate_buffer(Allocator& allocator, DeviceAddr size, Buffer* buffer) {
+DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer) {
     DeviceAddr address = 0;
-    auto page_size = buffer->page_size();
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
     auto buffer_type = buffer->buffer_type();
     auto bottom_up = buffer->bottom_up();
     auto num_shards = buffer->num_cores();
@@ -536,8 +558,8 @@ void Allocator::reset() {
 void AllocatorConfig::reset() {
     dram_bank_offsets.clear();
     core_type_from_noc_coord_table.clear();
-    worker_log_to_physical_routing_x.clear();
-    worker_log_to_physical_routing_y.clear();
+    worker_log_to_virtual_routing_x.clear();
+    worker_log_to_virtual_routing_y.clear();
     l1_bank_remap.clear();
 }
 

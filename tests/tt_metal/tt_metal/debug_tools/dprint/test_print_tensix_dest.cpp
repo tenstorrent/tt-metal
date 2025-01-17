@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -44,8 +44,7 @@ using DramBuffer = std::shared_ptr<Buffer>;
 static std::vector<uint32_t> get_dram_kernel_runtime_arguments(const DramBuffer& dram_buffer, size_t num_tiles) {
     return {
         static_cast<uint32_t>(dram_buffer->address()),
-        static_cast<uint32_t>(dram_buffer->noc_coordinates().x),
-        static_cast<uint32_t>(dram_buffer->noc_coordinates().y),
+        static_cast<uint32_t>(0),
         static_cast<uint32_t>(num_tiles),
     };
 }
@@ -64,7 +63,7 @@ static CBHandle create_circular_buffer(
 }
 
 // Creates a DRAM interleaved buffer configuration
-static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::Device* device, size_t byte_size) {
+static tt::tt_metal::InterleavedBufferConfig create_dram_interleaved_config(tt_metal::IDevice* device, size_t byte_size) {
     return {.device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 }
 
@@ -72,7 +71,7 @@ constexpr uint32_t DEFAULT_INPUT_CB_INDEX = 0;
 constexpr uint32_t DEFAULT_OUTPUT_CB_INDEX = 16;
 
 // Prepares the reader kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_reader(tt_metal::Device* device,
+static DramBuffer prepare_reader(tt_metal::IDevice* device,
                                  tt_metal::Program& program,
                                  const DestPrintTestConfig& config) {
     // Create input DRAM buffer
@@ -101,7 +100,7 @@ static DramBuffer prepare_reader(tt_metal::Device* device,
 }
 
 // Prepares the writer kernel by setting up the DRAM buffer, circular buffer, and kernel
-static DramBuffer prepare_writer(tt_metal::Device* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
+static DramBuffer prepare_writer(tt_metal::IDevice* device, tt_metal::Program& program, const DestPrintTestConfig& config) {
     // Create output DRAM buffer
     auto output_dram_buffer =
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
@@ -194,7 +193,7 @@ static std::string generate_golden_output(std::vector<uint32_t> data, tt::DataFo
 
 // Performs DRAM --> Reader --> CB --> Datacopy --> CB --> Writer --> DRAM on a single core
 static bool reader_datacopy_writer(
-    DPrintFixture* fixture, tt_metal::Device* device, const DestPrintTestConfig& config) {
+    DPrintFixture* fixture, tt_metal::IDevice* device, const DestPrintTestConfig& config) {
     // Create program
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -240,7 +239,7 @@ TEST_F(DPrintFixture, TensixTestDestPrintFloat16b) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
+        [&](DPrintFixture* fixture, IDevice* device) { reader_datacopy_writer(fixture, device, test_config); },
         this->devices_[0]);
 }
 
@@ -260,7 +259,7 @@ TEST_F(DPrintFixture, TensixTestDestPrintFloat32) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
+        [&](DPrintFixture* fixture, IDevice* device) { reader_datacopy_writer(fixture, device, test_config); },
         this->devices_[0]);
 }
 
@@ -282,6 +281,6 @@ TEST_F(DPrintFixture, TensixTestDestPrintFloat32RemapAndSwizzle) {
 
     // Run the test on the device
     this->RunTestOnDevice(
-        [&](DPrintFixture* fixture, Device* device) { reader_datacopy_writer(fixture, device, test_config); },
+        [&](DPrintFixture* fixture, IDevice* device) { reader_datacopy_writer(fixture, device, test_config); },
         this->devices_[0]);
 }

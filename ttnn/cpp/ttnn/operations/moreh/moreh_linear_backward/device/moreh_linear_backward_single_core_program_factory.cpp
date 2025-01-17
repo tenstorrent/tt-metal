@@ -6,7 +6,7 @@
 
 #include "moreh_linear_backward_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
@@ -55,7 +55,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 
-    Device* device = output_grad.device();
+    IDevice* device = output_grad.device();
     auto arch = device->arch();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);

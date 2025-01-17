@@ -4,7 +4,7 @@
 
 import math
 import pathlib
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import ttnn.decorators
@@ -158,6 +158,7 @@ def from_torch(
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
@@ -176,6 +177,7 @@ def from_torch(
         device (ttnn.Device, optional): the desired `ttnn` device. Defaults to `None`.
         memory_config (ttnn.MemoryConfig, optional): The desired `ttnn` memory configuration. Defaults to `None`.
         mesh_mapper (ttnn.TensorToMesh, optional): The desired `ttnn` mesh mapper. Defaults to `None`.
+        cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
     Returns:
         ttnn.Tensor: The resulting `ttnn` tensor.
@@ -186,6 +188,12 @@ def from_torch(
         Tensor([[1.375, -1.30469, -0.714844],
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
+    if memory_config is not None and memory_config.is_sharded():
+        if memory_config.shard_spec is None:
+            raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
+
+        if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+            return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
 
     shape_with_padding = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
@@ -225,7 +233,7 @@ def from_torch(
     if device is not None:
         if memory_config is None:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
-        tensor = ttnn.to_device(tensor, device, memory_config=memory_config)
+        tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
     if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
         tensor = ttnn.reshape(tensor, shape_with_padding)
@@ -262,7 +270,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.MeshToTensor] = None,
     device: Optional[ttnn.Device] = None,
-    cq_id: Optional[int] = 0,
+    cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
     """
     Converts the `ttnn.Tensor` tensor into a `torch.Tensor`. It does not call to_layout for bfloat8_b or bfloat4_b as we now convert
@@ -289,26 +297,38 @@ def to_torch(
         tensor([[-0.3008, -0.8438,  0.3242],
                 [ 0.9023, -0.5820,  0.5312]], dtype=torch.bfloat16)
     """
+    if mesh_composer:
+        return mesh_composer.compose(tensor)
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
-    if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
-        tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
-    ):
-        tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
-
-    shape_without_tile_padding = tuple(tensor.shape)
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
-    if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
-        tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
-    ):
-        raise RuntimeError("ttnn.Tensor has to be in ROW_MAJOR Layout to be converted to torch.Tensor")
-    if mesh_composer:
-        return mesh_composer.compose(tensor)
-    tensor = tensor.to_torch()
-    slices = [slice(None, x) for x in shape_without_tile_padding]
-    tensor = tensor[slices]
+
+    memory_config = tensor.memory_config()
+    if memory_config.is_sharded() and memory_config.shard_spec is None:
+        raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
+
+    if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
+        tensor = tensor.to_torch_with_logical_shape()
+    else:
+        if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
+            tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
+        ):
+            tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
+
+        shape_without_tile_padding = tuple(tensor.shape)
+        logical_shape_rank = len(tensor.logical_shape)
+
+        tensor = tensor.to_torch()
+        slices = [slice(None, x) for x in shape_without_tile_padding]
+        tensor = tensor[slices]
+
+        while len(tensor.shape) > logical_shape_rank:
+            if tensor.shape[0] != 1:
+                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+            tensor = tensor.squeeze(0)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

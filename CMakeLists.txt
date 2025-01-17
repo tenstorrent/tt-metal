@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16..3.30)
+cmake_minimum_required(VERSION 3.18..3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -36,6 +36,7 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
+message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
@@ -124,6 +125,8 @@ message(STATUS "Build Programming Examples: ${BUILD_PROGRAMMING_EXAMPLES}")
 message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
+message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+
 ############################################################################################################################
 
 if(ENABLE_BUILD_TIME_TRACE)
@@ -202,11 +205,6 @@ target_link_libraries(
         numa
 )
 
-if(NOT DEFINED ENV{ARCH_NAME})
-    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
-endif(NOT DEFINED ENV{ARCH_NAME})
-string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
-add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
     -Wno-deprecated-declarations
@@ -253,31 +251,13 @@ add_link_options(
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
-if(ENABLE_TRACY)
-    add_compile_definitions(TRACY_ENABLE)
-    add_compile_options(-fno-omit-frame-pointer)
-    add_link_options(-rdynamic)
-endif()
-
-if(WITH_PYTHON_BINDINGS)
-    # Can't use the `REUSE_FROM` option bc tt_lib and ttnn have different build flags :(
-    add_library(pch_pybinds INTERFACE)
-    target_precompile_headers(
-        pch_pybinds
-        INTERFACE
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/operators.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/pybind11.h
-            ${PROJECT_SOURCE_DIR}/tt_metal/third_party/pybind11/include/pybind11/stl.h
-    )
-endif()
+include(tracy)
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
-if(ENABLE_TRACY)
-    include(tracy)
-endif()
 
+add_subdirectory(tt_fabric)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -293,6 +273,15 @@ endif()
 # Install for build artifacts that will upload build/lib
 include(GNUInstallDirs)
 
+install(
+    TARGETS
+        tt_fabric
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
+)
 install(
     TARGETS
         tt_metal

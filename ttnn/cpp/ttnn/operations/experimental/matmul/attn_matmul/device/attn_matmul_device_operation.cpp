@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "attn_matmul_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -60,11 +60,13 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
     } else {
         TT_FATAL(
             ashape[3] == bshape[2],
-            "Dimension K (A.shape[3] and B.shape[2]) must match for A and B in attn_matmul op");  // A.K == B.K
+            "Dimension K (A.shape[3]and B.shape[2]) must match for A shape: {} and B shape: {} in attn_matmul op",
+            ashape,
+            bshape);  // A.K == B.K
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> AttnMatmulDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
@@ -79,18 +81,8 @@ std::vector<tt::tt_metal::LegacyShape> AttnMatmulDeviceOperation::compute_output
     if (this->transpose_hw.value_or(false)) {
         N = this->num_tokens.value();
     }
-
-    return {tt::tt_metal::LegacyShape{1, ashape[1], ashape[2], N}};
-}
-
-std::vector<Tensor> AttnMatmulDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return {create_device_tensor(
-        compute_output_shapes(input_tensors).at(0),
-        this->output_dtype,
-        Layout::TILE,
-        input_tensor.device(),
-        this->output_mem_config)};
+    SimpleShape shape({1, ashape[1], ashape[2], N});
+    return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks AttnMatmulDeviceOperation::create_program(
