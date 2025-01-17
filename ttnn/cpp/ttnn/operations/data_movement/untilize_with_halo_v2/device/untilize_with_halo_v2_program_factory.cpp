@@ -30,7 +30,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& remote_config,
     const bool remote_read,
     const bool transpose_mcast,
-    Tensor& output_tensor) {
+    Tensor& output_tensor,
+    const bool capture_buffers) {
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -143,7 +144,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     TT_ASSERT(local_config.get_dtype() == DataType::UINT16);
     TT_ASSERT(remote_config.get_dtype() == DataType::UINT16);
 
-    Buffer* padding_config_buffer = padding_config.buffer();
+    auto padding_config_buffer = padding_config.device_buffer();
     const uint32_t num_cores = all_cores.num_cores();
     auto padding_config_cb_config =
         CircularBufferConfig(padding_config_buffer->size() / num_cores, {{padding_config_cb_id, kernel_config_df}})
@@ -151,14 +152,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*padding_config_buffer);
     CBHandle padding_config_cb = CreateCircularBuffer(program, all_cores, padding_config_cb_config);
 
-    Buffer* local_config_buffer = local_config.buffer();
+    auto local_config_buffer = local_config.device_buffer();
     auto local_config_cb_config =
         CircularBufferConfig(local_config_buffer->size() / num_cores, {{local_config_cb_id, kernel_config_df}})
             .set_page_size(local_config_cb_id, local_config_buffer->page_size())
             .set_globally_allocated_address(*local_config_buffer);
     CBHandle local_config_cb = CreateCircularBuffer(program, all_cores, local_config_cb_config);
 
-    Buffer* remote_config_buffer = remote_config.buffer();
+    auto remote_config_buffer = remote_config.device_buffer();
     auto remote_config_cb_config =
         CircularBufferConfig(remote_config_buffer->size() / num_cores, {{remote_config_cb_id, kernel_config_df}})
             .set_page_size(remote_config_cb_id, remote_config_buffer->page_size())
@@ -212,7 +213,20 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
-    auto override_runtime_arguments_callback = [src_cb, out_cb, padding_config_cb, local_config_cb, remote_config_cb](
+    if (!capture_buffers) {
+        padding_config_buffer = nullptr;
+        local_config_buffer = nullptr;
+        remote_config_buffer = nullptr;
+    }
+    // Capture padding_config_buffer, local_config_buffer, remote_config_buffer to cache this with the program
+    auto override_runtime_arguments_callback = [src_cb,
+                                                out_cb,
+                                                padding_config_cb,
+                                                local_config_cb,
+                                                remote_config_cb,
+                                                padding_config_buffer,
+                                                local_config_buffer,
+                                                remote_config_buffer](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
