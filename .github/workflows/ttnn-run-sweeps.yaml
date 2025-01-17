@@ -360,6 +360,8 @@ on:
           - eltwise.binary.lt.lt_forge
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.ne.ne_forge
+          - eltwise.binary.pow.pow
+          - eltwise.binary.pow.pow_output
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
