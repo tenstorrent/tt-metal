@@ -397,8 +397,6 @@ static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_2cq = {
     {135, 8, x, 1, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-std::vector<std::shared_ptr<FDKernel>> node_id_to_kernel;
-
 // Helper function to get the nodes for this platform
 std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
@@ -527,11 +525,8 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
 // Populate node_id_to_kernel and set up kernel objects. Do this once at the beginning since they (1) don't need a valid
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
-void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
-    // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
-    if (!node_id_to_kernel.empty()) {
-        node_id_to_kernel.clear();
-    }
+FDTopologyGraph populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
+    FDTopologyGraph node_id_to_kernel;
 
     // Read the input table, create configs for each node
     std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
@@ -664,9 +659,11 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
             device_id_to_remaining_routers[router_kernel->GetDeviceId()]--;
         }
     }
+
+    return node_id_to_kernel;
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
+std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device, FDTopologyGraph& node_id_to_kernel) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
         "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
@@ -695,7 +692,7 @@ std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     return cq_program_ptr;
 }
 
-void configure_dispatch_cores(IDevice* device) {
+void configure_dispatch_cores(IDevice* device, FDTopologyGraph& node_id_to_kernel) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());

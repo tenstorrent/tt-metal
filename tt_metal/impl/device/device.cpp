@@ -12,6 +12,7 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
+#include "dispatch/util/fd_topology_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
 #include <dprint_server.hpp>
@@ -847,8 +848,10 @@ void Device::compile_command_queue_programs() {
     ZoneScoped;
     auto command_queue_program_ptr = std::make_unique<Program>();
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
+    const auto& active_device_ids = tt::DevicePool::instance().get_all_active_device_ids();
+    auto& topology = dispatch::FDTopologyManager::instance().get_topology(active_device_ids);
     if (this->is_mmio_capable()) {
-        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this);
+        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this, topology);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
         // Since devices could be set up in any order, on mmio device do a pass and populate cores for tunnelers.
         if (tt::Cluster::instance().get_mmio_device_tunnel_count(this->id_) > 0) {
@@ -864,7 +867,7 @@ void Device::compile_command_queue_programs() {
             }
         }
     } else {
-        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this);
+        auto command_queue_program_ptr = dispatch::create_and_compile_cq_program(this, topology);
         this->command_queue_programs_.push_back(std::move(command_queue_program_ptr));
     }
 }
@@ -909,7 +912,8 @@ void Device::configure_command_queue_programs() {
     }
 
     // Write device-side cq pointers
-    dispatch::configure_dispatch_cores(this);
+    const auto& active_device_ids = tt::DevicePool::instance().get_all_active_device_ids();
+    dispatch::configure_dispatch_cores(this, dispatch::FDTopologyManager::instance().get_topology(active_device_ids));
 
     // Run the cq program
     program_dispatch::finalize_program_offsets(command_queue_program, this);
@@ -1887,6 +1891,13 @@ IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
         options.trace_region_size,
         options.dispatch_core_config,
         options.l1_bank_remap);
+
+    if (true) {
+        // this->fast_dispatch_topology_data->graph = dispatch::populate_fd_kernels(devices_to_activate,
+        // this->num_hw_cqs);
+    } else {
+        // this->fast_dispatch_topology_data->graph.clear();
+    }
 
     return tt::DevicePool::instance().get_active_device(device_id);
 }

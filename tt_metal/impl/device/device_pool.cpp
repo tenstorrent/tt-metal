@@ -8,9 +8,10 @@
 #include <numa.h>
 
 #include <tt_metal.hpp>
+#include "dispatch/util/fd_topology_manager.hpp"
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/topology.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 
 using namespace tt::tt_metal;
 
@@ -357,9 +358,9 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
         }
     }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
-    if (this->using_fast_dispatch) {
-        dispatch::populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
-    }
+    TT_ASSERT(this->num_hw_cqs > 0);
+    TT_ASSERT(this->get_all_active_device_ids().size() == device_ids.size());
+    dispatch::FDTopologyManager::instance().initialize_topology(this->get_all_active_device_ids(), this->num_hw_cqs);
 }
 
 void DevicePool::register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id) {
@@ -470,6 +471,16 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
         }
     }
     return user_devices;
+}
+
+std::set<chip_id_t> DevicePool::get_all_active_device_ids() const {
+    std::set<chip_id_t> ids;
+    for (const auto& device : this->devices) {
+        if (device->is_initialized()) {
+            ids.insert(device->id());
+        }
+    }
+    return ids;
 }
 
 bool DevicePool::close_device(chip_id_t device_id) {
