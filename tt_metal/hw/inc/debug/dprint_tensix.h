@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 
 #include "ckernel_debug.h"
 #include "compute_kernel_api.h"
@@ -646,9 +647,7 @@ inline void dprint_tensix_unpack_config_grayskull() {
     dprint_tensix_unpack_config_fifo_size(config);
 }
 
-inline void dprint_tensix_pack_config_grayskull(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
-    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
-
+inline void dprint_tensix_pack_config_grayskull(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -766,9 +765,7 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
 }
 
 #ifdef ARCH_WORMHOLE
-inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
-    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
-
+inline void dprint_tensix_pack_config_wormhole(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -811,9 +808,7 @@ inline void dprint_tensix_pack_config_wormhole(uint32_t reg_addr, const volatile
 #endif  // ARCH_WORMHOLE
 
 #ifdef ARCH_BLACKHOLE
-inline void dprint_tensix_pack_config_blackhole(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
-    ckernel::packer::pack_config_t config = ckernel::packer::read_pack_config(reg_addr, cfg);
-
+inline void dprint_tensix_pack_config_blackhole(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -1264,27 +1259,13 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 #endif  // END OF ELSE
 
 // Choose what register you want printed with reg_id (1-4)
-inline void dprint_tensix_pack_config_helper(uint reg_id) {
-    // Get pointer to registers for current state ID
-    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
-
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1: reg_addr = THCON_SEC0_REG1_Row_start_section_size_ADDR32; break;
-        case 2: reg_addr = THCON_SEC0_REG8_Row_start_section_size_ADDR32; break;
-        case 3: reg_addr = THCON_SEC1_REG1_Row_start_section_size_ADDR32; break;
-        case 4: reg_addr = THCON_SEC1_REG8_Row_start_section_size_ADDR32; break;
-        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 4)" << ENDL(); return;
-    }
-
-    DPRINT << "REG_ID: " << reg_id << ENDL();
-
+inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
 #ifdef ARCH_GRAYSKULL
-    dprint_tensix_pack_config_grayskull(reg_addr, cfg);
+    dprint_tensix_pack_config_grayskull(config);
 #elif ARCH_WORMHOLE
-    dprint_tensix_pack_config_wormhole(reg_addr, cfg);
+    dprint_tensix_pack_config_wormhole(config);
 #else
-    dprint_tensix_pack_config_blackhole(reg_addr, cfg);
+    dprint_tensix_pack_config_blackhole(config);
 #endif
 }
 
@@ -1308,16 +1289,21 @@ inline void dprint_tensix_unpack_config() {
     )
 }
 
+// Choose what register you want by id (1-4). 0 for all.
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
+    std::array<ckernel::packer::pack_config_t, 4> config_vec;
     MATH(
-        if (reg_id) { dprint_tensix_pack_config_helper(reg_id); } else {
-            for (uint i = 1; i < 5; i++) {
-                dprint_tensix_pack_config_helper(i);
-                if (i != 4) {
-                    DPRINT << ENDL();
-                }
+        config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= 4) {
+            DPRINT << "REG_ID: " << reg_id << ENDL();
+            dprint_tensix_pack_config_helper(config_vec[reg_id - 1]);
+        } else if (reg_id == 0) for (uint i = 1; i <= 4; i++) {
+            DPRINT << "REG_ID: " << i << ENDL();
+            dprint_tensix_pack_config_helper(config_vec[i - 1]);
+            if (i != 4) {
+                DPRINT << ENDL();
             }
-        })
+        } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4."
+                      << ENDL();)
 }
 
 // Choose what register you want printed (1-2). 0 for all.
