@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "gtest/gtest.h"
@@ -26,7 +27,7 @@ struct Inputs {
 };
 
 struct Expected {
-    Size physical_size;
+    Shape2D physical_size;
     Alignment alignment;
     Strides strides;
     bool tensor_creation_works = true;
