@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api_declarations.h"
+#include "dataflow_api_common.h"
 #include "dataflow_addr_gen.h"
 
 /**

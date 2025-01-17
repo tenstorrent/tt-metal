@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "dataflow_api_declarations.h"
+#include "dataflow_api_common.h"
 #include "debug/dprint.h"
 
 template <
@@ -27,105 +27,6 @@ public:
     constexpr static uint32_t pages_per_shard_width = PAGES_PER_SHARD_WIDTH;
     constexpr static uint32_t rows_per_shard_height = ROWS_PER_SHARD_HEIGHT;
 };
-
-namespace interleaved_addr_gen {
-
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_offset_index(uint32_t id) {
-    if constexpr (DRAM) {  // DRAM
-#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
-        return udivsi3_const_divisor<NUM_DRAM_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_DRAM_BANKS;
-#endif
-    } else {  // L1
-#ifdef IS_NOT_POW2_NUM_L1_BANKS
-        return udivsi3_const_divisor<NUM_L1_BANKS>(id);
-#else
-        return id >> LOG_BASE_2_OF_NUM_L1_BANKS;
-#endif
-    }
-}
-
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_index(uint32_t id, uint32_t bank_offset_index) {
-    if constexpr (DRAM) {  // DRAM
-        return id - bank_offset_index * NUM_DRAM_BANKS;
-    } else {  // L1
-        return id - bank_offset_index * NUM_L1_BANKS;
-    }
-}
-
-template <bool DRAM>
-FORCE_INLINE uint32_t get_noc_xy(uint32_t bank_index, uint8_t noc = noc_index) {
-    if constexpr (DRAM) {  // DRAM
-        return dram_bank_to_noc_xy[noc][bank_index];
-    } else {  // L1
-        return l1_bank_to_noc_xy[noc][bank_index];
-    }
-}
-
-template <bool DRAM>
-FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
-    if constexpr (DRAM) {  // DRAM
-        return bank_to_dram_offset[bank_index];
-    } else {  // L1
-        return bank_to_l1_offset[bank_index];
-    }
-}
-
-}  // namespace interleaved_addr_gen
-
-template <uint32_t tile_hw = 1024>
-FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
-    constexpr uint8_t datum_shift = (tile_hw == 1024)  ? 10
-                                    : (tile_hw == 512) ? 9
-                                    : (tile_hw == 256) ? 8
-                                    : (tile_hw == 128) ? 7
-                                    : (tile_hw == 64)  ? 6
-                                    : (tile_hw == 32)  ? 5
-                                    : (tile_hw == 16)  ? 4
-                                                       : 10;
-
-    constexpr uint8_t exp_shift = (tile_hw == 1024)  ? 6
-                                  : (tile_hw == 512) ? 5
-                                  : (tile_hw == 256) ? 4
-                                  : (tile_hw == 128) ? 4
-                                  : (tile_hw == 64)  ? 4
-                                  : (tile_hw == 32)  ? 4
-                                  : (tile_hw == 16)  ? 4
-                                                     : 6;
-    switch (format & 0x1F) {
-        case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
-        case ((uint8_t)DataFormat::UInt16):
-        case ((uint8_t)DataFormat::Float16):
-        case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
-        case ((uint8_t)DataFormat::Int32):
-        case ((uint8_t)DataFormat::UInt32):
-        case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
-        case ((uint8_t)DataFormat::Bfp2):
-        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
-        case ((uint8_t)DataFormat::Bfp4):
-        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
-        case ((uint8_t)DataFormat::Bfp8):
-        case ((uint8_t)DataFormat::Bfp8_b):
-        // Keep default as Bfp8?
-        default: return ((index << datum_shift) + (index << (exp_shift)));
-    };
-}
-
-/*
-    Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
-    the struct variant
-*/
-FORCE_INLINE
-std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
-    /*
-        Get an encoding which contains tensix core and address you want to
-        write to via the noc multicast
-    */
-    return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
-}
 
 namespace shard_addr_gen_utils {
 
@@ -202,16 +103,50 @@ shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t pa
     return coord_info;
 }
 template <uint32_t number_of_cores>
-std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_address) {
+std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
     // Gets the shard_array from the runtime arguments
     // returns a pair where .first holds the shard array map
-    // and .second holds the new rt_address
-    const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_address));
+    // and .second holds the new rt_index
+    const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_index));
     constexpr uint32_t incrementation = (number_of_cores - 1) / 2 + 1;
-    return std::pair<const uint32_t* const, uint32_t>(map, rt_address + incrementation);
+    return std::pair<const uint32_t* const, uint32_t>(map, rt_index + incrementation);
 }
 
 }  // namespace shard_addr_gen_utils
+
+/*
+* ShardedAddrGen requires the type definition of a Sharded_Info class object who's templates hold the CT information
+    ex.
+    typedef Sharded_Info <
+    SHARD_TYPE,
+    NUMBER_OF_CORES,
+    PAGE_SIZE_JUMP,
+    PAGES_PER_TENSOR_ROW,
+    CONTIGUITY,
+    PAGES_PER_SHARD_WIDTH,
+    ROWS_PER_SHARD_HEIGHT> tensor_1_shard_info;
+
+    The above parameters are usually obtained using get_compile_time_arg_val.
+    In the program factory you can create an vector containing the above parameters in order using the function
+    shard_pf_builder:sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
+    defined in ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp
+
+    It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::parse_map
+function ex. auto mapping = parse_map<NUMBER_OF_CORES>(rt_index); const uint32_t* const shard_array_map = mapping.first;
+//Contains the shard array map rt_index = mapping.second;//contains the new runtime index
+
+In the program factory you can create an vector containing the runtime arguments extracted by this function using the
+function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
+    defined in ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp
+
+
+
+    Lastly you need the bank_base_address from the Tensor object just like interleaved addr gen
+
+    You can then create a sharded addrgen as follows:
+    s = ShardedAddrGen <tensor_1_shard_info> {.bank_base_address = bank_base_address, .shard_array=shard_array_map};
+    This object can then be used by the get_noc_addr api.
+*/
 
 template <typename SHARDING_INFO_OBJECT>
 struct ShardedAddrGen {
@@ -288,6 +223,54 @@ struct ShardedAddrGen {
         noc_async_read(this->get_noc_addr(id, offset), dest_addr, CONSTANT_ARGS.page_size_jump, noc);
     }
 };
+
+namespace interleaved_addr_gen {
+
+template <bool DRAM>
+FORCE_INLINE uint32_t get_bank_offset_index(uint32_t id) {
+    if constexpr (DRAM) {  // DRAM
+#ifdef IS_NOT_POW2_NUM_DRAM_BANKS
+        return udivsi3_const_divisor<NUM_DRAM_BANKS>(id);
+#else
+        return id >> LOG_BASE_2_OF_NUM_DRAM_BANKS;
+#endif
+    } else {  // L1
+#ifdef IS_NOT_POW2_NUM_L1_BANKS
+        return udivsi3_const_divisor<NUM_L1_BANKS>(id);
+#else
+        return id >> LOG_BASE_2_OF_NUM_L1_BANKS;
+#endif
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE uint32_t get_bank_index(uint32_t id, uint32_t bank_offset_index) {
+    if constexpr (DRAM) {  // DRAM
+        return id - bank_offset_index * NUM_DRAM_BANKS;
+    } else {  // L1
+        return id - bank_offset_index * NUM_L1_BANKS;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE uint32_t get_noc_xy(uint32_t bank_index, uint8_t noc = noc_index) {
+    if constexpr (DRAM) {  // DRAM
+        return dram_bank_to_noc_xy[noc][bank_index];
+    } else {  // L1
+        return l1_bank_to_noc_xy[noc][bank_index];
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
+    if constexpr (DRAM) {  // DRAM
+        return bank_to_dram_offset[bank_index];
+    } else {  // L1
+        return bank_to_l1_offset[bank_index];
+    }
+}
+
+}  // namespace interleaved_addr_gen
 
 template <bool DRAM>
 struct InterleavedAddrGen {

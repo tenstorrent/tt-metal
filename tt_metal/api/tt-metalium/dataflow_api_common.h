@@ -164,3 +164,54 @@ inline void noc_async_read(
         WAYPOINT("NARD");
     }
 }
+
+template <uint32_t tile_hw = 1024>
+FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint index) {
+    constexpr uint8_t datum_shift = (tile_hw == 1024)  ? 10
+                                    : (tile_hw == 512) ? 9
+                                    : (tile_hw == 256) ? 8
+                                    : (tile_hw == 128) ? 7
+                                    : (tile_hw == 64)  ? 6
+                                    : (tile_hw == 32)  ? 5
+                                    : (tile_hw == 16)  ? 4
+                                                       : 10;
+
+    constexpr uint8_t exp_shift = (tile_hw == 1024)  ? 6
+                                  : (tile_hw == 512) ? 5
+                                  : (tile_hw == 256) ? 4
+                                  : (tile_hw == 128) ? 4
+                                  : (tile_hw == 64)  ? 4
+                                  : (tile_hw == 32)  ? 4
+                                  : (tile_hw == 16)  ? 4
+                                                     : 6;
+    switch (format & 0x1F) {
+        case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
+        case ((uint8_t)DataFormat::UInt16):
+        case ((uint8_t)DataFormat::Float16):
+        case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
+        case ((uint8_t)DataFormat::Int32):
+        case ((uint8_t)DataFormat::UInt32):
+        case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
+        case ((uint8_t)DataFormat::Bfp2):
+        case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
+        case ((uint8_t)DataFormat::Bfp4):
+        case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
+        case ((uint8_t)DataFormat::Bfp8):
+        case ((uint8_t)DataFormat::Bfp8_b):
+        // Keep default as Bfp8?
+        default: return ((index << datum_shift) + (index << (exp_shift)));
+    };
+}
+
+/*
+    Need an alias to get_noc_addr so that the structs below don't confuse the above get_noc_addr with
+    the struct variant
+*/
+FORCE_INLINE
+std::uint64_t get_noc_addr_helper(std::uint32_t noc_xy, std::uint32_t addr) {
+    /*
+        Get an encoding which contains tensix core and address you want to
+        write to via the noc multicast
+    */
+    return ((uint64_t)(noc_xy) << NOC_ADDR_COORD_SHIFT) | addr;
+}
