@@ -934,7 +934,7 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
     };
 
     auto output_storage = std::visit(
-        [&convert](auto&& storage) -> std::variant<OwnedStorage, MultiDeviceHostStorage> {
+        [&convert, target_layout](auto&& storage) -> std::variant<OwnedStorage, MultiDeviceHostStorage> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 const auto input_data = owned_buffer::get_as<T>(storage.buffer);
@@ -951,7 +951,15 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                     const auto input_data = owned_buffer::get_as<T>(storage.get_buffer(i));
                     auto output_buffer = owned_buffer::create<T>(std::move(convert(input_data)));
                     output_buffers.push_back(output_buffer);
-                    output_specs.push_back(storage.specs[i]);
+                    const auto& prev_spec = storage.specs[i];
+                    output_specs.push_back(TensorSpec(
+                        prev_spec.logical_shape(),
+                        TensorLayout::fromPaddedShape(
+                            prev_spec.data_type(),
+                            PageConfig(target_layout, prev_spec.tile()),
+                            MemoryConfig{},
+                            prev_spec.logical_shape(),
+                            prev_spec.padded_shape())));
                 }
                 return MultiDeviceHostStorage{storage.strategy, output_buffers, output_specs};
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
