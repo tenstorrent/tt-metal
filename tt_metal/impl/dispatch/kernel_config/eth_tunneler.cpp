@@ -4,10 +4,16 @@
 #include "eth_tunneler.hpp"
 #include "eth_router.hpp"
 #include "demux.hpp"
+#include "hal.hpp"
+#include "logger.hpp"
+#include "magic_enum/magic_enum.hpp"
 #include "mux.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+
+#include <algorithm>
 
 using namespace tt::tt_metal;
 
@@ -26,17 +32,42 @@ void EthTunnelerKernel::GenerateStaticConfigs() {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
         logical_core_ = dispatch_core_manager::instance().us_tunneler_core_local(device_->id(), channel, cq_id_);
     }
+
+    TT_ASSERT(static_config_.vc_count.value() > 0);
+    TT_ASSERT(GetCoreType() == CoreType::ETH);  // Below code and this core is for erisc
+
+    const auto prog_core =
+        device_->get_programmable_core_type(device_->virtual_core_from_logical_core(logical_core_, GetCoreType()));
+    const auto core_base = hal.get_dev_addr(prog_core, HalL1MemAddrType::UNRESERVED);
+
     static_config_.endpoint_id_start_index = 0xDACADACA;
-    static_config_.in_queue_start_addr_words = 0x19A00 >> 4;
-    // Input queue size can be extended based on number of tunnel lanes
-    // Eth L1 size is ~180K
-    switch (static_config_.vc_count.value()) {
-        case 1:
-        case 2: static_config_.in_queue_size_words = 65536 >> 4; break;
-        case 3:
-        case 4: static_config_.in_queue_size_words = 32768 >> 4; break;
-        case 5:
-        default: static_config_.in_queue_size_words = 16384 >> 4; break;
+    static_config_.in_queue_start_addr_words = core_base >> 4;  // Slightly above the l1 unreserved start
+
+    if (tt::llrt::RunTimeOptions::get_instance().get_enable_dispatch_dynamic_queue_sizing()) {
+        const auto core_size = hal.get_dev_size(prog_core, HalL1MemAddrType::UNRESERVED);
+        static_config_.in_queue_size_words =
+            ((core_size / static_config_.vc_count.value()) & ~0xF) >> 4;  // Round down to nearest 16 multiple
+        tt::log_debug(
+            tt::LogMetal,
+            "Dynamic Dispatch Queue Sizing Enabled. Tunneler Queue Size = {:#x} ({} VCs)",
+            static_config_.in_queue_size_words.value() * 16,
+            static_config_.vc_count.value(),
+            magic_enum::enum_name(prog_core),
+            core_base,
+            core_size);
+    } else {
+        switch (static_config_.vc_count.value()) {
+            case 1:
+            case 2: static_config_.in_queue_size_words = 65536 >> 4; break;
+            case 3:
+            case 4: static_config_.in_queue_size_words = 32768 >> 4; break;
+            case 5:
+            default: static_config_.in_queue_size_words = 16384 >> 4; break;
+        }
+        tt::log_debug(
+            tt::LogMetal,
+            "Dynamic Dispatch Queue Sizing Disabled. Tunneler Queue Size = {}",
+            static_config_.in_queue_size_words.value() * 16);
     }
     static_config_.kernel_status_buf_addr_arg = 0;
     static_config_.kernel_status_buf_size_bytes = 0;

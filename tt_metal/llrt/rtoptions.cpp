@@ -198,6 +198,12 @@ void RunTimeOptions::ParseWatcherEnv() {
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
+
+    if (getenv("TT_METAL_DISPATCH_STATIC_QUEUE_SIZING")) {
+        this->enable_dispatch_dynamic_queue_sizing = false;
+    } else {
+        this->enable_dispatch_dynamic_queue_sizing = true;
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature) {

@@ -133,6 +133,8 @@ class RunTimeOptions {
 
     bool skip_deleting_built_cache = false;
 
+    bool enable_dispatch_dynamic_queue_sizing = true;
+
     RunTimeOptions();
 
 public:
@@ -306,6 +308,8 @@ public:
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
+
+    inline bool get_enable_dispatch_dynamic_queue_sizing() { return enable_dispatch_dynamic_queue_sizing; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
