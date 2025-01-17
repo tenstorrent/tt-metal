@@ -33,6 +33,7 @@ struct SubDeviceId {
         return *this;
     }
 
+    bool operator<(size_t other) const { return id < other; }
     bool operator==(const SubDeviceId& other) const { return id == other.id; }
 
     bool operator!=(const SubDeviceId& other) const { return id != other.id; }
