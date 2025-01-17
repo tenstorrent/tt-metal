@@ -9,10 +9,12 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_metal/common/constants.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include <tt-metalium/constants.hpp>
+
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 #include "fold.hpp"
 
@@ -216,7 +218,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], c = tt_output_tensor.shape()[2],
     h = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
+    tt_output_tensor =
+        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
 
     tt::log_debug("reshape_hc_output: {}", tt_output_tensor.shape());
 
@@ -229,7 +232,8 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.shape()[0], w = tt_output_tensor.shape()[1], h = tt_output_tensor.shape()[2],
     c = tt_output_tensor.shape()[3];
-    tt_output_tensor = tt_output_tensor.reshape(ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
+    tt_output_tensor =
+        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.shape());
 

@@ -4,8 +4,8 @@
 
 #include <sys/types.h>
 #include "gtest/gtest.h"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
-#include "tt_metal/common/env_lib.hpp"
+#include <tt-metalium/worker_config_buffer.hpp>
+#include <tt-metalium/env_lib.hpp>
 
 #include <cstddef>
 #include <deque>

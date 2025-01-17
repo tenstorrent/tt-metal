@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/all_gather_matmul_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce/all_reduce_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"

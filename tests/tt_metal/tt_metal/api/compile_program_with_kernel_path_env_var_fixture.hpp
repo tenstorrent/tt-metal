@@ -5,7 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "logger.hpp"
 
 using namespace tt;

@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include "cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
 
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -18,7 +18,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 
@@ -80,7 +80,8 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1)
-        .value("L1_SMALL", BufferType::L1_SMALL);
+        .value("L1_SMALL", BufferType::L1_SMALL)
+        .value("TRACE", BufferType::TRACE);
 
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate

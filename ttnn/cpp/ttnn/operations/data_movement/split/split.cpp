@@ -6,7 +6,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
@@ -88,7 +88,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 }
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};

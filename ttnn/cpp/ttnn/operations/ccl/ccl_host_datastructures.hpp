@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_metal/experimental/hal.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor_impl.hpp"
+#include <tt-metalium/hal_exp.hpp>
+#include "cpp/ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <limits>
 

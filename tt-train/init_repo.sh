@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Description: Initialize the repository with the necessary configurations
-git lfs install
 sudo apt install clang-tidy-17
 sudo apt install clang-format-17
 sudo ln -sf /usr/bin/clang-tidy-17 /usr/bin/clang-tidy

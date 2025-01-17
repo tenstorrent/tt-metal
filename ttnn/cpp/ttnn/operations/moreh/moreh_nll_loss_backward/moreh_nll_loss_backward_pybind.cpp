@@ -9,7 +9,7 @@
 
 #include "moreh_nll_loss_backward.hpp"
 #include "pybind11/cast.h"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace py = pybind11;
 

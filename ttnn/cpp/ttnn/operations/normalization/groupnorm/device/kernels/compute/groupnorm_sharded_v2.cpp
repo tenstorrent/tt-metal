@@ -144,7 +144,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
 #endif
-    tilize_init_short(cb_in_rm, per_core_N);
+    tilize_init_short(cb_in_rm, per_core_N, cb_in);
     for (uint32_t m = 0; m < per_core_M; ++m) {
 #ifdef READER_REPACK
         cb_wait_front(cb_in_rm, per_core_N);
@@ -154,7 +154,7 @@ void MAIN {
         cb_push_back(cb_in, per_core_N);
         cb_pop_front(cb_in_rm, per_core_N);
     }
-    tilize_uninit(cb_in_rm);
+    tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
     binary_op_init_common(cb_in0, cb_input_mask, cb_x);
@@ -199,7 +199,7 @@ void MAIN {
 
             // Partial-E[x]
             index_h_offset = 0;
-            reduce_init_delta<false>();
+            reduce_init_delta<false>(cb_ex_partial, cb_x, cb_scaler);
             cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
             cb_wait_front(cb_scaler, 1);
@@ -216,10 +216,10 @@ void MAIN {
             pack_tile(dst0, cb_ex_partial);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
-            reduce_revert_delta();
+            reduce_revert_delta(cb_ex_partial);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init_delta<false>();
+                reduce_init_delta<false>(cb_ex_global, cb_ex_external, cb_scaler_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
@@ -231,7 +231,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_revert_delta();
+                reduce_revert_delta(cb_ex_global);
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }
@@ -316,7 +316,7 @@ void MAIN {
 
             // Partial-Var(x)
             index_h_offset = 0;
-            reduce_init_delta<false>();
+            reduce_init_delta<false>(cb_ex_partial, cb_xmm, cb_scaler);
             cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
             cb_wait_front(cb_xmm, block_hw);
@@ -334,10 +334,10 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
             cb_pop_front(cb_xmm, block_hw);
-            reduce_revert_delta();
+            reduce_revert_delta(cb_ex_partial);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init_delta<false>();
+                reduce_init_delta<false>(cb_ex_global, cb_ex_external, cb_scaler_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
@@ -349,7 +349,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_revert_delta();
+                reduce_revert_delta(cb_ex_global);
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }

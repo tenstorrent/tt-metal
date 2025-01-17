@@ -6,11 +6,11 @@
 
 #include <utility>
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/move/move.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/trace.hpp>
+#include "cpp/ttnn/operations/data_movement/move/move.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
@@ -105,7 +105,7 @@ ttnn::Tensor allocate_tensor_on_device(
 }
 
 void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {
-    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor));
+    tt::tt_metal::write_tensor(std::move(host_tensor), std::move(device_tensor), cq_id);
 }
 
 ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, uint8_t cq_id) {

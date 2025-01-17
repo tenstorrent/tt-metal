@@ -5,8 +5,8 @@
 #pragma once
 #include <map>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/constants.hpp>
 using namespace tt::constants;
 class ConvParameters {
 public:

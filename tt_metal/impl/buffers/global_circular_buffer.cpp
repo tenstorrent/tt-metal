@@ -2,20 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
+#include <global_circular_buffer_impl.hpp>
 
 #include <cstdint>
 #include <memory>
 #include <vector>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/llrt/hal.hpp"
+#include <assert.hpp>
+#include <core_coord.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <buffer.hpp>
+#include <buffer_constants.hpp>
+#include <device.hpp>
+#include <hal.hpp>
+#include <tt_align.hpp>
 
 namespace tt::tt_metal {
 
@@ -72,7 +73,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     // is_sender, receiver_val, fifo_start_addr, fifo_size, fifo_ptr, noc_xy coords, and pages_sent
     constexpr uint32_t num_config_elements = 7;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
-    auto cb_config_page_size = align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
+    auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
                                2 * max_num_receivers_per_sender * l1_alignment;
     uint32_t cb_config_size = cb_config_page_size * num_cores;
     this->cb_config_buffer_ = Buffer::create(
@@ -100,7 +101,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         const auto& core_to_core_id = cb_config_buffer->get_buffer_page_mapping()->core_to_core_id_;
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
         uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
-        uint32_t pages_sent_address = align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
+        uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
 
         for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
             const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);

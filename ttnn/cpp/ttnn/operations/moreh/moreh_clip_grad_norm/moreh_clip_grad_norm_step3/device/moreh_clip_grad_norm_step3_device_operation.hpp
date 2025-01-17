@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

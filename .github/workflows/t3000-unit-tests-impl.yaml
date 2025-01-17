@@ -15,6 +15,7 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 30, owner_id: ULMEPM2MA}, #Sean Nijjar
+          { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 30, owner_id: UJ45FEC7M}, # Allan Liu
           { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 120, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, owner_id: UBHPP2NDP}, #Joseph Chu
           { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, owner_id: U053W15B6JF}, #Djordje Ivanovic
@@ -46,9 +47,9 @@ jobs:
       - uses: ./.github/actions/ensure-active-weka-mount
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run unit regression tests
         shell: bash {0}

@@ -1,5 +1,6 @@
 set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
@@ -10,6 +11,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
@@ -47,11 +49,13 @@ target_link_libraries(
     impl
     PUBLIC
         common
-        Metalium::Metal::LLRT
         Tracy::TracyClient
+        Taskflow::Taskflow
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
+        TT::Metalium::HostDevCommon
+        Metalium::Metal::Hardware
 )
 
 target_include_directories(

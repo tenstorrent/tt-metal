@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <string>
 
-#include "tt_metal/experimental/hal.hpp"
-#include "tt_metal/llrt/hal.hpp"
+#include <hal_exp.hpp>
+#include <hal.hpp>
+#include <tt_backend_api_types.hpp>
 #include <umd/device/types/arch.h>
 
 using tt::tt_metal::HalL1MemAddrType;
@@ -14,6 +16,11 @@ using tt::tt_metal::HalProgrammableCoreType;
 using tt::tt_metal::HalSingleton;
 
 namespace tt::tt_metal::experimental::hal {
+
+std::string get_arch_name() {
+    auto arch_enum = HalSingleton::getInstance().get_arch();
+    return tt::get_string_lowercase(arch_enum);
+}
 
 uint32_t get_l1_size() {
     return HalSingleton::getInstance().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
@@ -40,5 +47,11 @@ uint32_t get_erisc_l1_unreserved_size() {
     }
     return 0;
 }
+
+float get_eps() { return HalSingleton::getInstance().get_eps(); }
+
+float get_nan() { return HalSingleton::getInstance().get_nan(); }
+
+float get_inf() { return HalSingleton::getInstance().get_inf(); }
 
 }  // namespace tt::tt_metal::experimental::hal

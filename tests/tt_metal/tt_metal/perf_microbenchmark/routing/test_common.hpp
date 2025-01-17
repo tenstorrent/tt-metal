@@ -5,8 +5,8 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/llrt.hpp>
 
 static inline std::string to_string(pkt_dest_size_choices_t choice) {
     switch (choice) {

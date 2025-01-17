@@ -1,15 +1,13 @@
 {
-  "_comments": "We do not include git and git-lfs here along with the PPA command 'sudo add-apt-repository ppa:git-core/ppa' for registering the apt repository to install those packages because we were timing out the GPG fetching by hammering it",
+  "_comments": "We do not include git here along with the PPA command 'sudo add-apt-repository ppa:git-core/ppa' for registering the apt repository to install those packages because we were timing out the GPG fetching by hammering it",
   "ubuntu-20.04": [
     "git",
-    "git-lfs",
     "pandoc",
     "pkg-config",
     "ninja-build"
   ],
   "ubuntu-22.04": [
     "git",
-    "git-lfs",    
     "pandoc",
     "pkg-config",
     "ninja-build",

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt;

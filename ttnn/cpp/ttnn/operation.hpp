@@ -7,10 +7,10 @@
 #include <experimental/type_traits>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_stl/concepts.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "ttnn/config.hpp"
 
 namespace tt {
@@ -288,14 +288,6 @@ constexpr bool implements_validate_with_output_tensors_and_optional_input_tensor
 }
 
 template <class T, class... Args>
-using has_compute_output_shapes_t = decltype(std::declval<T>().compute_output_shapes(std::declval<Args>()...));
-
-template <class T>
-constexpr bool implements_compute_output_shapes() {
-    return std::experimental::is_detected_v<has_compute_output_shapes_t, T, const Tensors&>;
-}
-
-template <class T, class... Args>
 using has_compute_output_specs_t = decltype(std::declval<T>().compute_output_specs(std::declval<Args>()...));
 
 template <class T>
@@ -433,8 +425,7 @@ template <class OutputTensorsT = Tensors>
 struct DeviceOperation final {
     using storage_t = std::array<std::byte, 1152>;
     using OutputTensors = OutputTensorsT;
-    using ComputedShapes = std::
-        variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>, std::vector<ttnn::TensorSpec>>;
+    using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 
     inline const std::string get_type_name() const { return this->get_type_name_impl_(this->type_erased_storage); }
 
@@ -446,10 +437,9 @@ struct DeviceOperation final {
             this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
-    // TODO: Rename into compute_output_specs in later PR
-    inline const ComputedShapes compute_output_shapes(
+    inline const ComputedSpecs compute_output_specs(
         const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
-        return this->compute_output_shapes_impl_(this->type_erased_storage, input_tensors, output_tensors);
+        return this->compute_output_specs_impl_(this->type_erased_storage, input_tensors, output_tensors);
     }
 
     inline const OutputTensors create_output_tensors(
@@ -588,26 +578,18 @@ struct DeviceOperation final {
                         "Operation must implement either validate or validate_with_output_tensors");
                 }
             }},
-        compute_output_shapes_impl_{
+        compute_output_specs_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
-               const OptionalTensors& output_tensors) -> const ComputedShapes {
+               const OptionalTensors& output_tensors) -> const ComputedSpecs {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
-                if constexpr (
-                    detail::implements_compute_output_shapes<T>() and detail::implements_compute_output_specs<T>()) {
-                    static_assert(
-                        tt::stl::concepts::always_false_v<T>,
-                        "Operation cannot implement both compute_output_shapes and compute_output_specs");
-                } else if constexpr (detail::implements_compute_output_shapes<T>()) {
-                    return operation.compute_output_shapes(input_tensors);
-                } else if constexpr (detail::implements_compute_output_specs_with_optional_output_tensors<T>()) {
+                if constexpr (detail::implements_compute_output_specs_with_optional_output_tensors<T>()) {
                     return operation.compute_output_specs(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_compute_output_specs<T>()) {
                     return operation.compute_output_specs(input_tensors);
                 } else {
                     static_assert(
-                        tt::stl::concepts::always_false_v<T>,
-                        "Operation must implement either compute_output_shapes or compute_output_specs");
+                        tt::stl::concepts::always_false_v<T>, "Operation must implement compute_output_specs");
                 }
             }},
         create_output_tensors_impl_{
@@ -617,15 +599,13 @@ struct DeviceOperation final {
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 if constexpr (detail::implements_create_output_tensors_with_optional_output_tensors<T>()) {
                     static_assert(
-                        detail::implements_compute_output_shapes<T>() || detail::implements_compute_output_specs<T>(),
-                        "Operation must implement compute_output_shapes or compute_output_specs if it implements "
-                        "create_output_tensors");
+                        detail::implements_compute_output_specs<T>(),
+                        "Operation must implement compute_output_specs if it implements create_output_tensors");
                     return operation.create_output_tensors(input_tensors, output_tensors);
                 } else if constexpr (detail::implements_create_output_tensors<T>()) {
                     static_assert(
-                        detail::implements_compute_output_shapes<T>() || detail::implements_compute_output_specs<T>(),
-                        "Operation must implement compute_output_shapes or compute_output_specs if it implements "
-                        "create_output_tensors");
+                        detail::implements_compute_output_specs<T>(),
+                        "Operation must implement compute_output_specs if it implements create_output_tensors");
                     return operation.create_output_tensors(input_tensors);
                 } else if constexpr (detail::implements_compute_output_specs<T>()) {
                     return default_create_output_tensors(operation, input_tensors, output_tensors);
@@ -732,7 +712,7 @@ struct DeviceOperation final {
         move_storage{other.move_storage},
         get_type_name_impl_{other.get_type_name_impl_},
         validate_impl_{other.validate_impl_},
-        compute_output_shapes_impl_{other.compute_output_shapes_impl_},
+        compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
@@ -754,7 +734,7 @@ struct DeviceOperation final {
             this->move_storage = other.move_storage;
             this->get_type_name_impl_ = other.get_type_name_impl_;
             this->validate_impl_ = other.validate_impl_;
-            this->compute_output_shapes_impl_ = other.compute_output_shapes_impl_;
+            this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
@@ -774,7 +754,7 @@ struct DeviceOperation final {
         move_storage{other.move_storage},
         get_type_name_impl_{other.get_type_name_impl_},
         validate_impl_{other.validate_impl_},
-        compute_output_shapes_impl_{other.compute_output_shapes_impl_},
+        compute_output_specs_impl_{other.compute_output_specs_impl_},
         create_output_tensors_impl_{other.create_output_tensors_impl_},
         create_program_impl_{other.create_program_impl_},
         create_op_performance_model_impl_{other.create_op_performance_model_impl_},
@@ -796,7 +776,7 @@ struct DeviceOperation final {
             this->move_storage = other.move_storage;
             this->get_type_name_impl_ = other.get_type_name_impl_;
             this->validate_impl_ = other.validate_impl_;
-            this->compute_output_shapes_impl_ = other.compute_output_shapes_impl_;
+            this->compute_output_specs_impl_ = other.compute_output_specs_impl_;
             this->create_output_tensors_impl_ = other.create_output_tensors_impl_;
             this->create_program_impl_ = other.create_program_impl_;
             this->create_op_performance_model_impl_ = other.create_op_performance_model_impl_;
@@ -825,7 +805,7 @@ private:
         const Tensors&,
         const std::vector<std::optional<const Tensor>>&,
         const OptionalTensors&);
-    const ComputedShapes (*compute_output_shapes_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
+    const ComputedSpecs (*compute_output_specs_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
     const OutputTensors (*create_output_tensors_impl_)(const storage_t& value, const Tensors&, const OptionalTensors&);
 
     CacheableProgram<OutputTensors> (*create_program_impl_)(

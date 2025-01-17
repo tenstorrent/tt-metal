@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/assert.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/cpp/ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/cpp/ttnn/tensor/types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -462,7 +462,8 @@ static void test_convert_conv_weight_tensor_to_tiled_layout_block_sharded() {
 static void test_convert_conv_bias_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < bias_tensor_shape.size(); i++) {
-        auto input_tensor = ttnn::random::random(bias_tensor_shape[i], DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+        auto input_tensor =
+            ttnn::random::random(SimpleShape(bias_tensor_shape[i]), DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         auto output_tensor = ttnn::operations::conv::convert_conv_bias_tensor_to_tiled_layout_block_sharded(
             input_tensor, shards[i], DataType::BFLOAT16);

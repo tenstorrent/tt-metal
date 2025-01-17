@@ -29,9 +29,10 @@ def test_multichip_hop_latency(sample_counts, page_sizes, channel_counts, hop_co
     channel_counts_str = " ".join([str(s) for s in channel_counts])
     hop_counts_str = " ".join([str(s) for s in hop_counts])
 
+    ARCH_NAME = os.getenv("ARCH_NAME")
     rc = os.system(
         f"TT_METAL_DEVICE_PROFILER=1 \
-            ./build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_hop_latencies_no_edm \
+            ./build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_hop_latencies_no_edm_{ARCH_NAME} \
                 {len(sample_counts)} {sample_counts_str} \
                     {len(page_sizes)} {page_sizes_str} \
                         {len(channel_counts)} {channel_counts_str} \

@@ -63,16 +63,18 @@ struct address_map {
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3344;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2056;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+        (FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE + 31) & ~31;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
     // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
     // runtime build, and is unused once FW copies the data to local memory during FW initialization.
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH =
-        (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;

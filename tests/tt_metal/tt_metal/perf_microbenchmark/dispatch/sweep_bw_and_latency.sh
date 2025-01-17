@@ -38,7 +38,7 @@ hy=$(get_half_way_away_core_y 0);
 
 function run_one() {
     echo "Running $@"
-    build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency $@
+    build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency_${ARCH_NAME} $@
 }
 
 function bw_test() {

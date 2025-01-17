@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <tt-metalium/span.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -20,6 +20,7 @@ struct PermuteDeviceOperation {
     struct operation_attributes_t {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
+        const std::optional<float> pad_value;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -72,6 +73,9 @@ struct PermuteDeviceOperation {
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
+
+    // Implementation for when the tile is not broken apart (either dims = {..., rank - 2, rank - 1} or {..., rank - 1,
+    // rank - 2})
     struct MultiCoreTileInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
@@ -94,7 +98,31 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric, MultiCoreTileInvariant>;
+    // Implemention for when the height dimension (rank - 2) is swapped with another dimension (dims = {..., rank - 2,
+    // ..., i, rank - 1})
+    struct MultiCoreTileRowInvariant {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t =
+        std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric, MultiCoreTileInvariant, MultiCoreTileRowInvariant>;
 
     // Mandatory methods
 
@@ -123,7 +151,8 @@ struct PermuteDeviceOperation {
         const Tensor& input_tensor,
         const SmallVector<uint32_t>& dims,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor);
+        std::optional<Tensor> optional_output_tensor,
+        const std::optional<float>& pad_value = std::nullopt);
 };
 }  // namespace ttnn::operations::data_movement
 

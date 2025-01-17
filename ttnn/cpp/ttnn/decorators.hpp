@@ -6,8 +6,8 @@
 
 #include <reflect>
 
-#include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tracy/Tracy.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
@@ -131,11 +131,10 @@ auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) {
     } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<T>);
-        std::apply(
-            [&output_tensors](auto&&... args) {
-                (output_tensors.emplace_back(std::forward<decltype(args)>(args)), ...);
-            },
-            value);
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            using std::get;
+            (output_tensors.emplace_back(std::forward<decltype(get<Is>(value))>(get<Is>(value))), ...);
+        }(std::make_index_sequence<std::tuple_size_v<T>>{});
         return output_tensors;
     } else {
         static_assert(

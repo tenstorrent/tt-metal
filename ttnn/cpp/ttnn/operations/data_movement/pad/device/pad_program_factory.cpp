@@ -3,15 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_log.h"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/tt_align.hpp>
+
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -809,7 +811,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
     auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
-    uint32_t stick_size_padded_aligned = align(stick_size_padded, hal.get_alignment(HalMemType::L1));
+    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal.get_alignment(HalMemType::L1));
     uint32_t row_major_min_bytes = 16;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());

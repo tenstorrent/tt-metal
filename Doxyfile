@@ -922,9 +922,9 @@ WARN_LOGFILE           =
 # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING
 # Note: If this tag is empty the current directory is searched.
 
-INPUT                  = tt_metal/hw/inc/dataflow_api.h \
+INPUT                  = tt_metal/api/tt-metalium/dataflow_api.h \
                          tt_metal/hw/inc/ethernet/dataflow_api.h \
-                         tt_metal/host_api.hpp \
+                         tt_metal/api/tt-metalium/host_api.hpp \
                          tt_metal/include/compute_kernel_api/eltwise_unary/erf_erfc.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/erfinv.h \
                          tt_metal/include/compute_kernel_api/eltwise_unary/exp.h \
@@ -953,12 +953,12 @@ INPUT                  = tt_metal/hw/inc/dataflow_api.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp \
                          tt_metal/include/tt_metal/metal.hpp \
-                         tt_metal/include/tt_metal/types.hpp \
+                         tt_metal/api/tt-metalium/types.hpp \
                          tt_metal/include/tt_metal/buffer.hpp \
                          tt_metal/include/tt_metal/command_queue.hpp \
                          tt_metal/include/tt_metal/device.hpp \
                          tt_metal/include/tt_metal/event.hpp \
-                         tt_metal/include/tt_metal/global_circular_buffer.hpp \
+                         tt_metal/api/tt-metalium/global_circular_buffer.hpp \
                          tt_metal/include/tt_metal/kernel.hpp \
                          tt_metal/include/tt_metal/program.hpp \
                          tt_metal/include/tt_metal/trace.hpp

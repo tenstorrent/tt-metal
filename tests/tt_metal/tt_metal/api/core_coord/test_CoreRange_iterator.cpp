@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "core_coord_fixture.hpp"
 
 using std::vector;

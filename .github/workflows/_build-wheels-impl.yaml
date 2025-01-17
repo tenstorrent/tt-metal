@@ -6,9 +6,6 @@ on:
       os:
         required: True
         type: string
-      arch:
-        required: True
-        type: string
       from-precompiled:
         required: True
         default: True
@@ -17,8 +14,6 @@ on:
 jobs:
   build-wheel:
     runs-on: ${{ inputs.os }}
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
         with:
@@ -57,7 +52,6 @@ jobs:
       - uses: ./.github/actions/prepare-metal-run
         if: ${{ inputs.from-precompiled }}
         with:
-          arch: ${{ inputs.arch }}
           python-version: ${{ env.python-version }}
       - name: Set precompiled dir for precompile builds
         if: ${{ inputs.from-precompiled }}
@@ -69,5 +63,5 @@ jobs:
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: eager-dist-${{ inputs.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ inputs.os }}-any
           path: dist/

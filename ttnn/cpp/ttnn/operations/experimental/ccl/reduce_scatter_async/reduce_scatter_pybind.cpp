@@ -7,10 +7,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 

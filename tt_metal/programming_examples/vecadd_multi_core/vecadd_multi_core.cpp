@@ -5,10 +5,10 @@
 // this programing example is based on the vecadd single core example in the
 // contributed folder it illustarted using multiple cores to perform vector
 // addition the program will use 4 cores to perform the vector addition
-#include "common/bfloat16.hpp"
-#include "common/core_coord.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>

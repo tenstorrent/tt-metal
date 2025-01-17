@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
 

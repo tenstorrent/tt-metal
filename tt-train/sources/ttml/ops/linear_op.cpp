@@ -51,19 +51,21 @@ void ttnn_linear_backward(
 
     auto reshaped_grad =
         ttnn::reshape(out->get_grad(), ttnn::Shape({volume_without_features, out->get_grad().get_shape()[-1]}));
-    auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
     auto reshaped_weight_grad =
         matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false, config);
     auto reshaped_tensor_grad =
         matmul(reshaped_grad, weight->get_value(), /* transpose_a */ false, /* transpose_b */ false, config);
-
-    auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().get_shape());
+    if (bias) {
+        auto reshaped_bias_grad = ttnn_fixed::sum_over_dim(reshaped_grad, /* axis */ 0);
+        auto bias_grad = ttnn::reshape(reshaped_bias_grad, bias->get_value().get_shape());
+        bias->add_grad(bias_grad);
+    }
     auto weight_grad = ttnn::reshape(reshaped_weight_grad, weight->get_value().get_shape());
+
     auto tensor_grad = ttnn::reshape(reshaped_tensor_grad, tensor_value.get_shape());
 
     tensor->add_grad(tensor_grad);
     weight->add_grad(weight_grad);
-    bias->add_grad(bias_grad);
 }
 
 void moreh_linear_backward(
@@ -72,7 +74,6 @@ void moreh_linear_backward(
     const autograd::TensorPtr& bias,
     const autograd::TensorPtr& out,
     const ttnn::WormholeComputeKernelConfig& config) {
-    auto bias_grad = ttnn::empty_like(bias->get_value());
     auto tensor_grad = ttnn::empty_like(tensor->get_value());
     auto weight_grad = ttnn::empty_like(weight->get_value());
 
@@ -80,11 +81,13 @@ void moreh_linear_backward(
         out->get_grad(),
         tensor->get_value(),
         weight->get_value(),
-        /* are required outputs */ std::vector<bool>{true, true, true},
-        bias->get_value(),
+        /* are required outputs */ std::vector<bool>{true, true, bias != nullptr},
+        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
+                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
         tensor_grad,
         weight_grad,
-        bias_grad,
+        bias ? std::optional<tt::tt_metal::Tensor>(ttnn::empty_like(bias->get_value()))
+             : std::optional<tt::tt_metal::Tensor>(std::nullopt),
         /* input_grad_mem_config */ std::nullopt,
         /* weight_grad_mem_config */ std::nullopt,
         /* bias_grad_mem_config */ std::nullopt,
@@ -100,10 +103,9 @@ void moreh_linear_backward(
     }
     weight->add_grad(res[1].value());
 
-    if (!res[2].has_value()) {
-        throw std::runtime_error("Bias gradient is not available");
+    if (res[2].has_value()) {
+        bias->add_grad(res[2].value());
     }
-    bias->add_grad(res[2].value());
 }
 
 autograd::TensorPtr linear_op(
@@ -113,7 +115,8 @@ autograd::TensorPtr linear_op(
     out->set_value(ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
-        bias->get_value(),
+        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
+                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
         /* transpose_a */ false,
         /* tranpose_b */ true,
         /* memory_config */ std::nullopt,

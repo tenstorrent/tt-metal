@@ -5,12 +5,12 @@
 #include <memory>
 
 #include "multi_command_queue_fixture.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "dispatch_test_utils.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;

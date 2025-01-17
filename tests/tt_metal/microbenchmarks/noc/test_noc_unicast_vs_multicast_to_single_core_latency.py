@@ -12,8 +12,9 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 
 
 def test_noc_unicast_vs_multicast_to_single_core_latency():
+    ARCH_NAME = os.getenv("ARCH_NAME")
     os.system(
-        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency"
+        f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/noc/test_noc_unicast_vs_multicast_to_single_core_latency_{ARCH_NAME}"
     )
     setup = device_post_proc_config.default_setup()
     setup.timerAnalysis = {

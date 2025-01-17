@@ -7,15 +7,15 @@
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "impl/device/device.hpp"
-#include "llrt/hal.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/hal.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/rtoptions.hpp>
 
 class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
 protected:

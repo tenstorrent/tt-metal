@@ -7,8 +7,8 @@
 #include <type_traits>
 #include "dataflow_api.h"
 
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 
 namespace ccl {

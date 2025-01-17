@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "repeat_and_interleave_eltwise_mul.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::experimental::ssm::detail {
 

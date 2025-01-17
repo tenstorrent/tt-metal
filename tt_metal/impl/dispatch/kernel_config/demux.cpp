@@ -5,8 +5,8 @@
 #include "dispatch.hpp"
 #include "eth_tunneler.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
 
 using namespace tt::tt_metal;
 

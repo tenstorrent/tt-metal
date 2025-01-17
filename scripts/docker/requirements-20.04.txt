@@ -3,7 +3,6 @@ dialog
 software-properties-common=0.99.9.12
 build-essential=12.8ubuntu1.1
 git
-git-lfs
 pandoc
 libtbb-dev
 libcapstone-dev

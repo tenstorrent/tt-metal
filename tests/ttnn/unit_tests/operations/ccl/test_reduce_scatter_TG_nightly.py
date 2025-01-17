@@ -279,6 +279,8 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                 )
+            if enable_persistent_fabric:
+                ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:

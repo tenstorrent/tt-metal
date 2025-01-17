@@ -10,8 +10,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::dram_prefetcher {
 
@@ -27,8 +27,7 @@ struct DramPrefetcher {
     const uint32_t num_layers;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };

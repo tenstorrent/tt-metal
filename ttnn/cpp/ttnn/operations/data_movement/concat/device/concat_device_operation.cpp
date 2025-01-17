@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -185,13 +185,13 @@ Tensor concat_impl(
                 for (const auto& input_tensor : input_tensors) {
                     if (target_layout == Layout::ROW_MAJOR) {
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = input_tensor.get_legacy_shape(),
+                            .pad_shape = input_tensor.get_padded_shape(),
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        tt::tt_metal::LegacyShape pad_shape =
+                        ttnn::SimpleShape pad_shape =
                             ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                                input_tensor.get_legacy_shape());
+                                input_tensor.get_padded_shape());
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
                             .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }

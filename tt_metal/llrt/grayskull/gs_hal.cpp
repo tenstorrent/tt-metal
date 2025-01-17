@@ -10,7 +10,7 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"
@@ -32,6 +32,10 @@
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+
+static constexpr float EPS_GS = 0.001953125f;
+static constexpr float NAN_GS = 6.9752e19;
+static constexpr float INF_GS = 1.6948e38;
 
 namespace tt {
 
@@ -212,6 +216,10 @@ void Hal::initialize_gs() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+
+    this->eps_ = EPS_GS;
+    this->nan_ = NAN_GS;
+    this->inf_ = INF_GS;
 }
 
 }  // namespace tt_metal

@@ -7,7 +7,8 @@
 #include "dropout.hpp"
 namespace ttnn::operations::experimental {
 Tensor DropoutOperation::invoke(const Tensor& input_tensor, float prob, float scale, uint32_t seed) {
-    return ttnn::prim::dropout(input_tensor, prob, scale, seed, DataType::BFLOAT16);
+    auto chip_id = static_cast<uint32_t>(input_tensor.device()->id());
+    return ttnn::prim::dropout(input_tensor, prob, scale, seed + chip_id, DataType::BFLOAT16);
 }
 
 }  // namespace ttnn::operations::experimental

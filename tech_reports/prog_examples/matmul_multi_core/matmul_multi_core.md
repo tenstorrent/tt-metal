@@ -13,10 +13,18 @@ The full example program is in [matmul_multi_core.cpp](../../../tt_metal/program
 
 To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
 
+Run the appropriate command for the Tenstorrent card you have installed:
+
+| Card             | Command                              |
+|------------------|--------------------------------------|
+| Grayskull        | ```export ARCH_NAME=grayskull```     |
+| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+| Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+Then run the following:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/matmul_multi_core
 ```
 ## Accessing all the cores

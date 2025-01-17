@@ -51,9 +51,7 @@ int main() {
     size_t num_devices_ = 0;
 
     std::srand(0);
-    arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
     num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-    std::cout << "Arch:" << tt::test_utils::get_env_arch_name() << std::endl;
     std::cout << "num_devices:" << num_devices_ << std::endl;
     device = tt::tt_metal::CreateDevice(0);
     std::cout << "Device created" << std::endl;

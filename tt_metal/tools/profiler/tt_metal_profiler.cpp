@@ -5,17 +5,17 @@
 #include <thread>
 #include <cmath>
 
-#include "llrt/hal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <hal.hpp>
+#include <host_api.hpp>
+#include <dprint_server.hpp>
 
-#include "tools/profiler/profiler.hpp"
+#include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt_metal.hpp>
 
 #include "tracy/TracyTTDevice.hpp"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 namespace tt {
 

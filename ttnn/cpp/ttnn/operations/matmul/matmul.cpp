@@ -52,8 +52,8 @@ ttnn::Tensor bound_matmul(
                                               ? ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config())
                                               : input_tensor_b;
 
-    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_shape();
-    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_shape();
+    const auto input_tensor_a_shape = input_tensor_a_adjusted.get_logical_shape();
+    const auto input_tensor_b_shape = input_tensor_b_adjusted.get_logical_shape();
 
     const auto width_a = input_tensor_a_shape[-1];
     const auto height_b = input_tensor_b_shape[-2];

@@ -5,12 +5,12 @@
 #include <algorithm>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
@@ -541,11 +541,10 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* d
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
-    const char* arch = getenv("ARCH_NAME");
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (strcasecmp(arch, "wormhole_b0") == 0) {
+    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         tt::log_info("This test is disabled in WH B0");
         GTEST_SKIP();
     }

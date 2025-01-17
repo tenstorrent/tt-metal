@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::test::buffer::detail {
 inline void writeL1Backdoor(

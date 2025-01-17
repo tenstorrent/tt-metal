@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 
 using namespace tt;

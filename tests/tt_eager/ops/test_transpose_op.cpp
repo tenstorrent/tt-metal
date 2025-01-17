@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include <ttnn/operations/functions.hpp>
@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::random::random(shape).to(Layout::TILE).to(device);
 

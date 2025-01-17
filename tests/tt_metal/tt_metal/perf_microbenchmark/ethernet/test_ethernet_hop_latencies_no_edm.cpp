@@ -8,26 +8,26 @@
 #include <random>
 #include <tuple>
 
-#include "tt_metal/distributed/mesh_device_view.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/logger.hpp>
 #include "umd/device/types/arch.h"
-#include "impl/device/device.hpp"
-#include "impl/kernels/data_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_backend_api_types.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/distributed/mesh_device.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
@@ -50,7 +50,7 @@ public:
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() == 8 and
             tt::tt_metal::GetNumPCIeDevices() == 4) {
-            mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
+            mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
 
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
@@ -65,7 +65,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        mesh_device_->close_devices();
+        mesh_device_->close();
     }
 
     tt::ARCH arch_;

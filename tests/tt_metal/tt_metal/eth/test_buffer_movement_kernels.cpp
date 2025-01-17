@@ -9,10 +9,10 @@
 #include "command_queue_fixture.hpp"
 #include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 // FIXME: ARCH_NAME

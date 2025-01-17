@@ -5,7 +5,7 @@
 #include <optional>
 #include <utility>
 
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -74,7 +74,7 @@ Result conv2d(
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_shape()[3],
+            weight_tensor.get_logical_shape()[3],
             input_width,
             compute_grid_size,
             input_tensor.layout(),

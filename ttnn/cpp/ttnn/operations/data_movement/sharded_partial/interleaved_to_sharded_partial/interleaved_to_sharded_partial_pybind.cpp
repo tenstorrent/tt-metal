@@ -5,10 +5,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "interleaved_to_sharded_partial.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::data_movement {
 

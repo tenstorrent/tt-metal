@@ -8,15 +8,16 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 namespace ttnn::operations::binary {
@@ -65,7 +66,7 @@ Tensor _addalpha(
 
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = input_a.device()->sfpu_eps();
+    const float eps = tt::tt_metal::experimental::hal::get_eps();
     Tensor result(input_a);
     {
         Tensor eps_gt(input_a);

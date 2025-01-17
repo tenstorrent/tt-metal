@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include <global_semaphore.hpp>
 
 #include <cstdint>
 #include <memory>
 #include <vector>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/llrt/hal.hpp"
+#include <assert.hpp>
+#include <core_coord.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <buffer.hpp>
+#include <buffer_constants.hpp>
+#include <device.hpp>
+#include <hal.hpp>
 
 namespace tt::tt_metal {
 

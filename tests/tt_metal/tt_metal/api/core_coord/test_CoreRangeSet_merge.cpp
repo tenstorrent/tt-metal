@@ -7,7 +7,7 @@
 
 #include "core_coord_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace basic_tests::CoreRangeSet {
 

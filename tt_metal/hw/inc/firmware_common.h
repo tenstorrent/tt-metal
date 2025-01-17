@@ -12,9 +12,10 @@
 #include "compile_time_args.h"
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
+#include "risc_common.h"
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -71,4 +72,13 @@ uint32_t firmware_config_init(
                                          launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
+}
+
+FORCE_INLINE
+void wait_for_go_message() {
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+
+    while (mailboxes->go_message.signal != RUN_MSG_GO) {
+        invalidate_l1_cache();
+    }
 }

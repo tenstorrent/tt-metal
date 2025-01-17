@@ -7,8 +7,8 @@
 #include <string_view>
 #include "types.hpp"
 
-#include "tt_metal/impl/kernels/kernel_types.hpp"
-#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include <kernel_types.hpp>
+#include <circular_buffer_types.hpp>
 
 //==================================================
 //                  INTERNAL PROGRAM MANAGEMENT
