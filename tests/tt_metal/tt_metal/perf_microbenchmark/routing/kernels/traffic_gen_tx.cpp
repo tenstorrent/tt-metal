@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
-// clang-format on
 
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
@@ -63,7 +61,12 @@ constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
 
 packet_input_queue_state_t input_queue;
+using input_queue_network_sequence = NetworkTypeSequence<DispatchRemoteNetworkType::NONE>;
+using input_queue_cb_mode_sequence = CBModeTypeSequence<false>;
+
 packet_output_queue_state_t output_queue;
+using output_queue_network_sequence = NetworkTypeSequence<tx_network_type>;
+using output_queue_cb_mode_sequence = CBModeTypeSequence<false>;
 
 constexpr packet_input_queue_state_t* input_queue_ptr = &input_queue;
 constexpr packet_output_queue_state_t* output_queue_ptr = &output_queue;
@@ -122,7 +125,7 @@ inline bool input_queue_handler() {
             byte_wr_addr += num_words * PACKET_WORD_SIZE_BYTES;
         }
     }
-    input_queue_ptr->advance_queue_local_wptr(words_initialized);
+    input_queue_ptr->advance_queue_local_wptr<true>(words_initialized);
     return false;
 }
 
@@ -164,7 +167,7 @@ void kernel_main() {
         input_queue_ptr,
         1);
 
-    if (!wait_all_src_dest_ready(NULL, 0, output_queue_ptr, 1, timeout_cycles)) {
+    if (!wait_all_input_output_ready<NoNetworkTypeSequence, NoCBModeTypeSequence, output_queue_network_sequence, output_queue_cb_mode_sequence>(NULL, &output_queue, timeout_cycles)) {
         test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
         return;
     }
@@ -193,9 +196,9 @@ void kernel_main() {
         }
 #endif
         bool all_packets_initialized = input_queue_handler();
-        if (input_queue_ptr->get_curr_packet_valid()) {
+        if (input_queue_ptr->get_curr_packet_valid<false>()) {
             bool full_packet_sent;
-            uint32_t curr_data_words_sent = output_queue_ptr->forward_data_from_input(
+            uint32_t curr_data_words_sent = output_queue_ptr->forward_data_from_input<tx_network_type, false, DispatchRemoteNetworkType::NONE, false>(
                 input_queue_id, full_packet_sent, input_queue.get_end_of_cmd());
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {
@@ -209,12 +212,12 @@ void kernel_main() {
         } else if (all_packets_initialized) {
             break;
         }
-        words_flushed += output_queue_ptr->prev_words_in_flight_check_flush();
+        words_flushed += output_queue_ptr->prev_words_in_flight_check_flush<false, input_queue_network_sequence, input_queue_cb_mode_sequence>();
     }
 
     if (!timeout) {
         test_results[PQ_TEST_MISC_INDEX] = 0xff00002;
-        if (!output_queue_ptr->output_barrier(timeout_cycles)) {
+        if (!output_queue_ptr->output_barrier<false, input_queue_network_sequence, input_queue_cb_mode_sequence>(timeout_cycles)) {
             timeout = true;
         }
     }
