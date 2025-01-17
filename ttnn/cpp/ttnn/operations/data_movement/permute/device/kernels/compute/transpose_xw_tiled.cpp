@@ -60,11 +60,6 @@ void MAIN {
         tilize_init_short(cb_in, 1, cb_tilize);
 
         cb_wait_front(cb_in, 1);
-        UNPACK(
-            uint32_t base_address = get_local_cb_interface(tt::CBIndex::c_0).fifo_rd_ptr
-                                    << 4);  // Remove header size added by descriptor
-        UNPACK(DPRINT << "base_address: " << base_address << ENDL());
-        UNPACK(print_bf16_pages(base_address, 32, 1));
         cb_reserve_back(cb_tilize, 1);
 
         tilize_block(cb_in, 1, cb_tilize);  // tilize and pack into cb_tilize
@@ -77,18 +72,11 @@ void MAIN {
         // transpose input
         cb_wait_front(cb_tilize, 1);
 
-        UNPACK(DPRINT << "after tilizing" << ENDL());
-        for (uint8_t r = 0; r < 1; ++r) {
-            SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-            UNPACK(DPRINT << TileSlice(cb_tilize, 0, sr, true, true) << ENDL());
-        }
-
         transpose_wh_init_short(cb_tilize);
         pack_untilize_dst_init_short<1>(cb_out);
 
         tile_regs_acquire();
         transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
-        // dprint_tensix_dest_reg(0);
         tile_regs_commit();
 
         // pack and untilize
@@ -97,14 +85,6 @@ void MAIN {
         tile_regs_wait();
         pack_untilize_dst<1>(cb_out);  // pack call
         tile_regs_release();
-
-        PACK(DPRINT << "after transposing" << ENDL());
-        PACK(
-            uint32_t base_address = get_local_cb_interface(cb_out).fifo_wr_ptr
-                                    << 4);  // Remove header size added by descriptor
-        PACK(DPRINT << "base_address: " << base_address << ENDL());
-        PACK(print_bf16_pages(base_address, 32, 32));
-        PACK(DPRINT << ENDL());
 
         cb_push_back(cb_out, 1);
 

@@ -53,6 +53,7 @@ void kernel_main() {
     constexpr uint32_t padding_val_packed = get_compile_time_arg_val(23);
     constexpr bool needs_x_padding = (bool)get_compile_time_arg_val(24);
     constexpr bool needs_y_padding = (bool)get_compile_time_arg_val(25);
+    constexpr uint32_t non_x_rows = get_compile_time_arg_val(26);
 
     constexpr uint32_t TILE_HW = TILE_HEIGHT * TILE_WIDTH;
     constexpr uint32_t FACE_HW = FACE_HEIGHT * FACE_WIDTH;
@@ -162,13 +163,12 @@ void kernel_main() {
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;
-    uint32_t num_rows = 1;
-    for (uint32_t i = 0; i < N - 1; i++) {
-        num_rows *= input_shape[i];
-    }
-    uint32_t non_x_rows = num_rows / X;
 
     DPRINT << ENDL();
+    uint32_t real_faces_w = 0;
+    if constexpr (NUM_FACES_W == final_tile_real_faces_w) {
+        real_faces_w = NUM_FACES_W;
+    }
     for (uint32_t block = start_block; block < end_block; ++block) {
         // Decompose block into w_block, x_block, and xw_block indices
         uint32_t rem = block;
@@ -178,7 +178,7 @@ void kernel_main() {
         const uint32_t x_block = rem % x_blocks;  // Which X block?
         rem /= x_blocks;
 
-        uint32_t h = rem % input_shape[N - 2];
+        uint32_t h = rem % H;
         uint32_t sub_tile_line = h % FACE_HEIGHT;
         uint32_t face_h = (h % TILE_HEIGHT) / FACE_HEIGHT;
         uint32_t base_face_line_offset_bytes = face_h * FACE_H_STRIDE_BYTES + sub_tile_line * SUBTILE_LINE_BYTES;
@@ -189,22 +189,6 @@ void kernel_main() {
         // Compute X block boundaries
         uint32_t x_start = x_block * x_block_size;
         uint32_t x_end = min(x_start + x_block_size, X);
-
-        // Compute W block boundaries
-        uint32_t w_start = w_block * w_block_size;
-        uint32_t w_end = min(w_start + w_block_size, input_shape[N - 1]);
-
-        DPRINT << "block: " << block << ENDL();
-        DPRINT << "w_block: " << w_block << ENDL();
-        DPRINT << "x_block: " << x_block << ENDL();
-        DPRINT << "xw_block: " << xw_block << ENDL();
-        DPRINT << "h: " << h << ENDL();
-        DPRINT << "sub_tile_line: " << sub_tile_line << ENDL();
-        DPRINT << "face_h: " << face_h << ENDL();
-        DPRINT << "base_face_line_offset_bytes: " << base_face_line_offset_bytes << ENDL();
-        uint32_t w_offset = w_start * element_size;
-
-        // uint32_t w_read_size_bytes = (w_end - w_start) * element_size;
 
         // Map linear index i to multidimensional indices idxs[]
         // We skip x_dim when doing this mapping and set it separately later
@@ -217,7 +201,6 @@ void kernel_main() {
             remainder /= input_shape[d];
         }
         idxs[N - 1] = w_block;
-        dprint_array<N>(idxs, "idxs");
 
         // Precompute the base address offset (excluding x_dim)
         uint64_t base_tile_offset = 0;
@@ -228,25 +211,24 @@ void kernel_main() {
             uint32_t index = d != N - 2 ? idxs[d] : idxs[d] / TILE_HEIGHT;
             base_tile_offset += index * src_tiled_strides[d];
         }
-        DPRINT << "base_tile_offset: " << base_tile_offset << ENDL();
+        if constexpr (NUM_FACES_W != final_tile_real_faces_w) {
+            real_faces_w = w_block != W_t - 1 ? NUM_FACES_W : final_tile_real_faces_w;
+        }
 
         // Reserve space in the circular buffer for the X-block length
         cb_reserve_back(tt::CBIndex::c_0, 1);
         uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
-
         // We read in 'x_block_len' chunks along the X dimension
         // Read along the X dimension
-        // DPRINT << "Reading along the X dimension" << ENDL();
-        uint32_t real_faces_w = w_block != W_t - 1 ? NUM_FACES_W : final_tile_real_faces_w;
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint32_t tile = base_tile_offset + x * X_stride_tile;
             // Compute the address offset for this index
             // Build final output address
-            uint32_t page_offset = (x - x_start) * TILE_LINE_BYTES;
+            uint16_t page_offset = (x - x_start) * TILE_LINE_BYTES;
             uint64_t src_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
             for (uint8_t i = 0; i < real_faces_w; i++) {
-                uint64_t w_offset = i * FACE_HW_BYTES;
-                uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
+                uint16_t w_offset = i * FACE_HW_BYTES;
+                uint16_t cb_w_offset = i * SUBTILE_LINE_BYTES;
                 noc_async_read(
                     src_noc_addr + w_offset, src_buffer_l1_addr + page_offset + cb_w_offset, SUBTILE_LINE_BYTES);
             }
@@ -254,39 +236,38 @@ void kernel_main() {
         if constexpr (needs_x_padding) {
             // final x_block needs padding
             if (x_block == x_blocks - 1) {
+                uint32_t writes = 0;
+                if constexpr (num_writes == final_x_pad_write) {
+                    writes = num_writes;
+                }
                 for (uint32_t x = x_end; x < X_p; ++x) {
-                    DPRINT << "padding x: " << x << ENDL();
                     // Compute the address offset for this index
                     // Build final output address
                     uint32_t page_offset = (x - x_start) * TILE_LINE_BYTES;
                     for (uint8_t i = 0; i < real_faces_w; i++) {
                         uint32_t cb_w_offset = i * SUBTILE_LINE_BYTES;
-                        // num_writes can be div_up(final_tile_real_w * element_size, sizeof(uint32_t))
-                        uint32_t writes =
-                            (w_block == w_blocks - 1 && i == real_faces_w - 1) ? final_x_pad_write : num_writes;
-                        DPRINT << "padding writes: " << writes << ENDL();
+                        if constexpr (num_writes != final_x_pad_write) {
+                            writes =
+                                (w_block == w_blocks - 1 && i == real_faces_w - 1) ? final_x_pad_write : num_writes;
+                        }
                         tt::data_movement::common::fill_with_val(
                             src_buffer_l1_addr + page_offset + cb_w_offset, writes, padding_val_packed);
                     }
                 }
             }
         }
-        // DPRINT << "DONE READING ALONG X DIM" << ENDL();
+
         // Wait for all async reads to complete before proceeding
         noc_async_read_barrier();
 
         // Push the filled block into the circular buffer
-        DPRINT << "src_buffer_l1_addr: " << src_buffer_l1_addr << ENDL();
-        print_bf16_pages(src_buffer_l1_addr, 32, 32);
         cb_push_back(tt::CBIndex::c_0, 1);
-        DPRINT << ENDL();
     }
     if constexpr (needs_y_padding) {
         // Add padding
         cb_reserve_back(tt::CBIndex::c_3, 1);
         uint32_t l1_write_addr = get_write_ptr(tt::CBIndex::c_3);
         // Fill with padding value
-        // if bfloat16 num_writes = FACE_WIDTH / (sizeof(uint32_t))/(element_size)
         tt::data_movement::common::fill_with_val(l1_write_addr, num_writes, padding_val_packed);
         cb_push_back(tt::CBIndex::c_3, 1);
     }
