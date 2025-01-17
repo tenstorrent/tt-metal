@@ -17,6 +17,7 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
@@ -214,6 +215,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     auto output_padding = Padding(
         {{0, 0}, {0, 0}, {0, (padded_shape_w - shape_w)}, {0, (padded_shape_c - shape_c)}}, Padding::PadValue::Zero);
     auto output_shape = tt::tt_metal::LegacyShape({1, 1, padded_shape_w, padded_shape_c}, output_padding);
+    // log_info(tt::LogOp, "compute_output_specs Output shape: {}", output_shape);
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
@@ -240,6 +242,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             CoreRangeSet shard_grid =
                 tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
+            // log_info(tt::LogOp, "Shard spec: {}", shard_spec);
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
             return {TensorSpec(
@@ -298,6 +301,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const auto weights_dtype = input_tensor_b.dtype();
     const auto output_dtype = output_tensor.dtype();
 
+    // const SimpleShape input_tensor_shape = input_tensor_a.get_logical_shape();
     const auto weights_shape = input_tensor_b.get_legacy_shape();
 
     auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
@@ -322,11 +326,15 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_subblock_padding,
         use_non_tile_height);
 
-    const uint32_t post_op_l1_stats =
+    const uint32_t post_op_l1_allocation_size =
         device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
-    auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
+    // log_info(tt::LogOp, "Input tensor shape: {}", input_tensor_shape);
+    // log_info(tt::LogOp, "Input weights shape: {}", weights_shape);
+    // log_info(tt::LogOp, "Output shape: {}", sliding_window_config.get_output_shape());
+
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
         arch,
         this->memory_config.memory_layout,
         input_dtype,
@@ -335,10 +343,11 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        input_tensor_shape,
-        weights_shape,
-        sliding_window_config.get_output_shape(),
+        input_tensor_shape[3],
         output_channels,
+        weights_shape,
+        input_tensor_shape[0],
+        sliding_window_config.get_output_shape()[2],
         groups,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
@@ -350,21 +359,24 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         this->memory_config,
         has_bias,
         use_non_tile_height);
-    if (calc_CB_size != actual_cb_size) {
-        TT_FATAL(
-            actual_cb_size == calc_CB_size,
-            "Calculated CB size {} does not match with the actual CB size {}",
-            calc_CB_size,
-            actual_cb_size);
-    }
-    if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
-        TT_FATAL(
-            post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
-            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-            this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_stats,
-            calc_output_size);
-    }
+    // log_info(tt::LogOp, "L1 Usage: {}", l1_usage.CB_allocation_size);
+    // log_info(tt::LogOp, "Actual L1 Usage: {}", actual_cb_size);
+
+    TT_FATAL(
+        actual_cb_size == l1_usage.CB_allocation_size,
+        "Calculated CB size {} does not match with the actual CB size {}",
+        l1_usage.CB_allocation_size,
+        actual_cb_size);
+    // log_info(tt::LogOp, "Pre Op L1 Stats: {}", this->pre_op_l1_allocation_size_bytes);
+    // log_info(tt::LogOp, "l1 tensor allocation size : {}", l1_usage.tensor_allocation_size);
+    // log_info(tt::LogOp, "Post op allocation size : {}", post_op_l1_allocation_size);
+
+    TT_FATAL(
+        post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size),
+        "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+        this->pre_op_l1_allocation_size_bytes,
+        post_op_l1_allocation_size,
+        l1_usage.tensor_allocation_size);
     return program_with_cbs;
 }
 

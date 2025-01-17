@@ -68,6 +68,7 @@ ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
+    const DataType input_tensor_dtype,
     const std::string& weights_format,
     uint32_t in_channels,
     uint32_t out_channels,
@@ -80,6 +81,7 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
     T* device,
+    const bool has_bias,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
@@ -88,6 +90,7 @@ ttnn::Tensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
     Layout input_tensor_layout,
+    // const DataType input_tensor_dtype,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

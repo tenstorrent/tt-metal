@@ -78,6 +78,10 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         shard_shape,
         shard_shape,
         output_memory_config_.shard_spec->orientation};
+    log_info(
+        tt::LogOp,
+        "halo output size: {}",
+        shard_shape[0] * shard_shape[1] * output_memory_config_.shard_spec->grid.num_cores() * 2);
     return {TensorSpec(
         output_shape,
         TensorLayout::fromLegacyPaddedShape(

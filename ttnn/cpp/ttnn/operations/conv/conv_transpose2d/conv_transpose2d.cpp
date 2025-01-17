@@ -188,11 +188,18 @@ Result conv_transpose2d(
             output_height,
             output_width,
             weight_tensor.get_logical_shape()[3],
+            full_input_height,
             full_input_width,
             compute_grid_size,
             input_tensor.layout(),
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt);
+                                                                   : std::nullopt,
+            kernel_size,
+            device->arch(),
+            input_tensor.get_dtype(),
+            groups,
+            bias_tensor.has_value(),
+            compute_config);
         auto_shard = true;
     }
 

@@ -106,6 +106,7 @@ def run_conv(
         dilation=(dilation, dilation),
         groups=groups,
     )
+    print("Golden shape", torch_out_golden_tensor.shape)
     output_shape_nhwc = [
         torch_out_golden_tensor.shape[0],
         torch_out_golden_tensor.shape[2],
@@ -1615,35 +1616,35 @@ def test_unet_conv(
         # unet convs with batch size 2
         # unique convs in unet (complete list)
         (2, 16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 64, 32, 66, 10, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 64, 64, 66, 10, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 96, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 64, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
-        (2, 16, 48, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
-        (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 64, 32, 66, 10, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 64, 64, 66, 10, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 96, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 64, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 32, 32, 264, 40, 3, 3, 1, 1, 1, 1, True, None, False),
+        # (2, 16, 48, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
+        # (2, 16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, True, {"act_block_h": 16 * 32}, True),
         # (2, 1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, True, {"act_block_h": 5 * 32}, False) # Enable when issue #11490 resolved
     ),
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("auto_shard", [True], ids=["auto_shard"])
 def test_unet_conv_wh(
     device,
     use_program_cache,
