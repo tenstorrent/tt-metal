@@ -229,7 +229,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 const auto& connected_eth_channels =
                     cluster_desc->get_directly_connected_ethernet_channels_between_chips(
                         physical_chip_id, physical_connected_chip_id);
-                TT_ASSERT(
+                TT_FATAL(
                     connected_eth_channels.size() == edge.connected_chip_ids.size(),
                     "Expected {} eth links from physical chip {} to physical chip {}",
                     edge.connected_chip_ids.size(),
