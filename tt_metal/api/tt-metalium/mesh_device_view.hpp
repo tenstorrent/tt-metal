@@ -19,8 +19,8 @@ namespace tt::tt_metal::distributed {
 // Forward declaration of MeshDevice
 class MeshDevice;
 struct Coordinate {
-    size_t row;
-    size_t col;
+    size_t row = 0;
+    size_t col = 0;
     auto operator<=>(const Coordinate&) const = default;
 
     // Add support for structured bindings

@@ -398,17 +398,17 @@ Tensor convert_python_tensors_to_tt_tensors(
             /*force_disable_borrow=*/true));
     }
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<ttnn::Shape> host_owned_shapes;
+    std::vector<ttnn::TensorSpec> host_owned_specs;
     for (const auto& shard : tt_shards) {
         TT_ASSERT(
             std::holds_alternative<OwnedStorage>(shard.get_storage()),
             "Unexpected type {}",
             tt::stl::get_active_type_name_in_variant(shard.get_storage()));
         host_owned_buffers.push_back(std::get<OwnedStorage>(shard.get_storage()).buffer);
-        host_owned_shapes.push_back(shard.shape());
+        host_owned_specs.push_back(shard.get_tensor_spec());
     }
     auto distributed_tensor_config = get_distributed_tensor_config(strategy);
-    auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes};
+    auto storage = MultiDeviceHostStorage{distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs};
 
     auto output = Tensor(std::move(storage), tt_shards.at(0).get_tensor_spec());
     output = tt::tt_metal::set_tensor_id(output);

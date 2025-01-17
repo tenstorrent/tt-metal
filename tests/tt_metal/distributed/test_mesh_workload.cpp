@@ -4,13 +4,16 @@
 
 #include <random>
 
-#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
-#include "tests/tt_metal/distributed/distributed_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
+#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
+#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/distributed/distributed.hpp"
+
 namespace tt::tt_metal::distributed::test {
+namespace {
 
 struct CBConfig {
     uint32_t cb_id = 0;
@@ -500,7 +503,9 @@ void validate_sems(
     }
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEth) {
+using MeshWorkloadTest = T3000MultiDeviceFixture;
+
+TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEth) {
     uint32_t num_workloads = 10;
     auto random_seed = 0;
     uint32_t num_iters = 500;
@@ -532,7 +537,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEth) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadMixedTensixEth) {
     uint32_t num_workloads = 20;
     auto random_seed = 0;
     uint32_t num_iters = 30;
@@ -582,7 +587,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadMixedTensixEth) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEthRandomGridSize) {
     uint32_t num_workloads = 30;
     auto random_seed = 0;
     uint32_t num_iters = 500;
@@ -619,7 +624,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadOnActiveEthRandomGridSize) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
     uint32_t num_iterations = 1000;
@@ -699,7 +704,7 @@ TEST_F(MeshDevice_T3000, TestSimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshDevice_T3000, TestRandomizedMeshWorkload) {
+TEST_F(MeshWorkloadTest, TestRandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
@@ -736,7 +741,7 @@ TEST_F(MeshDevice_T3000, TestRandomizedMeshWorkload) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshDevice_T3000, TestEltwiseBinaryMeshWorkload) {
+TEST_F(MeshWorkloadTest, TestEltwiseBinaryMeshWorkload) {
     std::vector<std::shared_ptr<Buffer>> src0_bufs = {};
     std::vector<std::shared_ptr<Buffer>> src1_bufs = {};
     std::vector<std::shared_ptr<Buffer>> output_bufs = {};
@@ -790,7 +795,7 @@ TEST_F(MeshDevice_T3000, TestEltwiseBinaryMeshWorkload) {
     }
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadSanity) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadSanity) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
 
@@ -903,7 +908,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSanity) {
     }
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadCBUpdate) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadCBUpdate) {
     std::shared_ptr<Program> program = std::make_shared<Program>();
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -938,7 +943,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadCBUpdate) {
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreSanity) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreSanity) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program;
@@ -959,7 +964,7 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreSanity) {
     }
 }
 
-TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreDifferentPrograms) {
+TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreDifferentPrograms) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program0;
@@ -998,4 +1003,5 @@ TEST_F(MeshDevice_T3000, TestMeshWorkloadSemaphoreDifferentPrograms) {
     }
 }
 
+}  // namespace
 }  // namespace tt::tt_metal::distributed::test

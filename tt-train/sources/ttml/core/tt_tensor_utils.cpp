@@ -103,47 +103,29 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 
 tt::tt_metal::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
+    return ttnn::empty(shape.logical_shape(), DataType::BFLOAT16, Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(
     const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    auto padded = shape.with_tile_padding();
-    // if the shape is not divisible by TILE_SIZE, we need to add padding
-    if (padded[2] % ttnn::types::TILE_SIZE != 0 || padded[3] % ttnn::types::TILE_SIZE != 0) {
-        int additional_padding_h =
-            (ttnn::types::TILE_SIZE - (int)padded[2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        int additional_padding_w =
-            (ttnn::types::TILE_SIZE - (int)padded[3] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        auto padded_shape = ttnn::Shape(
-            {shape[0], shape[1], shape[2], shape[3]},
-            {
-                padded[0],
-                padded[1],
-                (padded[2] + additional_padding_h),
-                (padded[3] + additional_padding_w),
-            });
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device));
-    }
-    // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device));
+    return ttnn::full(shape.logical_shape(), value, dtype, Layout::TILE, std::ref(*device));
 }
 
 tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    return core::full(shape, 0.F, device, dtype);
+    return core::full(shape.logical_shape(), 0.F, device, dtype);
 }
 
 tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    return core::full(shape, 1.F, device, dtype);
+    return core::full(shape.logical_shape(), 1.F, device, dtype);
 }
 
 template <class T, DataType TensorType>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensors_to_host(
     const std::vector<xt::xarray<T>>& buffers, const std::unordered_map<std::string, std::string>& config) {
     std::vector<OwnedBuffer> host_owned_buffers;
-    std::vector<ttnn::Shape> host_owned_shapes;
+    std::vector<ttnn::TensorSpec> host_owned_specs;
     host_owned_buffers.reserve(buffers.size());
-    host_owned_shapes.reserve(buffers.size());
+    host_owned_specs.reserve(buffers.size());
     if (buffers.empty()) {
         throw std::runtime_error("Cannot create a host buffer from an empty vector of xtensors!");
     }
@@ -168,14 +150,15 @@ template <class T, DataType TensorType>
             host_owned_buffers.push_back(owned_buffer);
         }
 
-        host_owned_shapes.push_back(shape);
+        host_owned_specs.push_back(
+            TensorSpec(shape, TensorLayout(TensorType, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
     }
     auto distributed_tensor_config = get_distributed_tensor_config(config);
     auto storage = tt::tt_metal::MultiDeviceHostStorage(
-        distributed_tensor_config, std::move(host_owned_buffers), host_owned_shapes);
+        distributed_tensor_config, std::move(host_owned_buffers), host_owned_specs);
 
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
-    auto output = Tensor(std::move(storage), host_owned_shapes[0], TensorType, Layout::ROW_MAJOR);
+    auto output = Tensor(std::move(storage), host_owned_specs[0]);
     return output;
 }
 

@@ -19,6 +19,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -409,7 +410,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const std::vector<IDevice*>& devices,

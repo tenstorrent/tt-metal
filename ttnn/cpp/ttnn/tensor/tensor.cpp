@@ -287,7 +287,9 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
             storage.strategy = distributed_tensor_config.value();
         }
         storage.buffers = std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
-        storage.shapes = std::vector<ttnn::Shape>(num_buffers, ttnn::Shape{});
+        storage.specs = std::vector<ttnn::TensorSpec>(
+            num_buffers,
+            TensorSpec(SimpleShape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
         return Storage(std::move(storage));
     }();
     tensor_attributes->num_shards_to_be_populated = num_buffers;
@@ -511,7 +513,7 @@ void Tensor::populate_buffers_and_metadata(const Tensor& other) {
                 std::is_same_v<StorageType, MultiDeviceHostStorage> or
                 std::is_same_v<StorageType, MultiDeviceStorage>) {
                 std::get<StorageType>(this->tensor_attributes->storage).buffers = storage.buffers;
-                std::get<StorageType>(this->tensor_attributes->storage).shapes = storage.shapes;
+                std::get<StorageType>(this->tensor_attributes->storage).specs = storage.specs;
             }
         },
         other.get_storage());  // Non blocking storage query, since this is done for tensors that get created inside the
@@ -1027,7 +1029,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
+    const ttnn::SimpleShape& shape,
     DataType data_type,
     Layout layout,
     const std::vector<IDevice*>& devices,
@@ -1035,9 +1037,7 @@ Tensor allocate_tensor_on_devices(
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
     Tensor device_tensor = Tensor(devices);
-    TensorSpec tensor_spec(
-        shape.logical_shape(),
-        TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
+    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config));
 
     // Save the ref count to later re-set it:
     // 1. device_tensor is copied in the lambda by the main thread, which increments the ref count.
