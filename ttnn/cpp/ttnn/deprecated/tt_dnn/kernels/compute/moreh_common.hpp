@@ -955,7 +955,7 @@ ALWI void reduce_and_recip_tile_to_cb(
         cb_pop_front(icb1, pop1);
     }
 
-    reduce_revert_delta();
+    reduce_revert_delta(ocb);
 
     recip_tile_init();
     recip_tile(dst0);
@@ -992,7 +992,7 @@ ALWI void reduce_and_log_tile_to_cb(
         cb_pop_front(icb1, pop1);
     }
 
-    reduce_revert_delta();
+    reduce_revert_delta(ocb);
 
     log_tile_init();
     log_tile(dst0);

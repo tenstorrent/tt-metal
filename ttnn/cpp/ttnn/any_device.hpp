@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/distributed/mesh_device.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/device.hpp>
 
 namespace ttnn {
 

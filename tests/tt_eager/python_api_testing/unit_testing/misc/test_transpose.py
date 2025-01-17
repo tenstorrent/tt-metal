@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1092,3 +1092,31 @@ def test_transpose_hw_rm(shape, device):
     tt_output = ttnn.transpose(tt_input, 2, 3)
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+@skip_for_grayskull("Grayskull does not support float32")
+def test_transpose_16411(device):
+    torch.manual_seed(2005)
+    input_shape = (5, 3, 1, 1, 12, 8)
+    a = torch.rand(input_shape, dtype=torch.bfloat16)
+    p_b2 = torch.transpose(a, 1, 3)
+    p_b3 = torch.transpose(a, 1, 5)
+    p_c = torch.transpose(a, 0, 4)
+    p_c2 = torch.transpose(a, 1, 4)
+    p_c3 = torch.transpose(a, 2, 4)
+    p_c4 = torch.transpose(a, 3, 4)
+
+    b = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b2 = ttnn.transpose(b, 1, 3)
+    b3 = ttnn.transpose(b, 1, 5)
+    c = ttnn.transpose(b, 0, 4)
+    c2 = ttnn.transpose(b, 1, 4)
+    c3 = ttnn.transpose(b, 2, 4)
+    c4 = ttnn.transpose(b, 3, 4)
+
+    assert_with_pcc(p_b2, ttnn.to_torch(b2), 0.9999)
+    assert_with_pcc(p_b3, ttnn.to_torch(b3), 0.9999)
+    assert_with_pcc(p_c, ttnn.to_torch(c), 0.9999)
+    assert_with_pcc(p_c2, ttnn.to_torch(c2), 0.9999)
+    assert_with_pcc(p_c3, ttnn.to_torch(c3), 0.9999)
+    assert_with_pcc(p_c4, ttnn.to_torch(c4), 0.9999)

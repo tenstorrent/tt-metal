@@ -8,23 +8,22 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
+#include <tt-metalium/persistent_kernel_cache.hpp>
+#include <tt-metalium/compilation_reporter.hpp>
+#include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/hal_exp.hpp>
 using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
 namespace {
-inline void DumpDeviceProfiler(IDevice* device, bool last_dump) {
-    tt::tt_metal::detail::DumpDeviceProfileResults(device, last_dump);
-}
+inline void DumpDeviceProfiler(IDevice* device) { tt::tt_metal::detail::DumpDeviceProfileResults(device); }
 }  // namespace
 
 namespace ttnn {
@@ -610,16 +609,20 @@ void device_module(py::module& m_device) {
         the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
         that the write pointer has been updated.
     )doc");
-    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), py::arg("last_dump") = false, R"doc(
+    m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
         | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
-        | last_dump        | Last dump before process dies    | bool                  |             | No       |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+
+    m_device.def(
+        "get_arch_name",
+        &tt::tt_metal::experimental::hal::get_arch_name,
+        "Return the name of the architecture present.");
 
     m_device.attr("DEFAULT_L1_SMALL_SIZE") = py::int_(DEFAULT_L1_SMALL_SIZE);
     m_device.attr("DEFAULT_TRACE_REGION_SIZE") = py::int_(DEFAULT_TRACE_REGION_SIZE);

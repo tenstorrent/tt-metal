@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 

@@ -4,12 +4,12 @@
 
 #include <cmath>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;

@@ -8,15 +8,15 @@
 #include <tuple>
 
 #include "conv2d_utils.hpp"
-#include "impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"

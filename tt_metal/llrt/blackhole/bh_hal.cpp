@@ -7,7 +7,7 @@
 
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"

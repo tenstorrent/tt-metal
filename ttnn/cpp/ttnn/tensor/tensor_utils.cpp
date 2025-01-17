@@ -128,21 +128,12 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
-            const Tile tile = tensor.get_tensor_spec().tile();
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 shard = Tensor{
-                    DeviceStorage{s.get_buffer_for_device(target_device)},
-                    s.get_tensor_shape_for_device(target_device),
-                    tensor.get_dtype(),
-                    tensor.get_layout(),
-                    tile};
+                    DeviceStorage{s.get_buffer_for_device(target_device)}, s.get_tensor_spec_for_device(target_device)};
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                shard = Tensor{
-                    OwnedStorage{s.get_buffer(buffer_index.value())},
-                    s.get_tensor_shape(buffer_index.value()),
-                    tensor.get_dtype(),
-                    tensor.get_layout(),
-                    tile};
+                shard =
+                    Tensor{OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
             } else if constexpr (
                 std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage> ||
                 std::is_same_v<T, DeviceStorage>) {
@@ -162,15 +153,15 @@ void insert_buffer_and_shape_for_device(
         [target_device, &shard, buffer_index](auto&& s) {
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                s.insert_buffer_and_shape_for_device(
+                s.insert_buffer_and_spec_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->tensor_spec.shape());
+                    shard.tensor_attributes->tensor_spec);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                s.insert_buffer_and_shape_for_device(
+                s.insert_buffer_and_spec_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->tensor_spec.shape());
+                    shard.tensor_attributes->tensor_spec);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
@@ -209,13 +200,7 @@ Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor)
     return tensor;
 }
 
-Size get_2d_shape(const ttnn::SimpleShape& shape) {
-    size_t width = shape[-1];
-    size_t height = shape.volume() / width;
-    return Size{height, width};
-}
-
-ShardDivisionSpec compute_shard_division_spec(const Size& shape, const Size& shard_shape) {
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape) {
     const auto num_shards_height = tt::div_up(shape.height(), shard_shape.height());
     const auto last_shard_height =
         shape.height() % shard_shape.height() > 0 ? shape.height() % shard_shape.height() : shard_shape.height();

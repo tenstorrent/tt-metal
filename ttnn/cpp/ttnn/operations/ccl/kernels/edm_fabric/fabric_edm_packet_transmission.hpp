@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
+#include "dataflow_api.h"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include <cstdint>
 
 // If the hop/distance counter equals to the below value, it indicates that it has

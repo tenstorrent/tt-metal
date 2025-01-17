@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <common/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <optional>
 #include <random>
 #include <ttnn/tensor/host_buffer/functions.hpp>
@@ -13,7 +13,7 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include "cpp/ttnn/common/constants.hpp"
 
 namespace ttnn {
 
