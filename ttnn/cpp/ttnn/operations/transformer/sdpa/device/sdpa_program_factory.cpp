@@ -141,7 +141,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
-        num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y, "Error");
+        num_cores <= device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y,
+        "Provided grid must not contain more cores than the device. Got {} cores, expected at most {} cores.",
+        num_cores,
+        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 
     // Parallelization scheme
     // We will choose parallelization factors for batch, num_heads, and q_seq_len in that order
@@ -149,7 +152,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t nh_parallel_factor = std::min(num_cores / batch_parallel_factor, NQH);
     uint32_t q_parallel_factor = std::min(num_cores / (batch_parallel_factor * nh_parallel_factor), q_num_chunks);
 
-    TT_FATAL(batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores, "Error");
+    TT_FATAL(
+        batch_parallel_factor * nh_parallel_factor * q_parallel_factor <= num_cores,
+        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
+        batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
+        num_cores);
 
     tt::log_debug("Parallelization scheme:");
     tt::log_debug("batch_parallel_factor: {}", batch_parallel_factor);
@@ -230,18 +237,36 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // Find log2 of stats_granularity using std
     const uint32_t log2_stats_granularity = std::log2(stats_granularity);
     // Assert that this is a power of 2
-    TT_FATAL(stats_granularity == (1 << log2_stats_granularity), "Error");
+    TT_FATAL(
+        stats_granularity == (1 << log2_stats_granularity),
+        "stats_granularity must be a power of 2. Got {}.",
+        stats_granularity);
 
     const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
     const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-    TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
+    TT_FATAL(
+        sub_exp_granularity == (1 << log2_sub_exp_granularity),
+        "sub_exp_granularity must be a power of 2. Got {}.",
+        sub_exp_granularity);
 
     const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
     const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-    TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
+    TT_FATAL(
+        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
+        "mul_bcast_granularity must be a power of 2. Got {}.",
+        mul_bcast_granularity);
 
-    const uint32_t dht_granularity = std::min(DHt, dst_size);
-    const uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    uint32_t dht_granularity = std::min(DHt, dst_size);
+    uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    // Sometimes DHt is not a power of 2, so granularity should be 1
+    if (dht_granularity != (1 << log2_dht_granularity)) {
+        dht_granularity = 1;
+        log2_dht_granularity = 0;
+    }
+    TT_FATAL(
+        dht_granularity == (1 << log2_dht_granularity),
+        "dht_granularity must be a power of 2. Got {}.",
+        dht_granularity);
 
     // Log these
     tt::log_debug("stats_granularity: {}", stats_granularity);
@@ -417,10 +442,13 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
-    // attn_mask input
-    auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CBIndex::c_3, mask_df}})
-                            .set_page_size(tt::CBIndex::c_3, mask_tile_size);
-    auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
+    // Only create mask buffer if it's going to be used
+    if (use_provided_mask or is_causal) {
+        // attn_mask input
+        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                                .set_page_size(tt::CB::c_in3, mask_tile_size);
+        auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
+    }
 
     // scale input
     auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
