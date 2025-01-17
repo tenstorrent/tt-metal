@@ -17,7 +17,6 @@ Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
-    const auto tile = input_tensor.get_tensor_spec().tile();
     auto new_spec = ttnn::TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
@@ -27,20 +26,21 @@ Tensor tensor_reshape(
             new_logical_shape,
             new_padded_shape));
     auto output = std::visit(
-        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape, &tile](auto&& storage) -> Tensor {
+        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape](auto&& storage) -> Tensor {
             using T = std::decay_t<decltype(storage)>;
             const auto& tensor = input_tensor;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 auto updated_storage = std::get<T>(tensor.get_storage());
-                TensorSpec spec(
-                    new_logical_shape,
-                    TensorLayout::fromPaddedShape(
-                        tensor.get_dtype(),
-                        tensor.get_tensor_spec().page_config(),
-                        tensor.memory_config(),
-                        new_logical_shape,
-                        new_padded_shape));
                 for (int i = 0; i < updated_storage.specs.size(); i++) {
+                    const auto& prev_spec = updated_storage.specs[i];
+                    TensorSpec spec(
+                        new_logical_shape,
+                        TensorLayout::fromPaddedShape(
+                            prev_spec.data_type(),
+                            prev_spec.page_config(),
+                            prev_spec.memory_config(),
+                            new_logical_shape,
+                            new_padded_shape));
                     updated_storage.specs[i] = spec;
                 }
                 return Tensor(updated_storage, new_spec);
@@ -48,15 +48,16 @@ Tensor tensor_reshape(
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
                 std::unordered_map<int, ttnn::TensorSpec> new_specs;
-                TensorSpec spec(
-                    new_logical_shape,
-                    TensorLayout::fromPaddedShape(
-                        tensor.get_dtype(),
-                        tensor.get_tensor_spec().page_config(),
-                        tensor.memory_config(),
-                        new_logical_shape,
-                        new_padded_shape));
                 for (auto device_id : updated_storage.ordered_device_ids) {
+                    const auto& prev_spec = updated_storage.specs[device_id];
+                    TensorSpec spec(
+                        new_logical_shape,
+                        TensorLayout::fromPaddedShape(
+                            prev_spec.data_type(),
+                            prev_spec.page_config(),
+                            prev_spec.memory_config(),
+                            new_logical_shape,
+                            new_padded_shape));
                     new_specs.insert({device_id, spec});
                 }
                 updated_storage.specs = new_specs;

@@ -338,7 +338,7 @@ Tensor::~Tensor() {
 
 Tensor::Tensor(
     Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), shape, shape, dtype, layout, tile) {}
+    Tensor(std::move(storage), ttnn::Shape(shape.view()), dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
