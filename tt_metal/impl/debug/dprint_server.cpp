@@ -89,7 +89,7 @@ static void AssertSize(uint8_t sz, uint8_t expected_sz) {
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
-    int overflow(int c) { return c; }
+    int overflow(int c) override { return c; }
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
