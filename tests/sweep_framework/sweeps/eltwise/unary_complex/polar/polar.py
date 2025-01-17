@@ -74,8 +74,10 @@ def run(
         input_shape
     ).to(torch.float32)
 
-    golden_function = torch.polar
-    torch_output_tensor = golden_function(torch_real, torch_imag)
+    torch_input_tensor = torch.complex(torch_real, torch_imag)
+
+    golden_function = ttnn.get_golden_function(ttnn.polar)
+    torch_output_tensor = golden_function(torch_input_tensor)
 
     input_tensor_a_real = ttnn.from_torch(
         torch_real,
