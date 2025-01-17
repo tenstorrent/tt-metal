@@ -20,10 +20,16 @@ def run_reshape_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
     try:
         # get ref result
         ref_value = torch.reshape(x, reshape_dims)
-        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config, dtype[0])
 
-        tt_result = ttnn.reshape(x, reshape_dims)
-        tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
+        tt_result = ttnn_ops.reshape(
+            x,
+            device=device,
+            dtype=dtype,
+            layout=dlayout,
+            input_mem_config=[in_mem_config],
+            output_mem_config=output_mem_config,
+            reshape_dims=reshape_dims,
+        )
 
     except Exception as e:
         logger.warning(f"Operation execution crashed")

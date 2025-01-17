@@ -813,7 +813,7 @@ def reshape(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.reshape(t0, reshape_dims)  # , memory_config=output_mem_config)
+    t1 = ttnn.reshape(t0, reshape_dims, memory_config=output_mem_config)
     return ttnn_tensor_to_torch(t1)
 
 
