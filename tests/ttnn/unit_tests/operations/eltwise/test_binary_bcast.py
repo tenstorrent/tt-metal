@@ -253,3 +253,27 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config):
     c = ttnn.to_torch(ttnn_c).reshape((-1))
 
     assert c.tolist() == c_golden
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 1, 1, 32, 32]), torch.Size([5, 3, 2, 32, 32])),),
+)
+def test_binary_add(input_shapes, device):
+    a_shape, b_shape = input_shapes
+    a_pt = torch.rand(a_shape).bfloat16()
+    b_pt = torch.rand(b_shape).bfloat16()
+
+    # a_pt = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+    # b_pt = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
+
+    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    cq_id = 0
+    out_tt = ttnn.experimental.add(a_tt, b_tt, queue_id=cq_id)
+    # print(out_tt)
+    out_pt = a_pt + b_pt
+    # print(out_tt)
+    # print(out_pt)
+    comp_pass = compare_pcc([out_tt], [out_pt])
+    assert comp_pass
