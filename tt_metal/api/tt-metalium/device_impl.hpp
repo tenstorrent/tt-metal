@@ -19,6 +19,8 @@
 #include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
+#include "command_queue.hpp"
+#include "hardware_command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
