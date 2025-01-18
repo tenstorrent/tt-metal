@@ -10,18 +10,14 @@
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
 
-static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
-
 constexpr uint32_t queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t queue_size_bytes = queue_size_words * PACKET_WORD_SIZE_BYTES;
 
-static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_rx_queue_start_addr_words = get_compile_time_arg_val(4);
 constexpr uint32_t remote_rx_queue_size_words = get_compile_time_arg_val(5);
 
-static_assert(is_power_of_2(remote_rx_queue_size_words), "remote_rx_queue_size_words must be a power of 2");
 
 constexpr uint32_t remote_rx_x = get_compile_time_arg_val(6);
 constexpr uint32_t remote_rx_y = get_compile_time_arg_val(7);
@@ -42,7 +38,6 @@ constexpr uint64_t total_data_words = ((uint64_t)total_data_kb) * 1024 / PACKET_
 
 constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(14);
 
-static_assert(is_power_of_2(max_packet_size_words), "max_packet_size_words must be a power of 2");
 static_assert(max_packet_size_words < queue_size_words, "max_packet_size_words must be less than queue_size_words");
 static_assert(max_packet_size_words > 2, "max_packet_size_words must be greater than 2");
 
@@ -59,6 +54,13 @@ constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(21);
 
 constexpr uint32_t input_queue_id = 0;
 constexpr uint32_t output_queue_id = 1;
+
+static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
+#ifdef POW2_CB
+static_assert(is_power_of_2(queue_size_words), "queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_rx_queue_size_words), "remote_rx_queue_size_words must be a power of 2");
+#endif
+static_assert(is_power_of_2(max_packet_size_words), "max_packet_size_words must be a power of 2");
 
 packet_input_queue_state_t input_queue;
 using input_queue_network_sequence = NetworkTypeSequence<DispatchRemoteNetworkType::NONE>;
@@ -80,15 +82,15 @@ inline bool input_queue_handler() {
         return true;
     }
 
-    uint32_t free_words = input_queue_ptr->get_queue_data_num_words_free();
+    uint32_t free_words = input_queue_ptr->get_queue_data_num_words_free<true>();
     if (free_words == 0) {
         return false;
     }
 
     // Each call to input_queue_handler initializes only up to the end
     // of the queue buffer, so we don't need to handle wrapping.
-    uint32_t byte_wr_addr = input_queue_ptr->get_queue_wptr_addr_bytes();
-    uint32_t words_to_init = std::min(free_words, input_queue_ptr->get_queue_words_before_wptr_wrap());
+    uint32_t byte_wr_addr = input_queue_ptr->get_queue_wptr_addr_bytes<true>();
+    uint32_t words_to_init = std::min(free_words, input_queue_ptr->get_queue_words_before_wptr_wrap<true>());
     uint32_t words_initialized = 0;
 
     while (words_initialized < words_to_init) {
