@@ -47,7 +47,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
-    add_compile_options(-fsized-deallocation)
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
 endif()
 
 include(CTest)
