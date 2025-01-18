@@ -36,12 +36,7 @@ GenericOpDeviceOperation::invoke(
     const Tensor& input,
     const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
     const std::vector<Tensor>& io_tensors) {
-    return {
-        operation_attributes_t{
-            .circular_buffer_attributes = cb_attr_map,
-            .data_movement_attributes = dm_attr,
-            .compute_attributes = comp_attr},
-        tensor_args_t{.input_tensor = input, .io_tensors = io_tensors}};
+    return {operation_attributes, tensor_args_t{.input_tensor = input, .io_tensors = io_tensors}};
 }
 
 }  // namespace ttnn::operations::generic
