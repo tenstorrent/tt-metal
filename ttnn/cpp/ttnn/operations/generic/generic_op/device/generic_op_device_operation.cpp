@@ -27,22 +27,21 @@ GenericOpDeviceOperation::shape_return_value_t GenericOpDeviceOperation::compute
 GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Don't create anything, user is passing output tensor.
-    return tensor_args.io_tensors.back();
+    return create_device_tensor(
+        compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
 GenericOpDeviceOperation::invoke(
     const Tensor& input,
-    const cb_attr_map& cb_attr_map,
-    const std::vector<data_movement_attributes_t>& dm_attr,
-    const std::vector<compute_attributes_t>& comp_attr,
+    const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
     const std::vector<Tensor>& io_tensors) {
     return {
         operation_attributes_t{
             .circular_buffer_attributes = cb_attr_map,
             .data_movement_attributes = dm_attr,
             .compute_attributes = comp_attr},
-        tensor_args_t{.io_tensors = io_tensors}};
+        tensor_args_t{.input_tensor = input, .io_tensors = io_tensors}};
 }
 
 }  // namespace ttnn::operations::generic
