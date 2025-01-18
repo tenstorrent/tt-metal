@@ -11,14 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         build: [
-                {type: Debug, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
+          {type: Debug, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
           {type: RelWithDebInfo, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          #{type: Debug, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
+          {type: Release, toolchain: cmake/x86-linux-clang-17-libstdcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
           {type: Release, toolchain: cmake/x86-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
           {type: Release, toolchain: cmake/x86-linux-clang-17-libstdcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: Debug, toolchain: cmake/x86-linux-gcc-12-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo, toolchain: cmake/x86-linux-gcc-12-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
           {type: Release, toolchain: cmake/x86-linux-gcc-12-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
         ]
     env:
