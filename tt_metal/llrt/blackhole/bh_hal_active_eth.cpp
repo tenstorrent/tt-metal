@@ -86,7 +86,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
     std::cout << "MEM_AERISC_FIRMWARE_BASE " << std::hex << MEM_AERISC_FIRMWARE_BASE << " FW BASE "
-              << eth_l1_mem::address_map::FIRMWARE_BASE << std::dec << std::endl;
+              << eth_l1_mem::address_map::FIRMWARE_BASE << " UNRESERVED BASE "
+              << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << std::dec << std::endl;
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
@@ -94,7 +95,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SLAVE_IERISC_RESET_PC,
+            .fw_launch_addr = SLAVE_IERISC_RESET_PC,  // fix this
             .fw_launch_addr_value = (uint32_t)eth_l1_mem::address_map::FIRMWARE_BASE,
         };
         processor_classes[processor_class_idx] = processor_types;
