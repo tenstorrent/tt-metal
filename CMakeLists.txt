@@ -45,13 +45,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(ENABLE_LIBCXX)
-    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
-    #add_link_options(
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
-    #)
-else()
+if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
     add_compile_options(-fsized-deallocation)
 endif()
