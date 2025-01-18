@@ -13,20 +13,16 @@ struct GenericOp {
     static Tensor invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
-        const cb_attr_map& cb_attr_map,
-        const std::vector<data_movement_attributes_t>& dm_attr,
-        const std::vector<compute_attributes_t>& comp_attr,
-        const std::vector<Tensor>& io_tensors) {
-        return ttnn::prim::generic(queue_id, input_tensor, cb_attr_map, dm_attr, comp_attr, io_tensors);
+        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const std::vector<Tensor>& io_tensors = {}) {
+        return ttnn::prim::generic(queue_id, input_tensor, operation_attributes, io_tensors);
     }
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        const cb_attr_map& cb_attr_map,
-        const std::vector<data_movement_attributes_t>& dm_attr,
-        const std::vector<compute_attributes_t>& comp_attr,
-        const std::vector<Tensor>& io_tensors) {
-        return invoke(0, input_tensor, cb_attr_map, dm_attr, comp_attr, io_tensors);
+        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const std::vector<Tensor>& io_tensors = {}) {
+        return invoke(0, input_tensor, operation_attributes, io_tensors);
     }
 
     // static Tensor invoke(
