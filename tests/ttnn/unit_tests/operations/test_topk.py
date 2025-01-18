@@ -12,19 +12,22 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
-def run_topk_test(N, C, H, W, k, dtype, device):
+def run_topk_test(N, C, H, W, k, dtype, dim, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype)
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1, largest=True, sorted=True)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=True, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=True, sorted=True)
 
-    assert list(ttnn_topk_values.shape.with_tile_padding()) == [N, C, H, k]
-    assert list(ttnn_topk_indices.shape.with_tile_padding()) == [N, C, H, k]
+    desired_shape = [N, C, H, W]
+    desired_shape[dim] = k
+
+    assert list(ttnn_topk_values.shape.with_tile_padding()) == desired_shape
+    assert list(ttnn_topk_indices.shape.with_tile_padding()) == desired_shape
 
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
     ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
@@ -64,21 +67,14 @@ def run_topk_test(N, C, H, W, k, dtype, device):
     ],
 )
 @pytest.mark.parametrize(
-    "N, C, H, W,",
+    "N, C, H, W, dim, k",
     (
-        (1, 1, 32, 64),
-        (1, 1, 32, 8192),
-        (1, 1, 2048, 64),
-        (1, 1, 32, 32768),
-        (1, 1, 8192, 64),
+        (1, 1, 64, 64, 2, 32),
+        (1, 1, 32, 8192, 3, 64),
+        (1, 2048, 1, 64, 1, 32),
+        (1, 1, 32, 32768, 3, 64),
+        (128, 1, 1, 64, 0, 64),
     ),
 )
-@pytest.mark.parametrize(
-    "k",
-    [
-        32,
-        64,
-    ],
-)
-def test_topk(N, C, H, W, k, dtype, device):
-    run_topk_test(N, C, H, W, k, dtype, device)
+def test_topk(N, C, H, W, dim, k, dtype, device):
+    run_topk_test(N, C, H, W, k, dtype, dim, device)
