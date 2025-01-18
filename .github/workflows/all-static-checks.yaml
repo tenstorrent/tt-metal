@@ -129,7 +129,7 @@ jobs:
       # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
       run: |
         echo "Checking compatibility with $(cmake --version)"
-        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86-linux-clang-17-libcpp-toolchain.cmake -B build .
+        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
   clang-tidy:
     runs-on: ubuntu-latest
     container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
