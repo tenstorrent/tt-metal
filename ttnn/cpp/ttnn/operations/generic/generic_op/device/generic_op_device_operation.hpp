@@ -78,6 +78,7 @@ struct GenericOpDeviceOperation {
 
     using spec_return_value_t = TensorSpec;
     struct tensor_args_t {
+        const Tensor& input_tensor;
         // std::vector<std::reference_wrapper<Tensor>> io_tensors;
         std::vector<Tensor> io_tensors;
         // std::vector<Tensor> input_tensors; // this might not be the best thing?
@@ -134,11 +135,7 @@ struct GenericOpDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
-        const cb_attr_map&,
-        const std::vector<data_movement_attributes_t>&,
-        const std::vector<compute_attributes_t>&,
-        const std::vector<Tensor>&);
+        const Tensor&, const operation_attributes_t&, const std::vector<Tensor>& = {});
 
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
