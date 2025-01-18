@@ -29,11 +29,17 @@ void validate_pool2d(
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
 
+    const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    TT_FATAL(
+        (input_shape[3] % tt::constants::TILE_WIDTH == 0) || (input_shape[3] == 16),
+        "Input channels ({}) should be padded to nearest TILE_WIDTH ({}) or should be 16",
+        input_shape[3],
+        tt::constants::TILE_WIDTH);
+
     // check that C dimnenion is a multiple of num_shards_c for all but height sharding
     TensorMemoryLayout in_memory_layout = input.memory_config().memory_layout;
     if (in_memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
         uint32_t num_shards_c = sliding_window_config.num_cores_c;
-        const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
         TT_FATAL(
             input_shape[3] % num_shards_c == 0,
             "For width and block sharding, input channels ({}) should be divisible by num_shards ({})",
