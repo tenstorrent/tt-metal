@@ -16,7 +16,8 @@
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
           "ENABLE_CCACHE": {"value": "TRUE"},
           "TT_UNITY_BUILDS": {"value": "FALSE"}
-        }
+        },
+	"toolchainFile": "cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
       },
       {
         "name": "clang-tidy",
@@ -27,8 +28,7 @@
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--warnings-as-errors=*"},
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"}
-        },
-	"toolchainFile": "cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
+        }
       },
       {
         "name": "clang-tidy-fix",
@@ -37,8 +37,7 @@
         "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
         "cacheVariables": {
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
-        },
-	"toolchainFile": "cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
+        }
       }
     ],
     "buildPresets": [
