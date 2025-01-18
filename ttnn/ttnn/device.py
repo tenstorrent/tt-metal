@@ -98,7 +98,6 @@ EnableCompilationReports = ttnn._ttnn.device.EnableCompilationReports
 DisableCompilationReports = ttnn._ttnn.device.DisableCompilationReports
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
-SetLazyCommandQueueMode = ttnn._ttnn.device.SetLazyCommandQueueMode
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 
 
