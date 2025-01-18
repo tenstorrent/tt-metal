@@ -95,6 +95,7 @@ set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 # Project Options
 #   The following options and their defaults impact what artifacts get built
 ############################################################################################################################
+message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
 message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
