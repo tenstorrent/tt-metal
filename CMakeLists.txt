@@ -10,20 +10,6 @@ endif()
 ############################################
 include(cmake/compilers.cmake)
 
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
-
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
-endif()
-
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
@@ -43,6 +29,12 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
         FATAL_ERROR
         "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
     )
+endif()
+
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE)
+    message(STATUS "CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
+else()
+    message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
 endif()
 
 include(project_options)
