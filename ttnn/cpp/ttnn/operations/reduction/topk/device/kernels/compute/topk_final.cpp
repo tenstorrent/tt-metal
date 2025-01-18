@@ -38,12 +38,12 @@ void MAIN {
     constexpr uint32_t index_dest_start = 2;
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
-    constexpr uint32_t tiles_per_seq = std::max(K / 32, (uint32_t)1);
-    // init pack, compute and unpack
 
+    constexpr uint32_t tiles_per_seq = std::max(K / 32, (uint32_t)1);
     bool switch_dir = (K == 64);
     int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
 
+    // init pack, compute and unpack
     init_sfpu(input_cb_index, tt::CBIndex::c_16);
     ckernel::topk_tile_init();
 
