@@ -107,6 +107,8 @@ void MAIN {
     constexpr uint32_t num_output_tiles = in_ntiles_c / in_nblocks_c;
     tilizeA_B_reduce_init<true>(
         in_cb_id, in_scalar_cb_id, num_output_tiles, out_cb_id, num_faces_in_tile, window_size_hw);
+    // Omitted pasing in_ntiles_c as template argument to pack_untilize_dst_init_short
+    // Workaround for tt-metal#15824
     pack_untilize_dst_init_short(out_cb_id, num_out_rows, num_faces_in_tile); /* pack 1 row (1x16 or 1x32) */
 
     cb_wait_front(in_scalar_cb_id, 1);
