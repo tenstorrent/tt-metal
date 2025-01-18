@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 
 #include "compute_kernel_api.h"
 #include "compute_kernel_api/transpose_wh.h"
@@ -16,35 +15,6 @@
 int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
-
-#if 0
-void print_all_tiles(uint32_t input_transposed_cb_index, uint32_t start) {
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        UNPACK(
-            DPRINT << "for iter i/p " << start << " " << (int)r << " : " << TSLICE(input_transposed_cb_index, start, sr)
-                   << ENDL());
-    }
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        UNPACK(
-            DPRINT << "for iter i/p " << start + 1 << " " << (int)r << " : "
-                   << TSLICE(input_transposed_cb_index, start + 1, sr) << ENDL());
-    }
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        UNPACK(
-            DPRINT << "for iter i/p " << start + 2 << " " << (int)r << " : "
-                   << TSLICE(input_transposed_cb_index, start + 2, sr) << ENDL());
-    }
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = uint8_t(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        UNPACK(
-            DPRINT << "for iter i/p " << start + 3 << " " << (int)r << " : "
-                   << TSLICE(input_transposed_cb_index, start + 3, sr) << ENDL());
-    }
-}
-#endif
 
 void MAIN {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
