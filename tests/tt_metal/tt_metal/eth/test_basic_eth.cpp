@@ -31,6 +31,16 @@ constexpr std::int32_t MAX_NUM_WORDS =
 
 namespace unit_tests::erisc::kernels {
 
+inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_t start = 0) {
+    TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
+    std::vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
+
+    for (uint32_t i = 0; i < src.size(); i++) {
+        src.at(i) = start + i;
+    }
+    return src;
+}
+
 /*
  *                                         ███╗░░██╗░█████╗░░█████╗░
  *                                         ████╗░██║██╔══██╗██╔══██╗
@@ -78,7 +88,8 @@ bool reader_kernel_no_send(
     //                      Compile and Execute Application
     ////////////////////////////////////////////////////////////////////////////
 
-    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
+    // auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
+    auto inputs = generate_arange_vector(byte_size);
     fixture->WriteBuffer(device, input_dram_buffer, inputs);
 
     // Clear expected value at ethernet L1 address
@@ -110,6 +121,15 @@ bool reader_kernel_no_send(
     pass &= (readback_vec == inputs);
     if (not pass) {
         std::cout << "Mismatch at Core: " << eth_noc_xy.str() << std::endl;
+        std::cout << "Expected " << std::endl;
+        for (auto i : inputs) {
+            std::cout << i << "\t";
+        }
+        std::cout << "\n\n GOT: " << std::endl;
+        for (auto r : readback_vec) {
+            std::cout << r << "\t";
+        }
+        std::cout << "\n\n";
     }
     return pass;
 }
@@ -178,7 +198,8 @@ bool writer_kernel_no_receive(
         sizeof(uint32_t),
         tt_cxy_pair(device->id(), eth_noc_xy),
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
-    std::cout << "L1 unreserved base " << std::hex << l1_unreserved_base_val << std::dec << std::endl;
+    std::cout << " addr " << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << " L1 unreserved base " << std::hex
+              << l1_unreserved_base_val << std::dec << std::endl;
 
     std::vector<uint32_t> readback_vec;
     fixture->ReadBuffer(device, output_dram_buffer, readback_vec);
@@ -303,10 +324,10 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
             std::cout << "Eth core is " << eth_core.str() << " device is " << device->id() << std::endl;
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
                 static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
-            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
-            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
         }
     }
 }

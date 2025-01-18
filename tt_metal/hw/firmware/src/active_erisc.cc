@@ -88,6 +88,9 @@ int main() {
     // debug_addr_ptr[0] = 0xABCDABCD;
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        noc_local_state_init(n);
+    }
 
     // debug_addr_ptr[0] = 0xFACEFACE;
 

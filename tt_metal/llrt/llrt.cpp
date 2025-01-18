@@ -196,12 +196,12 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     if (dispatch_core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
         // uint32_t pc_addr;
         // // void *mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr,
-        uint32_t l1_unreserved_base_val;
-        tt::Cluster::instance().read_core(
-            &l1_unreserved_base_val,
-            sizeof(uint32_t),
-            tt_cxy_pair(chip_id, core),
-            eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        // uint32_t l1_unreserved_base_val;
+        // tt::Cluster::instance().read_core(
+        //     &l1_unreserved_base_val,
+        //     sizeof(uint32_t),
+        //     tt_cxy_pair(chip_id, core),
+        //     eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         // tt::Cluster::instance().read_reg(&pc_addr, tt_cxy_pair(chip_id, core), 0xFFB14008);
         // std::cout << "Eth core " << core.str() << " l1 unreserved base " << std::hex << l1_unreserved_base_val
         //           << std::dec << std::endl;

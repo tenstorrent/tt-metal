@@ -475,7 +475,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(
                 "-DERISC "
                 "-DRISC_B0_HW ";
             if (this->is_fw_) {
-                this->defines_ += "-DLOADING_NOC=0 ";
+                this->defines_ += "-DLOADING_NOC=0 ";  // looks like this is unused
             }
 
             if (this->is_fw_) {

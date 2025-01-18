@@ -17,6 +17,8 @@
 #include "hal_asserts.hpp"
 #include "blackhole/bh_hal.hpp"
 
+#include "hostdevcommon/common_runtime_address_map.h"  // L1_KERNEL_CONFIG_SIZE
+
 #include "umd/device/tt_soc_descriptor.h"  // CoreType
 
 #define GET_ETH_MAILBOX_ADDRESS_HOST(x) \
@@ -37,7 +39,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = GET_ETH_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_ETH_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
-        eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
+        eth_l1_mem::address_map::MEM_ERISC_MAP_END;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORE_INFO)] = GET_ETH_MAILBOX_ADDRESS_HOST(core_info);
@@ -48,8 +50,6 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
-        eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
         eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
@@ -69,7 +69,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
-        eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_SIZE;
+        L1_KERNEL_CONFIG_SIZE;  // TODO: this is wrong, need idle eth specific value
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         eth_l1_mem::address_map::MAX_SIZE - eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
@@ -86,7 +86,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
     std::cout << "MEM_AERISC_FIRMWARE_BASE " << std::hex << MEM_AERISC_FIRMWARE_BASE << " FW BASE "
-              << eth_l1_mem::address_map::FIRMWARE_BASE << std::dec << std::endl;
+              << eth_l1_mem::address_map::FIRMWARE_BASE << " UNRESERVED BASE "
+              << eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE << std::dec << std::endl;
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
     for (std::size_t processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
@@ -94,7 +95,7 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-            .fw_launch_addr = SLAVE_IERISC_RESET_PC,
+            .fw_launch_addr = SLAVE_IERISC_RESET_PC,  // fix this
             .fw_launch_addr_value = (uint32_t)eth_l1_mem::address_map::FIRMWARE_BASE,
         };
         processor_classes[processor_class_idx] = processor_types;
