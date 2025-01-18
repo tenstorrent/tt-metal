@@ -26,13 +26,9 @@
         "cacheVariables": {
           "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--warnings-as-errors=*"},
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
-          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
-	  "CMAKE_C_COMPILER": "clang-17",
-	  "CMAKE_CXX_COMPILER": "clang++-17",
-	  "CMAKE_CXX_FLAGS_INIT": "-stdlib=libc++",
-	  "CMAKE_EXE_LINKER_FLAGS_INIT": "-lc++ -lc++abi",
-	  "CMAKE_SHARED_LINKER_FLAGS_INIT": "-lc++ -lc++abi"
-        }
+          "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"}
+        },
+	"toolchainFile": "cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
       },
       {
         "name": "clang-tidy-fix",
@@ -40,13 +36,9 @@
         "description": "Run Clang Tidy and apply fixes",
         "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
         "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"},
-	  "CMAKE_C_COMPILER": "clang-17",
-	  "CMAKE_CXX_COMPILER": "clang++-17",
-	  "CMAKE_CXX_FLAGS_INIT": "-stdlib=libc++",
-	  "CMAKE_EXE_LINKER_FLAGS_INIT": "-lc++ -lc++abi",
-	  "CMAKE_SHARED_LINKER_FLAGS_INIT": "-lc++ -lc++abi"
-        }
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
+        },
+	"toolchainFile": "cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
       }
     ],
     "buildPresets": [
