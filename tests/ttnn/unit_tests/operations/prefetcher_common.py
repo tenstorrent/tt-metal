@@ -7,6 +7,8 @@ import torch
 import ttnn
 from loguru import logger
 
+from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
+from models.common.lightweightmodule import LightweightModule
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
@@ -19,6 +21,18 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
 )
+
+
+def get_buffer_address(tensor):
+    device_tensors = ttnn.get_device_tensors(tensor)
+    buffer_addr = device_tensors[0].buffer_address()
+
+    if len(device_tensors) > 1:
+        for i in range(1, len(device_tensors)):
+            addr = device_tensors[i].buffer_address()
+            assert addr == buffer_addr, f"Expected buffer address on device {i} to be same as device 0"
+
+    return buffer_addr
 
 
 def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
@@ -196,6 +210,14 @@ def run_prefetcher_mm(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
+    cluster_shape = None
+    mesh_mapper = None
+    mesh_composer = None
+    if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
+        cluster_shape = device.shape
+        mesh_mapper = ReplicateTensorToMesh(device)
+        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
+
     pt_tensors = []
     for l in range(num_layers):
         for t in range(num_tensors):
@@ -220,12 +242,13 @@ def run_prefetcher_mm(
             dtype=dtypes[tid % num_tensors],
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
         )
         tt_tensors_all.append(tt_tensor)
     tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
+    tensor_addrs = torch.tensor([get_buffer_address(x) for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -237,8 +260,13 @@ def run_prefetcher_mm(
         ),
     )
     tt_tensor_addrs = ttnn.as_tensor(
-        tensor_addrs, device=device, dtype=ttnn.uint32, memory_config=tensor_addrs_mem_config
+        tensor_addrs,
+        device=device,
+        dtype=ttnn.uint32,
+        memory_config=tensor_addrs_mem_config,
+        mesh_mapper=mesh_mapper,
     )
+    tt_tensors.append(tt_tensor_addrs)
 
     ##### Setup up sub devices #####
     prefetcher_sub_device = ttnn.SubDevice([sender_core_range_set])
@@ -356,6 +384,7 @@ def run_prefetcher_mm(
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=in0_sharded_mem_config,
+            mesh_mapper=mesh_mapper,
         )
         in0_t_tensors.append(in0_t)
 
@@ -389,9 +418,8 @@ def run_prefetcher_mm(
     def run_op():
         ttnn.dram_prefetcher(
             tt_tensors,
-            tt_tensor_addrs,
             num_layers,
-            global_circular_buffer,
+            global_cb=global_circular_buffer,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
@@ -438,7 +466,10 @@ def run_prefetcher_mm(
         for t in range(num_tensors):
             idx = l * num_tensors + t
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
-            tt_out = ttnn.to_torch(outputs_t[idx])
+            tt_out = ttnn.to_torch(
+                outputs_t[idx],
+                mesh_composer=mesh_composer,
+            )[:1, :1, ...]
             pt_out = in0_tensors[t] @ pt_tensors[idx]
 
             dtype = dtypes[t]

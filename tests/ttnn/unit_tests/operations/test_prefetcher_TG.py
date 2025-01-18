@@ -47,6 +47,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
         ),  # qkv + do + ff1 + ff3 + ff2
     ],
 )
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
@@ -69,7 +70,7 @@ def test_run_prefetcher(
         pytest.skip("Skipping test_run_prefetcher because it only works with a 7x10 grid")
 
     run_prefetcher_mm(
-        device,
+        mesh_device,
         num_tensors,
         input_shapes,
         num_layers,

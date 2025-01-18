@@ -2109,6 +2109,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
+                if (this->global_cb.has_value()) {
+                    global_cb = get_global_circular_buffer(*this->global_cb, input_tensor_a.device()->id());
+                }
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -2130,7 +2134,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.gather_in0,
                     program_config.hop_cores,
                     this->untilize_out,
-                    this->global_cb,
+                    global_cb,
                     program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
