@@ -64,7 +64,7 @@ With the N300 form-factor, it houses two wormhole chips. The host is connected t
 
 <img src="../EthernetMultichip/images/TG.png" style="width:500px;"/>
 
-*Figure 2: TG System Topology. TG is composed of 16x N300 wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
+*Figure 2: TG System Topology. TG is composed of 32x galaxy wormhole cards, totalling 32 wormhole chips, connected in a 8x4 mesh configuration. Each pair of wormhole-chips are connected via four ethernet links.*
 
 
 [tt-topology](https://github.com/tenstorrent/tt-topology) can be used to flash multiple wormhole cards on a system to a specific ethernet routing configuration (linear, ring, mesh) and used to visualize the organization of the chip layout.
