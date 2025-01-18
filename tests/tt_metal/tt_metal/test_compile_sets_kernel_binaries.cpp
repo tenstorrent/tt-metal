@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            programs.push_back(Program());
+            programs.emplace_back();
             Program& program = programs.back();
 
             construct_program(program, device, core);
@@ -172,7 +172,7 @@ int main(int argc, char** argv) {
             std::vector<Program> new_programs;
             for (int i = 0; i < num_devices; i++) {
                 auto& device = devices[i];
-                new_programs.push_back(Program());
+                new_programs.emplace_back();
                 Program& program = new_programs.back();
                 construct_program(program, device, core);
             }

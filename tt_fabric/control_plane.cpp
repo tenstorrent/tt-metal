@@ -559,26 +559,26 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
                 this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
             if (src_chan_id != next_chan_id) {
                 // Chan to chan within chip
-                route.push_back({physical_chip_id, next_chan_id});
+                route.emplace_back(physical_chip_id, next_chan_id);
             }
             std::tie(src_mesh_id, src_chip_id, src_chan_id) =
                 this->get_connected_mesh_chip_chan_ids(src_mesh_id, src_chip_id, next_chan_id);
             auto connected_physical_chip_id =
                 logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
-            route.push_back({connected_physical_chip_id, src_chan_id});
+            route.emplace_back(connected_physical_chip_id, src_chan_id);
         } else if (src_chip_id != dst_chip_id) {
             // Intra-mesh routing
             chan_id_t next_chan_id =
                 this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
             if (src_chan_id != next_chan_id) {
                 // Chan to chan within chip
-                route.push_back({physical_chip_id, next_chan_id});
+                route.emplace_back(physical_chip_id, next_chan_id);
             }
             std::tie(src_mesh_id, src_chip_id, src_chan_id) =
                 this->get_connected_mesh_chip_chan_ids(src_mesh_id, src_chip_id, next_chan_id);
             auto connected_physical_chip_id =
                 logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
-            route.push_back({connected_physical_chip_id, src_chan_id});
+            route.emplace_back(connected_physical_chip_id, src_chan_id);
         }
     }
 

@@ -54,20 +54,20 @@ MorehSgdOperation::spec_return_value_t MorehSgdOperation::compute_output_specs(
     std::vector<std::optional<TensorSpec>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out->get_tensor_spec());
+        ret.emplace_back(tensor_args.param_out->get_tensor_spec());
     } else {
-        ret.push_back(TensorSpec(
+        ret.emplace_back(TensorSpec(
             input_tensor_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.param_out_memory_config)));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out->get_tensor_spec());
+        ret.emplace_back(tensor_args.momentum_buffer_out->get_tensor_spec());
     } else if (operation_attributes.momentum != 0.0f) {
-        ret.push_back(TensorSpec(
+        ret.emplace_back(TensorSpec(
             input_tensor_shape,
             TensorLayout(dtype, PageConfig(layout), operation_attributes.momentum_buffer_out_memory_config)));
     } else {
-        ret.push_back(std::nullopt);
+        ret.emplace_back(std::nullopt);
     }
 
     return ret;
@@ -81,17 +81,17 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
     std::vector<std::optional<Tensor>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out.value());
+        ret.emplace_back(tensor_args.param_out.value());
     } else {
-        ret.push_back(create_device_tensor(*output_specs[0], device));
+        ret.emplace_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out.value());
+        ret.emplace_back(tensor_args.momentum_buffer_out.value());
     } else if (output_specs[1].has_value()) {
-        ret.push_back(create_device_tensor(*output_specs[1], device));
+        ret.emplace_back(create_device_tensor(*output_specs[1], device));
     } else {
-        ret.push_back(std::nullopt);
+        ret.emplace_back(std::nullopt);
     }
 
     return ret;

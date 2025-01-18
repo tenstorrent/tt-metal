@@ -253,7 +253,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
             if (sscanf(str, "%d,%d", &x, &y) != 2) {
                 TT_THROW("Invalid {}", env_var);
             }
-            cores.push_back({x, y});
+            cores.emplace_back(x, y);
         } else if (str[0] == '(') {
             if (strchr(str, '-')) {
                 // Assume this is a range
@@ -267,7 +267,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
                 }
                 for (uint32_t x = start.x; x <= end.x; x++) {
                     for (uint32_t y = start.y; y <= end.y; y++) {
-                        cores.push_back({x, y});
+                        cores.emplace_back(x, y);
                     }
                 }
             } else {
@@ -277,7 +277,7 @@ void RunTimeOptions::ParseFeatureCoreRange(
                     if (sscanf(str, "(%d,%d)", &x, &y) != 2) {
                         TT_THROW("Invalid {}", env_var);
                     }
-                    cores.push_back({x, y});
+                    cores.emplace_back(x, y);
                     str = strchr(str, ',');
                     str = strchr(str + 1, ',');
                     if (str != nullptr) {

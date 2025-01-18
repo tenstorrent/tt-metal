@@ -72,17 +72,17 @@ MorehAdamOperation::spec_return_value_t MorehAdamOperation::compute_output_specs
         output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
     for (int idx = 0; idx < 3; idx++) {
         if (tensor_args.output_tensors.at(idx).has_value()) {
-            ret.push_back(tensor_args.output_tensors.at(idx)->get_tensor_spec());
+            ret.emplace_back(tensor_args.output_tensors.at(idx)->get_tensor_spec());
         } else {
-            ret.push_back(out_spec);
+            ret.emplace_back(out_spec);
         }
     }
     if (tensor_args.output_tensors.at(3).has_value()) {
-        ret.push_back(tensor_args.output_tensors.at(3)->get_tensor_spec());
+        ret.emplace_back(tensor_args.output_tensors.at(3)->get_tensor_spec());
     } else if (operation_attributes.amsgrad) {
-        ret.push_back(out_spec);
+        ret.emplace_back(out_spec);
     } else {
-        ret.push_back(std::nullopt);
+        ret.emplace_back(std::nullopt);
     }
 
     return ret;
@@ -98,9 +98,9 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
 
     for (size_t idx = 0; idx < output_specs.size(); idx++) {
         if (tensor_args.output_tensors.at(idx).has_value()) {
-            ret.push_back(tensor_args.output_tensors.at(idx).value());
+            ret.emplace_back(tensor_args.output_tensors.at(idx).value());
         } else if (output_specs[idx].has_value()) {
-            ret.push_back(create_device_tensor(*output_specs[idx], device));
+            ret.emplace_back(create_device_tensor(*output_specs[idx], device));
         }
     }
 

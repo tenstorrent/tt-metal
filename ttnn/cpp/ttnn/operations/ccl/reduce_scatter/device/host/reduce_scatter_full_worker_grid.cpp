@@ -91,8 +91,8 @@ static void add_worker_config_to_edm_builders(
         std::vector<ttnn::ccl::WorkerXY> sender_worker_coords;
         std::vector<ttnn::ccl::WorkerXY> receiver_worker_coords;
         auto const& worker_noc_coords = device->worker_core_from_logical_core(worker_attrs.location_logical);
-        sender_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
-        receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(worker_noc_coords.x, worker_noc_coords.y));
+        sender_worker_coords.emplace_back(worker_noc_coords.x, worker_noc_coords.y);
+        receiver_worker_coords.emplace_back(worker_noc_coords.x, worker_noc_coords.y);
 
         // Get the maximum message size we'd like to use. Not the actual packet size
         // If linear, then we want to reuse the slicer in both directions

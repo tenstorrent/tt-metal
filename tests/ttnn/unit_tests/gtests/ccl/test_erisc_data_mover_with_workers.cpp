@@ -301,7 +301,7 @@ bool RunWriteBWTest(
         std::size_t row = 0;
         std::size_t col = 0;
         for (uint32_t i = 0; i < num_local_sender_channels + num_remote_sender_channels; i++) {
-            worker_cores.push_back(CoreCoord(col, row));
+            worker_cores.emplace_back(col, row);
             col++;
             if (col == 8) {
                 col = 0;

@@ -59,7 +59,7 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeList::available_addresses(Dev
     while (curr_block != nullptr) {
         if (curr_block->size >= alloc_size) {
             DeviceAddr end_range = (curr_block->address + curr_block->size) - alloc_size;
-            addresses.push_back({curr_block->address, end_range});
+            addresses.emplace_back(curr_block->address, end_range);
         }
         curr_block = curr_block->next_free;
     }

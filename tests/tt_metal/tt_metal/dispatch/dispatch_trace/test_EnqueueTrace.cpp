@@ -146,7 +146,7 @@ TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLo
     vector<vector<uint32_t>> trace_outputs;
 
     for (auto i = 0; i < num_loops; i++) {
-        trace_outputs.push_back({});
+        trace_outputs.emplace_back();
         trace_outputs[i].resize(input_data.size());
     }
 
@@ -202,7 +202,7 @@ TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBe
     vector<vector<uint32_t>> trace_outputs;
 
     for (auto i = 0; i < num_loops; i++) {
-        trace_outputs.push_back({});
+        trace_outputs.emplace_back();
         trace_outputs[i].resize(input_data.size());
     }
 
@@ -403,7 +403,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueTwoProgramTrace) {
     vector<vector<uint32_t>> trace_outputs;
 
     for (auto i = 0; i < num_loops; i++) {
-        trace_outputs.push_back({});
+        trace_outputs.emplace_back();
         trace_outputs[i].resize(input_data.size());
     }
 
@@ -494,7 +494,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     vector<vector<uint32_t>> trace_outputs;
 
     for (uint32_t i = 0; i < num_loops; i++) {
-        trace_outputs.push_back({});
+        trace_outputs.emplace_back();
         trace_outputs[i].resize(input_data.size());
     }
 

@@ -45,7 +45,7 @@ TEST_F(DeviceSingleCardFastSlowDispatchFixture, TestDynamicNoCAsyncWriteProgram)
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
+        programs.emplace_back();
         Program& program = programs.back();
 
         if (i % 10 == 0) {

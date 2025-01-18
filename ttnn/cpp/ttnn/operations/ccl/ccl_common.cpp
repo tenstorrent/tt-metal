@@ -1399,7 +1399,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     uint32_t remainder_worker_len_tiles = total_num_tiles % optim_worker_slice_len_tiles;
 
     for (uint32_t w = 0; w < num_workers; ++w) {
-        worker_slice_shapes.emplace_back(Shape4D<uint32_t>(1, 1, 1, optim_worker_slice_len_tiles));
+        worker_slice_shapes.emplace_back(1, 1, 1, optim_worker_slice_len_tiles);
     }
     // If there is a remainder worker, we need to adjust the last worker's slice shape to be smaller
     if (remainder_worker_len_tiles > 0) {

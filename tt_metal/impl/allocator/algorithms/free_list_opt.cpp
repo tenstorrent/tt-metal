@@ -336,8 +336,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
         for (size_t j = 0; j < free_blocks_segregated_by_size_[i].size(); j++) {
             size_t block_index = free_blocks_segregated_by_size_[i][j];
             if (block_size_[block_index] >= alloc_size) {
-                addresses.push_back(
-                    {block_address_[block_index], block_address_[block_index] + block_size_[block_index]});
+                addresses.emplace_back(
+                    block_address_[block_index], block_address_[block_index] + block_size_[block_index]);
             }
         }
     }

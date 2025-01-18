@@ -115,19 +115,19 @@ std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std
     std::vector<TensorSpec> output_tensors;
     output_tensors.reserve(5);
     // real_output_tensor
-    output_tensors.emplace_back(TensorSpec(
-        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
+    output_tensors.emplace_back(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config));
     // temporary_input_from_remote_tensor_for_forward_direction
     output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_input_from_remote_tensor_for_backward_direction
     output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_partial_output_tensor_for_forward_direction
-    output_tensors.emplace_back(TensorSpec(
-        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
+    output_tensors.emplace_back(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config));
     // temporary_partial_output_tensor_for_backward_direction
-    output_tensors.emplace_back(TensorSpec(
+    output_tensors.emplace_back(
         shape,
-        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), this->output_mem_config)));
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), this->output_mem_config));
 
     return output_tensors;
 }

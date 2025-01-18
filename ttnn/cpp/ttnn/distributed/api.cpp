@@ -40,7 +40,7 @@ std::vector<ttnn::Tensor> get_device_tensors(const ttnn::Tensor& tensor) {
         auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
         const Tile tile = tensor.get_tensor_spec().tile();
         for (int i = 0; i < host_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{OwnedStorage{host_storage.get_buffer(i)}, host_storage.specs[i]});
+            tensors.emplace_back(OwnedStorage{host_storage.get_buffer(i)}, host_storage.specs[i]);
         }
         return tensors;
     } else if (std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage())) {
@@ -235,7 +235,7 @@ std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_de
             tt::stl::get_active_type_name_in_variant(multi_device_tensor.get_storage()));
         const auto& tensor_storage = std::get<MultiDeviceHostStorage>(multi_device_tensor.get_storage());
         for (int i = 0; i < tensor_storage.num_buffers(); ++i) {
-            tensors.push_back(Tensor{OwnedStorage{tensor_storage.get_buffer(i)}, tensor_storage.specs[i]});
+            tensors.emplace_back(OwnedStorage{tensor_storage.get_buffer(i)}, tensor_storage.specs[i]);
         }
     } else {
         TT_THROW("get_tensors_from_multi_device_storage only support multi device tensors");

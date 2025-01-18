@@ -129,7 +129,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
                 result.push_back(data.at(offset + j));
             }
             for (int j = 0; j < (N - K) * 32; j++) {
-                result.push_back((float)0);
+                result.emplace_back((float)0);
             }
         }
     } else {

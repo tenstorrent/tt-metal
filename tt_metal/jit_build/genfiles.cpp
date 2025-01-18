@@ -125,14 +125,14 @@ void jit_build_genfiles_triscs_src(
     const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     vector<string> unpack_prolog;
-    unpack_prolog.push_back("#define TRISC_UNPACK\n");
-    unpack_prolog.push_back("#include \"defines_generated.h\"\n");
+    unpack_prolog.emplace_back("#define TRISC_UNPACK\n");
+    unpack_prolog.emplace_back("#include \"defines_generated.h\"\n");
     vector<string> math_prolog;
-    math_prolog.push_back("#define TRISC_MATH\n");
-    math_prolog.push_back("#include \"defines_generated.h\"\n");
+    math_prolog.emplace_back("#define TRISC_MATH\n");
+    math_prolog.emplace_back("#include \"defines_generated.h\"\n");
     vector<string> pack_prolog;
-    pack_prolog.push_back("#define TRISC_PACK\n");
-    pack_prolog.push_back("#include \"defines_generated.h\"\n");
+    pack_prolog.emplace_back("#define TRISC_PACK\n");
+    pack_prolog.emplace_back("#include \"defines_generated.h\"\n");
 
     // TODO(pgk) - is this really worth it?
     std::thread t0([&]() { gen_kernel_cpp(kernel_src_to_include, unpack_cpp, unpack_prolog); });

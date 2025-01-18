@@ -326,10 +326,10 @@ detail::Program_::Program_() :
 
     uint32_t programmable_core_count = hal.get_programmable_core_type_count();
     for (uint32_t i = 0; i < programmable_core_count; i++) {
-        kernels_.push_back({});
-        grid_extent_.push_back({});
-        kernel_groups_.push_back({});
-        core_to_kernel_group_index_table_.push_back({});
+        kernels_.emplace_back();
+        grid_extent_.emplace_back();
+        kernel_groups_.emplace_back();
+        core_to_kernel_group_index_table_.emplace_back();
     }
 
     program_configs_.resize(programmable_core_count);
@@ -886,7 +886,7 @@ void Program::init_semaphores(const IDevice &device, const CoreCoord &logical_co
 
 void detail::Program_::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add semaphore to an already compiled program {}", this->id);
-    semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
+    semaphores_.emplace_back(crs, semaphore_id, init_value, core_type);
 }
 
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
@@ -900,8 +900,8 @@ std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
     std::vector<std::set<CoreCoord>> unique_cores;
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < kernels_.size(); programmable_core_type_index++) {
         auto &kernels = this->kernels_[programmable_core_type_index];
-        cores_in_program.push_back({});
-        unique_cores.push_back({});
+        cores_in_program.emplace_back();
+        unique_cores.emplace_back();
         for (auto [id, kernel] : kernels) {
             for (auto core : kernel->logical_cores()) {
                 if (unique_cores[programmable_core_type_index].find(core) != unique_cores[programmable_core_type_index].end()) {
@@ -1013,7 +1013,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
-                    dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
+                    dst_noc_unicast_info.emplace_back(virtual_coord, /*num_mcast_dests=*/0);
                 }
             }
         }

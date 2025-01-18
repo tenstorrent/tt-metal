@@ -99,10 +99,10 @@ create_programs(
     bool use_sub_devices) {
     log_info("created program");
     std::vector<tt_metal::Program> programs;
-    programs.push_back(tt_metal::Program());
+    programs.emplace_back();
 
     if (use_sub_devices) {
-        programs.push_back(tt_metal::Program());
+        programs.emplace_back();
     }
     auto& sender_program = programs[0];
     auto& receiver_program = use_sub_devices ? programs[1] : programs[0];

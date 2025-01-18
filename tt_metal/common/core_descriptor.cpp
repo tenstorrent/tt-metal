@@ -152,7 +152,7 @@ const core_descriptor_t& get_core_descriptor_config(
         std::back_inserter(logical_dispatch_cores),
         [&grid_size](RelativeCoreCoord rel_coord) { return get_core_coord_from_relative(rel_coord, grid_size); });
 
-    auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
+    auto [it, _] = config_by_num_cqs.emplace(
         num_hw_cqs,
         core_descriptor_t{
             .compute_grid_size = std::move(compute_grid_size),
@@ -163,7 +163,7 @@ const core_descriptor_t& get_core_descriptor_config(
             .logical_compute_cores = std::move(logical_compute_cores),
             .logical_storage_cores = std::move(logical_storage_cores),
             .logical_dispatch_cores = std::move(logical_dispatch_cores),
-        }));
+        });
     return it->second;
 }
 

@@ -321,9 +321,9 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     uint32_t input_reshard_local_idx = 0;
     for (bool is_pad_stick : pad_metadata) {
         if (is_pad_stick) {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, std::make_pair(0, 0)));
+            tensor_metadata.emplace_back(is_pad_stick, std::make_pair(0, 0));
         } else {
-            tensor_metadata.push_back(std::make_pair(is_pad_stick, remap(core_id, input_reshard_local_idx++)));
+            tensor_metadata.emplace_back(is_pad_stick, remap(core_id, input_reshard_local_idx++));
             if (input_reshard_local_idx == input_shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
@@ -387,7 +387,7 @@ generate_halo_kernel_config_tensors(
                 }
             }
             // insert new tuple
-            per_core_gather_data[{src_core_id, dst_core_id}].push_back({src_local_idx, local_idx, 1});
+            per_core_gather_data[{src_core_id, dst_core_id}].emplace_back(src_local_idx, local_idx, 1);
         }
         ++core_id;
     }
@@ -418,7 +418,7 @@ generate_halo_kernel_config_tensors(
         bool is_remote = !is_local && !is_pad;
         if (is_pad) {
             for (auto [src_start, dst_start, length] : data) {
-                pad_config[dst_core_id].push_back({dst_start, length});
+                pad_config[dst_core_id].emplace_back(dst_start, length);
             }
         } else if (is_local) {
             CoreCoord noc_xy = core_id_to_noc_coords(dst_core_id);
@@ -591,7 +591,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
             // Pad indices for this core if not equal to other cores
             if (sharded_input_top_left_indices.size() == core_idx) {
-                sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
+                sharded_input_top_left_indices.emplace_back();
             }
             TT_FATAL(
                 core_idx < sharded_input_top_left_indices.size(),

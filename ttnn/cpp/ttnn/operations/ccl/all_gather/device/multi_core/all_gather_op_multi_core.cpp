@@ -907,9 +907,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 bool sender_enabled = (!is_linear || !is_last_chip_in_chain);
                 if (sender_enabled) {
                     std::vector<ccl::WorkerXY> sender_worker_coords;
-                    sender_worker_coords.push_back(ttnn::ccl::WorkerXY(
+                    sender_worker_coords.emplace_back(
                         device->worker_core_from_logical_core(sender_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).y));
+                        device->worker_core_from_logical_core(sender_worker_cores.at(b)).y);
                     auto& sender_edm_builder = is_buffer_in_clockwise_direction(b)
                                                    ? clockwise_edm_builders.at(i)
                                                    : counter_clockwise_edm_builders.at(i);
@@ -936,9 +936,9 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
                 bool receiver_enabled = (!is_linear || !is_first_chip_in_chain);
                 if (receiver_enabled) {
                     std::vector<ccl::WorkerXY> receiver_worker_coords;
-                    receiver_worker_coords.push_back(ttnn::ccl::WorkerXY(
+                    receiver_worker_coords.emplace_back(
                         device->worker_core_from_logical_core(receiver_worker_cores.at(b)).x,
-                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y));
+                        device->worker_core_from_logical_core(receiver_worker_cores.at(b)).y);
                     auto& receiver_edm_builder = is_buffer_in_clockwise_direction(b)
                                                      ? counter_clockwise_edm_builders.at(i)
                                                      : clockwise_edm_builders.at(i);

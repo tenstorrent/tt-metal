@@ -126,7 +126,7 @@ std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_rec
                     sender_device = second_device, receiver_device = first_device;
                     sender_eth_core = second_eth_core, receiver_eth_core = first_eth_core;
                 }
-                sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});
+                sender_receivers.emplace_back(sender_device, receiver_device, sender_eth_core, receiver_eth_core);
                 log_info(
                     tt::LogTest,
                     "Sender: {} Receiver: {} Sender Eth: {} Receiver Eth: {}",
@@ -147,7 +147,7 @@ std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_rec
             for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
                 auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
-                    sender_receivers.push_back({sender_device, receiver_device, sender_eth_core, receiver_eth_core});
+                    sender_receivers.emplace_back(sender_device, receiver_device, sender_eth_core, receiver_eth_core);
                     log_info(
                         tt::LogTest,
                         "Sender: {} Receiver: {} Sender Eth: {} Receiver Eth: {}",

@@ -762,7 +762,7 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         std::vector<Program*> program_ptrs;
         program_ptrs.reserve(num_cols);
         std::transform(programs[i].begin(), programs[i].end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
-        row_fabric_lines.push_back(EdmLineFabricOpInterface(mesh_device->get_view().get_row_views()[i], program_ptrs, true));
+        row_fabric_lines.emplace_back(mesh_device->get_view().get_row_views()[i], program_ptrs, true);
     }
 
     for (size_t i = 0; i < num_cols; i++) {
@@ -771,7 +771,7 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device) {
         for (size_t r = 0; r < num_rows; r++) {
             program_ptrs.push_back(&programs[r][i]);
         }
-        col_fabric_lines.push_back(EdmLineFabricOpInterface(mesh_device->get_view().get_column_views()[i], program_ptrs, true));
+        col_fabric_lines.emplace_back(mesh_device->get_view().get_column_views()[i], program_ptrs, true);
     }
 
     std::for_each(row_fabric_lines.begin(), row_fabric_lines.end(), [](auto& line) { line.build_kernels(); });

@@ -819,7 +819,7 @@ void assemble_device_commands(
         for (const auto& [dst, transfer_info_vec] : program_transfer_info.multicast_semaphores) {
             // TODO: loop over things inside transfer_info[i]
             uint32_t write_packed_len = transfer_info_vec[0].data.size();
-            multicast_sem_dst_size.emplace_back(std::make_pair(dst, write_packed_len * sizeof(uint32_t)));
+            multicast_sem_dst_size.emplace_back(dst, write_packed_len * sizeof(uint32_t));
 
             for (const auto& transfer_info : transfer_info_vec) {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
@@ -856,7 +856,7 @@ void assemble_device_commands(
         for (const auto& [dst, transfer_info_vec] : program_transfer_info.unicast_semaphores) {
             // TODO: loop over things inside transfer_info[i]
             uint32_t write_packed_len = transfer_info_vec[0].data.size();
-            unicast_sem_dst_size.emplace_back(std::make_pair(dst, write_packed_len * sizeof(uint32_t)));
+            unicast_sem_dst_size.emplace_back(dst, write_packed_len * sizeof(uint32_t));
 
             for (const auto& transfer_info : transfer_info_vec) {
                 for (const auto& dst_noc_info : transfer_info.dst_noc_info) {
@@ -1031,8 +1031,8 @@ void assemble_device_commands(
                 while (aligned_length != 0) {
                     if (kernel_bins_dispatch_subcmds.empty() ||
                         kernel_bins_dispatch_subcmds.back().size() == CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS) {
-                        kernel_bins_dispatch_subcmds.push_back({});
-                        kernel_bins_prefetch_subcmds.push_back({});
+                        kernel_bins_dispatch_subcmds.emplace_back();
+                        kernel_bins_prefetch_subcmds.emplace_back();
                         kernel_bins_write_packed_large_data_aligned_sizeB.push_back(0);
                     }
                     uint32_t write_length, read_length;

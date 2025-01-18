@@ -422,7 +422,7 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, 
             auto end = cr.end_coord;
             for (size_t y = start.y; y <= end.y; y++) {
                 for (size_t x = start.x; x <= end.x; x++) {
-                    all_cores_out.push_back(CoreCoord(x, y));
+                    all_cores_out.emplace_back(x, y);
                     if (all_cores_out.size() == total_cores_needed) {
                         return;
                     }
@@ -1812,12 +1812,12 @@ static void initialize_op_internal_tensor_syncs(
                 device->worker_core_from_logical_core(worker_core).x,
                 device->worker_core_from_logical_core(worker_core).y,
             });
-            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.push_back(from_remote_sem.get());
+            all_tensors.input_tensor_from_remote_sync[direction].semaphore_ids.emplace_back(from_remote_sem.get());
             all_tensors.input_tensor_from_remote_sync[direction].completion_target_value_per_semaphore.push_back(1);
 
             // remote output sync
             if (neighbour_devices[direction] != nullptr) {
-                all_tensors.remote_output_sync[direction].semaphore_ids.push_back(to_remote_sem.get());
+                all_tensors.remote_output_sync[direction].semaphore_ids.emplace_back(to_remote_sem.get());
                 all_tensors.remote_output_sync[direction].completion_target_value_per_semaphore.push_back(1);
                 all_tensors.remote_output_sync[direction] = all_tensors.input_tensor_from_remote_sync[direction];
                 all_tensors.remote_output_sync[direction].targets.back() = TensorSyncSpec::target_rect{
@@ -1844,12 +1844,12 @@ static void initialize_op_internal_tensor_syncs(
         all_tensors.local_output_partial_sync[LineDirection::FORWARD].targets.push_back(worker_target);
         all_tensors.local_output_partial_sync[LineDirection::FORWARD].completion_target_value_per_semaphore.push_back(
             1);
-        all_tensors.local_output_partial_sync[LineDirection::FORWARD].semaphore_ids.push_back(
+        all_tensors.local_output_partial_sync[LineDirection::FORWARD].semaphore_ids.emplace_back(
             final_reducer_partial_input_sem_ids[LineDirection::FORWARD]);
         all_tensors.local_output_partial_sync[LineDirection::BACKWARD].targets.push_back(worker_target);
         all_tensors.local_output_partial_sync[LineDirection::BACKWARD].completion_target_value_per_semaphore.push_back(
             1);
-        all_tensors.local_output_partial_sync[LineDirection::BACKWARD].semaphore_ids.push_back(
+        all_tensors.local_output_partial_sync[LineDirection::BACKWARD].semaphore_ids.emplace_back(
             final_reducer_partial_input_sem_ids[LineDirection::BACKWARD]);
     }
 

@@ -152,7 +152,7 @@ void DataCollector::RecordKernelGroups(Program& program, CoreType core_type, std
                 watcher_kernel_ids[idx] = program.get_kernel(*kernel_group.kernel_ids[idx])->get_watcher_kernel_id();
             }
         }
-        program_id_to_kernel_groups[program_id][core_type].push_back({watcher_kernel_ids, kernel_group.core_ranges});
+        program_id_to_kernel_groups[program_id][core_type].emplace_back(watcher_kernel_ids, kernel_group.core_ranges);
     }
 }
 

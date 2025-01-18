@@ -204,7 +204,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         uint64_t hostTimeLarge =
             hostStartTime - smallestHostime[device_id] + ((uint64_t(hostStartTime_H) << 32) | hostTime);
 
-        deviceHostTimePair[device_id].push_back(std::pair<uint64_t, uint64_t>{deviceTimeLarge, hostTimeLarge});
+        deviceHostTimePair[device_id].emplace_back(deviceTimeLarge, hostTimeLarge);
 
         if (firstSample) {
             firstDeviceTimeLarge = deviceTimeLarge;
@@ -414,7 +414,7 @@ void syncDeviceDevice(chip_id_t device_id_sender, chip_id_t device_id_receiver) 
             TT_ASSERT(event_receiver != tt_metal_device_profiler_map.at(device_id_receiver).device_sync_events.end());
             deviceDeviceTimePair.at(device_id_sender)
                 .at(device_id_receiver)
-                .push_back({event_sender->timestamp, event_receiver->timestamp});
+                .emplace_back(event_sender->timestamp, event_receiver->timestamp);
             event_receiver++;
         }
     }

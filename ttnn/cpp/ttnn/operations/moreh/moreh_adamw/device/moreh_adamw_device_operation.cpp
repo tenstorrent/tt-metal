@@ -75,29 +75,29 @@ MorehAdamWDeviceOperation::spec_return_value_t MorehAdamWDeviceOperation::comput
     TensorSpec outSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config));
 
     if (tensor_args.param_out.has_value()) {
-        result.push_back(tensor_args.param_out->get_tensor_spec());
+        result.emplace_back(tensor_args.param_out->get_tensor_spec());
     } else {
-        result.push_back(outSpec);
+        result.emplace_back(outSpec);
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_out->get_tensor_spec());
+        result.emplace_back(tensor_args.exp_avg_out->get_tensor_spec());
     } else {
-        result.push_back(outSpec);
+        result.emplace_back(outSpec);
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_sq_out->get_tensor_spec());
+        result.emplace_back(tensor_args.exp_avg_sq_out->get_tensor_spec());
     } else {
-        result.push_back(outSpec);
+        result.emplace_back(outSpec);
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.max_exp_avg_sq_out->get_tensor_spec());
+        result.emplace_back(tensor_args.max_exp_avg_sq_out->get_tensor_spec());
     } else if (operation_attributes.amsgrad) {
-        result.push_back(outSpec);
+        result.emplace_back(outSpec);
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     return result;
@@ -111,29 +111,29 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     tensor_return_value_t result;
 
     if (tensor_args.param_out.has_value()) {
-        result.push_back(tensor_args.param_out.value());
+        result.emplace_back(tensor_args.param_out.value());
     } else {
-        result.push_back(create_device_tensor(*output_specs[0], device));
+        result.emplace_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_out.value());
+        result.emplace_back(tensor_args.exp_avg_out.value());
     } else {
-        result.push_back(create_device_tensor(*output_specs[1], device));
+        result.emplace_back(create_device_tensor(*output_specs[1], device));
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_sq_out.value());
+        result.emplace_back(tensor_args.exp_avg_sq_out.value());
     } else {
-        result.push_back(create_device_tensor(*output_specs[2], device));
+        result.emplace_back(create_device_tensor(*output_specs[2], device));
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.max_exp_avg_sq_out.value());
+        result.emplace_back(tensor_args.max_exp_avg_sq_out.value());
     } else if (output_specs[3].has_value()) {
-        result.push_back(create_device_tensor(*output_specs[3], device));
+        result.emplace_back(create_device_tensor(*output_specs[3], device));
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     return result;

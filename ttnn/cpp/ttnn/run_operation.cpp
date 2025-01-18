@@ -277,7 +277,7 @@ OutputTensors run_without_autoformat(
     optional_input_tensors_on_dev.reserve(optional_input_tensors.size());
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and optional_input_tensor.value().storage_type() != StorageType::DEVICE) {
-            optional_input_tensors_on_dev.push_back(
+            optional_input_tensors_on_dev.emplace_back(
                 AutoFormat::move_tensor_to_device(optional_input_tensor.value(), device));
         } else {
             optional_input_tensors_on_dev.push_back(optional_input_tensor);
@@ -351,10 +351,10 @@ Tensors run_with_autoformat(
             auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape(), pad_c);
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
-                formatted_optional_input_tensors.push_back(
+                formatted_optional_input_tensors.emplace_back(
                     AutoFormat::format_input_tensor(input_tensor, device, padded_input_shape, pad_value, Layout::TILE));
             } else {
-                formatted_optional_input_tensors.push_back(input_tensor);
+                formatted_optional_input_tensors.emplace_back(input_tensor);
             }
         } else {
             formatted_optional_input_tensors.push_back(optional_input_tensor);
@@ -423,7 +423,7 @@ Tensors run_with_autoformat(
             auto& input_tensor = optional_input_tensors[i].value();
             TT_ASSERT(optional_input_formatting[i].has_value());
             auto& input_formatting = optional_input_formatting[i].value();
-            formatted_optional_input_tensors.push_back(AutoFormat::format_input_tensor(
+            formatted_optional_input_tensors.emplace_back(AutoFormat::format_input_tensor(
                 input_tensor,
                 device,
                 input_formatting.pad_shape,

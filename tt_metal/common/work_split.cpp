@@ -183,14 +183,13 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
 
             if (current_width < subcoregrid_width) {
                 if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                    result_coreranges.emplace_back(current_start_core, current_end_core);
                 }
 
                 current_end_core = CoreCoord(current_start_core.x + current_width - 1, y);
                 remaining_cores -= current_width;
 
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(current_start_core.x, y), CoreCoord(current_end_core.x, y)));
+                result_coreranges.emplace_back(CoreCoord(current_start_core.x, y), CoreCoord(current_end_core.x, y));
 
                 current_start_core = CoreCoord(subcoregrid.start_coord.x, y + 1);
                 current_end_core = current_start_core;
@@ -201,7 +200,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
         }
 
         if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+            result_coreranges.emplace_back(current_start_core, current_end_core);
         }
     };
 
@@ -218,14 +217,13 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
 
             if (current_height < subcoregrid_height) {
                 if (current_start_core != current_end_core) {
-                    result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+                    result_coreranges.emplace_back(current_start_core, current_end_core);
                 }
 
                 current_end_core = CoreCoord(x, current_start_core.y + current_height - 1);
                 remaining_cores -= current_height;
 
-                result_coreranges.push_back(
-                    CoreRange(CoreCoord(x, current_start_core.y), CoreCoord(x, current_end_core.y)));
+                result_coreranges.emplace_back(CoreCoord(x, current_start_core.y), CoreCoord(x, current_end_core.y));
 
                 current_start_core = CoreCoord(x + 1, subcoregrid.start_coord.y);
                 current_end_core = current_start_core;
@@ -236,7 +234,7 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
         }
 
         if (current_start_core != current_end_core) {
-            result_coreranges.push_back(CoreRange(current_start_core, current_end_core));
+            result_coreranges.emplace_back(current_start_core, current_end_core);
         }
     };
 

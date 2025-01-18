@@ -378,7 +378,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             for (int j = 0; j < num_cores_r; ++j) {
                 std::vector<CoreCoord> temp;
                 for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)(k + i * num_cores_per_group), (std::size_t)j});
+                    temp.emplace_back((std::size_t)(k + i * num_cores_per_group), (std::size_t)j);
                 }
                 core_coords2D.push_back(temp);
             }
@@ -388,7 +388,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             for (int j = 0; j < num_cores_c; ++j) {
                 std::vector<CoreCoord> temp;
                 for (int k = 0; k < num_cores_per_group; ++k) {
-                    temp.push_back(CoreCoord{(std::size_t)j, (std::size_t)(k + i * num_cores_per_group)});
+                    temp.emplace_back((std::size_t)j, (std::size_t)(k + i * num_cores_per_group));
                 }
                 core_coords2D.push_back(temp);
             }
@@ -431,7 +431,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                 group_index += 1;
             }
             if (group_index >= mcast_groups.size()) {
-                mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
+                mcast_groups.emplace_back();  // Add a new group
             }
             mcast_groups[group_index].push_back(core_coords[i]);
         }
@@ -442,7 +442,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                     group_index += 1;
                 }
                 if (group_index >= mcast_groups.size()) {
-                    mcast_groups.push_back(std::vector<CoreCoord>());  // Add a new group
+                    mcast_groups.emplace_back();  // Add a new group
                 }
                 mcast_groups[group_index].push_back(core_coords2D[i][j]);
             }

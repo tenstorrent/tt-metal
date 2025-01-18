@@ -37,7 +37,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
             while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == string::npos)) {
                 host_data.push_back(line);
             }
-            host_map.push_back(make_pair(type, std::move(host_data)));
+            host_map.emplace_back(type, std::move(host_data));
         }
     }
 

@@ -351,8 +351,8 @@ void get_l1_writer_core_coords_wormhole_b0(
     // Place writers horizontally next to DRAM readers in logical space (no column harvesting for WH)
     for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
         auto dram_reader_core = all_dram_reader_cores[i];
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
+        all_cores_ordered.emplace_back(dram_reader_core.x + 1, dram_reader_core.y);
+        all_cores_ordered.emplace_back(dram_reader_core.x + 2, dram_reader_core.y);
     }
     std::set<CoreRange> all_cores_set;
     for (int i = 0; i < all_cores_ordered.size(); ++i) {
@@ -367,8 +367,8 @@ void get_l1_writer_core_coords_blackhole(
     // in logical space can lead to physical physical columns being skipped when placing writers next to readers)
     for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
         auto dram_reader_core = all_dram_reader_cores[i];
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y));
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 2, dram_reader_core.y));
+        all_cores_ordered.emplace_back(dram_reader_core.x + 1, dram_reader_core.y);
+        all_cores_ordered.emplace_back(dram_reader_core.x + 2, dram_reader_core.y);
     }
     std::set<CoreRange> all_cores_set;
     for (int i = 0; i < all_cores_ordered.size(); ++i) {
@@ -381,8 +381,8 @@ void get_l1_writer_core_coords_grayskull(
     std::vector<CoreCoord>& all_dram_reader_cores, CoreRangeSet& all_cores, std::vector<CoreCoord>& all_cores_ordered) {
     for (int i = 0; i < all_dram_reader_cores.size(); ++i) {
         auto dram_reader_core = all_dram_reader_cores[i];
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x, dram_reader_core.y + 1));
-        all_cores_ordered.push_back(CoreCoord(dram_reader_core.x + 1, dram_reader_core.y + 1));
+        all_cores_ordered.emplace_back(dram_reader_core.x, dram_reader_core.y + 1);
+        all_cores_ordered.emplace_back(dram_reader_core.x + 1, dram_reader_core.y + 1);
     }
     std::set<CoreRange> all_cores_set;
     for (int i = 0; i < all_cores_ordered.size(); ++i) {

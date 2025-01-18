@@ -94,30 +94,30 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
 
     // output
     if (tensor_args.output.has_value()) {
-        result.push_back(tensor_args.output->get_tensor_spec());
+        result.emplace_back(tensor_args.output->get_tensor_spec());
     } else {
-        result.push_back(
+        result.emplace_back(
             TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     }
 
     // mean
     if (tensor_args.mean.has_value()) {
-        result.push_back(tensor_args.mean->get_tensor_spec());
+        result.emplace_back(tensor_args.mean->get_tensor_spec());
     } else if (operation_attributes.are_required_outputs[1]) {
-        result.push_back(
+        result.emplace_back(
             TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     // rstd
     if (tensor_args.rstd.has_value()) {
-        result.push_back(tensor_args.rstd->get_tensor_spec());
+        result.emplace_back(tensor_args.rstd->get_tensor_spec());
     } else if (operation_attributes.are_required_outputs[2]) {
-        result.push_back(
+        result.emplace_back(
             TensorSpec(mean_rstd_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config)));
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     return result;
 }
@@ -132,27 +132,27 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
 
     // output
     if (tensor_args.output.has_value()) {
-        result.push_back(tensor_args.output.value());
+        result.emplace_back(tensor_args.output.value());
     } else {
-        result.push_back(create_device_tensor(*output_specs[0], device));
+        result.emplace_back(create_device_tensor(*output_specs[0], device));
     }
 
     // mean
     if (tensor_args.mean.has_value()) {
-        result.push_back(tensor_args.mean.value());
+        result.emplace_back(tensor_args.mean.value());
     } else if (output_specs[1].has_value()) {
-        result.push_back(create_device_tensor(*output_specs[1], device));
+        result.emplace_back(create_device_tensor(*output_specs[1], device));
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
 
     // rstd
     if (tensor_args.rstd.has_value()) {
-        result.push_back(tensor_args.rstd.value());
+        result.emplace_back(tensor_args.rstd.value());
     } else if (output_specs[2].has_value()) {
-        result.push_back(create_device_tensor(*output_specs[2], device));
+        result.emplace_back(create_device_tensor(*output_specs[2], device));
     } else {
-        result.push_back(std::nullopt);
+        result.emplace_back(std::nullopt);
     }
     return result;
 }

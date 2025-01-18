@@ -179,7 +179,7 @@ typedef struct test_board {
         // for default setting, generate a random unicast map
         if (DEFAULT_NUM_HOPS == num_hops) {
             for (auto i = 0; i < physical_chip_ids.size(); i += 2) {
-                unicast_map.push_back({physical_chip_ids[i], physical_chip_ids[i + 1]});
+                unicast_map.emplace_back(physical_chip_ids[i], physical_chip_ids[i + 1]);
             }
             return;
         }
@@ -238,7 +238,7 @@ typedef struct test_board {
             // shuffle the list of neighbors to induce randomness
             std::shuffle(chip_n_hop_neighbors[chip_id].begin(), chip_n_hop_neighbors[chip_id].end(), global_rng);
 
-            n_hop_neighbors_cnt.push_back({chip_id, chip_n_hop_neighbors[chip_id].size()});
+            n_hop_neighbors_cnt.emplace_back(chip_id, chip_n_hop_neighbors[chip_id].size());
         }
 
         // error out if no n hop chip pairs exist at all
@@ -281,7 +281,7 @@ typedef struct test_board {
                 throw std::runtime_error("No neighbor found for this chip");
             */
 
-            unicast_map.push_back({chip_id, selected_chip_id});
+            unicast_map.emplace_back(chip_id, selected_chip_id);
 
             // remove selected chip as it should not be picked again
             chip_n_hop_neighbors.erase(selected_chip_id);
@@ -1047,7 +1047,7 @@ int main(int argc, char **argv) {
             if (test_device_id_l == test_device_id_r) {
                 throw std::runtime_error("Left and right chips should be different");
             }
-            test_board.unicast_map.push_back({test_device_id_l, test_device_id_r});
+            test_board.unicast_map.emplace_back(test_device_id_l, test_device_id_r);
         } else {
             test_board.generate_unicast_map(num_hops);
         }

@@ -1301,11 +1301,11 @@ Tensor matmul(
     std::vector<Tensor> output_tensors;
 
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.emplace_back(bias.value());
         output_tensors = {
             Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}, {bias.value()}))};
     } else {
-        optional_input_tensors.push_back(std::nullopt);
+        optional_input_tensors.emplace_back(std::nullopt);
         output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor_a, input_tensor_b}))};
     }
 

@@ -249,7 +249,7 @@ int main(int argc, char** argv) {
                 arg_help = true;
                 break;
             } else {
-                operators.push_back(std::string(argv[idx]));
+                operators.emplace_back(argv[idx]);
             }
         }
         if (arg_help) {

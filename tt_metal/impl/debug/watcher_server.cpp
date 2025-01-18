@@ -118,7 +118,7 @@ void create_kernel_file() {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
     watcher::kernel_names.clear();
-    watcher::kernel_names.push_back("blank");
+    watcher::kernel_names.emplace_back("blank");
     fprintf(f, "0: blank\n");
     fflush(f);
 

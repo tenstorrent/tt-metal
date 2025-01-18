@@ -195,7 +195,7 @@ void run_programs(std::vector<Program>& programs, const std::vector<IDevice*>& d
     threads.reserve(num_programs);
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         for (size_t i = 0; i < num_programs; i++) {
-            threads.emplace_back(std::thread([&] { tt_metal::detail::LaunchProgram(devices.at(i), programs.at(i)); }));
+            threads.emplace_back([&] { tt_metal::detail::LaunchProgram(devices.at(i), programs.at(i)); });
         }
 
         std::ranges::for_each(threads, [](std::thread& t) { t.join(); });
@@ -2332,8 +2332,8 @@ bool RunPipelinedWorkersTest(
     std::vector<TensorSpec> tensor_specs;
     tensor_specs.reserve(num_stages + 1);
     for (size_t i = 0; i < num_stages + 1; ++i) {
-        tensor_specs.push_back(TensorSpec(
-            logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i])));
+        tensor_specs.emplace_back(
+            logical_shape, TensorLayout(DataType::UINT32, PageConfig(layout, tt_metal::Tile()), mem_configs[i]));
     }
 
     // Allocate the tensors - pull to function
@@ -2364,8 +2364,8 @@ bool RunPipelinedWorkersTest(
 
     std::vector<CoreRangeSet> pipeline_stage_worker_cores = {};
     for (size_t i = 0; i < num_stages; ++i) {
-        pipeline_stage_worker_cores.push_back(
-            CoreRangeSet(CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i))));
+        pipeline_stage_worker_cores.emplace_back(
+            CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i)));
     }
     CoreRangeSet all_workers_cores = CoreRangeSet();
     for (size_t i = 0; i < num_stages; ++i) {
@@ -2386,7 +2386,7 @@ bool RunPipelinedWorkersTest(
     std::vector<std::vector<uint32_t>> input_tensor_semaphores;
     input_tensor_semaphores.reserve(num_stages);
     for (size_t stage = 0; stage < num_stages; stage++) {
-        input_tensor_semaphores.push_back({});
+        input_tensor_semaphores.emplace_back();
         for (size_t j = 0; j < slices_per_stage; j++) {
             input_tensor_semaphores[stage].push_back(CreateSemaphore(program, pipeline_stage_worker_cores[stage], 0));
         }

@@ -52,7 +52,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
 
     std::vector<CoreCoord> cores;
     for (uint32_t i = 0; i < num_cores; i++) {
-        cores.push_back({i, 0});
+        cores.emplace_back(i, 0);
     }
 
     log_info(LogTest, "num_cores: {}", num_cores);

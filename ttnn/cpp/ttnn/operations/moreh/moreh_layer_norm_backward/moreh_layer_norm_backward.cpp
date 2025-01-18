@@ -58,10 +58,10 @@ std::vector<std::optional<Tensor>> MorehLayerNormBackward::invoke(
     outputs.reserve(3);
 
     if (input_grad.has_value()) {
-        outputs.push_back(ttnn::prim::moreh_layer_norm_backward_input_grad(
+        outputs.emplace_back(ttnn::prim::moreh_layer_norm_backward_input_grad(
             output_grad, input, mean, rstd, normalized_dims, input_grad, gamma, memory_config, compute_kernel_config));
     } else {
-        outputs.push_back(std::nullopt);
+        outputs.emplace_back(std::nullopt);
     }
 
     const auto& gamma_beta_grad = moreh_layer_norm_backward_gamma_beta_grad(

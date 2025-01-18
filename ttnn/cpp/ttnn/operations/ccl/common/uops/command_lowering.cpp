@@ -22,7 +22,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
     TT_FATAL(page_size > 0, "Internal error: page size is 0");
 
     size_t packet_space_in_bytes_left = packet_size_bytes;
-    noc_transfer_burst_out.transfer_burst_groupings.push_back({});
+    noc_transfer_burst_out.transfer_burst_groupings.emplace_back();
     bool closed_out_last_group = false;
     bool empty_last_group = false;
     for (size_t w = 0; w < tensor_slice.tensor_slice_shape.w; w++) {
@@ -64,7 +64,7 @@ void generate_noc_transfer_burst_for_tensor_slice(
                             "Internal error: Last x is out of bounds");
                         if (!(last_w && last_z && last_y && last_x)) {
                             empty_last_group = true;
-                            noc_transfer_burst_out.transfer_burst_groupings.push_back({});
+                            noc_transfer_burst_out.transfer_burst_groupings.emplace_back();
                         }
                     }
                 }

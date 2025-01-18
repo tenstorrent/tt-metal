@@ -1336,7 +1336,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
+        programs.emplace_back();
         Program& program = programs.back();
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
@@ -1609,7 +1609,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestRandomizedProgram) {
 
     vector<Program> programs;
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
-        programs.push_back(Program());
+        programs.emplace_back();
         Program& program = programs.back();
 
         std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};

@@ -1812,7 +1812,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
         std::vector<CoreCoord> all_worker_cores_logical;
         for (int i = 0; i < num_cores_x; ++i) {
             for (int j = 0; j < num_cores_y; ++j) {
-                all_worker_cores_logical.push_back(CoreCoord(i, j));
+                all_worker_cores_logical.emplace_back(i, j);
             }
         }
         // Get the physical rows and cols  (y, x) in the worker grid
@@ -1865,7 +1865,7 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
         CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
 
         uint32_t num_receivers = core_range.size();
-        dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));
+        dst_noc_multicast_info.emplace_back(CoreRange(virtual_start, virtual_end), num_receivers);
     }
     return dst_noc_multicast_info;
 }

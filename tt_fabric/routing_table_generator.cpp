@@ -121,7 +121,7 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
                     dist[connected_mesh_id] = dist[current_mesh_id] + 1;
                     paths[connected_mesh_id] = paths[current_mesh_id];
                     for (auto& path : paths[connected_mesh_id]) {
-                        path.push_back({chip_in_mesh, connected_mesh_id});
+                        path.emplace_back(chip_in_mesh, connected_mesh_id);
                     }
                 } else if (dist[connected_mesh_id] == dist[current_mesh_id] + 1) {
                     // another possible path discovered
@@ -129,8 +129,8 @@ std::vector<std::vector<std::vector<std::pair<chip_id_t, mesh_id_t>>>> RoutingTa
                         paths[connected_mesh_id].push_back(path);
                     }
 
-                    paths[connected_mesh_id][paths[connected_mesh_id].size() - 1].push_back(
-                        {chip_in_mesh, connected_mesh_id});
+                    paths[connected_mesh_id][paths[connected_mesh_id].size() - 1].emplace_back(
+                        chip_in_mesh, connected_mesh_id);
                 }
             }
         }

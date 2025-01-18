@@ -10,7 +10,7 @@
 namespace ttnn::ccl {
 size_t tensor_address_runtime_args_overrider::add_tensor() {
     size_t tensor_idx = tensor_address_runtime_arg_indices.size();
-    tensor_address_runtime_arg_indices.push_back(std::vector<size_t>());
+    tensor_address_runtime_arg_indices.emplace_back();
     return tensor_idx;
 }
 

@@ -198,9 +198,9 @@ std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
     for (int i = 0; i < num_dram_banks; ++i) {
         auto dram_core = dram_phy_coords[i];
         if (arch == ARCH::GRAYSKULL) {
-            dram_interface_workers.push_back(CoreCoord(dram_core.x, dram_core.y + 1));
+            dram_interface_workers.emplace_back(dram_core.x, dram_core.y + 1);
         } else if (arch == ARCH::WORMHOLE_B0 or arch == ARCH::BLACKHOLE) {
-            dram_interface_workers.push_back(CoreCoord(dram_core.x + 1, dram_core.y));
+            dram_interface_workers.emplace_back(dram_core.x + 1, dram_core.y);
         }
     }
 

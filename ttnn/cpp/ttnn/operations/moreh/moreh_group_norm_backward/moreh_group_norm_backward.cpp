@@ -28,7 +28,7 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
     std::vector<std::optional<Tensor>> outputs;
 
     if (are_required_outputs[0]) {
-        outputs.push_back(ttnn::prim::moreh_group_norm_backward_input_grad(
+        outputs.emplace_back(ttnn::prim::moreh_group_norm_backward_input_grad(
             output_grad,
             input,
             mean,
@@ -39,7 +39,7 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
             input_grad_memory_config,
             compute_kernel_config));
     } else {
-        outputs.push_back(std::nullopt);
+        outputs.emplace_back(std::nullopt);
     }
     if (are_required_outputs[1] || are_required_outputs[2]) {
         std::vector<bool> are_required_outputs_gamma_beta_grad = {are_required_outputs[1], are_required_outputs[2]};
@@ -59,8 +59,8 @@ std::vector<std::optional<Tensor>> MorehGroupNormBackward::invoke(
         outputs.push_back(std::move(dgamma_dbeta[1]));
 
     } else {
-        outputs.push_back(std::nullopt);
-        outputs.push_back(std::nullopt);
+        outputs.emplace_back(std::nullopt);
+        outputs.emplace_back(std::nullopt);
     }
     return std::move(outputs);
 }
