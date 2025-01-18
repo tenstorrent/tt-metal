@@ -41,9 +41,9 @@ ttnn::Tensor FillPadOperation::invoke(
             ttnn::SimpleShape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
         auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
-        operation::run_without_autoformat(
-            FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
-            .at(0);
+        reshaped_tensor = operation::run_without_autoformat(
+                              FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
+                              .at(0);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
     return operation::run_without_autoformat(
