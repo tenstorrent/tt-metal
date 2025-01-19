@@ -35,6 +35,7 @@ struct CreateKernelCommand;
 struct SetRuntimeArgsUint32Command;
 struct SetRuntimeArgsCommand;
 struct CreateCircularBufferCommand;
+struct LightMetalCompareCommand;
 struct RuntimeArg;
 
 struct TraceDescriptor;
@@ -83,6 +84,7 @@ public:
     void Execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32Command* command);
     void Execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* command);
     void Execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* command);
+    void Execute(const tt::tt_metal::flatbuffer::LightMetalCompareCommand* command);
 
     // Object maps public accessors
     void AddBufferToMap(uint32_t global_id, const std::shared_ptr<::tt::tt_metal::Buffer>& buffer);
@@ -112,6 +114,7 @@ private:
     LightMetalBinary binary_;                                      // Stored binary blob
     const tt::tt_metal::flatbuffer::LightMetalBinary* fb_binary_;  // Parsed FlatBuffer binary
     bool show_reads_ = false;                                      // Flag to show read buffer contents
+    bool disable_checking_ = false;                                // Optionally disable equality checking in Compare command.
 
     // System related members ----------------------
     void SetupDevices();

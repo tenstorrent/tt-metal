@@ -116,6 +116,7 @@ LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary) : binary_(std::mov
     }
 
     show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
+    disable_checking_ = parse_env("TT_LIGHT_METAL_DISABLE_CHECKING", false);
     fb_binary_ = ParseFlatBufferBinary();  // Parse and store the FlatBuffer binary
 }
 
@@ -325,6 +326,10 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::Command* command)
             Execute(command->cmd_as_CreateCircularBufferCommand());
             break;
         }
+        case ::tt::tt_metal::flatbuffer::CommandType::LightMetalCompareCommand: {
+            Execute(command->cmd_as_LightMetalCompareCommand());
+            break;
+        }
         default:
             throw std::runtime_error("Unsupported type: " + std::string(EnumNameCommandType(command->cmd_type())));
             break;
@@ -446,8 +451,7 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::EnqueueReadBuffer
     EnqueueReadBuffer(cq, buffer, readback_data.data(), cmd->blocking());
 
     // TODO (kmabee) - TBD what to do with readback data. For now, optionally print.
-    // One idea is to store in map by global_read_id that caller can access. Plan to also
-    // partially replace this by mechanism to capture and treat some reads as golden.
+    // One idea is to store in map by global_read_id that caller can access.
     if (show_reads_) {
         for (size_t i = 0; i < readback_data.size(); i++) {
             log_info(tt::LogMetalTrace, " rd_data i: {:3d} => data: {} ({:x})", i, readback_data[i], readback_data[i]);
@@ -572,6 +576,58 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
     auto config = from_flatbuffer(cmd->config(), shadow_global_buffer);
     auto cb_handle = CreateCircularBuffer(*program, core_spec, config);
     AddCBHandleToMap(cmd->global_id(), cb_handle);
+}
+
+// Verification command to compare readback of a buffer with golden from either capture or user expected values.
+void LightMetalReplay::Execute(const ::tt::tt_metal::flatbuffer::LightMetalCompareCommand* cmd) {
+    log_debug(
+        tt::LogMetalTrace,
+        "LightMetalReplay(LightMetalCompare) cq_global_id: {} buffer_global_id: {} is_user_data: {}",
+        cmd->cq_global_id(),
+        cmd->buffer_global_id(),
+        cmd->is_user_data());
+
+    auto buffer = GetBufferFromMap(cmd->buffer_global_id());
+    if (!buffer) {
+        throw std::runtime_error(
+            "Buffer w/ global_id: " + std::to_string(cmd->buffer_global_id()) + " not previously created");
+    }
+
+    // TODO (kmabee) - consider storing/getting CQ from global map instead.
+    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    std::vector<uint32_t> rd_data(buffer->size() / sizeof(uint32_t), 0);
+    EnqueueReadBuffer(cq, buffer, rd_data.data(), true);
+
+    if (disable_checking_) {
+        log_debug(
+            tt::LogMetalTrace, "Skipping LightMetalCompareCommand for buffer_global_id: {}.", cmd->buffer_global_id());
+    } else {
+        if (rd_data.size() != cmd->golden_data()->size()) {
+            throw std::runtime_error(
+                "Readback data size: " + std::to_string(rd_data.size()) +
+                " does not match golden data size: " + std::to_string(cmd->golden_data()->size()));
+        }
+
+        // Optional debug to show verbose comparison
+        if (show_reads_) {
+            for (size_t i = 0; i < rd_data.size(); i++) {
+                bool match = rd_data[i] == cmd->golden_data()->Get(i);
+                log_info(
+                    tt::LogMetalTrace,
+                    "LightMetalCompare i: {:3d} match: {} RdData: {:x} Golden: {:x}",
+                    i,
+                    match,
+                    rd_data[i],
+                    cmd->golden_data()->Get(i));
+            }
+        }
+
+        // Do simple equality comparison between two vectors
+        if (!std::equal(rd_data.begin(), rd_data.end(), cmd->golden_data()->begin())) {
+            throw std::runtime_error(
+                "Golden vs rd_data mismatch for buffer_global_id: " + std::to_string(cmd->buffer_global_id()));
+        }
+    }
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.
