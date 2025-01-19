@@ -15,6 +15,7 @@ from models.demos.mnist.reference.mnist import MnistModel
 from models.demos.mnist.tt import tt_mnist
 
 
+@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
