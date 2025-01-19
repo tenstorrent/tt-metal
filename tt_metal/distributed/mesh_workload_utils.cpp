@@ -4,6 +4,8 @@
 
 #include <host_api.hpp>
 #include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
+
 #include "tt_metal/impl/program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -24,8 +26,10 @@ void write_program_commands(
     // supports all runtime features, this will be removed, and program dispatch commands will be written
     // directly through dedicated interfaces.
 
-    uint32_t num_workers_in_cq = cq.device()->hw_command_queue(cq.id()).get_expected_num_workers_completed_for_sub_device(sub_device_index);
-    cq.device()->hw_command_queue(cq.id()).set_expected_num_workers_completed_for_sub_device(sub_device_index, num_workers_in_cq + num_active_cores_in_program);
+    uint32_t num_workers_in_cq =
+        cq.hw_command_queue().get_expected_num_workers_completed_for_sub_device(sub_device_index);
+    cq.hw_command_queue().set_expected_num_workers_completed_for_sub_device(
+        sub_device_index, num_workers_in_cq + num_active_cores_in_program);
     // Write program command stream to device
     program_dispatch::write_program_command_sequence(
         program_cmd_seq,
