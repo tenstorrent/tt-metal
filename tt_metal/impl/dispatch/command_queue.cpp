@@ -800,10 +800,6 @@ void HWCommandQueue::enqueue_read_buffer(
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
 
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-
     uint32_t padded_page_size = buffer.aligned_page_size();
     uint32_t unpadded_dst_offset = 0;
     uint32_t src_page_index;
@@ -822,57 +818,20 @@ void HWCommandQueue::enqueue_read_buffer(
                                               buffer.shard_spec().grid(),
                                               buffer.num_cores(),
                                               buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
-        uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
+
+        auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
+            buffer, this->id, this->expected_num_workers_completed);
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            uint32_t num_pages_to_read;
-            if (width_split) {
-                num_pages_to_read =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-            } else {
-                num_pages_to_read = std::min(num_total_pages, max_pages_per_shard);
-                num_total_pages -= num_pages_to_read;
-            }
-            uint32_t bank_base_address = buffer.address();
-            if (buffer.is_dram()) {
-                bank_base_address += buffer.device()->bank_offset(
-                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
-            }
-            if (num_pages_to_read > 0) {
-                if (width_split) {
-                    uint32_t host_page = buffer_page_mapping->core_host_page_indices_[core_id][0];
-                    src_page_index = buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-                    unpadded_dst_offset = host_page * buffer.page_size();
-                } else {
-                    unpadded_dst_offset = src_page_index * buffer.page_size();
-                }
-
-                auto command = EnqueueReadShardedBufferCommand(
-                    this->id,
-                    this->device,
-                    this->noc_index,
-                    buffer,
-                    this->manager,
-                    this->expected_num_workers_completed,
-                    sub_device_ids,
-                    cores[core_id],
-                    bank_base_address,
-                    src_page_index,
-                    num_pages_to_read);
-
-                this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-                    std::in_place_type<detail::ReadBufferDescriptor>,
-                    buffer.buffer_layout(),
-                    buffer.page_size(),
-                    padded_page_size,
-                    dst,
-                    unpadded_dst_offset,
-                    num_pages_to_read,
-                    src_page_index,
-                    buffer_page_mapping));
-
-                src_page_index += num_pages_to_read;
-                this->enqueue_command(command, false, sub_device_ids);
+            buffer_dispatch::read_sharded_buffer_from_core(
+                core_id,
+                buffer,
+                dispatch_params,
+                sub_device_ids,
+                cores[core_id],
+                dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
+            if (dispatch_params.num_pages_to_read > 0) {
+                this->issued_completion_q_reads.push(
+                    buffer_dispatch::generate_read_buffer_descriptor(dst, dispatch_params, buffer));
                 this->increment_num_entries_in_completion_q();
             }
         }
