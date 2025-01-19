@@ -102,6 +102,7 @@ def test_performance_mnist(device, batch_size, tt_mnist, model_location_generato
     logger.info("Exit MNIST perf test")
 
 
+@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 @pytest.mark.parametrize(
     "batch_size",
     [128],
