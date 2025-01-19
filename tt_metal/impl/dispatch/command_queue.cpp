@@ -107,96 +107,9 @@ enum DispatchWriteOffsets {
     DISPATCH_WRITE_OFFSET_ETH_L1_CONFIG_BASE = 2,
 };
 
-// EnqueueReadBufferCommandSection
-
-EnqueueReadBufferCommand::EnqueueReadBufferCommand(
-    uint32_t command_queue_id,
-    IDevice* device,
-    NOC noc_index,
-    Buffer& buffer,
-    SystemMemoryManager& manager,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    uint32_t bank_base_address,
-    uint32_t src_page_index,
-    std::optional<uint32_t> pages_to_read) :
-    command_queue_id(command_queue_id),
-    noc_index(noc_index),
-    manager(manager),
-    buffer(buffer),
-    expected_num_workers_completed(expected_num_workers_completed),
-    sub_device_ids(sub_device_ids),
-    bank_base_address(bank_base_address),
-    src_page_index(src_page_index),
-    pages_to_read(pages_to_read.has_value() ? pages_to_read.value() : buffer.num_pages()) {
-    TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to read an invalid buffer");
-
-    this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-}
-
-void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = this->buffer.aligned_page_size();
-    command.add_prefetch_relay_paged(
-        this->buffer.is_dram(), this->src_page_index, this->bank_base_address, padded_page_size, this->pages_to_read);
-}
-
-void EnqueueReadShardedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
-    uint32_t padded_page_size = this->buffer.aligned_page_size();
-    const CoreCoord virtual_core =
-        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
-    command.add_prefetch_relay_linear(
-        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
-        padded_page_size * this->pages_to_read,
-        this->bank_base_address);
-}
-
-void EnqueueReadBufferCommand::process() {
-    uint32_t num_worker_counters = this->sub_device_ids.size();
-    // accounts for padding
-    uint32_t cmd_sequence_sizeB =
-        hal.get_alignment(HalMemType::HOST) * num_worker_counters +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        hal.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_STALL
-        hal.get_alignment(HalMemType::HOST) +  // CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST
-        hal.get_alignment(HalMemType::HOST);   // CQ_PREFETCH_CMD_RELAY_LINEAR or CQ_PREFETCH_CMD_RELAY_PAGED
-
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    uint32_t dispatch_message_base_addr = dispatch_constants::get(dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    uint32_t last_index = num_worker_counters - 1;
-    // We only need the write barrier + prefetch stall for the last wait cmd
-    for (uint32_t i = 0; i < last_index; ++i) {
-        auto offset_index = this->sub_device_ids[i].to_index();
-        uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
-        command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
-
-    }
-    auto offset_index = this->sub_device_ids[last_index].to_index();
-    uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
-    command_sequence.add_dispatch_wait_with_prefetch_stall(
-        true, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
-
-    uint32_t padded_page_size = this->buffer.aligned_page_size();
-    bool flush_prefetch = false;
-    command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size, false);
-
-    this->add_prefetch_relay(command_sequence);
-
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
-
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
-
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-}
-
 inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
-
-// EnqueueProgramCommand Section
 
 EnqueueProgramCommand::EnqueueProgramCommand(
     uint32_t command_queue_id,
@@ -799,147 +712,47 @@ void HWCommandQueue::enqueue_read_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
-
-    chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
-    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-
-    uint32_t padded_page_size = buffer.aligned_page_size();
-    uint32_t unpadded_dst_offset = 0;
-    uint32_t src_page_index;
-
     sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
-        src_page_index = 0;
-        const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
-        const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
-
-        // Note that the src_page_index is the device page idx, not the host page idx
-        // Since we read core by core we are reading the device pages sequentially
-        const auto& cores = width_split ? buffer_page_mapping->all_cores_
-                                        : corerange_to_cores(
-                                              buffer.shard_spec().grid(),
-                                              buffer.num_cores(),
-                                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
-        uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
+        // Forward data from each core to the completion queue.
+        // Then have the completion queue reader thread copy this data to user space.
+        auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
+            buffer, this->id, this->expected_num_workers_completed);
+        auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
+            dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer);
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            uint32_t num_pages_to_read;
-            if (width_split) {
-                num_pages_to_read =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-            } else {
-                num_pages_to_read = std::min(num_total_pages, max_pages_per_shard);
-                num_total_pages -= num_pages_to_read;
-            }
-            uint32_t bank_base_address = buffer.address();
-            if (buffer.is_dram()) {
-                bank_base_address += buffer.device()->bank_offset(
-                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
-            }
-            if (num_pages_to_read > 0) {
-                if (width_split) {
-                    uint32_t host_page = buffer_page_mapping->core_host_page_indices_[core_id][0];
-                    src_page_index = buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-                    unpadded_dst_offset = host_page * buffer.page_size();
-                } else {
-                    unpadded_dst_offset = src_page_index * buffer.page_size();
-                }
-
-                auto command = EnqueueReadShardedBufferCommand(
-                    this->id,
-                    this->device,
-                    this->noc_index,
-                    buffer,
-                    this->manager,
-                    this->expected_num_workers_completed,
-                    sub_device_ids,
-                    cores[core_id],
-                    bank_base_address,
-                    src_page_index,
-                    num_pages_to_read);
-
-                this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-                    std::in_place_type<detail::ReadBufferDescriptor>,
-                    buffer.buffer_layout(),
-                    buffer.page_size(),
-                    padded_page_size,
-                    dst,
-                    unpadded_dst_offset,
-                    num_pages_to_read,
-                    src_page_index,
-                    buffer_page_mapping));
-
-                src_page_index += num_pages_to_read;
-                this->enqueue_command(command, false, sub_device_ids);
+            buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
+                core_id,
+                buffer,
+                dispatch_params,
+                sub_device_ids,
+                cores[core_id],
+                dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
+            if (dispatch_params.pages_per_txn > 0) {
+                this->issued_completion_q_reads.push(
+                    buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, buffer));
                 this->increment_num_entries_in_completion_q();
             }
         }
-        if (blocking) {
-            this->finish(sub_device_ids);
-        }
     } else {
-        if (buffer.is_valid_partial_region(region)) {
-            TT_FATAL(
-                region.offset % buffer.page_size() == 0,
-                "Offset {} must be a multiple of the buffer page size {}.",
-                region.offset,
-                buffer.page_size());
-            TT_FATAL(
-                region.size % buffer.page_size() == 0,
-                "Size {} must be a multiple of the buffer page size {}.",
-                region.size,
-                buffer.page_size());
-            TT_FATAL(
-                (region.size + region.offset) <= buffer.size(),
-                "(Size + offset) {} must be <= the buffer size {}.",
-                region.size + region.offset,
-                buffer.size());
-        }
-
-        const uint32_t pages_to_read = region.size / buffer.page_size();
-        if (pages_to_read > 0) {
-            uint32_t bank_base_address = buffer.address();
-            src_page_index = region.offset / buffer.page_size();
-            // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
-            // To handle larger page offsets move bank base address up and update page offset to be relative to the new
-            // bank address
-            if (src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
-                const uint32_t num_pages_per_bank = src_page_index / num_banks;
-                bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
-                src_page_index = src_page_index % num_banks;
-            }
-            // this is a streaming command so we don't need to break down to multiple
-            auto command = EnqueueReadInterleavedBufferCommand(
-                this->id,
-                this->device,
-                this->noc_index,
-                buffer,
-                this->manager,
-                this->expected_num_workers_completed,
-                sub_device_ids,
-                bank_base_address,
-                src_page_index,
-                pages_to_read);
-
-            this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-                std::in_place_type<detail::ReadBufferDescriptor>,
-                buffer.buffer_layout(),
-                buffer.page_size(),
-                padded_page_size,
-                dst,
-                unpadded_dst_offset,
-                pages_to_read,
-                src_page_index));
-            this->enqueue_command(command, blocking, sub_device_ids);
+        // Forward data from device to the completion queue.
+        // Then have the completion queue reader thread copy this data to user space.
+        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+            buffer, this->id, this->expected_num_workers_completed, region);
+        buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
+            dispatch_params,
+            buffer,
+            sub_device_ids,
+            dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
+        if (dispatch_params.pages_per_txn > 0) {
+            this->issued_completion_q_reads.push(
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer));
             this->increment_num_entries_in_completion_q();
-        } else {
-            if (blocking) {
-                this->finish(sub_device_ids);
-            }
         }
+    }
+    if (blocking) {
+        this->finish(sub_device_ids);
     }
 }
 
@@ -1180,190 +993,6 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     }
 }
 
-void HWCommandQueue::copy_into_user_space(
-    const detail::ReadBufferDescriptor& read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel) {
-    const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id] =
-        read_buffer_descriptor;
-    uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
-    uint32_t contig_dst_offset = dst_offset;
-    uint32_t remaining_bytes_to_read = padded_num_bytes;
-    uint32_t dev_page_id = cur_dev_page_id;
-
-    // track the amount of bytes read in the last non-aligned page
-    uint32_t remaining_bytes_of_nonaligned_page = 0;
-    std::optional<uint32_t> host_page_id = std::nullopt;
-    uint32_t offset_in_completion_q_data = sizeof(CQDispatchCmd);
-
-    uint32_t pad_size_bytes = padded_page_size - page_size;
-
-    while (remaining_bytes_to_read != 0) {
-        uint32_t completion_queue_write_ptr_and_toggle = this->manager.completion_queue_wait_front(this->id, this->exit_condition);
-
-        if (this->exit_condition) {
-            break;
-        }
-
-        uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
-        uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);
-        uint32_t completion_q_read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
-        uint32_t completion_q_read_toggle = this->manager.get_completion_queue_read_toggle(this->id);
-
-        uint32_t bytes_avail_in_completion_queue;
-        if (completion_q_write_ptr > completion_q_read_ptr and completion_q_write_toggle == completion_q_read_toggle) {
-            bytes_avail_in_completion_queue = completion_q_write_ptr - completion_q_read_ptr;
-        } else {
-            // Completion queue write pointer on device wrapped but read pointer is lagging behind.
-            //  In this case read up until the end of the completion queue first
-            bytes_avail_in_completion_queue =
-                this->manager.get_completion_queue_limit(this->id) - completion_q_read_ptr;
-        }
-
-        // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
-        uint32_t bytes_xfered = std::min(remaining_bytes_to_read, bytes_avail_in_completion_queue);
-        uint32_t num_pages_xfered = div_up(bytes_xfered, dispatch_constants::TRANSFER_PAGE_SIZE);
-
-        remaining_bytes_to_read -= bytes_xfered;
-
-        if (buffer_page_mapping == nullptr) {
-            void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
-            if (page_size == padded_page_size) {
-                uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
-                tt::Cluster::instance().read_sysmem(
-                    contiguous_dst,
-                    data_bytes_xfered,
-                    completion_q_read_ptr + offset_in_completion_q_data,
-                    mmio_device_id,
-                    channel);
-                contig_dst_offset += data_bytes_xfered;
-                offset_in_completion_q_data = 0;
-            } else {
-                uint32_t src_offset_bytes = offset_in_completion_q_data;
-                offset_in_completion_q_data = 0;
-                uint32_t dst_offset_bytes = 0;
-
-                while (src_offset_bytes < bytes_xfered) {
-                    uint32_t src_offset_increment = padded_page_size;
-                    uint32_t num_bytes_to_copy;
-                    if (remaining_bytes_of_nonaligned_page > 0) {
-                        // Case 1: Portion of the page was copied into user buffer on the previous completion queue pop.
-                        uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
-                        num_bytes_to_copy = std::min(remaining_bytes_of_nonaligned_page, num_bytes_remaining);
-                        remaining_bytes_of_nonaligned_page -= num_bytes_to_copy;
-                        src_offset_increment = num_bytes_to_copy;
-                        // We finished copying the page
-                        if (remaining_bytes_of_nonaligned_page == 0) {
-                            uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
-                            // There is more data after padding
-                            if (rem_bytes_in_cq >= pad_size_bytes) {
-                                src_offset_increment += pad_size_bytes;
-                                // Only pad data left in queue
-                            } else {
-                                offset_in_completion_q_data = pad_size_bytes - rem_bytes_in_cq;
-                            }
-                        }
-                    } else if (src_offset_bytes + padded_page_size >= bytes_xfered) {
-                        // Case 2: Last page of data that was popped off the completion queue
-                        // Don't need to compute src_offset_increment since this is end of loop
-                        uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
-                        num_bytes_to_copy = std::min(num_bytes_remaining, page_size);
-                        remaining_bytes_of_nonaligned_page = page_size - num_bytes_to_copy;
-                        // We've copied needed data, start of next read is offset due to remaining pad bytes
-                        if (remaining_bytes_of_nonaligned_page == 0) {
-                            offset_in_completion_q_data = padded_page_size - num_bytes_remaining;
-                        }
-                    } else {
-                        num_bytes_to_copy = page_size;
-                    }
-
-                    tt::Cluster::instance().read_sysmem(
-                        (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
-                        num_bytes_to_copy,
-                        completion_q_read_ptr + src_offset_bytes,
-                        mmio_device_id,
-                        channel);
-
-                    src_offset_bytes += src_offset_increment;
-                    dst_offset_bytes += num_bytes_to_copy;
-                    contig_dst_offset += num_bytes_to_copy;
-                }
-            }
-        } else {
-            uint32_t src_offset_bytes = offset_in_completion_q_data;
-            offset_in_completion_q_data = 0;
-            uint32_t dst_offset_bytes = contig_dst_offset;
-            uint32_t num_bytes_to_copy = 0;
-
-            while (src_offset_bytes < bytes_xfered) {
-                uint32_t src_offset_increment = padded_page_size;
-                if (remaining_bytes_of_nonaligned_page > 0) {
-                    // Case 1: Portion of the page was copied into user buffer on the previous completion queue pop.
-                    uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
-                    num_bytes_to_copy = std::min(remaining_bytes_of_nonaligned_page, num_bytes_remaining);
-                    remaining_bytes_of_nonaligned_page -= num_bytes_to_copy;
-                    src_offset_increment = num_bytes_to_copy;
-                    // We finished copying the page
-                    if (remaining_bytes_of_nonaligned_page == 0) {
-                        dev_page_id++;
-                        uint32_t rem_bytes_in_cq = num_bytes_remaining - num_bytes_to_copy;
-                        // There is more data after padding
-                        if (rem_bytes_in_cq >= pad_size_bytes) {
-                            src_offset_increment += pad_size_bytes;
-                            offset_in_completion_q_data = 0;
-                            // Only pad data left in queue
-                        } else {
-                            offset_in_completion_q_data = (pad_size_bytes - rem_bytes_in_cq);
-                        }
-                    }
-                    if (!host_page_id.has_value()) {
-                        src_offset_bytes += src_offset_increment;
-                        continue;
-                    }
-                } else if (src_offset_bytes + padded_page_size >= bytes_xfered) {
-                    // Case 2: Last page of data that was popped off the completion queue
-                    // Don't need to compute src_offset_increment since this is end of loop
-                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
-                    uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
-                    num_bytes_to_copy = std::min(num_bytes_remaining, page_size);
-                    remaining_bytes_of_nonaligned_page = page_size - num_bytes_to_copy;
-                    // We've copied needed data, start of next read is offset due to remaining pad bytes
-                    if (remaining_bytes_of_nonaligned_page == 0) {
-                        offset_in_completion_q_data = padded_page_size - num_bytes_remaining;
-                        dev_page_id++;
-                    }
-                    if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
-                    } else {
-                        src_offset_bytes += src_offset_increment;
-                        continue;
-                    }
-                } else {
-                    num_bytes_to_copy = page_size;
-                    host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
-                    dev_page_id++;
-                    if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
-                    } else {
-                        src_offset_bytes += src_offset_increment;
-                        continue;
-                    }
-                }
-
-                tt::Cluster::instance().read_sysmem(
-                    (char*)(uint64_t(dst) + dst_offset_bytes),
-                    num_bytes_to_copy,
-                    completion_q_read_ptr + src_offset_bytes,
-                    mmio_device_id,
-                    channel);
-
-                src_offset_bytes += src_offset_increment;
-            }
-            dst_offset_bytes += num_bytes_to_copy;
-            contig_dst_offset = dst_offset_bytes;
-        }
-        this->manager.completion_queue_pop_front(num_pages_xfered, this->id);
-    }
-}
-
 void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device->id());
@@ -1395,7 +1024,13 @@ void HWCommandQueue::read_completion_queue() {
                         using T = std::decay_t<decltype(read_descriptor)>;
                         if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
                             ZoneScopedN("CompletionQueueReadData");
-                            this->copy_into_user_space(read_descriptor, mmio_device_id, channel);
+                            buffer_dispatch::copy_completion_queue_data_into_user_space(
+                                read_descriptor,
+                                mmio_device_id,
+                                channel,
+                                this->id,
+                                this->manager,
+                                this->exit_condition);
                         } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id);
