@@ -193,6 +193,8 @@ add_subdirectory(tt_metal/third_party/umd)
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propogate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
+add_library(stdlib INTERFACE)
+
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(
     metal_common_libs
