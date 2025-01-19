@@ -392,4 +392,40 @@ inline void CaptureCreateCircularBuffer(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateCircularBufferCommand, cmd.Union());
 }
 
+inline void CaptureLightMetalCompare(
+    CommandQueue& cq,
+    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    void* golden_data,
+    bool is_user_data) {
+    auto& ctx = LightMetalCaptureContext::Get();
+
+    // We don't want to use shared_ptr to extend lifetime of buffer when adding to global_id map.
+    Buffer* buffer_ptr = std::holds_alternative<std::shared_ptr<Buffer>>(buffer)
+                             ? std::get<std::shared_ptr<Buffer>>(buffer).get()
+                             : &std::get<std::reference_wrapper<Buffer>>(buffer).get();
+
+    uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
+    uint32_t buffer_global_id = ctx.GetGlobalId(buffer_ptr);
+
+    // Calculate num uint32_t elements in buffer, and convert golden void* to vector
+    size_t golden_data_len = buffer_ptr->size() / sizeof(uint32_t);
+    const uint32_t* golden_data_uint32 = static_cast<const uint32_t*>(golden_data);
+    std::vector<uint32_t> golden_data_vector(golden_data_uint32, golden_data_uint32 + golden_data_len);
+
+    log_debug(
+        tt::LogMetalTrace,
+        "{}: buffer_global_id: {} is_user_data: {} golden_data_len: {}",
+        __FUNCTION__,
+        buffer_global_id,
+        is_user_data,
+        golden_data_len);
+
+    // Serialize golden_data into FlatBuffer
+    auto golden_data_fb = ctx.GetBuilder().CreateVector(golden_data_vector);
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateLightMetalCompareCommand(
+        ctx.GetBuilder(), cq_global_id, buffer_global_id, golden_data_fb, is_user_data);
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::LightMetalCompareCommand, cmd.Union());
+}
+
 }  // namespace tt::tt_metal

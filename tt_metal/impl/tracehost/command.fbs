@@ -94,6 +94,13 @@ table CreateCircularBufferCommand {
     config: CircularBufferConfig;
 }
 
+table LightMetalCompareCommand {
+    cq_global_id: uint32;       // reference to CommandQueue
+    buffer_global_id: uint32;   // Reference to Buffer used as destination
+    golden_data: [uint32];      // Golden data to compare against at replay
+    is_user_data: bool;         // Informational, denote if golden data is from user or capture
+}
+
 union CommandType {
     ReplayTraceCommand,
     EnqueueTraceCommand,
@@ -110,6 +117,7 @@ union CommandType {
     SetRuntimeArgsUint32Command,
     SetRuntimeArgsCommand,
     CreateCircularBufferCommand,
+    LightMetalCompareCommand,
 }
 
 table Command {
