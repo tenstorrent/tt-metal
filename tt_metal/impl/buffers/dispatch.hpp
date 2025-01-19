@@ -30,6 +30,17 @@ struct ShardedBufferReadDispatchParams {
     uint32_t num_pages_to_read;
 };
 
+struct InterleavedBufferReadDispatchParams {
+    tt::stl::Span<const uint32_t> expected_num_workers_completed;
+    uint32_t cq_id;
+    IDevice* device;
+    uint32_t padded_page_size;
+    uint32_t src_page_index;
+    uint32_t unpadded_dst_offset;
+    uint32_t num_pages_to_read;
+    uint32_t address;
+};
+
 void write_to_device_buffer(
     const void* src,
     Buffer& buffer,
@@ -42,6 +53,12 @@ void write_to_device_buffer(
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
 
+InterleavedBufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    const BufferRegion& region);
+
 void read_sharded_buffer_from_core(
     uint32_t core_id,
     Buffer& buffer,
@@ -50,8 +67,15 @@ void read_sharded_buffer_from_core(
     const CoreCoord core,
     CoreType dispatch_core_type);
 
+void read_interleaved_buffer_from_device(
+    InterleavedBufferReadDispatchParams& dispatch_params,
+    Buffer& buffer,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    CoreType dispatch_core_type);
+
+template <typename T>
 std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_read_buffer_descriptor(
-    void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
+    void* dst, T& dispatch_params, Buffer& buffer);
 }  // namespace buffer_dispatch
 
 }  // namespace tt::tt_metal

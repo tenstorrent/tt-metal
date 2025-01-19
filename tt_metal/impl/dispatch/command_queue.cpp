@@ -137,6 +137,8 @@ EnqueueReadBufferCommand::EnqueueReadBufferCommand(
 
 void EnqueueReadInterleavedBufferCommand::add_prefetch_relay(HugepageDeviceCommand& command) {
     uint32_t padded_page_size = this->buffer.aligned_page_size();
+    std::cout << "Add prefetch relay paged " << this->src_page_index << " " << this->bank_base_address << " "
+              << padded_page_size << " " << this->pages_to_read << std::endl;
     command.add_prefetch_relay_paged(
         this->buffer.is_dram(), this->src_page_index, this->bank_base_address, padded_page_size, this->pages_to_read);
 }
@@ -176,11 +178,14 @@ void EnqueueReadBufferCommand::process() {
     }
     auto offset_index = this->sub_device_ids[last_index].to_index();
     uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+    std::cout << "Add dispatch wait: " << dispatch_message_addr << " "
+              << this->expected_num_workers_completed[offset_index] << std::endl;
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         true, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
 
     uint32_t padded_page_size = this->buffer.aligned_page_size();
     bool flush_prefetch = false;
+    std::cout << "Add dispatch write host: " << this->pages_to_read * padded_page_size << std::endl;
     command_sequence.add_dispatch_write_host(flush_prefetch, this->pages_to_read * padded_page_size, false);
 
     this->add_prefetch_relay(command_sequence);
@@ -839,65 +844,20 @@ void HWCommandQueue::enqueue_read_buffer(
             this->finish(sub_device_ids);
         }
     } else {
-        if (buffer.is_valid_partial_region(region)) {
-            TT_FATAL(
-                region.offset % buffer.page_size() == 0,
-                "Offset {} must be a multiple of the buffer page size {}.",
-                region.offset,
-                buffer.page_size());
-            TT_FATAL(
-                region.size % buffer.page_size() == 0,
-                "Size {} must be a multiple of the buffer page size {}.",
-                region.size,
-                buffer.page_size());
-            TT_FATAL(
-                (region.size + region.offset) <= buffer.size(),
-                "(Size + offset) {} must be <= the buffer size {}.",
-                region.size + region.offset,
-                buffer.size());
-        }
-
-        const uint32_t pages_to_read = region.size / buffer.page_size();
-        if (pages_to_read > 0) {
-            uint32_t bank_base_address = buffer.address();
-            src_page_index = region.offset / buffer.page_size();
-            // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
-            // To handle larger page offsets move bank base address up and update page offset to be relative to the new
-            // bank address
-            if (src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
-                const uint32_t num_pages_per_bank = src_page_index / num_banks;
-                bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
-                src_page_index = src_page_index % num_banks;
-            }
-            // this is a streaming command so we don't need to break down to multiple
-            auto command = EnqueueReadInterleavedBufferCommand(
-                this->id,
-                this->device,
-                this->noc_index,
-                buffer,
-                this->manager,
-                this->expected_num_workers_completed,
-                sub_device_ids,
-                bank_base_address,
-                src_page_index,
-                pages_to_read);
-
-            this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-                std::in_place_type<detail::ReadBufferDescriptor>,
-                buffer.buffer_layout(),
-                buffer.page_size(),
-                padded_page_size,
-                dst,
-                unpadded_dst_offset,
-                pages_to_read,
-                src_page_index));
-            this->enqueue_command(command, blocking, sub_device_ids);
+        auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
+            buffer, this->id, this->expected_num_workers_completed, region);
+        buffer_dispatch::read_interleaved_buffer_from_device(
+            dispatch_params,
+            buffer,
+            sub_device_ids,
+            dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
+        if (dispatch_params.num_pages_to_read > 0) {
+            this->issued_completion_q_reads.push(
+                buffer_dispatch::generate_read_buffer_descriptor(dst, dispatch_params, buffer));
             this->increment_num_entries_in_completion_q();
-        } else {
-            if (blocking) {
-                this->finish(sub_device_ids);
-            }
+        }
+        if (blocking) {
+            this->finish(sub_device_ids);
         }
     }
 }

@@ -495,23 +495,43 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     return dispatch_params;
 }
 
-InterleavedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+InterleavedBufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    const BufferRegion& region) {
+    if (buffer.is_valid_partial_region(region)) {
+        TT_FATAL(
+            region.offset % buffer.page_size() == 0,
+            "Offset {} must be a multiple of the buffer page size {}.",
+            region.offset,
+            buffer.page_size());
+        TT_FATAL(
+            region.size % buffer.page_size() == 0,
+            "Size {} must be a multiple of the buffer page size {}.",
+            region.size,
+            buffer.page_size());
+        TT_FATAL(
+            (region.size + region.offset) <= buffer.size(),
+            "(Size + offset) {} must be <= the buffer size {}.",
+            region.size + region.offset,
+            buffer.size());
+    }
+
     InterleavedBufferReadDispatchParams dispatch_params;
+    dispatch_params.num_pages_to_read = region.size / buffer.page_size();
+    dispatch_params.src_page_index = region.offset / buffer.page_size();
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = buffer.device();
     dispatch_params.padded_page_size = buffer.aligned_page_size();
-    dispatch_params.src_page_index = 0;
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
 }
 
+template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
-    Buffer& buffer,
-    ShardedBufferReadDispatchParams& dispatch_params,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    CoreType dispatch_core_type) {
+    Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
     // accounts for padding
@@ -551,12 +571,21 @@ void issue_read_buffer_dispatch_command_sequence(
         flush_prefetch, dispatch_params.num_pages_to_read * dispatch_params.padded_page_size, false);
 
     // Buffer layout specific
-    const CoreCoord virtual_core =
-        buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
-    command_sequence.add_prefetch_relay_linear(
-        dispatch_params.device->get_noc_unicast_encoding(dispatch_downstream_noc, virtual_core),
-        dispatch_params.padded_page_size * dispatch_params.num_pages_to_read,
-        dispatch_params.address);
+    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+        const CoreCoord virtual_core =
+            buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
+        command_sequence.add_prefetch_relay_linear(
+            dispatch_params.device->get_noc_unicast_encoding(dispatch_downstream_noc, virtual_core),
+            dispatch_params.padded_page_size * dispatch_params.num_pages_to_read,
+            dispatch_params.address);
+    } else {
+        command_sequence.add_prefetch_relay_paged(
+            buffer.is_dram(),
+            dispatch_params.src_page_index,
+            dispatch_params.address,
+            dispatch_params.padded_page_size,
+            dispatch_params.num_pages_to_read);
+    }
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
@@ -598,31 +627,75 @@ void read_sharded_buffer_from_core(
         }
         dispatch_params.address = bank_base_address;
         dispatch_params.core = core;
-        dispatch_params.num_pages_to_read = num_pages_to_read;
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
     }
 }
 
+void read_interleaved_buffer_from_device(
+    InterleavedBufferReadDispatchParams& dispatch_params,
+    Buffer& buffer,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    CoreType dispatch_core_type) {
+    if (dispatch_params.num_pages_to_read > 0) {
+        uint32_t bank_base_address = buffer.address();
+
+        // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
+        // To handle larger page offsets move bank base address up and update page offset to be relative to the new
+        // bank address
+        if (dispatch_params.src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+            const uint32_t num_banks = dispatch_params.device->num_banks(buffer.buffer_type());
+            const uint32_t num_pages_per_bank = dispatch_params.src_page_index / num_banks;
+            bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
+            dispatch_params.src_page_index = dispatch_params.src_page_index % num_banks;
+        }
+        dispatch_params.address = bank_base_address;
+        issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+    }
+}
+
+template <typename T>
 std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_read_buffer_descriptor(
-    void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer) {
-    auto initial_src_page_index = dispatch_params.src_page_index;
-    dispatch_params.src_page_index += dispatch_params.num_pages_to_read;
-    return std::make_shared<tt::tt_metal::detail::CompletionReaderVariant>(
-        std::in_place_type<tt::tt_metal::detail::ReadBufferDescriptor>,
-        buffer.buffer_layout(),
-        buffer.page_size(),
-        dispatch_params.padded_page_size,
-        dst,
-        dispatch_params.unpadded_dst_offset,
-        dispatch_params.num_pages_to_read,
-        initial_src_page_index,
-        dispatch_params.buffer_page_mapping);
+    void* dst, T& dispatch_params, Buffer& buffer) {
+    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+        auto initial_src_page_index = dispatch_params.src_page_index;
+        dispatch_params.src_page_index += dispatch_params.num_pages_to_read;
+        return std::make_shared<tt::tt_metal::detail::CompletionReaderVariant>(
+            std::in_place_type<tt::tt_metal::detail::ReadBufferDescriptor>,
+            buffer.buffer_layout(),
+            buffer.page_size(),
+            dispatch_params.padded_page_size,
+            dst,
+            dispatch_params.unpadded_dst_offset,
+            dispatch_params.num_pages_to_read,
+            initial_src_page_index,
+            dispatch_params.buffer_page_mapping);
+    } else {
+        return std::make_shared<tt::tt_metal::detail::CompletionReaderVariant>(
+            std::in_place_type<tt::tt_metal::detail::ReadBufferDescriptor>,
+            buffer.buffer_layout(),
+            buffer.page_size(),
+            dispatch_params.padded_page_size,
+            dst,
+            dispatch_params.unpadded_dst_offset,
+            dispatch_params.num_pages_to_read,
+            dispatch_params.src_page_index);
+    }
 }
 
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferDispatchParams>(
     const void*, Buffer&, InterleavedBufferDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
 template void issue_buffer_dispatch_command_sequence<ShardedBufferDispatchParams>(
     const void*, Buffer&, ShardedBufferDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+
+template void issue_read_buffer_dispatch_command_sequence<InterleavedBufferReadDispatchParams>(
+    Buffer&, InterleavedBufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+template void issue_read_buffer_dispatch_command_sequence<ShardedBufferReadDispatchParams>(
+    Buffer&, ShardedBufferReadDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
+
+template std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_read_buffer_descriptor<
+    InterleavedBufferReadDispatchParams>(void*, InterleavedBufferReadDispatchParams&, Buffer&);
+template std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant>
+generate_read_buffer_descriptor<ShardedBufferReadDispatchParams>(void*, ShardedBufferReadDispatchParams&, Buffer&);
 }  // namespace buffer_dispatch
 
 }  // namespace tt::tt_metal
