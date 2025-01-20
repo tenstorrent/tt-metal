@@ -228,59 +228,90 @@ _Coming soon._
 Convolution as Matrix Multiplication
 ------------------------------------
 
-Consider an example input image of resolution (dimensions) $16\times16$,
-that is, height and width, $H$ and $W$ are both $16$, and each pixel has
-a channel depth, $C$, of $32$ (see
-Figure [\[fig:input\]](#fig:input){reference-type="ref"
-reference="fig:input"}). Let us input two such images, setting batch
-$N=2$, to the convolution operation. Putting it together, the input
-tensor to convolution operation is, hence, of dimensions $[2,16,16,32]$,
-where the order of the dimensions is $[N, H, W, C]$. Let us perform the
-convolution with filters of size $[3,3]$ (see
-Figure [\[fig:filters\]](#fig:filters){reference-type="ref"
-reference="fig:filters"}), using a stride of $2$ in both $H$ and $W$
-dimensions, indicating downsample, and with padding enabled. The output
-of this convolution would be a tensor of dimensions $[2,8,8,32]$.
+Consider an example input image with a resolution of $32 \times 32$, meaning both the height $H$ and width $W$ are 32, and each pixel has a channel depth $C$ of 1. Let's use just one image, setting the batch size $N = 1$ for the convolution operation. Therefore, the input tensor for the convolution has dimensions $[1, 32, 32, 1]$, where the order of the dimensions is $[N, H, W, C]$. The last dimension will be padded to 32 before the convolution starts because the unit of calculation is a tile.
+
+In this case, we will focus on height-sharded convolution.
+
+Let us perform the convolution with a filter of size $[3, 3]$, using a stride of 1 in both the $H$ and $W$ dimensions, with padding enabled (both height and width padding are 1). The dilation is also 1. We will have just 1 input and 1 output channel, but these will be padded to 32 (for the same reason as the number of input channels in the activation input). In other words, only one filter (and just the firs
+
+
+<img src="media/im2col3.png" style="width:400px;">\
+_Figure 1: Filters_
+
+The output of this convolution will be a tensor with dimensions $[1, 32, 32, 1]$ — it has the same dimensions as the input tensor.
 
 The key variables as input to the convolution operation are:
 
-  -------------------- ----------- ------------ ------------ ------------
-            **Input**:   $N = 2$    $H_i = 16$   $W_i = 16$   $C_i = 32$
 
-    **Kernel window**:  $K_h = 3$   $K_w = 3$
+| **Parameter**       | **Value** |
+|---------------------|-----------|
+| **Input**           |           |
+| - Batch Size ($N$)  | 1         |
+| - Height ($H_i$)    | 32        |
+| - Width ($W_i$)     | 32        |
+| - Channels ($C_i$)  | 1         |
+| **Kernel window**   |           |
+| - Height ($K_h$)    | 3         |
+| - Width ($K_w$)     | 3         |
+| **Stride**          |           |
+| - Height ($S_h$)    | 1         |
+| - Width ($S_w$)     | 1         |
+| **Padding**          |           |
+| - Height ($P_h$)    | 1         |
+| - Width ($P_w$)     | 1         |
+| **Dilation**          |           |
+| - Height ($D_h$)    | 1         |
+| - Width ($D_w$)     | 1         |
+| **Output**          |           |
+| - Batch Size ($N$)  | 1         |
+| - Height ($H_o$)    | 32         |
+| - Width ($W_o$)     | 32         |
+| - Channels ($C_o$)  | 1        |
 
-           **Stride**:  $S_h = 2$   $S_w = 2$
+Before the part of the operation where the actual convolution is done, several actions take place (sharding, padding, haloing, etc.). The input to the convolution micro-op is the output of the halo operation—this op is described in one of the following sections. Briefly, the halo operation gathers all the necessary data for each core (activations input), including padding data, data from the core itself, and data from neighboring cores. This ensures that every core has everything needed to apply the convolution, which is essentially matrix multiplication.
 
-           **Output**:   $N = 2$    $H_o = 8$    $W_o = 8$    $C_o = 32$
-  -------------------- ----------- ------------ ------------ ------------
+In this case, we will analyze the height-sharded convolution. The output will be $[1, 32, 32, 1]$. Each core will process one row of the output, so 32 cores will be used—one row of output per core. Each core will handle this chunk of the tensor:
 
-The input tensor to the convolution must first be transformed into a
-matrix such that multiplying this matrix with the filters (as weights)
-gives the convolution output -- In a convolution a dot product is
-performed between the filter elements and each of the kernel window
-position. This kernel window is a sliding window, going across the width
-and height of the input image (see
-Figure [\[fig:filterwindow\]](#fig:filterwindow){reference-type="ref"
-reference="fig:filterwindow"}.) In a matrix multiply a dot product is
-performed between a row in the first input and a column in the second
-input. The transformed matrix must, hence, consist of rows where each
-row corresponds to the elements from the input image that are overlapped
-by the kernel window. This is illustrated in
-Figure [\[fig:inputtransform\]](#fig:inputtransform){reference-type="ref"
-reference="fig:inputtransform"}. For every valid kernel window position
-(which corresponds to a unique output element), there must be a
-corresponding row in the transformed matrix.
 
-The filters can be reshaped into a matrix of dimensions
-$[K_h \times K_w \times C_i, C_o]$. Based on this, the transformed input
-tensor matrix should have dimensions
-$[N \times H_o \times W_o , K_h \times K_w \times C_i]$. On multiplying
-this matrix with the filters matrix (weight matrix) yields an output
-matrix of dimensions $[N \times H_o \times W_o, C_o]$, which is the
-expected output (see
-Figure [\[fig:output\]](#fig:output){reference-type="ref"
-reference="fig:output"}.)
+<img src="media/im2col1.png" style="width:600px;">\
+_Figure 2: Chunk of data each core is going to process_
 
+This is easier to understand after first understanding haloing. Initially, each core will have just a $1 \times 32 \times 32$ shard (an equally divided tensor with padded input channels). However, after adding padding to the tensor (height and width are now 34 instead of 32) and gathering data from other cores, the dimensions will be $[1, 3, 34, 32]$.
+
+After reshaping this tensor into 2D, each stick from the tensor in Figure 2 will correspond to one row of the reshaped tensor:
+
+
+<img src="media/im2col2.png" style="width:400px;">\
+_Figure 3: Chunk of data each core is going to process - 2d reshaped_
+
+
+This is an actual shard that will be processed in the convolution micro-op, and it is also the output of the halo operation.
+
+Weights are stored as an interleaved tensor (usually in DRAM), and after reshaping to 2D, it looks like this:
+
+<img src="media/im2col4.png" style="width:400px;">\
+_Figure 4: Filters - 2d reshaped_
+
+Each column in the weight tensor represents one filter.
+
+The input tensor to the convolution must first be transformed into a matrix such that multiplying this matrix with the filters (as weights) gives the convolution output. In convolution, a dot product is performed between the filter elements and each kernel window position. This kernel window is a sliding window that moves across the width and height of the input image.
+
+In matrix multiplication, a dot product is performed between a row in the first input matrix and a column in the second input matrix. This means we need to transform our input into an appropriate matrix for matrix multiplication. Logically, if we look at Figure 2, one window where the filter is applied is one "box" (e.g., from $a_{0,0,0}$ to $a_{2,2,31}$). We need to store that data in one row of the transformed matrix so that when we apply the dot product of that row with the filter (weight matrix), we get the result of applying the filter to the input window.
+
+This is the job of the reader kernel. The reader kernel rearranges input data into a buffer (CB) that will be consumed by the compute kernel, in a way that enables matrix multiplication. Specifically, each row in this matrix is a flattened version of the input elements from each kernel window.
+
+Looking at both Figure 2 and Figure 3, we can see that the data for one row in the transformed matrix is not placed continuously in the input. For the first window, we take the first 3 elements, then skip the next 31 elements, and take the next 3 elements, and so on. For each row of the transformed matrix, we select which sticks (input elements) to use by choosing the starting point and applying the appropriate offsets.
+
+<img src="media/im2col5.png" style="width:600px;">\
+_Figure 5: Transformed input for matrix multiplication_
+
+Colors can be matched with those on Figure 1. These dimensions essentially mean that we have 32 windows in our input, with each window containing 288 values (3x3 sticks).
+
+On the other side, the 'writer' kernel (actually, the second reader, not the writer) reads the weight data from DRAM into L1. The entire weight tensor is fetched to each core, and a 1D matrix multiplication (matmul) is performed.
+
+Once the data from the reader and writer are ready, the compute kernel performs the matrix multiplication and stores the output as height-sharded.
+
+The output tensor is 32x32 per core, where only the first row is effective, because we have 31 padded filters.
 
 Convolution Operation on Tenstorrent Architecture
 =================================================
