@@ -13,12 +13,12 @@ void kernel_main() {
     uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t HtWt = get_arg_val<uint32_t>(4);
-    uint32_t n_stride = get_arg_val<uint32_t>(5);
-    uint32_t c_stride = get_arg_val<uint32_t>(6);
-    uint32_t d_stride = get_arg_val<uint32_t>(7);
-    uint32_t N = get_arg_val<uint32_t>(8);
-    uint32_t C = get_arg_val<uint32_t>(9);
-    uint32_t D = get_arg_val<uint32_t>(10);  // check here
+    uint32_t d_stride = get_arg_val<uint32_t>(5);
+    uint32_t n_stride = get_arg_val<uint32_t>(6);
+    uint32_t c_stride = get_arg_val<uint32_t>(7);
+    uint32_t D = get_arg_val<uint32_t>(8);  // check here
+    uint32_t N = get_arg_val<uint32_t>(9);
+    uint32_t C = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t onetile = 1;
 
@@ -77,3 +77,4 @@ void kernel_main() {
         }
         tile_offset += next_depth_shift;
     }
+}

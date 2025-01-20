@@ -6,7 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/operations/ccl/common/types/5d_type.hpp"
+// #include "ttnn/operations/ccl/common/types/5d_type.hpp"
 
 using namespace tt::tt_metal;
 
@@ -62,9 +62,9 @@ void set_or_update_runtime_arguments(
     const auto [bD, bN, bC, bHt, bWt] = b.has_value() ? extract_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
     const auto [cD, cN, cC, cHt, cWt] = extract_shape_dims(c);
 
-    std::cout << " aN, aC, aHt, aWt : " << aN << aC << aHt << aWt << std::endl;
-    std::cout << " bN, bC, bHt, bWt : " << bN << bC << bHt << bWt << std::endl;
-    std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
+    // std::cout << " aN, aC, aHt, aWt : " << aD << aN << aC << aHt << aWt << std::endl;
+    // std::cout << " bN, bC, bHt, bWt : " << bD << bN << bC << bHt << bWt << std::endl;
+    // std::cout << " cN, cC, cHt, cWt : " << cD << cN << cC << cHt << cWt << std::endl;
 
     uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();  // check here
 
@@ -107,13 +107,13 @@ void set_or_update_runtime_arguments(
             cHt,
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
-        std::cout << "reader_runtime_args : " << std::endl;
-        std::cout << start_tile_id << " start_tile_id" << std::endl;
-        std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
-        std::cout << cHtWt << " cHtWt " << std::endl;
-        std::cout << aHt * aWt * aC * (aN > 1) << " aHt * aWt * aC * (aN > 1)" << std::endl;
-        std::cout << aHt * aWt * (aC > 1) << " aHt * aWt * (aC > 1)" << std::endl;
-        std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
+        // std::cout << "reader_runtime_args : " << std::endl;
+        // std::cout << start_tile_id << " start_tile_id" << std::endl;
+        // std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
+        // std::cout << cHtWt << " cHtWt " << std::endl;
+        // std::cout << aHt * aWt * aC * (aN > 1) << " aHt * aWt * aC * (aN > 1)" << std::endl;
+        // std::cout << aHt * aWt * (aC > 1) << " aHt * aWt * (aC > 1)" << std::endl;
+        // std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
 
         if (b.has_value()) {
             std::array writer_runtime_args = {
@@ -131,19 +131,19 @@ void set_or_update_runtime_arguments(
                 cHt,
                 cWt};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
-            std::cout << "writer_runtime_args : " << std::endl;
-            std::cout << start_tile_id << " start_tile_id" << std::endl;
-            std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
-            std::cout << cHtWt << " cHtWt " << std::endl;
-            std::cout << bHt * bWt * bC * (bN > 1) << " bHt * bWt * bC * (bN > 1)" << std::endl;
-            std::cout << bHt * bWt * (bC > 1) << " bHt * bWt * (bC > 1)" << std::endl;
-            std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
+            // std::cout << "writer_runtime_args : " << std::endl;
+            // std::cout << start_tile_id << " start_tile_id" << std::endl;
+            // std::cout << num_tiles_per_core << " num_tiles_per_core" << std::endl;
+            // std::cout << cHtWt << " cHtWt " << std::endl;
+            // std::cout << bHt * bWt * bC * (bN > 1) << " bHt * bWt * bC * (bN > 1)" << std::endl;
+            // std::cout << bHt * bWt * (bC > 1) << " bHt * bWt * (bC > 1)" << std::endl;
+            // std::cout << " cN, cC, cHt, cWt : " << cN << cC << cHt << cWt << std::endl;
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, start_tile_id, cHtWt, cWt);
 
-            std::cout << "calculate_compute_kernel_args : freq " << freq << std::endl;
-            std::cout << "calculate_compute_kernel_args : counter " << counter << std::endl;
+            // std::cout << "calculate_compute_kernel_args : freq " << freq << std::endl;
+            // std::cout << "calculate_compute_kernel_args : counter " << counter << std::endl;
 
             std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
@@ -168,8 +168,9 @@ void set_or_update_runtime_arguments(
             std::array compute_runtime_args = {num_tiles_per_core, 0u, 0u};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
-
+        std::cout << "start_tile_id pre :  " << start_tile_id << std::endl;
         start_tile_id += num_tiles_per_core;
+        std::cout << "start_tile_id + num_tiles_per_core :  " << start_tile_id << std::endl;
     }
 }
 
@@ -200,7 +201,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
     uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();  // check here
-
+    std::cout << " How many out tiles " << num_output_tiles << std::endl;
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -288,7 +289,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         get_kernel_file_path(kernel_config.reader_kernel),
         all_device_cores,
         tt_metal::ReaderDataMovementConfig({a_is_dram}));
-
+    std::cout << "reader kernel " << get_kernel_file_path(kernel_config.reader_kernel) << std::endl;
     // WRITER KERNEL
     auto writer_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::WriterScalar;
     auto compute_kernel = CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar;
@@ -304,7 +305,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         get_kernel_file_path(writer_kernel),
         all_device_cores,
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram}));
-
+    std::cout << "writer kernel " << get_kernel_file_path(kernel_config.writer_kernel) << std::endl;
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
@@ -318,7 +319,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         get_kernel_file_path(compute_kernel),
         all_device_cores,
         tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .defines = compute_kernel_defines});
-
+    std::cout << "compute_kernel " << get_kernel_file_path(compute_kernel) << std::endl;
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
     };
