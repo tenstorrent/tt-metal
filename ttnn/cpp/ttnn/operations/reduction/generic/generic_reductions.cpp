@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn {
 namespace operations::reduction {
@@ -62,6 +63,7 @@ static Tensor reduce_impl(
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
+    const bool is_rank_le_4d = rank <= 4;
 
     ttnn::SmallVector<uint32_t> output_shape;
     for (int axis = 0; axis < input_shape.size(); axis++) {
@@ -75,7 +77,7 @@ static Tensor reduce_impl(
         }
     }
 
-    auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
+    auto input_tensor = is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor_arg) : input_tensor_arg;
 
     Tensor output_tensor;
     bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
@@ -83,39 +85,40 @@ static Tensor reduce_impl(
     if (!single_reduce_op) {
         auto reduce_4d_loop = [&](const bool use_reduce_type) -> Tensor {
             Tensor output_tensor = input_tensor;
-            int offset = 4 - rank;
+            int offset = is_rank_le_4d ? 4 - rank : 0;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
-                bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
-                if (found) {
-                    bool transpose = i_dim < rank - 2;
-                    int adjusted_dim = offset + i_dim;
-                    int reduce_dim = adjusted_dim;
-                    if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, 2, memory_config);
-                        reduce_dim = 2;
-                    }
-                    if (use_reduce_type) {
-                        output_tensor = reduce_impl<reduce_type>(
-                            output_tensor,
-                            {reduce_dim},
-                            /*keepdim=*/true,
-                            memory_config,
-                            compute_kernel_config,
-                            scalar,
-                            /*reshape=*/false);
-                    } else {
-                        output_tensor = reduce_impl<ReduceType::Sum>(
-                            output_tensor,
-                            {reduce_dim},
-                            /*keepdim=*/true,
-                            memory_config,
-                            compute_kernel_config,
-                            scalar,
-                            /*reshape=*/false);
-                    }
-                    if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config);
-                    }
+                if (std::find(dim.begin(), dim.end(), i_dim) == dim.end()) {
+                    continue;
+                }
+                bool transpose = i_dim < rank - 2;
+                int adjusted_dim = offset + i_dim;
+                int reduce_dim = adjusted_dim;
+
+                if (transpose) {
+                    output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
+                    reduce_dim = output_tensor.get_shape().size() - 1;
+                }
+                if (use_reduce_type) {
+                    output_tensor = reduce_impl<reduce_type>(
+                        output_tensor,
+                        {reduce_dim},
+                        /*keepdim=*/true,
+                        memory_config,
+                        compute_kernel_config,
+                        scalar,
+                        /*reshape=*/false);
+                } else {
+                    output_tensor = reduce_impl<ReduceType::Sum>(
+                        output_tensor,
+                        {reduce_dim},
+                        /*keepdim=*/true,
+                        memory_config,
+                        compute_kernel_config,
+                        scalar,
+                        /*reshape=*/false);
+                }
+                if (transpose) {
+                    output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -1, memory_config);
                 }
             }
             return output_tensor;
@@ -125,8 +128,7 @@ static Tensor reduce_impl(
         if (dim.size() == 1 || linear_type) {
             output_tensor = reduce_4d_loop(/*use_reduce_type=*/true);
         } else if constexpr (reduce_type == ReduceType::Mean) {
-            output_tensor = reduce_4d_loop(
-                /*use_reduce_type=*/false);
+            output_tensor = reduce_4d_loop(/*use_reduce_type=*/false);
             float inv_volume = 1.0f / input_tensor.get_logical_volume();
             output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
         } else {
@@ -147,6 +149,10 @@ static Tensor reduce_impl(
         int reduced_volume = 1;
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
+        }
+
+        if (!is_rank_le_4d) {
+            input_tensor = data_movement::squeeze_from_ND_to_4D(input_tensor);
         }
 
         if constexpr (reduce_type == ReduceType::Sum) {
@@ -187,6 +193,10 @@ static Tensor reduce_impl(
                 compute_kernel_config);
         } else {
             TT_THROW("Unsupported reduction operation");
+        }
+
+        if (!is_rank_le_4d) {
+            output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
         }
     }
 
