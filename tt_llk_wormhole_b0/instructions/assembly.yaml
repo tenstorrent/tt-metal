@@ -1,0 +1,3008 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Instruction types:
+#   This field only matters for verilog generation, it signifies which hierarchical decoder "owns" instruction
+#   LOCAL_CREGS  -
+#   PC_MODIFYING -
+#   COMPUTE      -
+#   COMMON_CREGS - ???? Jel se ovo koristi? Nema ga us assembler.cpp
+#
+#
+# Functional Coverage:
+# --------------------------------------
+#
+# Auto-generated instruction-level FCOV is specified with the following three tags as commented in the example below. 
+#
+#
+# SOME_INSTR:
+#   instrn_type: LOCAL_CREGS
+#   ex_resource: SYNC
+#   op_binary: 0xa0
+#   fcov:                                                    # This enables creation of the instruction specific FCOV group
+#   arguments:
+#       - name: mutex_index
+#         start_bit: 0
+#         field_type: HEX
+#         description: &mutex_index >
+#           Mutex index
+#             0 - math
+#             2 - unpack0
+#             3 - unpack1
+#             4 - pack0
+#             5 - pack1
+#             6 - pack2
+#             7 - pack3
+#         fcov_point_bins:                                   # This creates a coverage item for 'mutex_index' with the specified bins
+#           bins: [ {name: "math",    value: "0x0"},
+#                   {name: "unpack0",  value: "0x2"},
+#                   {name: "unpack1",  value: "0x3"},
+#                   {name: "pack0",    value: "0x4"},
+#                   {name: "pack1",    value: "0x5"},
+#                   {name: "pack2",  value: "0x6"},
+#                   {name: "pack3",  value: "0x7"}]
+#       - name: some_bin_interval_field                                          # This creates two bins, one for 0, and one for 1..10.  If 'slice' is smaller than the range, the range will be further divided into slices of that size
+#         fcov_point_bin_interval:
+#           bins: [ {name: "dst_0", slice: "1",  interval: ["0x0","0x0"]},
+#                   {name: "dst_1", slice: "15", interval: ["0x1","0x10"]}]
+#
+#       - name: some_bool_field
+#         fcov_point_bool:                                   # This creates a coverage item for 'some_bool_field' as a boolean.
+#
+
+ATGETM:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa0
+    fcov:
+    arguments:
+        - name: mutex_index
+          start_bit: 0
+          field_type: HEX
+          description: &mutex_index >
+              Mutex index
+                0 - math
+                2 - unpack0
+                3 - unpack1
+                4 - pack0
+                5 - pack1
+                6 - pack2
+                7 - pack3
+          fcov_point_bins:
+            bins: [ {name: "math",    value: "0x0"},
+                    {name: "unpack0",  value: "0x2"},
+                    {name: "unpack1",  value: "0x3"},
+                    {name: "pack0",    value: "0x4"},
+                    {name: "pack1",    value: "0x5"},
+                    {name: "pack2",  value: "0x6"},
+                    {name: "pack3",  value: "0x7"}]
+    description: >
+        Acquires mutex with index `mutex_index' for the issuing
+        thread. At most one thread can hold the mutex at any time.
+        Returns immediately if, when the instruction starts, mutex is
+        not held by any thread, or is held by the issuing thread.
+        Otherwise, stalls issuing thread until mutex is acquired. When
+        instruction completes, issuing thread holds the mutex, and it
+        must be released using instruction ATRELM.
+
+ATRELM:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa1
+    arguments:
+        - name: mutex_index
+          start_bit: 0
+          field_type: HEX
+          description: *mutex_index
+    description: >
+        Releases mutex with index `mutex_index' if it is held by
+        issuing thread. Otherwise, has no effect.
+
+STALLWAIT:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa2
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: wait_res
+          start_bit: 0
+          field_type: DEC
+          description: "resource to be waited for - bit mask: {sfpu(bit14), trisc cfg(bit13), mover(bit12), srcB valid, srcA valid, srcB cleared, srcA cleared, math, packer3, packer2, packer1, packer0, unpack1, unpack0, thcon(bit0)"
+          fcov_point_bins:
+            bins: [ {name: "thcon",    value: "0x1"},
+                    {name: "unpack0",  value: "0x2"},
+                    {name: "unpack1",  value: "0x4"},
+                    {name: "pack0",    value: "0x8"},
+                    {name: "pack1",    value: "0x10"},
+                    {name: "pack2",  value: "0x20"},
+                    {name: "pack3",  value: "0x40"},
+                    {name: "math",    value: "0x80"},
+                    {name: "SrcAClr",  value: "0x100"},
+                    {name: "SrcBClr",  value: "0x200"},
+                    {name: "SrcAVld",    value: "0x400"},
+                    {name: "SrcBVld",    value: "0x0800"},
+                    {name: "Mover",  value: "0x1000"},
+                    {name: "TriscCfg",  value: "0x2000"},
+                    {name: "Sfpu",  value: "0x4000"}]
+        - name: stall_res
+          start_bit: 15
+          field_type: HEX
+          description: "resource to be stalled -- bit mask for resources (compute/tdma(bit0), sync(bit1), pack(bit2), unpack(bit3), xmov(bit4), thcon(bit5), math(bit6), cfg(bit7), sfpu(bit8)  )"
+          fcov_point_bins:
+            bins: [ {name: "stall_compute/tdma",    value: "0x1"},
+                    {name: "stall_sync",  value: "0x2"},
+                    {name: "stall_pack",  value: "0x4"},
+                    {name: "stall_unpack",    value: "0x8"},
+                    {name: "stall_xmov",    value: "0x10"},
+                    {name: "stall_thcon",  value: "0x20"},
+                    {name: "stall_math",  value: "0x40"},
+                    {name: "stall_cfg",    value: "0x80"},
+                    {name: "stall_sfpu",  value: "0x100"}]
+    description: "Barrier instruction, stall resource until condition is met"
+
+SEMINIT:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa3
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: sem_sel
+          start_bit: 2
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..7 select"
+          fcov_point_bins:
+            bins: [ {name: "semaphore0",    value: "0x1"},
+                    {name: "semaphore1",  value: "0x2"},
+                    {name: "semaphore2",  value: "0x4"},
+                    {name: "semaphore3",    value: "0x8"},
+                    {name: "semaphore4",    value: "0x10"},
+                    {name: "semaphore5",  value: "0x20"},
+                    {name: "semaphore6",  value: "0x40"},
+                    {name: "semaphore7",    value: "0x80"}]
+
+        - name: init_value
+          start_bit: 16
+          field_type: DEC
+          description: "Semaphore initial value [0..15]"
+        - name: max_value
+          start_bit: 20
+          field_type: DEC
+          description: "Semaphore max value [0..15]"
+
+    description: "Initialize a semaphore"
+
+SEMPOST:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa4
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: sem_sel
+          start_bit: 2
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..7 select"
+          fcov_point_bins:
+            bins: [ {name: "semaphore0",    value: "0x1"},
+                    {name: "semaphore1",  value: "0x2"},
+                    {name: "semaphore2",  value: "0x4"},
+                    {name: "semaphore3",    value: "0x8"},
+                    {name: "semaphore4",    value: "0x10"},
+                    {name: "semaphore5",  value: "0x20"},
+                    {name: "semaphore6",  value: "0x40"},
+                    {name: "semaphore7",    value: "0x80"}]
+    description: "Semaphore increment"
+
+SEMGET:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa5
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: sem_sel
+          start_bit: 2
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..7 select"
+          fcov_point_bins:
+            bins: [ {name: "semaphore0",    value: "0x1"},
+                    {name: "semaphore1",  value: "0x2"},
+                    {name: "semaphore2",  value: "0x4"},
+                    {name: "semaphore3",    value: "0x8"},
+                    {name: "semaphore4",    value: "0x10"},
+                    {name: "semaphore5",  value: "0x20"},
+                    {name: "semaphore6",  value: "0x40"},
+                    {name: "semaphore7",    value: "0x80"}]
+    description: "Semaphore decrement"
+
+SEMWAIT:
+    instrn_type: LOCAL_CREGS
+    ex_resource: SYNC
+    op_binary: 0xa6
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: wait_sem_cond
+          start_bit: 0
+          field_type: DEC
+          description: "Wait on semaphore. 1 - wait while semaphore is 0, 2 - wait while semaphore is max"
+          fcov_point_bins:
+            bins: [ {name: "WaitWhileZero",    value: "0x1"},
+                    {name: "WaitWhileMax",  value: "0x2"}]
+        - name: sem_sel
+          start_bit: 2
+          field_type: DEC
+          description: "One-hot encoded semaphore 0..7 select"
+          fcov_point_bins:
+            bins: [ {name: "semaphore0",    value: "0x1"},
+                    {name: "semaphore1",  value: "0x2"},
+                    {name: "semaphore2",  value: "0x4"},
+                    {name: "semaphore3",    value: "0x8"},
+                    {name: "semaphore4",    value: "0x10"},
+                    {name: "semaphore5",  value: "0x20"},
+                    {name: "semaphore6",  value: "0x40"},
+                    {name: "semaphore7",    value: "0x80"}]
+        - name: stall_res
+          start_bit: 15
+          field_type: HEX
+          description: resource to be stalled -- bit mask for resources (compute/tdma, sync, pack, unpack, xmov, thcon, math, cfg, sfpu  )
+          fcov_point_bins:
+            bins: [ {name: "stall_compute/tdma",    value: "0x1"},
+                    {name: "stall_sync",  value: "0x2"},
+                    {name: "stall_pack",  value: "0x4"},
+                    {name: "stall_unpack",    value: "0x8"},
+                    {name: "stall_xmov",    value: "0x10"},
+                    {name: "stall_thcon",  value: "0x20"},
+                    {name: "stall_math",  value: "0x40"},
+                    {name: "stall_cfg",    value: "0x80"},
+                    {name: "stall_sfpu",  value: "0x100"}]
+
+    description: "Semaphore barrier instruction, stall resource until semaphore condition is met"
+
+NOP:
+    op_binary: 0x2
+    ex_resource: NONE
+    instrn_type: PREDECODE
+    src_mask: 0x0
+    arguments: 0
+    description: "Do nothing and consume an instruction slot and cycle"
+
+MOVD2A:
+    op_binary: 0x8
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments: &MOVD_REG
+      - name: dst
+        field_type: DEC
+        start_bit: 0
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: instr_mod
+        field_type: DEC
+        start_bit: 12
+        description: instruction modifier, 0 - move single row, 2 - move 4 rows
+        fcov_point_bins:
+          bins: [ {name: "move_single_row", value: "0x0"},
+                  {name: "move_4_rows",     value: "0x2"}]
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: src
+        field_type: DEC
+        start_bit: 17
+        description: src address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x0F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x10","0x1F"]} ]
+      - name: dest_32b_lo
+        field_type: BIN
+        start_bit: 23
+        description: address dest in 32-bit mode, but use the ext bits (Lower bits) (1-bit)
+        fcov_point_bool:
+
+    description: "Move dest register to srca. "
+
+MOVD2B:
+    op_binary: 0xA
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: dst
+        field_type: DEC
+        start_bit: 0
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: instr_mod
+        field_type: DEC
+        start_bit: 12
+        description: instruction modifier, 0 - move single row, 2 - move 4 rows
+        fcov_point_bins:
+          bins: [ {name: "move_single_row", value: "0x0"},
+                  {name: "move_4_rows",     value: "0x2"}]
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: src
+        field_type: DEC
+        start_bit: 17
+        description: src address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x1F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x20","0x3F"]} ]
+      - name: dest_32b_lo
+        field_type: BIN
+        start_bit: 23
+        description: address dest in 32-bit mode, but use the ext bits (Lower bits) (1-bit)
+        fcov_point_bool:
+    description: "Move dest register to srcb. "
+
+MOVB2A:
+    op_binary: 0xB
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments: &MOVB2A_REG
+      - name: srcb
+        field_type: DEC
+        start_bit: 0
+        description: Srcb address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x1F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x20","0x3F"]} ]
+      - name: instr_mod
+        field_type: DEC
+        start_bit: 12
+        description: instruction modifier, 0 - move single row, 2 - move 4 rows
+        fcov_point_bins:
+          bins: [ {name: "move_single_row", value: "0x0"},
+                  {name: "move_4_rows",     value: "0x2"}]
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: srca
+        field_type: DEC
+        start_bit: 17
+        description: srca address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x0F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x10","0x1F"]} ]
+    description: "Move srcb register to srca. F"
+
+ZEROACC:
+    op_binary: 0x10
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: dst
+          field_type: DEC
+          start_bit: 0
+          description: dest register index
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: AddrMode
+          field_type: BIN
+          start_bit: 15
+          description: Addressing mode (bit3)=set zero flag to zero mode
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: clear_mode
+          field_type: BIN
+          start_bit: 19
+          description: "Clear modes:
+            000 - clear only specified dest register. 
+            001 - dest_index specifies block of 16 registers to clear. 
+            010 - dest_index specified upper or lower half to clear when full dest is available (16bit data in dest). 
+            011 - clear all registers when full dest is available (16bit data in dest).
+            110 - dest_index specified upper or lower half to clear when half dest is available (32bit data in dest). 
+            111 - clear all registers half dest is available (32bit data in dest)."
+          fcov_point_bins:
+            bins: [ {name: "clear_only_specified_dest_register",                                value: "0x0"},
+                    {name: "dest_index_specifies_block_of_16_registers_to_clear",               value: "0x1"},
+                    {name: "dest_index_specified_upper_or_lower_half_to_clear - 16b dest mode", value: "0x2"},
+                    {name: "clear_all_registers - 16b dest mode",                               value: "0x3"},
+                    {name: "dest_index_specified_upper_or_lower_half_to_clear - 32b dest mode", value: "0x6"},
+                    {name: "clear_all_registers - 32b dest mode",                               value: "0x7"} ]
+    description: "Zero out accumulator. Single (00) mode clears one register and updates counters using the addressing mode. For other modes, zero-flags are set to emulate clearing of the dest memory, and dest_index is used to determine which portion is to be cleared."
+
+ZEROSRC:
+    op_binary: 0x11
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: src_mask
+          field_type: DEC
+          start_bit: 0
+          description: 1 = zero out source A, 2 = zero out source B, 3 = zero out source A & B
+          fcov_point_bins:
+            bins: [ {name: "zero_out_source_A",       value: "0x1"},
+                    {name: "zero_out_source_B",       value: "0x2"},
+                    {name: "zero_out_source_A_and_B", value: "0x3"} ]
+        - name: bank_mask
+          field_type: DEC
+          start_bit: 2
+          description: 0 - zero out only current bank, 1 - zero out all banks
+          fcov_point_bool:
+        - name: write_mode
+          field_type: DEC
+          start_bit: 3
+          description: 1 - current bank is the current read bank (i.e. math kernel), 0 - current bank is the current write bank (i.e. unpacker kernel)
+          fcov_poit_bool:
+        - name: zero_val
+          field_type: BIN
+          start_bit: 4
+          description: 0 - initialize registers with zero, 1 - initialize registers with -inf (all ones)
+          fcov_point_bool:
+    description: "Zero out source A or B registers"
+
+MOVA2D:
+    op_binary: 0x12
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    fcov:
+    arguments: &MOVA_REG
+      - name: dst
+        field_type: DEC
+        start_bit: 0
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: instr_mod
+        field_type: DEC
+        start_bit: 12
+        description: instruction modifier, 0 - move single row, 2 - move 8 rows
+        fcov_point_bins:
+          bins: [ {name: "move_single_row", value: "0x0"},
+                  {name: "move_8_rows",     value: "0x2"}]
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: src
+        field_type: DEC
+        start_bit: 17
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                  {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                  {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+      - name: dest_32b_lo
+        field_type: BIN
+        start_bit: 23
+        description: address dest in 32-bit mode, but use the ext bits (Lower bits) (1-bit)
+        fcov_point_bool:
+
+    description: "move srca register to dest"
+
+MOVB2D:
+    op_binary: 0x13
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x2
+    fcov:
+    arguments: &MOVB_REG
+      - name: dst
+        field_type: DEC
+        start_bit: 0
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: instr_mod
+        field_type: DEC
+        start_bit: 12
+        description: instruction modifier, bit[0] - single row/single row with broadcasted datum0; bit[1] - broadcast single word; bit[2] - multiple rows
+        fcov_point_bins:
+          bins: [ {name: "move_1_row",                                value: "0x0"},
+                  {name: "move_1_row_broadcast_datum0",               value: "0x1"},
+                  {name: "move_8_row_bcast_single_word",              value: "0x2"},
+                  {name: "move_8_row_bcast_single_word_bcast_datum0", value: "0x3"},
+                  {name: "move_4_row",                                value: "0x4"},
+                  {name: "move_4_row_bcast_datum0",                   value: "0x5"} ]
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: src
+        field_type: DEC
+        start_bit: 17
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: dest_32b_lo
+        field_type: BIN
+        start_bit: 23
+        description: address dest in 32-bit mode, but use the ext bits (Lower bits) (1-bit)
+        fcov_point_bool:
+    description: "move srcb register to dest"
+
+MOVDBGA2D:
+    op_binary: 0x9
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    fcov:
+    src_mask: 0x0
+    arguments: *MOVA_REG
+    description: "move srca register to dest in debug mode - do not wait for ready signals"
+
+TRNSPSRCA:
+    op_binary: 0x14
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    arguments: 0
+    description: "transpose SRCA main registers"
+
+RAREB:
+    op_binary: 0x15
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x2
+    arguments: 0
+    description: "Rarefy SrcB registers"
+
+TRNSPSRCB:
+    op_binary: 0x16
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x2
+    arguments: 0
+    description: "transpose SRCB main registers"
+
+SHIFTXA:
+    op_binary: 0x17
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    fcov:
+    arguments: &SRCA_SHIFTX
+        - name: shift_mode
+          field_type: DEC
+          start_bit: 0
+          description: 11 = combined row shift left towards column 0, 10 = combined row shift right away from column 0, 01 = reserved, 00 = reserved
+          fcov_point_bins:
+            bins: [ {name: "reserved1",                                        value: "0x0"},
+                    {name: "reserved2",                                        value: "0x1"},
+                    {name: "combined_row_shift_right_from_col0",              value: "0x2"},
+                    {name: "combined_row_shift_left_to_col0",                 value: "0x3"} ]
+        - name: log2_amount2
+          field_type: DEC
+          start_bit: 2
+          description: Log2 of the shift amount - allowed only shift by 1
+          fcov_point_bins:
+            bins: [ {name: "shift_1", value: "0x0"} ]
+    description: "horizontal SRCA shift"
+
+SHIFTXB:
+    op_binary: 0x18
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x2
+    fcov:
+    arguments: &SRCB_SHIFTX
+        - name: shift_row
+          field_type: DEC
+          start_bit: 0
+          description: addr row to be shifted
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rot_shift
+          field_type: DEC
+          start_bit: 10
+          description: 0 = rotational shift (datum0 shifts out and feeds into datum15), 1 = non-rotational shift (datum0 shifts out and 0 feeds into datum15)
+          fcov_point_bins:
+            bins: [ {name: "rot_shift",     value: "0x0"},
+                    {name: "non_rot_shift", value: "0x1"} ]
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+    description: "horizontal SRCA shift"
+
+SETASHRMH0:
+    op_binary: 0x1A
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    fcov:
+    arguments: &SRCSHRH0_MASK
+        - name: halo_mask
+          field_type: HEX
+          start_bit: 0
+          description: halo mask
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: reg_mask
+          field_type: HEX
+          start_bit: 1
+          description: 16bit wide register mask
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+    description: "SRCA right shift horizontal mask, covering left halo and thread0 reg_array"
+
+SETASHRMH1:
+    op_binary: 0x1B
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    fcov:
+    arguments: *SRCSHRH0_MASK
+    description: "SRCA right shift horizontal mask 1, covering thread1 reg_array. halo_mask argument is not used as there's no additional left halo storage with respect to thread1, right halo_mask is implied through the main_reg_mask"
+
+SETASHRMV:
+    op_binary: 0x1C
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x1
+    fcov:
+    arguments: &SRCSHRV_MASK
+        - name: reg_mask2
+          field_type: HEX
+          start_bit: 0
+          description: 20bit wide register mask
+    description: "SRCA right shift vertical mask, covering main reg_array and central_sr"
+
+SETASHRMH:
+    op_binary: 0x1E
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    fcov:
+    src_mask: 0x1
+    arguments: *SRCSHRH0_MASK
+    description: "SRCA right shift horizontal mask, only targeting own thread regs"
+
+SETPKEDGOF: # fixme: maybe go away as instruction?
+    op_binary: 0x1D
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    arguments: &PKEDGE_OFFSET
+        - name: x_start
+          field_type: DEC
+          start_bit: 0
+          description: starting datum index for X
+        - name: x_end
+          field_type: DEC
+          start_bit: 4
+          description: ending datum index for X
+        - name: y_start
+          field_type: DEC
+          start_bit: 8
+          description: starting datum index for Y
+        - name: y_end
+          field_type: DEC
+          start_bit: 12
+          description: ending datum index for Y
+    description: "Packer row/column offsets to zero out edges of X-Y plane"
+
+CLREXPHIST:
+    op_binary: 0x21
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    arguments: 0
+    description: "Clear exponent histogram"
+
+CONV3S1:
+    op_binary: 0x22
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: &CONV_ARGS
+        - name: dst
+          field_type: DEC
+          start_bit: 0
+          description: Dest address spec
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+        - name: rotate_weights
+          field_type: BIN
+          start_bit: 17
+          description: Rotate weights for backprop (1-bit field for CONV3S1 and CONV3S2 only)
+          fcov_point_bool:
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+          fcov_point_bool:
+    description: "3x3 primitive for convolution, with stride 1. Outputs 8x 16-wide rows of data"
+
+CONV3S2:
+    op_binary: 0x23
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: *CONV_ARGS
+    description: "Convolution with 3x3 primitive, with stride 2. Outputs 8x 16-wide rows of data"
+
+MPOOL3S1:
+    op_binary: 0x24
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: &MATH_ARGS
+        - name: dst
+          field_type: DEC
+          start_bit: 0
+          description: Dest address spec
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+        - name: index_en
+          field_type: BIN
+          start_bit: 14
+          description: Enable index output for max-pooling      
+          fcov_point_bool:
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+          fcov_point_bool:
+    description: "3x3 primitive for pooling, with stride 1 "
+
+APOOL3S1:
+    op_binary: 0x25
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    fcov:
+    arguments: *MATH_ARGS
+    src_mask: 0x3
+    description: "3x3 primitive for pooling, with stride 1 "
+
+MVMUL:
+    op_binary: 0x26
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: &MVMUL_ARGS
+        - name: dst
+          field_type: DEC
+          start_bit: 0
+          description: Dest address spec
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+        - name: instr_mod19
+          field_type: DEC
+          start_bit: 19
+          description: instruction modifier, 0 - compute 4 rows (full BW); 1 - compute 1 row (1/4 of BW)
+          fcov_point_bool:
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+          fcov_point_bool:
+    description: "Vector-matrix multiply. Outputs 4x 16-wide row"
+
+ELWMUL:
+    op_binary: 0x27
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: &ELW_ARGS
+        - name: dst
+          field_type: DEC
+          start_bit: 0
+          description: Dest address spec
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+        - name: addr_mode
+          field_type: BIN
+          start_bit: 15
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+        - name: instr_mod19
+          field_type: DEC
+          start_bit: 19
+          description: instruction modifier, 0 - srcb no broadcast; 1 - srcb single broadcast ; 3 - srcb broadcast all
+          fcov_point_bins:
+            bins: [ {name: "SRCB_NO_BCAST",     value: "0x0"},
+                    {name: "SRCB_BCAST_SINGLE", value: "0x1"},
+                    {name: "SRCB_BCAST_ALL",    value: "0x3"}]
+        - name: dest_accum_en
+          field_type: BIN
+          start_bit: 21
+          description: If zero, dest value will be overwritten with math result. If 1, result is added to existing dest value.
+          # TODO: fcov stuff
+        - name: clear_dvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear data valid bits (B,A) after math is done."
+          fcov_point_bool:
+    description: "Elementwise multiply operation"
+
+ELWADD:
+    op_binary: 0x28
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    fcov:
+    src_mask: 0x3
+    arguments: *ELW_ARGS
+    description: "Elementwise add operation"
+
+DOTPV:
+    op_binary: 0x29
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    arguments: *ELW_ARGS
+    description: "dot product of two vectors"
+
+ELWSUB:
+    op_binary: 0x30
+    ex_resource: MATH
+    fcov:
+    src_mask: 0x3
+    instrn_type: COMPUTE
+    arguments: *ELW_ARGS
+    description: "Elementwise subtract operation (A-B)"
+
+MPOOL3S2:
+    op_binary: 0x31
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: *MATH_ARGS
+    description: "3x3 primitive for pooling, with stride 2 "
+
+APOOL3S2:
+    op_binary: 0x32
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: *MATH_ARGS
+    description: "3x3 primitive for pooling, with stride 2 "
+
+GMPOOL:
+    op_binary: 0x33
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: &GPOOL_ARGS
+      - name: dst
+        field_type: DEC
+        start_bit: 0
+        description: Dest address spec
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+      - name: max_pool_index_en
+        field_type: DEC
+        start_bit: 14
+        description: Enable index computation for max pooling
+        fcov_point_bool:
+      - name: addr_mode
+        field_type: BIN
+        start_bit: 15
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                  {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+      - name: instr_mod19
+        field_type: DEC
+        start_bit: 19
+        description: instruction modifier, 0 - single row wide; 1 - 16x16 wide
+        fcov_point_bool:
+      - name: clear_dvalid
+        field_type: BIN
+        start_bit: 22
+        description: "Clear data valid bits (B,A) after math is done."
+        fcov_point_bool:
+    description: "Global max pool with primitive size 16x16 "
+
+GAPOOL:
+    op_binary: 0x34
+    ex_resource: MATH
+    src_mask: 0x3
+    instrn_type: COMPUTE
+    fcov:
+    arguments: *GPOOL_ARGS
+    description: "Global average pool with primitive size 16x16 "
+
+SETDVALID:
+    op_binary: 0x57
+    ex_resource: TDMA
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: setvalid
+          field_type: BIN
+          start_bit: 0
+          description: "Set {B,A} data valid (2 bits)"
+          fcov_point_bin_interval:
+            bins: [ {name: "ba_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "ba_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+    description: "Sets A/B data valid for current write ID. TDMA instruction."
+
+GATESRCRST:
+    op_binary: 0x35
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: reset srca gate control
+          field_type: BIN
+          start_bit: 0
+          description: "When set, the state of srca pipeline gating mechanism will reset to dont gate "
+          fcov_point_bool:
+        - name: reset srcb gate control
+          field_type: BIN
+          start_bit: 1
+          description: "When set, the state of srcb pipeline gating mechanism will reset to dont gate "
+          fcov_point_bool:
+    description: "Clear data valid bits, or reset data valid mechanism completely."
+
+CLEARDVALID:
+    op_binary: 0x36
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: reset
+          field_type: BIN
+          start_bit: 0
+          description: "bit 0: When set, clears all data valid bits, and reset write and read IDs to 0. Bit 1: Clear dvalid but dont switch bank"
+          fcov_point_bool:
+        - name: cleardvalid
+          field_type: BIN
+          start_bit: 22
+          description: "Clear {B,A} data valid (2 bits)"
+          fcov_point_bool:
+    description: "Clear data valid bits, or reset data valid mechanism completely."
+
+SETRWC:
+    op_binary: 0x37
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    arguments: &SETRWC_ARGS   # FIXME: fcov
+        - name: BitMask
+          field_type: BIN
+          start_bit: 0
+          description: "bit mask (fidelity_phase_clear,rwc_d,rwc_b,rwc_a)"
+        - name: rwc_a
+          field_type: DEC
+          start_bit: 6
+          description: rwc A value
+        - name: rwc_b
+          field_type: DEC
+          start_bit: 10
+          description: rwc B value
+        - name: rwc_d
+          field_type: DEC
+          start_bit: 14
+          description: rwc DST value
+        - name: rwc_cr
+          field_type: BIN
+          start_bit: 18
+          description: "bit mask (apply values specified to RWC CR counters (Dest CToCRMode,Dest,SrcB,srcA) (Dest CToCrMode: 1: CR <= Counter + inc, 0: CR <= CR + inc)"
+        - name: clear_ab_vld
+          field_type: BIN
+          start_bit: 22
+          description: clear srcA and srcB valids indicating to unpacker that new data can be written in
+          fcov_point_bool:
+    description: "Set register word counters or CR counters"
+
+INCRWC:
+    op_binary: 0x38
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments: &INCRWC_ARGS
+        - name: rwc_a
+          field_type: DEC
+          start_bit: 6
+          description: rwc A value
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rwc_b
+          field_type: DEC
+          start_bit: 10
+          description: rwc B value
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rwc_d
+          field_type: DEC
+          start_bit: 14
+          description: rwc DST value
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rwc_cr
+          field_type: BIN
+          start_bit: 18
+          description: apply values specified to RWC CR counters
+          fcov_point_bool:
+    description: "Increment RWC counters or CR counters"
+
+SETIBRWC:
+    op_binary: 0x39
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    fcov:
+    arguments: &SETIBRWC_ARGS
+        - name: set_inc_ctrl
+          field_type: BIN
+          start_bit: 0
+          description: "inc_bias, set_bias_rwc"
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rwc_bias
+          field_type: DEC
+          start_bit: 6
+          description: rwc A value
+          fcov_point_bin_interval:
+            bins: [ {name: "min", slice: "1",  interval: ["0x0","0x0"]},
+                    {name: "mid", slice: "14", interval: ["0x1","0x0F"]},
+                    {name: "max", slice: "1",  interval: ["0x10","0x10"]} ]    # FIXME: what's the actual range here?
+        - name: rwc_cr
+          field_type: BIN
+          start_bit: 18
+          description: "CR bit (apply values specified to RWC CR counter for bias (1: CR <= Counter + inc, 0: CR <= CR + inc))"
+          fcov_point_bool:
+    description: "Set/increment bias rwc"
+
+MFCONV3S1:
+    op_binary: 0x3A
+    ex_resource: MATH
+    instrn_type: COMPUTE
+    src_mask: 0x3
+    fcov:
+    arguments: *CONV_ARGS
+    description: "3x3 primitive for convolution, with stride 1 with each FP Row operating on four filters. Outputs 8x 12-wide rows of data"    
+
+XMOV:
+    op_binary: 0x40
+    ex_resource: XMOV
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "To be set to 0 for all invocations of XMOV except for the last in a task of assembling input data for     a thread (in which it should be set to 1). Causes data accumulation buffers in mover to flush  to memory"
+          fcov_point_bool:
+        - name: Mov block selection
+          field_type: BIN
+          start_bit: 23
+          description: Select between two move blocks
+          fcov_point_bool:
+    description: "Move data between L0 and L1"
+
+
+PACR:
+    op_binary: 0x41
+    ex_resource: PACK
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "To be set to 0 for all invocations of PACR except for the last in a tile, when it should be set to 1"
+          fcov_point_bool:
+        - name: Flush
+          field_type: BIN
+          start_bit: 1
+          description: "When this bit is set the PACR instruction will just cause a flush of non-empty WAs in the packer"
+          fcov_point_bool:
+        - name: Concat
+          field_type: BIN
+          start_bit: 4
+          description: "To be set to 1 when packed data needs to be concataned to the output of the previous PACR instruction. Must be set to 1 for the first pack instruction and 0 for the last PACR in a row "
+          fcov_point_bool:
+        - name: OvrdThreadId
+          field_type: BIN
+          start_bit: 7
+          description: "Use context ID instead of thread ID to select packer configuration. context id is set in the packer configuration register"
+          fcov_point_bool:
+        - name: PackSel
+          field_type: BIN
+          start_bit: 8
+          description: "Bit mask to select up to 4 packers. When PackSel is 0 then packer 0 will be selected by default"
+          fcov_point_bins:
+            bins: [ {name: "pack1",    value: "0x0"},
+                    {name: "pack2lo",  value: "0x3"},
+                    {name: "pack2hi",  value: "0xc"},
+                    {name: "pack4",    value: "0xf"} ]
+        - name: ZeroWrite
+          field_type: BIN
+          start_bit: 12
+          description: "Will cause zeros to be written regardless of source data"
+          fcov_point_bool:
+        - name: AddrMode
+          field_type: BIN
+          start_bit: 15
+          description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+    description: "Pack row from DST registers to L0"
+
+PACR_SETREG:
+    op_binary: 0x4a
+    ex_resource: PACK
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "Not used. Reserved for future use"
+        - name: Flush
+          field_type: BIN
+          start_bit: 1
+          description: "Enable pack flush. Must be set to 1 to trigger register write"
+        - name: StreamId
+          field_type: BIN
+          start_bit: 2
+          description: "6-bit stream id when writing to NOC overlay registers otherwise used as register address bits [17:12]"
+        - name: PackSel
+          field_type: BIN
+          start_bit: 8
+          description: "Bit mask to select up to 4 packers. Must be set to 0xf for register write"
+        - name: WrData
+          field_type: BIN
+          start_bit: 12
+          description: "10-bit register value to write"
+          fcov_point_bool:
+        - name: AddrSel
+          field_type: BIN
+          start_bit: 22
+          description: "1-bit to select between 2 preprogrammed addresses in TDMA MMIO RISC register space. Value from the register
+                        is used to form 32-bit address as {12'hFFB, REG_ADDR[11:10], StreamId, REG_ADDR[9:0], 2'b00}"
+        - name: Push
+          field_type: BIN
+          start_bit: 23
+          description: "Set to 1 to trigger register write"
+    description: "Set MMIO register through packer pipeline. Max register value is limited to 10-bit (upper bits must be don't care!). 32-bit address is assembled 
+                  as desribed under AddrSel field."
+
+UNPACR:
+    op_binary: 0x42
+    ex_resource: UNPACK
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: Last
+          field_type: BIN
+          start_bit: 0
+          description: "To be set to 0 for all invocations of UNPACR except for the last in a task of assembling input data for a thread (in which it should be set to 1). Causes data accumulation buffers in unpacker to flush  to memory"
+          fcov_point_bool:
+        - name: SearchCacheFlush
+          field_type: BIN
+          start_bit: 1
+          description: Flush row pointer cache in the search block
+          fcov_point_bool:
+        - name: RowSearch
+          field_type: BIN
+          start_bit: 2
+          description: "Search for start and end of selected row(s) within tile. If not set search is done per datum(s)"
+          fcov_point_bool:
+        - name: AutoIncContextID
+          field_type: BIN
+          start_bit: 3
+          description: "Auto increment config context ID after evey unpack instruction"
+          fcov_point_bool:
+        - name: ZeroWrite2
+          field_type: BIN
+          start_bit: 4
+          description: "Will cause zeros to be written regardless of source data"
+          fcov_point_bool:
+        - name: rareb_en
+          field_type: BIN
+          start_bit: 5
+          description: "Will cause srcb rarefy to trigger on uncompress_done"
+          fcov_point_bool:
+        - name: SetDatValid
+          field_type: BIN
+          start_bit: 6
+          description: "Unpacker will set data valid bit for the registers it is unpacking into once data has been written."
+          fcov_point_bool:
+        - name: OvrdThreadId
+          field_type: BIN
+          start_bit: 7
+          description: "Use context ID instead of thread ID to select unpacker configuration"
+          fcov_point_bool:
+        - name: AddrCntContextId
+          field_type: DEC
+          start_bit: 8
+          description: "Address counter context ID 0..2"
+        - name: CfgContextId
+          field_type: DEC
+          start_bit: 10
+          description: "Config context ID 0..7"
+          fcov_point_bin_interval:
+            bins: [ {name: "cc_0_3", slice: "4",  interval: ["0x0","0x3"]},
+                    {name: "cc_3_7", slice: "4",  interval: ["0x3","0x7"]} ]
+        - name: CfgContextCntInc
+          field_type: BIN
+          start_bit: 13
+          description: "Increment config context counter without performing search and unpack"
+          fcov_point_bool:
+        - name: AddrMode  # FIXME: fcov
+          field_type: BIN
+          start_bit: 15
+          description: "Addressing mode: CR, CH1_Y_INC, CH1_Z_INC, CH0_Y_INC, CH0_Z_INC. CR=1 bit, INCs are 2 bits"
+        - name: Unpack_block_selection
+          field_type: BIN
+          start_bit: 23
+          description: Select between two unpackers
+          fcov_point_bins:
+            bins: [ {name: "unpack0",   value: "0"},
+                    {name: "unpack1",   value: "1"} ]
+    description: "Search and unpack row from tile in L0 to SRCA/SRCB registers (by UNPACK0/UNPACK1)"
+
+
+# Do not use this instruction with ZEROSRC + SETDVALID options set at same time due issue:
+# tenstorrent/budabackend#1230
+# Use 2 UNPACR_NOP instructions with zerosrc in once cycle and setdvalid in second
+UNPACR_NOP: # Misc unpack instruction with side effect (skips actual search and unpack)
+    op_binary: 0x43
+    ex_resource: UNPACK
+    instrn_type: TDMA
+    fcov:
+    arguments:
+        - name: NoOp
+          field_type: DEC
+          start_bit: 0
+          description: "0 - UNP_POP (freeing up data allocation buffer in noc overlay through side band signal.
+                                 Amount of data to be freed is set through NOC_OVERLAY_MSG_CLEAR register)
+                        1 - UNP_ZERO_SRC (clear srcA or srcB when unpack is done)
+                            [2] - '0' clear to 0
+                                  '1' clear to neginf
+                            [3] - '0' clear current bank
+                                  '1' clear all banks
+                            [4] - '0' stall clear until data ready is 0
+                                  '1' stall clear until write ready is 1
+                            [6] - set dvalid
+                        2 - UNP_NOP (inject cycle delay between back to back unpack)
+                        3 - UNP_POP+stream_id (same as 0 but stream ID and message clear count are passed through instruction argument instead of register
+                                              [21:16] - stream id 
+                                              [14:12] - message clear count)
+                        4 - UNP_POP+stream_id (same as 3 with support for clearing up to 2k messages)
+                                              [22]    - register address select 
+                                              [21:16] - stream id
+                                              [14: 4] - message clear count 
+                                              [3]     - message count accumulate
+                        5 - UNPACK_NP_NEGINFSRC
+                        6 - RESERVED
+                        7 - UNPACK_SETDVALID"
+                        
+          fcov_point_bins:
+            bins: [  {name: "UNP_POP",        value: "0x0"},
+                     {name: "UNP_ZERO_SRC",   value: "0x1"},
+                     {name: "UNP_NOP",        value: "0x2"},
+                     {name: "UNP_POP_STRM_ID", value: "0x3"},
+                     {name: "UNP_POP_STRM_ID_2", value: "0x4"}]
+        - name: Unpack_block_selection
+          field_type: BIN
+          start_bit: 23
+          description: Select between two unpackers
+          fcov_point_bins:
+            bins: [ {name: "unpack0",   value: "0"},
+                    {name: "unpack1",   value: "1"} ]
+    description: "Trigger side-effect once unpack is done. Skips actual search and unpack"
+
+RSTDMA: # fixme; remove instr?
+    op_binary: 0x44
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    arguments:
+    description: "Soft reset of TDMA engine"
+
+SETDMAREG:
+    op_binary: 0x45
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: RegIndex16b
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA register index in 16b quants"   # FIXME: fcov
+        - name: SetSignalsMode
+          field_type: BIN
+          start_bit: 7
+          description: "Sets registers from signals routed into TDMA block rather than from payload immediate bellow. In this mode payload immediate represents a mux control for which 16b signal chunk to feed into selected register"
+          fcov_point_bool:
+        - name: Payload_SigSel
+          field_type: DEC
+          start_bit: 8
+          description: "In normal mode - immediate payload to set into selected register. In SetSignals mode selector for which 16b chunk of signals to set into selected register.
+          Payload_SigSel[6:3] mode values:
+            0  - Accumulated tile size (16-bit) and last written tile size (16-bit) for 4 packers (128-bit)
+            1  - All zero flag per XY plane [31:0] for 4 packers (128-bit)
+            2  - Tile header for packer 0 (SigSelSize set to 3 - TileHeader)
+            3  - Tile header for packer 1 (SigSelSize set to 3 - TileHeader)
+            4  - Tile header for packer 2 (SigSelSize set to 3 - TileHeader)
+            5  - Tile header for packer 3 (SigSelSize set to 3 - TileHeader)
+            6  - FPU stats 0 (payload bits 8:7 are used to select packer)
+            7  - FPU stats 1 (payload bits 8:7 are used to select packer)
+            8  - Clear accumulated tile size as a side-effect (payload bits 10:7 is the mask used to select packer)
+            9  - FPU stats max exp"
+          fcov_point_bins:
+            bins: [ {name: "acc_tile_size",   value: "0"},
+                    {name: "all_zero_flag",   value: "1"},
+                    {name: "tile_header_p0",   value: "2"},
+                    {name: "tile_header_p1",   value: "3"},
+                    {name: "tile_header_p2",   value: "4"},
+                    {name: "tile_header_p3",   value: "5"},
+                    {name: "fpu_stats_0",   value: "6"},
+                    {name: "fpu_stats_1",   value: "7"},
+                    {name: "clear_accum",   value: "8"},
+                    {name: "fpu_stats_max_exp",   value: "9"} ]
+        - name: Payload_SigSelSize
+          field_type: DEC
+          start_bit: 22
+          description: "Payload size in SetSignals mode. 0 - 16-bit, 1 - 32-bit, 2 - 128-bit, 3 - TileHeader"
+          fcov_point_bins:
+            bins: [ {name: "16bit",   value: "0x0"},
+                    {name: "32bit",   value: "0x1"},
+                    {name: "128bit",  value: "0x2"},
+                    {name: "TileHeader", value: "0x3"}]
+    description: "Set TDMA register file register with 16b immediate value provided with instruction or with routed signals from TDMA via indirect side-effects"
+
+FLUSHDMA:
+    op_binary: 0x46
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: FlushSpec
+          field_type: DEC
+          start_bit: 0
+          description: "Flushes (blocks until completely drained and idle) the entire TDMA engine or a selected component of it. 0 - flush entire DMA, 1 - flush TC(thread controller), 2 flush unpacker0, 4 flush unpacker1, 8 flush packer"
+          fcov_point_bins:
+            bins: [ {name: "flush_entire_DMA", value: "0x0"},
+                    {name: "flush_TC",         value: "0x1"},
+                    {name: "flush_unpacker0",  value: "0x2"},
+                    {name: "flush_unpacker1",  value: "0x4"},
+                    {name: "flush_packer",     value: "0x8"}]
+    description: "Flush TDMA engine or some subset of it as specified by instruction argument"
+
+REG2FLOP:
+    op_binary: 0x48
+    ex_resource: THCON  # FIXME: should this be CFG?  ckernels STALLWAIT against CFG to block this
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: RegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index"
+        - name: FlopIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b flop storage location"
+        - name: ContextId_2
+          field_type: DEC
+          start_bit: 16
+          description: "Context ID 0..3"
+          fcov_point_bins:
+            bins: [ {name: "Context_ID_0", value: "0x0"},
+                    {name: "Context_ID_1", value: "0x1"},
+                    {name: "Context_ID_2", value: "0x2"},
+                    {name: "Context_ID_3", value: "0x3"}]
+        - name: ByteOffset
+          field_type: DEC
+          start_bit: 18
+          description: "Offset (in bytes) into the 32 bit register location. Used for field extraction during 8 or 16 bit moves."
+        - name: TargetSel
+          field_type: DEC
+          start_bit: 20
+          description: "Target Select. 0: TDMA Registers, 1: Local Registers, 2: Context Registers, 3: Override thread id with context id"
+          fcov_point_bins:
+            bins: [ {name: "TDMA_Registers",                     value: "0x0"},
+                    {name: "Local_Registers",                    value: "0x1"},
+                    {name: "Context_Registers",                  value: "0x2"},
+                    {name: "Override_thread_id_with_context_id", value: "0x3"}]
+        - name: SizeSel
+          field_type: DEC
+          start_bit: 22
+          description: "Select size of the data transfer. 0: 16 Bytes, 1: 32 bits, 2: bits, 3: 8 bits." #2: 16 bits?
+          fcov_point_bins:
+            bins: [ {name: "16Bytes", value: "0x0"},
+                    {name: "32bits",  value: "0x1"},
+                    {name: "16bits",  value: "0x2"},
+                    {name: "8bits",   value: "0x3"}]
+    description: "Move data from TDMA register file into flip flops driving actual config signals. Used for certain TDMA configuration signal setting."
+
+LOADIND:
+    op_binary: 0x49
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index. Address is a L1 16B address"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: AutoIncSpec
+          field_type: DEC
+          start_bit: 12
+          description: "Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B"
+          fcov_point_bins:
+            bins: [ {name: "no_autoinc",     value: "0x0"},
+                    {name: "autoinc_by_2B",  value: "0x1"},
+                    {name: "autoinc_by_4B",  value: "0x2"},
+                    {name: "autoinc_by_16B", value: "0x3"}]
+        - name: OffsetIndex
+          field_type: DEC
+          start_bit: 14
+          description: "Offset address register index, in 16b quants (i.e. double the normal R value). Offset is in Bytes"
+        - name: SizeSel
+          field_type: DEC
+          start_bit: 22
+          description: "Select whether the data move is 0 - 16B, 1 - 32b, 2 - 16b, 3 - 8b size"
+          fcov_point_bins:
+            bins: [ {name: "16B", value: "0x0"},
+                    {name: "32b", value: "0x1"},
+                    {name: "16b", value: "0x2"},
+                    {name: "8b",  value: "0x3"}]
+    description: "Load indirect from address specified in a TDMA register, with offset specified in TDMA register to a TDMA register. Supports autoincrementing offset"
+
+TBUFCMD:
+    op_binary: 0x4B
+    ex_resource: PACK
+    instrn_type: TDMA
+    src_mask: 0x0
+    arguments:
+    description: "reserved for future use"
+
+SETADC:
+    op_binary: 0x50
+    instrn_type: ADDRMOD
+    ex_resource: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: Value
+          field_type: DEC
+          start_bit: 0
+          description: Address counter value
+          fcov_point_bin_interval:
+            bins: [ {name: "am_0_1", slice: "2",  interval: ["0x0","0x1"]},      # FIXME: actual range?
+                    {name: "am_2_3", slice: "2",  interval: ["0x2","0x3"]} ]
+        - name: DimensionIndex
+          field_type: DEC
+          start_bit: 18
+          description: 0 for X, 1 for Y, 2 for Z, 3 for W
+          fcov_point_bins:
+            bins: [ {name: "X", value: "0x0"},
+                    {name: "Y", value: "0x1"},
+                    {name: "Z", value: "0x2"},
+                    {name: "W", value: "0x3"}]
+        - name: ChannelIndex
+          field_type: BIN
+          start_bit: 20
+          description: 0 - channel 0, 1 - channel 1
+          fcov_point_bool:
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+          fcov_point_bins:
+            bins: [ {name: "unpacker0", value: "0x1"},
+                    {name: "unpacker1", value: "0x2"},
+                    {name: "packer0",   value: "0x4"}]  # FIXME: what about other packers?
+    description: "Set address counter for one channel and one dimension, but supports full address counter precision"
+
+SETADCXY:
+    op_binary: 0x51
+    ex_resource: TDMA
+    instrn_type: ADDRMOD
+    src_mask: 0x0
+    fcov:
+    arguments: &SETADCXY_ARGS
+        - name: BitMask
+          field_type: BIN
+          start_bit: 0
+          description: "bit mask (Ch1_Y,Ch1_X,Ch0_Y,Ch0_X)"
+        - name: Ch0_X
+          field_type: DEC
+          start_bit: 6
+          description: Ch0_X value
+        - name: Ch0_Y
+          field_type: DEC
+          start_bit: 9
+          description: Ch0_Y value
+        - name: Ch1_X
+          field_type: DEC
+          start_bit: 12
+          description: Ch1_X value
+        - name: Ch1_Y
+          field_type: DEC
+          start_bit: 15
+          description: Ch1_Y value
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+          fcov_point_bins:
+            bins: [ {name: "unpacker0", value: "0x1"},
+                    {name: "unpacker1", value: "0x2"},
+                    {name: "packer0",   value: "0x4"}]  # FIXME: what about other packers?
+    description: "Set address counters for X and Y dimensions. Choose counter set based on the CntSetMask"
+
+INCADCXY:
+    op_binary: 0x52
+    ex_resource: TDMA
+    instrn_type: ADDRMOD
+    src_mask: 0x0
+    fcov:
+    arguments: &INCADCXY_ARGS
+        - name: Ch0_X
+          field_type: DEC
+          start_bit: 6
+          description: Channel 0 X value
+        - name: Ch0_Y
+          field_type: DEC
+          start_bit: 9
+          description: Channel 0 Y value
+        - name: Ch1_X
+          field_type: DEC
+          start_bit: 12
+          description: Channel 1 X value
+        - name: Ch1_Y
+          field_type: DEC
+          start_bit: 15
+          description: Channel 1 Y value
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+          fcov_point_bins:
+            bins: [ {name: "unpacker0", value: "0x1"},
+                    {name: "unpacker1", value: "0x2"},
+                    {name: "packer0",   value: "0x4"}]     # FIXME: what about other pakcers?
+    description: "Increment address counters for X and Y dimensions, for both channels (0/1). Channel 0 = src, Channel 1 = dest"
+
+ADDRCRXY:
+    op_binary: 0x53
+    ex_resource: TDMA
+    instrn_type: ADDRMOD
+    src_mask: 0x0
+    fcov:
+    arguments: *SETADCXY_ARGS
+    description: "Address carriage return"
+
+SETADCZW:
+    op_binary: 0x54
+    ex_resource: TDMA
+    src_mask: 0x0
+    instrn_type: ADDRMOD
+    fcov:
+    arguments: *SETADCXY_ARGS
+    description: "Set address counters for Z and W dimensions"
+
+INCADCZW:
+    op_binary: 0x55
+    ex_resource: TDMA
+    instrn_type: ADDRMOD
+    src_mask: 0x0
+    fcov:
+    arguments: *INCADCXY_ARGS
+    description: "Increments address counter, for Z and W dimensions, for both channels (0/1)"
+
+ADDRCRZW:
+    op_binary: 0x56
+    ex_resource: TDMA
+    instrn_type: ADDRMOD
+    src_mask: 0x0
+    fcov:
+    arguments: *SETADCXY_ARGS
+    description: "Address carriage return"
+
+ADDDMAREG:
+    op_binary: 0x58
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments: &ADDDMAREG_ARGS
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"
+        - name: OpBisConst
+          field_type: BIN
+          start_bit: 23
+          description: "Use OpBRegIndex as const value for math operation"
+          fcov_point_bool:
+    description: "If OpBisConst is 0 adds 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex or
+                  if OpBisConst is 1 adds 32-bit value from DMA registers pointed by OpARegIndex and 6-bit const value set in OpBRegIndex field
+                  and writes result to register ResultRegIndex"
+
+SUBDMAREG:
+    op_binary: 0x59
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments: *ADDDMAREG_ARGS
+    description: "If OpBisConst is 0 subtracts 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex
+                  or if OpBisConst is 1 subtracts 32-bit value from DMA register pointed by OpARegIndex with 6-bit const value set in OpBRegIndex field
+                  and writes result to register ResultRegIndex"
+
+MULDMAREG:
+    op_binary: 0x5a
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments: *ADDDMAREG_ARGS
+    description: "If OpBisConst is 0 multiplies 16-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex or
+                  if OpBisConst is 1 multiplies 16-bit value from DMA register pointed by OpARegIndex with 6-bit const value set in OpBRegIndex field
+                  and writes result to register ResultRegIndex"
+
+BITWOPDMAREG:
+    op_binary: 0x5b
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - AND, 1 - OR, 2 - XOR"
+          fcov_point_bins:
+            bins: [ {name: "AND", value: "0x0"},
+                    {name: "OR",  value: "0x1"},
+                    {name: "XOR", value: "0x2"}]
+        - name: OpBisConst
+          field_type: BIN
+          start_bit: 23
+          description: "Use OpBRegIndex as const value for math operation"
+    description: "If OpBisConst is 0 performs bit-wise operation on 32-bit values from DMA registers pointed by OpARegIndex and OpBRegIndex or
+                  if OpBisConst is 0 performs bit-wise operation on 32-bit value from DMA register pointed by OpARegIndex with 6-bit const value set in OpBRegIndex field
+                  and writes result to register ResultRegIndex"
+
+SHIFTDMAREG:
+    op_binary: 0x5c
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - LEFT, 1 - RIGHT"
+          fcov_point_bool:
+        - name: OpBisConst
+          field_type: BIN
+          start_bit: 23
+          description: "Use OpBRegIndex as const value for math operation"
+          fcov_point_bool:
+    description: "Shifts OpARegIndex <<|>> OpBRegIndex and writes result to register ResultRegIndex. If OpBisConst is 1 6-bit const value set in OpBRegIndex field is used as operand B"
+
+CMPDMAREG:
+    op_binary: 0x5d
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: OpARegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "TDMA 32b register index for operand A"
+        - name: OpBRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "TDMA 32b register index for operand B"
+        - name: ResultRegIndex
+          field_type: DEC
+          start_bit: 12
+          description: "TDMA 32b register index for result"
+        - name: OpSel
+          field_type: DEC
+          start_bit: 18
+          description: "0 - A>B, 1 - A<B, 2 - A==B"
+          fcov_point_bins:
+            bins: [ {name: "A_greater_than_B",  value: "0x0"},
+                    {name: "A_less_than_B",  value: "0x1"},
+                    {name: "A_equals_B", value: "0x2"}]
+        - name: OpBisConst
+          field_type: BIN
+          start_bit: 23
+          description: "Use OpBRegIndex as const value for math operation"
+          fcov_point_bool:
+    description: "Compares values in OpARegIndex and OpBRegIndex registers and writes result 0 or 1 to register ResultRegIndex. If OpBisConst is 1 6-bit const value set in OpBRegIndex field is used as operand B"
+
+SETADCXX:
+    op_binary: 0x5E
+    ex_resource: TDMA
+    src_mask: 0x0
+    instrn_type: ADDRMOD
+    fcov:
+    arguments:
+        - name: x_start
+          field_type: DEC
+          start_bit: 0
+          description: x_start set value
+        - name: x_end2
+          field_type: DEC
+          start_bit: 10
+          description: x_end set value
+        - name: CntSetMask
+          field_type: BIN
+          start_bit: 21
+          description: 001 - unpacker0, 010 - unpacker1, 100 - packer0
+          fcov_point_bins:
+            bins: [ {name: "unpacker0", value: "0x1"},
+                    {name: "unpacker1", value: "0x2"},
+                    {name: "packer0",   value: "0x4"}]
+    description: "Set address counters for Z and W dimensions"
+
+DMANOP:
+    op_binary: 0x60
+    ex_resource: TDMA
+    src_mask: 0x0
+    instrn_type: TDMA
+    arguments: 0
+    description: "Do nothing and consume an tdma instruction slot and cycle"
+
+ATINCGET:
+    op_binary: 0x61
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index (16B word address)"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Source(inc value) and destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on"
+          fcov_point_bins:
+            bins: [ {name: "word0", value: "0x0"},
+                    {name: "word1", value: "0x1"},
+                    {name: "word2", value: "0x2"},
+                    {name: "word3", value: "0x3"}]
+        - name: WrapVal
+          field_type: DEC
+          start_bit: 14
+          description: "Wrap the targeted address value at 1 << WrapVal[4:0]"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          fcov_point_bool:
+    description: "Atomic increment and get - will read value in targetted memory location and return it to TDMA register and post-increment it atomically with the value pointed by DataRegIndex field"
+
+ATINCGETPTR:
+    op_binary: 0x62
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index (16B word address)"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on (i.e. Read/Write select)"
+          fcov_point_bins:
+            bins: [ {name: "word0", value: "0x0"},
+                    {name: "word1", value: "0x1"},
+                    {name: "word2", value: "0x2"},
+                    {name: "word3", value: "0x3"}]
+        - name: WrapVal
+          field_type: DEC
+          start_bit: 14
+          description: "Wrap the targeted address value at 1 << WrapVal (e.g. Set WrapVal==3 for a 4-byte byte-addressed fifo)"
+        - name: IncrVal
+          field_type: DEC
+          start_bit: 18
+          description: "Post-increment by 1<<IncrVal if NoIncr is 0"
+        - name: NoIncr
+          field_type: BIN
+          start_bit: 22
+          description: "Disable pointer increment"
+          fcov_point_bool:
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          fcov_point_bool:
+    description: >
+        Atomic increment and get pointer - will access a memory location designated as a FIFO pointer location (contains a 32b read pointer and a 32b write pointer), return the
+        pointer value to TDMA register and post-increment it unless the FIFO condition precludes that. For example, write pointer will not be incremented if FIFO is full. Read pointer
+        will not be incremented if FIFO is empty. FIFO full or empty conditions are returned as an unsuccessful return condition code, so that the thread controller can retry until
+        success (retry reads if FIFO empty, retry writes if FIFO full.) If NoIncr is set to 1 then hardware will not increment the pointers but retry will still occur if FIFO is empty or full
+
+ATSWAP:
+    op_binary: 0x63
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index (16B word address)"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "First of four data register indexes. Must be aligned to 4."
+        - name: SwapMask
+          field_type: DEC
+          start_bit: 14
+          description: "Swap mask at 16b granulatiry (8b of mask for 16B words)"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting DataRam (0) or L1 (1)"
+          fcov_point_bool:
+    description: "Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones provided on write data bus."
+
+ATCAS:
+    op_binary: 0x64
+    ex_resource: THCON
+    src_mask: 0x0
+    instrn_type: TDMA
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index (16B word address)"
+        - name: DataRegIndex  # FIXME: unused and to be removed. Issue #434
+          field_type: DEC
+          start_bit: 6
+          description: "Destination data register index"
+        - name: Sel32b
+          field_type: DEC
+          start_bit: 12
+          description: "Selects the 32b word within a 16B word to operate on"
+          fcov_point_bins:
+            bins: [ {name: "word0", value: "0x0"},
+                    {name: "word1", value: "0x1"},
+                    {name: "word2", value: "0x2"},
+                    {name: "word3", value: "0x3"}]
+        - name: CmpVal
+          field_type: DEC
+          start_bit: 14
+          description: "Compare value provided as an immediate (4 bits)"
+        - name: SwapVal
+          field_type: DEC
+          start_bit: 18
+          description: "Swap value provided as an immediate (4 bits)"
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targeting DataRam (0) or L1 (1)"
+          fcov_point_bool:
+    description: >
+        Atomic compare-and-swap. If value at selected memory location matches that provided by programmer it is swapped to a new one, also provided by
+        programmer. Otherwise, instruction will be retried until it does match at which time it will swap.  This instruction is implemented for
+        implementations of mutual exclusion between Tensix cores and threads
+
+STOREIND:
+    op_binary: 0x66
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: AddrRegIndex
+          field_type: DEC
+          start_bit: 0
+          description: "Address register index"
+        - name: DataRegIndex
+          field_type: DEC
+          start_bit: 6
+          description: "Source data register index"
+        - name: AutoIncSpec
+          field_type: DEC
+          start_bit: 12
+          description: "Autoincrement spec: 0 - no autoinc, 1 - autoinc by 2(B)ytes, 2 - autoinc by 4B, 3 - autoinc by 16B"
+          fcov_point_bins:
+            bins: [ {name: "no_autoinc",     value: "0x0"},
+                    {name: "autoinc_by_2B",  value: "0x1"},
+                    {name: "autoinc_by_4B",  value: "0x2"},
+                    {name: "autoinc_by_16B", value: "0x3"}]
+        - name: OffsetIndex
+          field_type: DEC
+          start_bit: 14
+          description: "Offset address register index"
+        - name: RegSizeSel
+          field_type: BIN
+          start_bit: 21
+          description: "If MemHierSel bit is set to 0 (source regfile) then this bit elects between src A and B register file: 0 - SRC A, 1 - SRCB. Supported data move size is 16B and 32b.
+                        If MemHierSel bit is set to 1 (L1) then bits 22:21 are used for setting data move size: 0 - 16B, 1 - 16b, 2 - 32b, 3 - 8b size"
+          fcov_point_bool:
+        - name: SizeSel
+          field_type: BIN
+          start_bit: 22
+          description: "Select whether the data move is 16B (0) or 32b (1) size"
+          fcov_point_bool:
+        - name: MemHierSel
+          field_type: BIN
+          start_bit: 23
+          description: "Selects whether transaction is targetting source regfile (0) or L1 (1)"
+          fcov_point_bool:
+    description: "Store indirect. Stores data from TDMA register to memory location specified by a combination of base+offset provided in other TDMA registers. Supports auto-increment on offset value."
+
+STOREREG:
+    op_binary: 0x67
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    arguments:
+        - name: RegAddr
+          field_type: DEC
+          start_bit: 0
+          description: "18-bit register index aligned to 32-bit"
+        - name: TdmaDataRegIndex
+          field_type: DEC
+          start_bit: 18
+          description: "Source data register index"
+    description: "Stores data from GPR to local RISC register space. Final register address is computed as 0xFFB0_0000 | (RegAddr<<2)"
+
+LOADREG:
+    op_binary: 0x68
+    ex_resource: THCON
+    instrn_type: TDMA
+    src_mask: 0x0
+    arguments:
+        - name: RegAddr
+          field_type: DEC
+          start_bit: 0
+          description: "18-bit register index aligned to 32-bit"
+        - name: TdmaDataRegIndex
+          field_type: DEC
+          start_bit: 18
+          description: "Dest data register index"
+    description: "Loads data from local RISC register space to GPR"
+
+SFPLOAD:
+    op_binary: 0x70
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MEM
+      - name: dest_reg_addr
+        field_type: DEC
+        start_bit: 0
+        description: dest regs addr
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+      - name: sfpu_addr_mode
+        field_type: BIN
+        start_bit: 14
+        description: 2-bit index of cfg register ADDR_MOD_REG to use for describing addressing mode
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x1"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x2","0x3"]} ]
+      - name: instr_mod0
+        field_type: DEC
+        start_bit: 16
+        description: "instruction modifier:
+                         DEFAULT       4'b0000
+                         FP16A         4'b0001
+                         FP16B         4'b0010
+                         FP32          4'b0011
+                         INT32         4'b0100
+                         INT32_COMP    4'b1100
+                         INT8          4'b0101
+                         INT8_COMP     4'b1101
+                         LO16          4'b0110
+                         LO16_ONLY     4'b1110
+                         HI16          4'b0111
+                         HI16_ONLY     4'b1111"
+      - name: lreg_ind
+        field_type: DEC
+        start_bit: 20
+        description: lreg index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU load from dest regs"
+
+SFPLOADI:
+    op_binary: 0x71
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MEMI
+      - name: imm16
+        field_type: DEC
+        start_bit: 0
+        description: immedate op
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+      - name: instr_mod0
+        field_type: DEC
+        start_bit: 16
+        description: instruction modifier   # FIXME: fcov
+      - name: lreg_ind
+        field_type: DEC
+        start_bit: 20
+        description: lreg index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU load immediate operand in half-float format"
+
+SFPSTORE:
+    op_binary: 0x72
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MEM
+    description: "sFPU store to dest"
+
+SFPLUT:
+    op_binary: 0x73
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_LUT
+      - name: dest_reg_addr
+        field_type: DEC
+        start_bit: 0
+        description: dest regs addr
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+      - name: instr_mod0 # FIXME: fcov
+        field_type: DEC
+        start_bit: 16
+        description: instruction modifier
+      - name: lreg_ind
+        field_type: DEC
+        start_bit: 20
+        description: lreg index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU table look-up instruction; this is a two cycle operation "
+
+SFPMULI:
+    op_binary: 0x74
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MATHI16
+      - name: instr_mod1 # FIXME: fcov
+        field_type: DEC
+        start_bit: 0
+        description: instruction modifier
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: imm16_math
+        field_type: DEC
+        start_bit: 8
+        description: immediate 16bit operand
+    description: "sFPU math instruction multiply-add with immediate operand in 12bit (exp/man) format; this is a two cycle operation "
+
+SFPADDI:
+    op_binary: 0x75
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI16
+    description: "sFPU math instruction add with immediate 16bit operand; this is a two cycle operation "
+
+SFPDIVP2:
+    op_binary: 0x76
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MATHI12
+      - name: instr_mod1 # FIXME: fcov
+        field_type: DEC
+        start_bit: 0
+        description: instruction modifier
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        description: immediate 12bit operand
+    description: "sFPU math instruction ??"
+
+SFPEXEXP:
+    op_binary: 0x77
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction extend exponent"
+
+SFPEXMAN:
+    op_binary: 0x78
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction extend mantissa"
+
+SFPIADD:
+    op_binary: 0x79
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction ???"
+
+SFPSHFT:
+    op_binary: 0x7A
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction shift"
+
+SFPSETCC:
+    op_binary: 0x7B
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction to manipulate conditional code"
+
+SFPMOV:
+    op_binary: 0x7C
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction move (imod[0]=1: invert sign)"
+
+SFPABS:
+    op_binary: 0x7D
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction absolute value"
+
+SFPAND:
+    op_binary: 0x7E
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction AND"
+
+SFPOR:
+    op_binary: 0x7F
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction OR"
+
+SFPNOT:
+    op_binary: 0x80
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction NOT"
+
+SFPLZ:
+    op_binary: 0x81
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction find leading zeros"
+
+SFPSETEXP:
+    op_binary: 0x82
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction find leading zeros"
+
+SFPSETMAN:
+    op_binary: 0x83
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction find leading zeros"
+
+SFPMAD:
+    op_binary: 0x84
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_MATH
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                          bit[3] : use value in lreg[7][3:0] as a pointer to the destination lreg
+                          bit[2] : use value in lreg[7][3:0] as a pointer to the src_a       lreg"
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_b
+        field_type: DEC
+        start_bit: 12
+        description: lreg src_b index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_a
+        field_type: DEC
+        start_bit: 16
+        description: lreg src_a index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU math instruction multiply-add; this is a two cycle operation "
+
+SFPADD:
+    op_binary: 0x85
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATH
+    description: "sFPU math instruction add; this is a two cycle operation  "
+
+SFPMUL:
+    op_binary: 0x86
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATH
+    description: "sFPU math instruction multiply; this is a two cycle operation  "
+
+SFPPUSHC:
+    op_binary: 0x87
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU instruction to push CC flag to stack"
+
+SFPPOPC:
+    op_binary: 0x88
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU instruction to pop CC flag from stack and make it active"
+
+SFPSETSGN:
+    op_binary: 0x89
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction set sign"
+
+SFPENCC:
+    op_binary: 0x8A
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction to manipulate enable/disable"
+
+SFPCOMPC:
+    op_binary: 0x8B
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction to manipulate enable/disable"
+
+SFPTRANSP:
+    op_binary: 0x8C
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction transpose registers"
+
+SFPXOR:
+    op_binary: 0x8D
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MATHI12
+    description: "sFPU math instruction XOR"
+
+SFP_STOCH_RND:
+    op_binary: 0x8E
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier bits [2:0]:
+                      fp32->fp16_a          - 0x0;
+                      fp32->fp16_b          - 0x1;
+                      fp32->unsigned  int8  - 0x2;
+                      fp32->signed    int8  - 0x3;
+                      int32->unsigned int8  - 0x4;
+                      int32->signed   int8  - 0x5;
+                      fp32->unsigned  int16 - 0x6;
+                      fp32->signed    int16 - 0x7;
+                      instruction modifier bit 3 : use immediate in place of srcb"
+        fcov_point_bins:
+            bins: [ {name: "fp32_to_fp16_a",     value: "0x0"},
+                    {name: "fp32_to_fp16_b",  value: "0x1"},
+                    {name: "fp32_to_uint8",  value: "0x2"},
+                    {name: "fp32_to_sint8", value: "0x3"},
+                    {name: "int32_to_uint8", value: "0x4"},
+                    {name: "int32_to_sint8", value: "0x5"},
+                    {name: "fp32_to_uint16", value: "0x6"},
+                    {name: "fp32_to_sint16", value: "0x7"}]
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index - src_c provides the value to be rounded
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_b
+        field_type: DEC
+        start_bit: 12
+        description: lreg src_b index - src_b[4:0] provides 5-bit descale value for rounding to int8
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: imm8_math
+        field_type: DEC
+        start_bit: 16
+        description: immediate 8bit operand to provide descale value in place of src_b when instr_mod bit 3 is set
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: rnd_mode
+        field_type: BIN
+        start_bit: 21
+        description: "Select the rounding mode - 0: Round to Nearest; 1: Round Stochastically"
+        fcov_point_bool:
+    description: "sFPU math instruction to stochastically round a given value"
+
+SFPNOP:
+    op_binary: 0x8F
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    arguments: 0
+    description: "sFPU math instruction NOP"
+
+SFPCAST:
+    op_binary: 0x90
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                      int32 -> fp32 (nearest even)         - 0x0;
+                      int32 -> fp32 (stochastically)       - 0x1;
+                      RESERVED                             - 0xf : 0x2;"
+        fcov_point_bins:
+          bins: [ {name: "int32_to_fp32_neven",     value: "0x0"},
+                  {name: "int32_to_fp32_stoch",  value: "0x1"} ]
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index - src_c provides the value to be cast
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU math instruction to cast a given value into another format"
+
+SFPCONFIG:
+    op_binary: 0x91
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1  # fixme: fcov
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                      [0]        : if config_dest is     one of the constant_lregs, then setting this bit means to reset to the default value (write input is not used)
+                      [0]        : if config_dest is NOT one of the constant_lregs, then setting this bit means to use the imm16_math field as the write input value instead of lreg[0] as write input value
+                      [2:1] == 0 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as a normal write
+                      [2:1] == 1 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an OR  MASK with the existing bits in the register (useful if you only want to SET    the values in specific bits while retaining whatever is in other bits)
+                      [2:1] == 2 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an AND MASK with the existing bits in the register (useful if you only want to CLEAR  the values in specific bits while retaining whatever is in other bits)
+                      [2:1] == 3 : if config_dest is SFPU or LOADMACRO Control Register, treat the write input as an XOR MASK with the existing bits in the register (useful if you only want to INVERT the values in specific bits while retaining whatever is in other bits)
+                      [3]        : treat the imm16_math field as a column mask which will only enable the config update on the columns corresponding to bit positions which are 1 in the imm16_math field (note: bits [0] and [3] mean different uses for imm16_math)"
+      - name: config_dest  # fixme: fcov
+        field_type: DEC
+        start_bit: 4
+        description: "SFPU configuration register index:
+                      Load Macro Instruction 0       :       0x0
+                      Load Macro Instruction 1       :       0x1
+                      Load Macro Instruction 2       :       0x2
+                      Load Macro Instruction 3       :       0x3
+                      Load Macro Sequence    0       :       0x4
+                      Load Macro Sequence    1       :       0x5
+                      Load Macro Sequence    2       :       0x6
+                      Load Macro Sequence    3       :       0x7
+                      Load Macro Control             :       0x8
+                      RESERVED                       : 0xA - 0x9
+                      Programmable constant lreg[11] : 0xB
+                      Programmable constant lreg[12] : 0xC
+                      Programmable constant lreg[13] : 0xD
+                      Programmable constant lreg[14] : 0xE
+                      SFPU Control Register          : 0xF"
+      - name: imm16_math
+        field_type: DEC
+        start_bit: 8
+        description: immediate 16bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+    description: "sFPU math instruction to program one of the configuration registers - hard-coded to read from LREG[0] on SFPU row[0] when not using the immediate field"
+
+SFPSWAP:
+    op_binary: 0x92  # fixme: fcov
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                      Unconditionally swap the values in SRCC and DST                                                                  - 0x0
+                      DST will be written with the smaller value and SRCC with the larger value on all rows                            - 0x1
+                      DST will be written with the smaller value and SRCC with the larger value on rows 0 & 1 (opposite on other rows) - 0x2
+                      DST will be written with the smaller value and SRCC with the larger value on rows 0 & 2 (opposite on other rows) - 0x3
+                      DST will be written with the smaller value and SRCC with the larger value on rows 0 & 3 (opposite on other rows) - 0x4
+                      DST will be written with the smaller value and SRCC with the larger value on row  0     (opposite on other rows) - 0x5
+                      DST will be written with the smaller value and SRCC with the larger value on row  1     (opposite on other rows) - 0x6
+                      DST will be written with the smaller value and SRCC with the larger value on row  2     (opposite on other rows) - 0x7
+                      DST will be written with the smaller value and SRCC with the larger value on row  3     (opposite on other rows) - 0x8
+                      RESERVED                                                                                                         - 0xf : 0x9"
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        description: immediate 12bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+    description: "sFPU math instruction to swap the values in two registers ; this is a two cycle operation"
+
+SFPLOADMACRO:
+    op_binary: 0x93
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: *SFPU_MEM
+    description: "sFPU load from dest regs and then run the macro specified in lreg_dest index[3:2]"
+
+SFPSHFT2:
+    op_binary: 0x94
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments:
+      - name: instr_mod1  # FIXME: fcov
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                      (One cycle) shift LREGs[3:0] all rows in parallel left towards LREG[0]                       within the SFPU instance with all four rows of LREG[3] being written with zeros (type 0)                                                      - 0x0
+                      (One cycle) shift LREGs[3:0] all rows in series   left towards LREG[0] and up towards ROW[0] within the SFPU instance with only ROW[3]      LREG[3] being written with zeros (type 1)                                                      - 0x1
+                      (Two cycle) shift LREGs[3:0] all rows in parallel left towards LREG[0] locally within the SFPU and globally shift a single LREG from each row away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[3] of SFPU column X+1 - 0x2
+                      (Two cycle) shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with rotation                                                     - 0x3
+                      (Two cycle) shift a single LREG from each row globally across SFPUs away from column 0 with LREG[src_c] of SFPU column X feeding into LREG[lreg_dest] of SFPU column X+1 with zero fill on column 0                                        - 0x4
+                      (One cycle) normal bitwise shift within the LREG specified by lreg_dest/src_b by the amount specified in src_c                                                                                                                             - 0x5
+                      (One cycle) normal bitwise shift within the LREG specified by lreg_dest/src_b by the amount specified in imm12_math                                                                                                                        - 0x6
+                      RESERVED                                                                                                                                                                                                                                   - 0xf : 0x7"
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index (doubles as src_b)
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: lreg_src_c
+        field_type: DEC
+        start_bit: 8
+        description: lreg src_c index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+      - name: imm12_math
+        field_type: DEC
+        start_bit: 12
+        description: immediate 12bit operand
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x000","0x7FF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x800","0xFFF"]} ]
+    description: "sFPU shift2 instruction to shift LREGS across and within instances of the SFPU"
+
+SFPLUTFP32:
+    op_binary: 0x95
+    ex_resource: SFPU
+    instrn_type: SFPU
+    src_mask: 0x0
+    fcov:
+    arguments: &SFPU_LUTFP32
+      - name: instr_mod1  # fixme: fcov
+        field_type: DEC
+        start_bit: 0
+        description: "instruction modifier :
+                          4'b0000 : force lreg3 sign to zero on input to the MAD
+                          4'b0100 : use lreg3 sign as the sign of the result on the MAD          "
+      - name: lreg_dest
+        field_type: DEC
+        start_bit: 4
+        description: lreg dest index
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x00","0x7F"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x80","0xFF"]} ]
+    description: "sFPU table look-up instruction with FP32 precision; this is a two cycle operation "
+
+
+
+WRCFG:
+    instrn_type: LOCAL_CREGS
+    ex_resource: CFG
+    op_binary: 0xb0
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: CfgReg
+          start_bit: 0
+          field_type: DEC
+          description: "configuration register address to write data to (32-bit aligned)"
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+        - name: wr128b
+          start_bit: 15
+          field_type: DEC
+          description: "Do 128-bit Reg to Cfg write if set to 1"
+          fcov_point_bool:
+        - name: GprAddress
+          start_bit: 16
+          field_type: DEC
+          description: "gpr address to read data from (32-bit aligned)"
+    description: "Write configuration register of current thread's state with 32b data read from Gpr file"
+
+RDCFG:
+    instrn_type: LOCAL_CREGS
+    ex_resource: CFG
+    op_binary: 0xb1
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: CfgReg
+          start_bit: 0
+          field_type: DEC
+          description: "configuration register address to read data from (32-bit aligned)"
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+        - name: GprAddress
+          start_bit: 16
+          field_type: DEC
+          description: "gpr address to write config data to (32-bit aligned)"
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+    description: "Read configuration register of current thread's state and write to its from Gpr file"
+
+SETC16:
+    instrn_type: LOCAL_CREGS
+    ex_resource: CFG
+    op_binary: 0xb2
+    src_mask: 0x0
+    fcov:
+    arguments:
+        - name: setc16_value
+          start_bit: 0
+          field_type: HEX
+          description: The value to store
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+        - name: setc16_reg
+          start_bit: 16
+          field_type: HEX
+          description: <register> - Register index
+          fcov_point_bin_interval:
+            bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                    {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+    description: "Sets thread specific control register <register> to the 16-bit value stored in the slot argument"
+
+RMWCIB0:
+  instrn_type: LOCAL_CREGS
+  ex_resource: CFG
+  op_binary: 0xb3
+  src_mask: 0x0
+  fcov:
+  arguments: &RMWCIB
+      - name: CfgRegAddr 
+        start_bit: 0
+        field_type: HEX
+        description: Address of CFG register in active state space
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x100",  interval: ["0x0","0x7F"]},
+                  {name: "top_half", slice: "0x100",  interval: ["0x80","0xFF"]} ]
+      - name: Data
+        start_bit: 8
+        field_type: HEX
+        description: DataToWrite (8-bits)
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x100",  interval: ["0x0","0x7F"]},
+                  {name: "top_half", slice: "0x100",  interval: ["0x80","0xFF"]} ]
+      - name: Mask
+        start_bit: 16
+        field_type: HEX
+        description: Mask to use for data (8-bits)
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x100",  interval: ["0x0","0x7F"]},
+                  {name: "top_half", slice: "0x100",  interval: ["0x80","0xFF"]} ]
+  description: "Read-Modify-Write on Byte 0 of the cfg register, only updating the bits set in mask"
+
+RMWCIB1:
+  instrn_type: LOCAL_CREGS
+  ex_resource: CFG
+  op_binary: 0xb4
+  src_mask: 0x0
+  fcov:
+  arguments:  *RMWCIB
+  description: "Read-Modify-Write on Byte 1 of the cfg register, only updating the bits set in mask"
+  
+RMWCIB2:
+  instrn_type: LOCAL_CREGS
+  ex_resource: CFG
+  op_binary: 0xb5
+  src_mask: 0x0
+  fcov:
+  arguments:  *RMWCIB
+  description: "Read-Modify-Write on Byte 2 of the cfg register, only updating the bits set in mask"
+
+RMWCIB3:
+  instrn_type: LOCAL_CREGS
+  ex_resource: CFG
+  op_binary: 0xb6
+  src_mask: 0x0
+  fcov:
+  arguments:  *RMWCIB
+  description: "Read-Modify-Write on Byte 3 of the cfg register, only updating the bits set in mask"
+
+
+MOP:
+    op_binary: 0x1
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    ex_resource: SYNC
+    mop_only : 0x1
+    fcov:
+    description: "Macro-Op. Run template programmed into the MOP decoder. This instruction should never reach Tensix itself, but can only be pushed in through C kernels into MOP decoder."
+    arguments:
+      - name: zmask_lo16
+        start_bit: 0
+        field_type: HEX
+        description: Low 16-bit zmask for unpacker loop
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+      - name: loop_count
+        start_bit: 16
+        field_type: HEX
+        description: (loop count - 1) for unpacker loop MOP operation
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+      - name: mop_type
+        start_bit: 23
+        field_type: BIN
+        description: 0 - unpack z-mask loop, 1 - double math/unpack loop
+        fcov_point_bool:
+
+MOP_CFG:
+    op_binary: 0x3
+    instrn_type: COMPUTE
+    src_mask: 0x0
+    ex_resource: SYNC
+    fcov:
+    mop_only : 0x1
+    description: "Macro-op config op. Currently used to program the top 16 bits of Z-mask for unpacker loop."
+    arguments:
+      - name: zmask_hi16
+        start_bit: 0
+        field_type: HEX
+        description: High 16-bit zmask for unpacker loop
+        fcov_point_bin_interval:
+          bins: [ {name: "bot_half", slice: "0x10000",  interval: ["0x0","0x7FFF"]},
+                  {name: "top_half", slice: "0x10000",  interval: ["0x8000","0xFFFF"]} ]
+
+
+REPLAY:
+    op_binary: 0x4
+    instrn_type: COMPUTE
+    ex_resource: NONE
+    fcov:
+    description: "Used to load or run instructions in the replay buffer. This instruction should never reach Tensix itself."
+    arguments:
+      - name: load_mode
+        start_bit: 0
+        field_type: BIN
+        description: "If 1, the next len instructions will be saved to replay_buffer[start_idx +: len] AND WILL NOT REACH THE TENSIX CORE. If 0, this instruction will instead issue the instructions saved in replay_buffer[start_idx +: len] to the tensix core. "
+      - name: execute_while_loading
+        start_bit: 1
+        field_type: BIN
+        description: >
+          When load_mode == 0, this bit has no effect. 
+          
+          When load_mode == 1, we have:
+            - When this bit is 1, instructions that are loaded into the replay buffer 
+              are also executed by the Tensix core (takes as many cycles as it would
+              normally take to execute the loaded Tensix instructions)
+              
+            - When this bit is 0, instructions are only loaded into the replay buffer 
+              (guaranteed to take only one cycle per loaded Tensix instruction)
+      - name: len
+        start_bit: 4
+        field_type: DEC
+        description: "This field indicates how many replay buffer instructions are targeted by this replay command. The hardware will only use the log2(replay_buffer_depth) LSBs of this field."
+      - name: start_idx
+        start_bit: 14
+        field_type: DEC
+        description: "replay_buffer[start_idx +: len] are targeted by this replay command. The hardware will only use the log2(replay_buffer_depth) LSBs of this field."
+        
+
