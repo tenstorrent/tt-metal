@@ -23,7 +23,7 @@ void MAIN {
 
     acquire_dst();
 
-    mm_init();
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     for (uint32_t b = 0; b < block_cnt; ++b) {
         cb_wait_front(tt::CBIndex::c_0, in0_block_tile_cnt);
         cb_wait_front(tt::CBIndex::c_1, in1_block_tile_cnt);

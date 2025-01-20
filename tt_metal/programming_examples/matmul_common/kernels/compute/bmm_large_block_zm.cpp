@@ -22,7 +22,7 @@ void MAIN {
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);  // out_subblock_h * out_subblock_w;
     uint32_t batch = get_compile_time_arg_val(11);                   // batch dim
 
-    mm_init();
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -47,7 +47,7 @@ void MAIN {
                             copy_tile(tt::CBIndex::c_24, i, i);
                         }
                         cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
-                        mm_init_short();
+                        mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

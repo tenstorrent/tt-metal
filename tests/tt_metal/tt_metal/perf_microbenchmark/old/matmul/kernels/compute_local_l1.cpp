@@ -12,7 +12,7 @@ void MAIN {
 
     constexpr int onetile = 1;
 
-    mm_init();
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     for (uint32_t mt = 0; mt < sub_Mt; ++mt) {
         for (uint32_t nt = 0; nt < sub_Nt; ++nt) {
