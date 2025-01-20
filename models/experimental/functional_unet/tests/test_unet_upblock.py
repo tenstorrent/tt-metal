@@ -43,7 +43,7 @@ def test_unet_upblock(
     device: ttnn.Device,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
@@ -52,7 +52,6 @@ def test_unet_upblock(
     torch_input, ttnn_input = create_unet_input_tensors(
         batch,
         groups,
-        pad_input=False,
         input_channels=input_channels,
         input_height=input_height,
         input_width=input_width,
@@ -60,7 +59,6 @@ def test_unet_upblock(
     torch_residual, ttnn_residual = create_unet_input_tensors(
         batch,
         groups,
-        pad_input=False,
         input_channels=residual_channels,
         input_height=input_height * 2,
         input_width=input_width * 2,
@@ -104,7 +102,7 @@ def test_unet_upblock_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -114,7 +112,6 @@ def test_unet_upblock_multi_device(
     torch_input, ttnn_input = create_unet_input_tensors(
         num_devices * batch,
         groups,
-        pad_input=False,
         input_channels=input_channels,
         input_height=input_height,
         input_width=input_width,
@@ -127,7 +124,6 @@ def test_unet_upblock_multi_device(
     torch_residual, ttnn_residual = create_unet_input_tensors(
         num_devices * batch,
         groups,
-        pad_input=False,
         input_channels=residual_channels,
         input_height=input_height * 2,
         input_width=input_width * 2,
