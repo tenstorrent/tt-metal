@@ -83,11 +83,6 @@ Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::
         buffer);
 }
 
-void SetLazyCommandQueueMode(bool lazy) {
-    DispatchStateCheck(true);
-    LAZY_COMMAND_QUEUE_MODE = lazy;
-}
-
 void ValidateBufferRegion(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer, const BufferRegion& region) {
     Buffer& buffer_obj = GetBufferObject(buffer);
@@ -2076,10 +2071,6 @@ void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool bloc
 
 void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
-}
-
-void v1::SetLazyCommandQueueMode(bool lazy) {
-    detail::SetLazyCommandQueueMode(lazy);
 }
 
 IDevice* v1::GetDevice(CommandQueueHandle cq) {

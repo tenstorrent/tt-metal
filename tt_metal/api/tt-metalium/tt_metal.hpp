@@ -330,8 +330,6 @@ bool ReadFromDeviceL1(
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
-void SetLazyCommandQueueMode(bool lazy);
-
 DeviceAddr AllocateBuffer(Buffer* buffer);
 
 void DeallocateBuffer(Buffer* buffer);
