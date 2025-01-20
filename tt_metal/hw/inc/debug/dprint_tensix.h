@@ -45,7 +45,7 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, ui
            << ENDL();
 }
 
-// Make it that it returns string not dprints it
+// Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
         case (uint8_t) DataFormat::Float32:
@@ -583,9 +583,8 @@ inline void dprint_tensix_pack_config_pack_dis_y_pos_start_offset(const ckernel:
 // HARDWARE SPECIFIC FUNCTIONS
 
 #ifdef ARCH_GRAYSKULL
-inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
-    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
-
+inline void dprint_tensix_unpack_tile_descriptor_grayskull_helper(
+    const ckernel::unpacker::tile_descriptor_t& tile_descriptor) {
     DPRINT << "in_data_format: ";
     dprint_tensix_unpack_tile_descriptor_in_data_format(tile_descriptor);
     DPRINT << "uncompressed: ";
@@ -611,9 +610,24 @@ inline void dprint_tensix_unpack_tile_descriptor_grayskull() {
     dprint_tensix_unpack_tile_descriptor_digest_type(tile_descriptor);
 }
 
-inline void dprint_tensix_unpack_config_grayskull() {
-    ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
+inline void dprint_tensix_unpack_tile_descriptor_grayskull(uint reg_id) {
+    std::array<ckernel::unpacker::unpack_tile_descriptor_t, 2> tile_descriptor_vec;
+    tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << ENDL();
+        dprint_tensix_unpack_tile_descriptor_grayskull_helper(tile_descriptor_vec[reg_id - 1]);
+    } else {
+        for (uint i = 1; i <= 2; i++) {
+            DPRINT << "REG_ID: " << i << ENDL();
+            dprint_tensix_unpack_tile_descriptor_grayskull_helper(tile_descriptor_vec[i - 1]);
+            if (i != 2) {
+                DPRINT << ENDL();
+            }
+        }
+    }
+}
 
+inline void dprint_tensix_unpack_config_grayskull_helper(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "out_data_format: ";
     dprint_tensix_unpack_config_out_data_format(config);
     DPRINT << "throttle_mode: ";
@@ -645,6 +659,23 @@ inline void dprint_tensix_unpack_config_grayskull() {
     dprint_tensix_unpack_config_limit_addr(config);
     DPRINT << "fifo_size: ";
     dprint_tensix_unpack_config_fifo_size(config);
+}
+
+inline void dprint_tensix_unpack_config_grayskull() {
+    std::array<ckernel::unpacker::unpack_config_t, 2> config_vec;
+    config_vec = ckernel::unpacker::read_unpack_config();
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << ENDL();
+        dprint_tensix_unpack_config_grayskull_helper(config_vec[reg_id - 1]);
+    } else {
+        for (uint i = 1; i <= 2; i++) {
+            DPRINT << "REG_ID: " << i << ENDL();
+            dprint_tensix_unpack_config_grayskull_helper(config_vec[i - 1]);
+            if (i != 2) {
+                DPRINT << ENDL();
+            }
+        }
+    }
 }
 
 inline void dprint_tensix_pack_config_grayskull(const ckernel::packer::pack_config_t& config) {
@@ -686,9 +717,8 @@ inline void dprint_tensix_pack_config_grayskull(const ckernel::packer::pack_conf
     dprint_tensix_pack_config_exp_threshold(config);
 }
 #else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
-inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
-    ckernel::unpacker::unpack_tile_descriptor_t tile_descriptor = ckernel::unpacker::read_unpack_tile_descriptor();
-
+inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole_helper(
+    const ckernel::unpacker::unpack_tile_descriptor_t& tile_descriptor) {
     DPRINT << "in_data_format: ";
     dprint_tensix_unpack_tile_descriptor_in_data_format(tile_descriptor);
     DPRINT << "uncompressed: ";
@@ -715,9 +745,25 @@ inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole() {
     dprint_tensix_unpack_tile_descriptor_digest_size(tile_descriptor);
 }
 
-inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
-    ckernel::unpacker::unpack_config_t config = ckernel::unpacker::read_unpack_config();
+// Choose which register you want (1-2). 0 for both.
+inline void dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(uint reg_id) {
+    std::array<ckernel::unpacker::unpack_tile_descriptor_t, 2> tile_descriptor_vec;
+    tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << ENDL();
+        dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole_helper(tile_descriptor_vec[reg_id - 1]);
+    } else {
+        for (uint i = 1; i <= 2; i++) {
+            DPRINT << "REG_ID: " << i << ENDL();
+            dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole_helper(tile_descriptor_vec[i - 1]);
+            if (i != 2) {
+                DPRINT << ENDL();
+            }
+        }
+    }
+}
 
+inline void dprint_tensix_unpack_config_wormhole_or_blackhole_helper(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "out_data_format: ";
     dprint_tensix_unpack_config_out_data_format(config);
     DPRINT << "throttle_mode: ";
@@ -762,6 +808,24 @@ inline void dprint_tensix_unpack_config_wormhole_or_blackhole() {
     dprint_tensix_unpack_config_fifo_size(config);
     DPRINT << "reserved_5: ";
     dprint_tensix_unpack_config_reserved_5(config);
+}
+
+// Choose which register you want (1-2). 0 for both.
+inline void dprint_tensix_unpack_config_wormhole_or_blackhole(uint reg_id) {
+    std::array<ckernel::unpacker::unpack_config_t, 2> config_vec;
+    config_vec = ckernel::unpacker::read_unpack_config();
+    if (reg_id) {
+        DPRINT << "REG_ID: " << reg_id << ENDL();
+        dprint_tensix_unpack_config_wormhole_or_blackhole_helper(config_vec[reg_id - 1]);
+    } else {
+        for (uint i = 1; i <= 2; i++) {
+            DPRINT << "REG_ID: " << i << ENDL();
+            dprint_tensix_unpack_config_wormhole_or_blackhole_helper(config_vec[i - 1]);
+            if (i != 2) {
+                DPRINT << ENDL();
+            }
+        }
+    }
 }
 
 #ifdef ARCH_WORMHOLE
@@ -1244,37 +1308,44 @@ inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_
 #endif
 }
 
-inline void dprint_tensix_unpack_tile_descriptor() {
+// Choose register you want (1-2). 0 for both.
+inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
     UNPACK(
 #ifdef ARCH_GRAYSKULL
-        dprint_tensix_unpack_tile_descriptor_grayskull();
+        dprint_tensix_unpack_tile_descriptor_grayskull(reg_id);
 #else
-        dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole();
+        dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(reg_id);
 #endif
     )
 }
 
-inline void dprint_tensix_unpack_config() {
+// Choose register you want (1-2). 0 for both.
+inline void dprint_tensix_unpack_config(uint reg_id = 0) {
     UNPACK(
 #ifdef ARCH_GRAYSKULL
-        dprint_tensix_unpack_config_grayskull();
+        dprint_tensix_unpack_config_grayskull(reg_id);
 #else
-        dprint_tensix_unpack_config_wormhole_or_blackhole();
+        dprint_tensix_unpack_config_wormhole_or_blackhole(reg_id);
 #endif
     )
 }
 
 // Choose what register you want by id (1-4). 0 for all.
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
-    std::array<ckernel::packer::pack_config_t, 4> config_vec;
+#ifdef ARCH_BLACKHOLE
+    constexpr uint num_of_instances = 1;
+#else
+    constexpr uint num_of_instances = 4;
+#endif
+    std::array<ckernel::packer::pack_config_t, num_of_instances> config_vec;
     MATH(
-        config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= 4) {
+        config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= num_of_instances) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_config_helper(config_vec[reg_id - 1]);
-        } else if (reg_id == 0) for (uint i = 1; i <= 4; i++) {
+        } else if (reg_id == 0) for (uint i = 1; i <= num_of_instances; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_pack_config_helper(config_vec[i - 1]);
-            if (i != 4) {
+            if (i != num_of_instances) {
                 DPRINT << ENDL();
             }
         } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4."
