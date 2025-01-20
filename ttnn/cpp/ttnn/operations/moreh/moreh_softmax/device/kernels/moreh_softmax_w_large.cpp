@@ -21,7 +21,7 @@ void MAIN {
     constexpr auto cb_max = tt::CBIndex::c_27;
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
-    binary_op_init_common(cb_in0, cb_bcast_scaler);
+    binary_op_init_common(cb_in0, cb_bcast_scaler, cb_out0);
 
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;

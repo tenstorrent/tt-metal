@@ -25,7 +25,7 @@ void MAIN {
     constexpr int dst1 = 1;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_in0, cb_bcast_scaler);
+    binary_op_init_common(cb_in0, cb_bcast_scaler, cb_out0);
 
     uint32_t N = get_compile_time_arg_val(0);
     uint32_t Ht = get_compile_time_arg_val(1);

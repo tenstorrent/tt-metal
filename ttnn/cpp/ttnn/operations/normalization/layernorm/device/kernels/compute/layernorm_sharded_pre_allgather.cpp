@@ -143,7 +143,7 @@ void MAIN {
 #endif  // not RMSNORM
 
     // X^2
-    mul_tiles_init();
+    mul_tiles_init(cb_in0, cb_in0);
     index_h_offset = 0;
     cb_reserve_back(cb_x2, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {

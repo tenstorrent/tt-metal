@@ -132,7 +132,7 @@ void MAIN {
 #endif
 
 #ifdef CAUSAL_MASK
-        add_tiles_init();
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short();
 #endif

@@ -42,7 +42,7 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     cb_wait_front(cb_one, onetile);              // comes from the reader
     cb_wait_front(cb_decimal, onetile);          // comes from the reader

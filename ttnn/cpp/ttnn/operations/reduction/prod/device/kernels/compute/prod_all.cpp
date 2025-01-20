@@ -41,7 +41,7 @@ void MAIN {
                 tile_regs_release();
             } else {
                 tile_regs_acquire();
-                mul_tiles_init();
+                mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_24);
                 mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_24, 0, 0, 0);
                 tile_regs_commit();
                 tile_regs_wait();

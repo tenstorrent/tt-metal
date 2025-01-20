@@ -63,7 +63,7 @@ void MAIN {
     cb_wait_front(cb_scalar_args, 5);
     cb_wait_front(cb_one, onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args);
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // grad += grad + param * weight_decay;
@@ -140,7 +140,7 @@ void MAIN {
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp1));
-        sub_tiles_init();
+        sub_tiles_init(cb_one, cb_tmp1);
         sub_tiles(cb_one, cb_tmp1, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
@@ -189,11 +189,11 @@ void MAIN {
         cb_reserve_back(cb_tmp1, onetile);
 
 #ifdef AMSGRAD
-        mul_tiles_init();
+        mul_tiles_init(tmp_cb_max_exp_avg_sq, cb_tmp1);
         WITH_FP32_DEST_ACC(reconfig_data_format(tmp_cb_max_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #else
-        mul_tiles_init();
+        mul_tiles_init(tmp_cb_exp_avg_sq, cb_tmp1);
         WITH_FP32_DEST_ACC(reconfig_data_format(tmp_cb_exp_avg_sq, cb_tmp1));
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
@@ -216,7 +216,7 @@ void MAIN {
         cb_wait_front(cb_tmp1, onetile);
         cb_reserve_back(cb_tmp1, onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_tmp1, cb_scalar_args));
-        add_tiles_init();
+        add_tiles_init(cb_tmp1, cb_scalar_args);
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
@@ -247,7 +247,7 @@ void MAIN {
         tile_regs_acquire();
         cb_wait_front(cb_tmp2, onetile);
         WITH_FP32_DEST_ACC(reconfig_data_format(cb_one, cb_tmp2));
-        sub_tiles_init();
+        sub_tiles_init(cb_one, cb_tmp2);
         sub_tiles(cb_one, cb_tmp2, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);

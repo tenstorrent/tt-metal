@@ -13,7 +13,7 @@ void MAIN {
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     // wait for a block of tiles in each of input CBs
     cb_wait_front(cb_in0, 1);

@@ -26,7 +26,7 @@ void MAIN {
     constexpr uint32_t weight_decay_tile = 3;
     constexpr uint32_t one_tile = 4;
 
-    binary_op_init_common(cb_param_in, cb_param_in);
+    binary_op_init_common(cb_param_in, cb_param_in, cb_param_out);
 
     uint32_t num_tiles = get_compile_time_arg_val(0);
 

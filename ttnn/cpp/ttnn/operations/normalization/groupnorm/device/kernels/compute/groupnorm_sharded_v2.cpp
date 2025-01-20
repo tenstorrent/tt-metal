@@ -168,7 +168,7 @@ void MAIN {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(cb_in0, cb_input_mask);
-            mul_tiles_init();
+            mul_tiles_init(cb_in0, cb_input_mask);
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
@@ -263,7 +263,7 @@ void MAIN {
 
             // zero out the garbage values by mult mask again
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
-            mul_tiles_init();
+            mul_tiles_init(cb_xmm, cb_input_mask);
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_xmm, block_hw);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -291,7 +291,7 @@ void MAIN {
 
             // (x - E[x])^2
             index_h_offset = 0;
-            mul_tiles_init();
+            mul_tiles_init(cb_x, cb_x);
             cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_x, block_hw);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -360,7 +360,7 @@ void MAIN {
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init();
+            add_tiles_init(cb_ex_global, cb_eps);
             add_tiles(cb_ex_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
             // sqrt(Var + eps)
@@ -415,7 +415,7 @@ void MAIN {
                 if (copy_or_add == true) {
                     copy_tile_init();
                 } else {
-                    add_tiles_init();
+                    add_tiles_init(cb_out, cb_xmm);
                 }
 
                 for (uint32_t i = 0; i < block_h; ++i) {

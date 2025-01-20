@@ -30,7 +30,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 // We don't pop in1 in decode which is sin/cos since we don't stream
 #else
     ACQ();
-    mul_tiles_init();
+    mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
     pack_tile(0, out_cb);
     REL();
@@ -146,7 +146,7 @@ void MAIN {
             reconfig_data_format_srca(rotated_in_cb, cos_interm_cb);
             pack_reconfig_data_format(cos_interm_cb, out_cb);
             ACQ();
-            add_tiles_init();
+            add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();

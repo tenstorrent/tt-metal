@@ -24,7 +24,7 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input);
+    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
 
 #if defined(DIVISOR)
     cb_wait_front(cb_divisor, onetile);
