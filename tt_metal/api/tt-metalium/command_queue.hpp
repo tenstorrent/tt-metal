@@ -68,106 +68,6 @@ class Command {
     virtual EnqueueCommandType type() = 0;
 };
 
-class EnqueueReadBufferCommand : public Command {
-private:
-    SystemMemoryManager& manager;
-    CoreType dispatch_core_type;
-
-    virtual void add_prefetch_relay(HugepageDeviceCommand& command) = 0;
-
-   protected:
-    IDevice* device;
-    uint32_t command_queue_id;
-    NOC noc_index;
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
-    uint32_t src_page_index;
-    uint32_t pages_to_read;
-    uint32_t bank_base_address;
-
-public:
-    Buffer& buffer;
-    EnqueueReadBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        Buffer& buffer,
-        SystemMemoryManager& manager,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        uint32_t bank_base_address,
-        uint32_t src_page_index = 0,
-        std::optional<uint32_t> pages_to_read = std::nullopt);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_READ_BUFFER; };
-
-    constexpr bool has_side_effects() { return false; }
-};
-
-class EnqueueReadInterleavedBufferCommand : public EnqueueReadBufferCommand {
-private:
-    void add_prefetch_relay(HugepageDeviceCommand& command) override;
-
-public:
-    EnqueueReadInterleavedBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        Buffer& buffer,
-        SystemMemoryManager& manager,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        uint32_t bank_base_address,
-        uint32_t src_page_index = 0,
-        std::optional<uint32_t> pages_to_read = std::nullopt) :
-        EnqueueReadBufferCommand(
-            command_queue_id,
-            device,
-            noc_index,
-            buffer,
-            manager,
-            expected_num_workers_completed,
-            sub_device_ids,
-            bank_base_address,
-            src_page_index,
-            pages_to_read) {
-    }
-};
-
-class EnqueueReadShardedBufferCommand : public EnqueueReadBufferCommand {
-private:
-    void add_prefetch_relay(HugepageDeviceCommand& command) override;
-    const CoreCoord core;
-
-public:
-    EnqueueReadShardedBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        Buffer& buffer,
-        SystemMemoryManager& manager,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        const CoreCoord& core,
-        uint32_t bank_base_address,
-        uint32_t src_page_index = 0,
-        std::optional<uint32_t> pages_to_read = std::nullopt) :
-        EnqueueReadBufferCommand(
-            command_queue_id,
-            device,
-            noc_index,
-            buffer,
-            manager,
-            expected_num_workers_completed,
-            sub_device_ids,
-            bank_base_address,
-            src_page_index,
-            pages_to_read),
-        core(core) {}
-};
-
 class EnqueueProgramCommand : public Command {
    private:
     uint32_t command_queue_id;
@@ -441,8 +341,6 @@ private:
     void reset_worker_dispatch_state_on_device(bool reset_launch_msg_state);
     void reset_config_buffer_mgr(const uint32_t num_entries);
 
-    void copy_into_user_space(
-        const detail::ReadBufferDescriptor& read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel);
     void read_completion_queue();
 
     // sub_device_ids only needs to be passed when blocking and there are specific sub_devices to wait on

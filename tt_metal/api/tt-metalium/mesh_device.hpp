@@ -243,7 +243,7 @@ public:
     // Reshaping Rules:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. Line-to-Line Reshaping (when either dimension is 1):
-    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1
+    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
     // 3. Grid-to-Grid Reshaping:
     //    - Only possible if the devices can form a connected physical mesh in the new shape
     //    - Must maintain physical connectivity between adjacent devices
