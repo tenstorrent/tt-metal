@@ -34,9 +34,9 @@ void kernel_main() {
     uint32_t final_indices_cb_addr = get_write_ptr(final_indices_cb_index);
 
     uint64_t noc_final_addr_values =
-        get_noc_addr(noc_final_x, noc_final_y, final_values_cb_addr) + start_wt * tile_bytes_values;
+        get_noc_addr(noc_final_x, noc_final_y, final_values_cb_addr) + start_wt * tile_bytes_values * Kt;
     uint64_t noc_value_addr_values =
-        get_noc_addr(noc_final_x, noc_final_y, final_indices_cb_addr) + start_wt * tile_bytes_ind;
+        get_noc_addr(noc_final_x, noc_final_y, final_indices_cb_addr) + start_wt * tile_bytes_ind * Kt;
 
     volatile tt_l1_ptr uint32_t* receiver_semaphore_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore);

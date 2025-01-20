@@ -11,7 +11,13 @@
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(
-    const Tensor& input_tensor, const uint16_t k, const int8_t dim, Tensor& value_tensor, Tensor& index_tensor) {
+    const Tensor& input_tensor,
+    const uint16_t k,
+    const int8_t dim,
+    const bool largest,
+    const bool sorted,
+    Tensor& value_tensor,
+    Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
     CoreRange core({0, 0}, {0, 0});
@@ -51,7 +57,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, input_cb_config);
 
     // Two tiles are loaded in for topk_local_sort at a time, and we double buffer to avoid stalls, so allocate four
-    // tiles of space This CB carries the indices that are created in the reader kernel
+    // tiles of space. This CB carries the indices that are created in the reader kernel
     uint32_t index_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
         tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
@@ -131,6 +137,8 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         k,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -203,7 +211,13 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  *
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
-    const Tensor& input_tensor, const uint16_t k, const int8_t dim, Tensor& value_tensor, Tensor& index_tensor) {
+    const Tensor& input_tensor,
+    const uint16_t k,
+    const int8_t dim,
+    const bool largest,
+    const bool sorted,
+    Tensor& value_tensor,
+    Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
@@ -401,6 +415,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_local),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
     };
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -421,6 +437,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_final),
+        (std::uint32_t)largest,
+        (std::uint32_t)sorted,
     };
 
     tt::tt_metal::KernelHandle topk_final_compute_kernel_id = tt::tt_metal::CreateKernel(

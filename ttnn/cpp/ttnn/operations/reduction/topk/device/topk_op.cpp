@@ -43,8 +43,6 @@ void TopK::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     auto input_shape = input_tensors.at(0).get_legacy_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
-    TT_FATAL(this->k == 32, "K must be equal to 32, pad with -infinity if necessary to get 32, got {}", this->k);
-    TT_FATAL(this->dim == -1 || this->dim == 3, "Only the last dim is supported right now, got {}", this->dim);
 
     TT_FATAL(
         input_shape[-1] >= 64,
@@ -122,10 +120,10 @@ operation::ProgramWithCallbacks TopK::create_program(
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.get_legacy_shape()[dim] < topk_utils::multi_core_min_width) {
         return detail::topk_single_core_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, this->sorted, output_tensors.at(0), output_tensors.at(1));
     }
 }
 
