@@ -14,6 +14,7 @@ void kernel_main() {
     uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t HtWt = get_arg_val<uint32_t>(4);
+    // need to add D  here
     uint32_t N = get_arg_val<uint32_t>(5);
     uint32_t C = get_arg_val<uint32_t>(6);
     uint32_t H = get_arg_val<uint32_t>(7);
