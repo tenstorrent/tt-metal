@@ -308,7 +308,6 @@ class EnqueueTerminateCommand : public Command {
 };
 
 namespace detail {
-inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 /*
  Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)

@@ -44,7 +44,6 @@ struct TestInfo {
     bool trisc_enabled{true};
     bool erisc_enabled{false};
     uint32_t erisc_count{1};
-    bool lazy{false};
     bool time_just_finish{false};
     bool use_global{false};
     bool use_trace{false};
@@ -102,8 +101,7 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
         log_info(LogTest, "  -t: disable trisc kernels (default enabled)");
         log_info(LogTest, "  +e: enable erisc kernels (default disabled)");
         log_info(LogTest, " -ec: erisc count (default 1 if enabled)");
-        log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
-        log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
+        log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, " -tr: enable trace (default disabled)");
         log_info(LogTest, " -de: dispatch from eth cores (default tensix)");
         log_info(
@@ -130,7 +128,6 @@ void init(const std::vector<std::string>& input_args, TestInfo& info) {
     info.n_common_args = test_args::get_command_option_uint32(input_args, "-ca", 0);
     info.n_sems = test_args::get_command_option_uint32(input_args, "-S", 0);
     info.n_kgs = test_args::get_command_option_uint32(input_args, "-kg", 1);
-    info.lazy = test_args::has_command_option(input_args, "-z");
     info.use_global = test_args::has_command_option(input_args, "-g");
     info.time_just_finish = test_args::has_command_option(input_args, "-f");
     info.fast_kernel_cycles = test_args::get_command_option_uint32(input_args, "-rf", 0);
@@ -333,7 +330,6 @@ static int pgm_dispatch(T& state, TestInfo info) {
     log_info(LogTest, "UniqueRTArgs: {}", info.n_args);
     log_info(LogTest, "CommonRTArgs: {}", info.n_common_args);
     log_info(LogTest, "Sems: {}", info.n_sems);
-    log_info(LogTest, "Lazy: {}", info.lazy);
 
     tt::llrt::RunTimeOptions::get_instance().set_kernels_nullified(true);
 
@@ -381,10 +377,6 @@ static int pgm_dispatch(T& state, TestInfo info) {
             main_program_loop();
             EndTraceCapture(device, cq.id(), tid);
             Finish(cq);
-        }
-
-        if (info.lazy) {
-            tt_metal::detail::SetLazyCommandQueueMode(true);
         }
 
         for (auto _ : state) {
