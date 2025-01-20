@@ -12,16 +12,16 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
-def run_topk_test(N, C, H, W, k, dtype, dim, device):
+def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype)
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=True, sorted=True)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=sorted)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=True, sorted=True)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=sorted)
 
     desired_shape = [N, C, H, W]
     desired_shape[dim] = k
@@ -76,11 +76,25 @@ def run_topk_test(N, C, H, W, k, dtype, dim, device):
         (128, 1, 1, 64, 0, 64),
     ),
 )
-def test_topk(N, C, H, W, dim, k, dtype, device):
+@pytest.mark.parametrize(
+    "sorted",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "largest",
+    [
+        True,
+        # False, Please refer to https://github.com/tenstorrent/tt-metal/issues/13235#issuecomment-2601432673
+    ],
+)
+def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device):
     if dim == 0 or dim == 1:
         # As of now, when we try to get top-k for dim = 0 or 1, we get following error from transpose_op.cpp's validate():
         # input_tensor.get_dtype() == DataType::BFLOAT16 || input_tensor.get_dtype() == DataType::FLOAT32
         # this is because, transpose.cpp always typecasts bf8 to bf16
         # and when dim = 0 or 1, transpose converts it into TransposeOpDim::HC & this dim doesnt support bf16 or fp32
         pytest.skip()
-    run_topk_test(N, C, H, W, k, dtype, dim, device)
+    run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device)
