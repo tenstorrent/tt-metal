@@ -226,7 +226,7 @@ ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init_with_operands<ELWADD, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -235,7 +235,7 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_cols to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -245,7 +245,7 @@ ALWI void add_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be
  * executed correctly.
  */
-ALWI void add_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -255,7 +255,7 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -278,7 +278,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -287,7 +287,7 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 /**
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
-ALWI void mul_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -297,7 +297,7 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_bcast_cols to be executed
  * correctly.
  */
-ALWI void sub_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::COL, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -307,7 +307,7 @@ ALWI void sub_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_scalar to be
  * executed correctly.
  */
-ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));

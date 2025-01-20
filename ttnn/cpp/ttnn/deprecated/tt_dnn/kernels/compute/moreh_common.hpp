@@ -328,7 +328,7 @@ ALWI void mul_tiles_bcast_rows_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(icb0, icb1);
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
 
@@ -366,7 +366,7 @@ ALWI void mul_tiles_bcast_rows_log_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(icb0, icb1);
     mul_tiles_bcast_rows(icb0, icb1, itile0, itile1, dst0);
 
     log_tile_init();
@@ -407,7 +407,7 @@ ALWI void mul_tiles_bcast_cols_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_bcast_cols_init_short();
+    mul_bcast_cols_init_short(icb0, icb1);
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
 
@@ -445,7 +445,7 @@ ALWI void mul_tiles_bcast_cols_log_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    mul_bcast_cols_init_short();
+    mul_bcast_cols_init_short(icb0, icb1);
     mul_tiles_bcast_cols(icb0, icb1, itile0, itile1, dst0);
 
     log_tile_init();
@@ -643,7 +643,7 @@ ALWI void sub_tiles_bcast_cols_to_cb(
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    sub_bcast_cols_init_short();
+    sub_bcast_cols_init_short(icb0, icb1);
     sub_tiles_bcast<BroadcastType::COL>(icb0, icb1, itile0, itile1, dst0);
     tile_regs_commit();
 
