@@ -1069,7 +1069,7 @@ def linear(x, weight, bias=None, *args, device, dtype, layout, input_mem_config,
 def eltwise_softmax_in_place(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
-    t1 = ttnn.softmax(t0, -1, memory_config=output_mem_config)
+    t1 = ttnn.softmax(t0, -1, numeric_stable=True, memory_config=output_mem_config)
     return ttnn_tensor_to_torch(t1)
 
 
