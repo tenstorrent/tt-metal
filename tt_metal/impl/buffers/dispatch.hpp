@@ -6,7 +6,7 @@
 
 #include <command_queue_interface.hpp>
 #include <sub_device_types.hpp>
-#include <command_queue.hpp>  // Need this for ReadBufferDesriptor -> this should be moved to a separate header
+#include <hardware_command_queue.hpp>  // Need this for ReadBufferDesriptor -> this should be moved to a separate header
 #include "buffer.hpp"
 
 namespace tt::tt_metal {
