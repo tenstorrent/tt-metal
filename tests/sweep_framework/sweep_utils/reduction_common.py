@@ -31,6 +31,9 @@ def run_sum(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
