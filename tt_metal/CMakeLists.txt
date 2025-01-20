@@ -12,22 +12,27 @@ target_sources(
 target_link_libraries(
     tt_metal
     PUBLIC
-        Metalium::Metal::Impl
-        Metalium::Metal::STL
         umd::device
-        metal_common_libs
         magic_enum
         fmt::fmt-header-only
         span
-        Tracy::TracyClient
-    PRIVATE
+        TracyClient
+        nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
+        Reflect::Reflect
+    PRIVATE
+        Metalium::Metal::Impl
+        Metalium::Metal::STL
+        metal_common_libs
         profiler
         common
         jit_build
         llrt
         detail
         distributed
+        HAL::grayskull
+        HAL::wormhole
+        HAL::blackhole
 )
 
 target_precompile_headers(
@@ -45,11 +50,9 @@ target_precompile_headers(
 target_include_directories(
     tt_metal
     PUBLIC
-        ${PROJECT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        include
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
     PRIVATE
-        common # FIXME: Clean up the tests and remove this
+        api/tt-metalium # FIXME: Re-home the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 add_dependencies(tt_metal hw_toolchain)
@@ -63,6 +66,17 @@ set_target_properties(
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
 
+if(BUILD_PROGRAMMING_EXAMPLES)
+    add_subdirectory(programming_examples)
+endif()
+
+# Allow internal files to access the public API "by default" and without the
+# scoping that external consumers must use.  Scaoping may still be used if desired.
+include_directories(
+    api
+    api/tt-metalium
+)
+
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
 add_subdirectory(common)
@@ -73,7 +87,3 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(tt_stl)
-
-if(BUILD_PROGRAMMING_EXAMPLES)
-    add_subdirectory(programming_examples)
-endif()

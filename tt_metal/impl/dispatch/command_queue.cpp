@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <command_queue.hpp>
 
 #include <algorithm>
 #include <array>
@@ -17,29 +17,30 @@
 #include <utility>
 #include <variant>
 
-#include "buffers/buffer.hpp"
-#include "common/math.hpp"
-#include "dev_msgs.h"
-#include "llrt/hal.hpp"
+#include <buffer.hpp>
+#include <math.hpp>
+#include <dev_msgs.h>
+#include <hal.hpp>
 #include "program_command_sequence.hpp"
 #include "tt_metal/command_queue.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <circular_buffer_constants.h>
+#include <circular_buffer.hpp>
+#include <dprint_server.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/dispatch/dispatch_core_manager.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <dispatch_core_manager.hpp>
+#include <event.hpp>
+#include <kernel.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/buffers/dispatch.hpp"
 #include "umd/device/tt_xy_pair.h"
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -80,11 +81,6 @@ Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::
             }
         },
         buffer);
-}
-
-void SetLazyCommandQueueMode(bool lazy) {
-    DispatchStateCheck(true);
-    LAZY_COMMAND_QUEUE_MODE = lazy;
 }
 
 void ValidateBufferRegion(
@@ -193,173 +189,6 @@ void EnqueueReadBufferCommand::process() {
 
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
 
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-}
-
-// EnqueueWriteBufferCommand section
-
-EnqueueWriteBufferCommand::EnqueueWriteBufferCommand(
-    uint32_t command_queue_id,
-    IDevice* device,
-    NOC noc_index,
-    const Buffer& buffer,
-    const void* src,
-    SystemMemoryManager& manager,
-    bool issue_wait,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    uint32_t bank_base_address,
-    uint32_t padded_page_size,
-    uint32_t dst_page_index,
-    std::optional<uint32_t> pages_to_write) :
-    command_queue_id(command_queue_id),
-    noc_index(noc_index),
-    manager(manager),
-    issue_wait(issue_wait),
-    src(src),
-    buffer(buffer),
-    expected_num_workers_completed(expected_num_workers_completed),
-    sub_device_ids(sub_device_ids),
-    bank_base_address(bank_base_address),
-    padded_page_size(padded_page_size),
-    dst_page_index(dst_page_index),
-    pages_to_write(pages_to_write.has_value() ? pages_to_write.value() : buffer.num_pages()) {
-    TT_ASSERT(buffer.is_dram() or buffer.is_l1(), "Trying to write to an invalid buffer");
-    this->device = device;
-    this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-}
-
-void EnqueueWriteInterleavedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
-    uint8_t is_dram = uint8_t(this->buffer.is_dram());
-    TT_ASSERT(
-        this->dst_page_index <= 0xFFFF,
-        "Page offset needs to fit within range of uint16_t, bank_base_address was computed incorrectly!");
-    uint16_t start_page = uint16_t(this->dst_page_index & 0xFFFF);
-    bool flush_prefetch = true;
-    command_sequence.add_dispatch_write_paged(
-        flush_prefetch, is_dram, start_page, this->bank_base_address, this->padded_page_size, this->pages_to_write);
-}
-
-void EnqueueWriteInterleavedBufferCommand::add_buffer_data(HugepageDeviceCommand& command_sequence) {
-    uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-
-    uint32_t full_page_size = this->buffer.aligned_page_size();  // this->padded_page_size could be a partial page if
-                                                                 // buffer page size > MAX_PREFETCH_CMD_SIZE
-    bool write_partial_pages = this->padded_page_size < full_page_size;
-
-    // TODO: Consolidate
-    if (write_partial_pages) {
-        uint32_t padding = full_page_size - this->buffer.page_size();
-        uint32_t src_address_offset = this->initial_src_addr_offset;
-        for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
-             sysmem_address_offset += this->padded_page_size) {
-            uint32_t page_size_to_copy = this->padded_page_size;
-            if (src_address_offset + this->padded_page_size > this->buffer.page_size()) {
-                // last partial page being copied from unpadded src buffer
-                page_size_to_copy -= padding;
-            }
-            command_sequence.add_data((char*)this->src + src_address_offset, page_size_to_copy, this->padded_page_size);
-            src_address_offset += page_size_to_copy;
-        }
-    } else {
-        if (this->buffer.page_size() % this->buffer.alignment() != 0 and
-            this->buffer.page_size() != this->buffer.size()) {
-            // If page size is not aligned, we cannot do a contiguous write
-            uint32_t src_address_offset = this->initial_src_addr_offset;
-            for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
-                 sysmem_address_offset += this->padded_page_size) {
-                command_sequence.add_data(
-                    (char*)this->src + src_address_offset, this->buffer.page_size(), this->padded_page_size);
-                src_address_offset += this->buffer.page_size();
-            }
-        } else {
-            command_sequence.add_data(
-                (char*)this->src + this->initial_src_addr_offset, data_size_bytes, data_size_bytes);
-        }
-    }
-}
-
-void EnqueueWriteShardedBufferCommand::add_dispatch_write(HugepageDeviceCommand& command_sequence) {
-    uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    const CoreCoord virtual_core =
-        this->buffer.device()->virtual_core_from_logical_core(this->core, this->buffer.core_type());
-    command_sequence.add_dispatch_write_linear(
-        0,
-        this->device->get_noc_unicast_encoding(this->noc_index, virtual_core),
-        this->bank_base_address,
-        data_size_bytes);
-}
-
-void EnqueueWriteShardedBufferCommand::add_buffer_data(HugepageDeviceCommand& command_sequence) {
-    uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    if (this->buffer_page_mapping) {
-        const auto& page_mapping = *this->buffer_page_mapping;
-        uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
-        // TODO: Expose getter for cmd_write_offsetB?
-        uint32_t dst_offset = dst - (uint8_t*)command_sequence.data();
-        for (uint32_t dev_page = this->dst_page_index; dev_page < this->dst_page_index + this->pages_to_write;
-             ++dev_page) {
-            auto& host_page = page_mapping.dev_page_to_host_page_mapping_[dev_page];
-            if (host_page.has_value()) {
-                command_sequence.update_cmd_sequence(
-                    dst_offset,
-                    (char*)this->src + host_page.value() * this->buffer.page_size(),
-                    this->buffer.page_size());
-            }
-            dst_offset += this->padded_page_size;
-        }
-    } else {
-        if (this->buffer.page_size() != this->padded_page_size and this->buffer.page_size() != this->buffer.size()) {
-            uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
-            for (uint32_t i = 0; i < this->pages_to_write; ++i) {
-                command_sequence.add_data(
-                    (char*)this->src + unpadded_src_offset, this->buffer.page_size(), this->padded_page_size);
-                unpadded_src_offset += this->buffer.page_size();
-            }
-        } else {
-            uint32_t unpadded_src_offset = this->dst_page_index * this->buffer.page_size();
-            command_sequence.add_data((char*)this->src + unpadded_src_offset, data_size_bytes, data_size_bytes);
-        }
-    }
-}
-
-void EnqueueWriteBufferCommand::process() {
-    uint32_t num_worker_counters = this->sub_device_ids.size();
-    uint32_t data_size_bytes = this->pages_to_write * this->padded_page_size;
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) + // CQ_PREFETCH_CMD_RELAY_INLINE
-        sizeof(CQDispatchCmd) + // CQ_DISPATCH_CMD_WRITE_PAGED or CQ_DISPATCH_CMD_WRITE_LINEAR
-        data_size_bytes, pcie_alignment);
-    if (this->issue_wait) {
-        cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST) * num_worker_counters;  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-    }
-
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
-
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    if (this->issue_wait) {
-        uint32_t dispatch_message_base_addr = dispatch_constants::get(
-            this->dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-        for (const auto &sub_device_id : this->sub_device_ids) {
-            auto offset_index = sub_device_id.to_index();
-            uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
-            command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[offset_index]);
-        }
-    }
-
-    this->add_dispatch_write(command_sequence);
-
-    uint32_t full_page_size = this->buffer.aligned_page_size();  // this->padded_page_size could be a partial page if
-                                                                 // buffer page size > MAX_PREFETCH_CMD_SIZE
-    bool write_partial_pages = this->padded_page_size < full_page_size;
-
-    this->add_buffer_data(command_sequence);
-
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
-
-    this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
@@ -828,7 +657,7 @@ void HWCommandQueue::set_expected_num_workers_completed_for_sub_device(uint32_t 
     this->expected_num_workers_completed[sub_device_index] = num_workers;
 }
 
-void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
+void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
@@ -890,6 +719,20 @@ void HWCommandQueue::reset_worker_state(bool reset_launch_msg_state) {
 
     if (clear_count) {
         std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
+    }
+}
+
+void HWCommandQueue::reset_worker_state(
+    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+    TT_FATAL(!this->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
+    // TODO: This could be further optimized by combining all of these into a single prefetch entry
+    // Currently each one will be pushed into its own prefetch entry
+    this->reset_worker_dispatch_state_on_device(reset_launch_msg_state);
+    this->set_num_worker_sems_on_dispatch(num_sub_devices);
+    this->set_go_signal_noc_data_on_dispatch(go_signal_noc_data);
+    this->reset_config_buffer_mgr(num_sub_devices);
+    if (reset_launch_msg_state) {
+        this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
     }
 }
 
@@ -1135,215 +978,11 @@ void HWCommandQueue::enqueue_write_buffer(
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
-    uint32_t padded_page_size = buffer.aligned_page_size();
-
-    const uint32_t command_issue_limit = this->manager.get_issue_queue_limit(this->id);
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
-    uint32_t max_data_sizeB =
-        max_prefetch_command_size - (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
-
-    uint32_t dst_page_index;
-
     sub_device_ids = detail::select_sub_device_ids(this->device, sub_device_ids);
+    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
 
-    if (is_sharded(buffer.buffer_layout())) {
-        dst_page_index = 0;
-        const bool width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
-        const auto& buffer_page_mapping = width_split ? buffer.get_buffer_page_mapping() : nullptr;
-
-        const auto& cores = width_split ? buffer_page_mapping->all_cores_
-                                        : corerange_to_cores(
-                                              buffer.shard_spec().grid(),
-                                              buffer.num_cores(),
-                                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
-        TT_FATAL(
-            max_data_sizeB >= padded_page_size,
-            "Writing padded page size > {} is currently unsupported for sharded tensors.",
-            max_data_sizeB);
-        uint32_t num_total_pages = buffer.num_pages();
-        uint32_t max_pages_per_shard = buffer.shard_spec().size();
-
-        // Since we read core by core we are reading the device pages sequentially
-        for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
-            // Skip writing the padded pages along the bottom
-            // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
-            // Alternative write each page row into separate commands, or have a strided linear write
-            uint32_t num_pages;
-            if (width_split) {
-                num_pages =
-                    buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-                if (num_pages == 0) {
-                    continue;
-                }
-                dst_page_index =
-                    buffer_page_mapping->host_page_to_dev_page_mapping_[buffer_page_mapping->core_host_page_indices_[core_id][0]];
-            } else {
-                num_pages = std::min(num_total_pages, max_pages_per_shard);
-                num_total_pages -= num_pages;
-            }
-            uint32_t curr_page_idx_in_shard = 0;
-            uint32_t bank_base_address = buffer.address();
-            if (buffer.is_dram()) {
-                bank_base_address += buffer.device()->bank_offset(
-                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
-            }
-            while (num_pages != 0) {
-                // data appended after CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PAGED
-                uint32_t data_offset_bytes = (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd));
-                bool issue_wait = dst_page_index == 0;  // only stall for the first write of the buffer
-                if (issue_wait) {
-                    // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-                    data_offset_bytes *= 2;
-                }
-                uint32_t space_available_bytes = std::min(
-                    command_issue_limit - this->manager.get_issue_queue_write_ptr(this->id), max_prefetch_command_size);
-                int32_t num_pages_available =
-                    (int32_t(space_available_bytes) - int32_t(data_offset_bytes)) / int32_t(padded_page_size);
-
-                uint32_t pages_to_write = std::min(num_pages, (uint32_t)num_pages_available);
-                if (pages_to_write > 0) {
-                    uint32_t address = bank_base_address + curr_page_idx_in_shard * padded_page_size;
-
-                    tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for channel {}", this->id);
-
-                    auto command = EnqueueWriteShardedBufferCommand(
-                        this->id,
-                        this->device,
-                        this->noc_index,
-                        buffer,
-                        src,
-                        this->manager,
-                        issue_wait,
-                        this->expected_num_workers_completed,
-                        sub_device_ids,
-                        address,
-                        buffer_page_mapping,
-                        cores[core_id],
-                        padded_page_size,
-                        dst_page_index,
-                        pages_to_write);
-
-                    this->enqueue_command(command, false, sub_device_ids);
-                    curr_page_idx_in_shard += pages_to_write;
-                    num_pages -= pages_to_write;
-                    dst_page_index += pages_to_write;
-                } else {
-                    this->manager.wrap_issue_queue_wr_ptr(this->id);
-                }
-            }
-        }
-    } else {
-        if (buffer.is_valid_partial_region(region)) {
-            TT_FATAL(
-                region.offset % buffer.page_size() == 0,
-                "Offset {} must be divisible by the buffer page size {}.",
-                region.offset,
-                buffer.page_size());
-            TT_FATAL(
-                region.size % buffer.page_size() == 0,
-                "Size {} must be divisible by the buffer page size {}.",
-                region.size,
-                buffer.page_size());
-            TT_FATAL(
-                (region.size + region.offset) <= buffer.size(),
-                "(Size + offset) {} must be <= the buffer size {}.",
-                region.size + region.offset,
-                buffer.size());
-        }
-        dst_page_index = region.offset / buffer.page_size();
-        uint32_t num_pages = region.size / buffer.page_size();
-        uint32_t total_pages_to_write = num_pages;
-        bool write_partial_pages = padded_page_size > max_data_sizeB;
-        uint32_t page_size_to_write = padded_page_size;
-        uint32_t padded_buffer_size = num_pages * padded_page_size;
-        if (write_partial_pages) {
-            TT_FATAL(num_pages == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
-            uint32_t partial_size = dispatch_constants::BASE_PARTIAL_PAGE_SIZE;
-            uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-            while (padded_buffer_size % partial_size != 0) {
-                partial_size += pcie_alignment;
-            }
-            page_size_to_write = partial_size;
-            total_pages_to_write = padded_buffer_size / page_size_to_write;
-        }
-
-        const uint32_t num_banks = this->device->num_banks(buffer.buffer_type());
-        uint32_t num_pages_round_robined = num_pages / num_banks;
-        uint32_t num_banks_with_residual_pages = num_pages % num_banks;
-        uint32_t num_partial_pages_per_page = padded_page_size / page_size_to_write;
-        uint32_t num_partials_round_robined = num_partial_pages_per_page * num_pages_round_robined;
-
-        uint32_t max_num_pages_to_write = write_partial_pages
-                                              ? (num_pages_round_robined > 0 ? (num_banks * num_partials_round_robined)
-                                                                             : num_banks_with_residual_pages)
-                                              : total_pages_to_write;
-
-        uint32_t bank_base_address = buffer.address();
-
-        const uint32_t orig_dst_page_index = dst_page_index;
-        uint32_t total_num_pages_written = 0;
-        while (total_pages_to_write > 0) {
-            uint32_t data_offsetB = hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
-                                                                    // + CQ_DISPATCH_CMD_WRITE_PAGED
-            bool issue_wait =
-                (dst_page_index == orig_dst_page_index and
-                 bank_base_address == buffer.address());  // only stall for the first write of the buffer
-            if (issue_wait) {
-                data_offsetB *= 2;  // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-            }
-
-            uint32_t space_availableB = std::min(
-                command_issue_limit - this->manager.get_issue_queue_write_ptr(this->id), max_prefetch_command_size);
-            int32_t num_pages_available =
-                (int32_t(space_availableB) - int32_t(data_offsetB)) / int32_t(page_size_to_write);
-
-            if (num_pages_available <= 0) {
-                this->manager.wrap_issue_queue_wr_ptr(this->id);
-                continue;
-            }
-
-            uint32_t num_pages_to_write =
-                std::min({(uint32_t)num_pages_available, max_num_pages_to_write, total_pages_to_write});
-
-            // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
-            // To handle larger page offsets move bank base address up and update page offset to be relative to the new
-            // bank address
-            if (dst_page_index > 0xFFFF or (num_pages_to_write == max_num_pages_to_write and write_partial_pages)) {
-                const uint32_t num_banks_to_use = write_partial_pages ? max_num_pages_to_write : num_banks;
-                const uint32_t num_pages_written_per_bank = dst_page_index / num_banks_to_use;
-                bank_base_address += num_pages_written_per_bank * page_size_to_write;
-                dst_page_index = dst_page_index % num_banks_to_use;
-            }
-
-            const uint32_t initial_src_addr_offset = write_partial_pages ? bank_base_address - buffer.address()
-                                                                         : total_num_pages_written * buffer.page_size();
-
-            tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", this->id);
-
-            auto command = EnqueueWriteInterleavedBufferCommand(
-                this->id,
-                this->device,
-                this->noc_index,
-                buffer,
-                src,
-                initial_src_addr_offset,
-                this->manager,
-                issue_wait,
-                this->expected_num_workers_completed,
-                sub_device_ids,
-                bank_base_address,
-                page_size_to_write,
-                dst_page_index,
-                num_pages_to_write);
-            this->enqueue_command(
-                command, false, sub_device_ids);  // don't block until the entire src data is enqueued in the issue queue
-
-            total_num_pages_written += num_pages_to_write;
-            total_pages_to_write -= num_pages_to_write;
-            dst_page_index += num_pages_to_write;
-        }
-    }
+    buffer_dispatch::write_to_device_buffer(
+        src, buffer, region, this->id, this->expected_num_workers_completed, dispatch_core_type, sub_device_ids);
 
     if (blocking) {
         this->finish(sub_device_ids);
@@ -1413,7 +1052,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         }
     }
 
-    auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(sub_device_id);
+    auto& worker_launch_message_buffer_state =
+        this->manager.get_worker_launch_message_buffer_state()[sub_device_id.to_index()];
     auto command = EnqueueProgramCommand(
         this->id,
         this->device,
@@ -1523,7 +1163,7 @@ void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         // Update the wptr on host to match state. If the trace doesn't execute on a
         // class of worker (unicast or multicast), it doesn't reset or modify the
         // state for those workers.
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(id);
+        auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state()[index];
         if (desc.num_traced_programs_needing_go_signal_multicast) {
             worker_launch_message_buffer_state.set_mcast_wptr(desc.num_traced_programs_needing_go_signal_multicast);
         }
@@ -1828,50 +1468,33 @@ volatile bool HWCommandQueue::is_dprint_server_hung() { return dprint_server_han
 volatile bool HWCommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
 
 void HWCommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx) {
-    uint32_t num_sub_devices = this->device->num_sub_devices();
-    // Issue event as a barrier and a counter reset
-    uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
-    if (this->device->distributed_dispatcher()) {
-        // wait on dispatch_s before issuing counter reset
-        cmd_sequence_sizeB += hal.get_alignment(HalMemType::HOST);
-    }
-    cmd_sequence_sizeB *= num_sub_devices;
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
-    uint32_t dispatch_message_base_addr = dispatch_constants::get(
-        dispatch_core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
-    // Currently Trace will track all sub_devices
-    // Potentially support tracking only used sub_devices in the future
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        uint32_t dispatch_message_addr = dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
-        if (this->device->distributed_dispatcher()) {
-            // wait on dispatch_s before issuing counter reset
-            command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[i], true, false, true, 1);
-        }
-        // dispatch_d waits for latest non-zero counter from dispatch_s and then clears its local counter
-        command_sequence.add_dispatch_wait(false, dispatch_message_addr, this->expected_num_workers_completed[i], true);
-    }
-
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id);
-    this->manager.fetch_queue_reserve_back(this->id);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id);
+    auto num_sub_devices = this->device->num_sub_devices();
+    // Record the original value of expected_num_workers_completed, and reset it to 0.
+    std::copy(
+        this->expected_num_workers_completed.begin(),
+        this->expected_num_workers_completed.begin() + num_sub_devices,
+        this->expected_num_workers_completed_reset.begin());
     std::fill(this->expected_num_workers_completed.begin(), this->expected_num_workers_completed.begin() + num_sub_devices, 0);
     // Record commands using bypass mode
     this->tid = tid;
     this->trace_ctx = std::move(ctx);
-    // Record original value of launch msg wptr
+    // Record original value of launch msg buffer
+    auto& worker_launch_message_buffer_state = this->manager.get_worker_launch_message_buffer_state();
+    std::copy(
+        worker_launch_message_buffer_state.begin(),
+        worker_launch_message_buffer_state.begin() + num_sub_devices,
+        this->worker_launch_message_buffer_state_reset.begin());
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(SubDeviceId{i});
-        this->multicast_cores_launch_message_wptr_reset[i] = worker_launch_message_buffer_state.get_mcast_wptr();
-        this->unicast_cores_launch_message_wptr_reset[i] = worker_launch_message_buffer_state.get_unicast_wptr();
         // Set launch msg wptr to 0. Every time trace runs on device, it will ensure that the workers
         // reset their rptr to be in sync with device.
-        worker_launch_message_buffer_state.reset();
+        worker_launch_message_buffer_state[i].reset();
     }
     this->manager.set_bypass_mode(true, true);  // start
+    // Record original value of config buffer manager
+    std::copy(
+        this->config_buffer_mgr.begin(),
+        this->config_buffer_mgr.begin() + num_sub_devices,
+        this->config_buffer_mgr_reset.begin());
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         // Sync values in the trace need to match up with the counter starting at 0 again.
         this->config_buffer_mgr[i].mark_completely_full(this->expected_num_workers_completed[i]);
@@ -1887,24 +1510,28 @@ void HWCommandQueue::record_end() {
     for (int i = 0; i < command_sequence.size_bytes() / sizeof(uint32_t); i++) {
         trace_data.push_back(((uint32_t*)command_sequence.data())[i]);
     }
-    // Currently Trace will track all sub_devices
-    uint32_t num_sub_devices = this->device->num_sub_devices();
-    // Reset the launch msg wptrs to their original value, so device can run programs after a trace
-    // was captured. This is needed since trace capture modifies the wptr state on host, even though device
-    // doesn't run any programs.
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        auto &worker_launch_message_buffer_state = this->device->get_worker_launch_message_buffer_state(SubDeviceId{i});
-        worker_launch_message_buffer_state.set_mcast_wptr(this->multicast_cores_launch_message_wptr_reset[i]);
-        worker_launch_message_buffer_state.set_unicast_wptr(this->unicast_cores_launch_message_wptr_reset[i]);
-    }
+    // Reset the expected workers, launch msg buffer state, and config buffer mgr to their original value,
+    // so device can run programs after a trace was captured. This is needed since trace capture modifies the state on
+    // host, even though device doesn't run any programs.
+    auto num_sub_devices = this->device->num_sub_devices();
+    std::copy(
+        this->expected_num_workers_completed_reset.begin(),
+        this->expected_num_workers_completed_reset.begin() + num_sub_devices,
+        this->expected_num_workers_completed.begin());
+    std::copy(
+        this->worker_launch_message_buffer_state_reset.begin(),
+        this->worker_launch_message_buffer_state_reset.begin() + num_sub_devices,
+        this->manager.get_worker_launch_message_buffer_state().begin());
+    std::copy(
+        this->config_buffer_mgr_reset.begin(),
+        this->config_buffer_mgr_reset.begin() + num_sub_devices,
+        this->config_buffer_mgr.begin());
+
     // Copy the desc keys into a separate vector. When enqueuing traces, we sometimes need to pass sub-device ids separately
     this->trace_ctx->sub_device_ids.reserve(this->trace_ctx->descriptors.size());
     for (const auto& [id, _]: this->trace_ctx->descriptors) {
         auto index = id.to_index();
         this->trace_ctx->sub_device_ids.push_back(id);
-        // config_buffer_mgr reflects the state inside the trace, not on the current device, so reset it.
-        // TODO(jbauman): Use a temporary WorkingBufferSetMgr when recording a trace.
-        this->get_config_buffer_mgr(index).mark_completely_full(this->expected_num_workers_completed[index]);
     }
     this->tid = std::nullopt;
     this->trace_ctx = nullptr;
@@ -2444,10 +2071,6 @@ void v1::EnqueueProgram(CommandQueueHandle cq, ProgramHandle &program, bool bloc
 
 void v1::Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     v0::Finish(GetDevice(cq)->command_queue(GetId(cq)));
-}
-
-void v1::SetLazyCommandQueueMode(bool lazy) {
-    detail::SetLazyCommandQueueMode(lazy);
 }
 
 IDevice* v1::GetDevice(CommandQueueHandle cq) {

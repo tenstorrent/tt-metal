@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include <nlohmann/json.hpp>
 #include "ttnn/tensor/tensor.hpp"
 

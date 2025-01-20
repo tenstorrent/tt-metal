@@ -7,9 +7,9 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 
-#include "common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn {
 namespace operations {

@@ -126,3 +126,10 @@ if(benchmark_ADDED)
                 "${CMAKE_BINARY_DIR}/lib"
     )
 endif()
+
+############################################################################################################################
+# taskflow : https://github.com/taskflow/taskflow
+############################################################################################################################
+
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
+add_library(Taskflow::Taskflow ALIAS Taskflow)

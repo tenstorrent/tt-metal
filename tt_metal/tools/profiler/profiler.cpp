@@ -7,16 +7,16 @@
 #include <iomanip>
 #include <filesystem>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tools/profiler/profiler.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tools/profiler/common.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+#include <profiler.hpp>
+#include <profiler_state.hpp>
+#include <common.hpp>
 #include "hostdevcommon/profiler_common.h"
-#include "llrt/rtoptions.hpp"
-#include "dev_msgs.h"
+#include <rtoptions.hpp>
+#include <dev_msgs.h>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 namespace tt {
 
@@ -27,10 +27,11 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void DeviceProfiler::readRiscProfilerResults(
-    IDevice* device, const std::vector<std::uint32_t>& profile_buffer, CoreCoord& worker_core) {
+    IDevice* device, CoreCoord& worker_core) {
     ZoneScoped;
     auto device_id = device->id();
 
+    my_device_id = device_id;
     HalProgrammableCoreType CoreType;
     int riscCount;
 
@@ -216,7 +217,10 @@ void DeviceProfiler::readRiscProfilerResults(
     }
 
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
+    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
+    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
 
     tt::llrt::write_hex_vec_to_core(
         device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
@@ -387,7 +391,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -397,11 +401,9 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
     generateZoneSourceLocationsHashes();
 
     if (output_dram_buffer != nullptr) {
-        std::vector<uint32_t> profile_buffer(output_dram_buffer->size() / sizeof(uint32_t), 0);
-
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (lastDump) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
@@ -409,13 +411,13 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
                 EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }
         } else {
-            if (!lastDump) {
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
         }
 
         for (auto worker_core : worker_cores) {
-            readRiscProfilerResults(device, profile_buffer, worker_core);
+            readRiscProfilerResults(device, worker_core);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");
@@ -436,9 +438,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    double delay = 0;
-    double frequency = 0;
-    uint64_t cpuTime = 0;
+    static double delay = 0;
+    static double frequency = 0;
+    static uint64_t cpuTime = 0;
 
     for (auto& device_core : device_cores) {
         int device_id = device_core.first;
@@ -485,8 +487,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    for (auto& event : device_events) {
+    for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
+        event.timestamp = event.timestamp * this->freqScale + this->shift;
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], event);
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {

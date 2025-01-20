@@ -7,10 +7,10 @@
 #include <experimental/type_traits>
 #include <ttnn/tensor/tensor.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_stl/concepts.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "ttnn/config.hpp"
 
 namespace tt {

@@ -14,7 +14,7 @@
 
 namespace ckernel {
 
-ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb = 16) {
+ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));

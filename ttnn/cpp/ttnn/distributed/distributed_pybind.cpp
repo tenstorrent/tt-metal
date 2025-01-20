@@ -9,7 +9,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/command_queue.hpp>
 #include "pybind11/stl.h"
 
 using namespace tt::tt_metal;
@@ -187,6 +187,32 @@ void py_module(py::module& module) {
             Returns:
                 Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
         )doc")
+        .def(
+            "reshape",
+            &MeshDevice::reshape,
+            py::arg("new_shape"),
+            R"doc(
+                Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
+
+                Reshaping Rules:
+                1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+                2. Line-to-Line Reshaping (when either dimension is 1):
+                   - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
+                3. Grid-to-Grid Reshaping:
+                   - Only possible if the devices can form a connected physical mesh in the new shape
+                   - Must maintain physical connectivity between adjacent devices
+                4. Line-to-Grid Reshaping:
+                   - Only possible if the physical devices can form a connected physical mesh in the new shape
+                   - Example: 1x8 -> 2x4 is possible only if physical mesh permits a 2x4 configuration
+
+                Args:
+                    new_shape (MeshShape): The new shape of the mesh.
+
+                Raises:
+                    RuntimeError: If the reshaping constraints are not met:
+                    1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
+            )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",

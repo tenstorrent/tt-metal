@@ -7,26 +7,26 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/bfloat8.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <optional>
 
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using std::vector;
 using namespace tt;

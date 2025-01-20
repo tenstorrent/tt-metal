@@ -5,7 +5,7 @@
 #include <string>
 
 #include "hostdevcommon/common_values.hpp"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include <allocator_algorithm.hpp>
 #include <boost/smart_ptr/local_shared_ptr.hpp>
 
 namespace tt {

@@ -240,7 +240,6 @@ fi
 if [ "$build_tests" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
 if [ "$build_metal_tests" = "ON" ]; then
@@ -276,7 +275,6 @@ fi
 if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi

@@ -4,8 +4,8 @@
 
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat4.hpp"
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat4.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.
@@ -197,6 +197,9 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
     CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    CircularBufferConfig cb_intermed_config =
+        CircularBufferConfig(tile_size, {{CBIndex::c_1, data_format}}).set_page_size(CBIndex::c_1, tile_size);
+    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
 
     // Dram buffer to send data to, device will read it out of here to print
     tt_metal::InterleavedBufferConfig dram_config{
@@ -208,31 +211,35 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program,
         llrt::RunTimeOptions::get_instance().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_brisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
     KernelHandle ncrisc_print_kernel_id = CreateKernel(
         program,
         llrt::RunTimeOptions::get_instance().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_ncrisc.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
     KernelHandle trisc_print_kernel_id = CreateKernel(
         program,
         llrt::RunTimeOptions::get_instance().get_root_dir() +
-            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/misc/print_tile_trisc.cpp",
         core,
         ComputeConfig{});
 
-    // BRISC kernel needs dram info via rtargs
-    tt_metal::SetRuntimeArgs(program, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0});
+    // BRISC kernel needs dram info via rtargs, every risc needs to know if data is tilized
+    bool is_tilized = (data_format == tt::DataFormat::Bfp8_b) || (data_format == tt::DataFormat::Bfp4_b);
+    tt_metal::SetRuntimeArgs(
+        program, brisc_print_kernel_id, core, {dram_buffer_src_addr, (std::uint32_t)0, is_tilized});
+    tt_metal::SetRuntimeArgs(program, ncrisc_print_kernel_id, core, {is_tilized});
+    tt_metal::SetRuntimeArgs(program, trisc_print_kernel_id, core, {is_tilized});
 
     // Create input tile
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);
     /*for (int idx = 0; idx < u32_vec.size(); idx+= 16) {
         string tmp = fmt::format("data[{:#03}:{:#03}]:", idx - 1, idx - 16);
         for (int i = 0; i < 16; i++)
-            tmp += fmt::format(" {:#08x}", u32_vec[idx + 15 - i]);
+            tmp += fmt::format(" 0x{:08x}", u32_vec[idx + 15 - i]);
         log_info("{}", tmp);
     }*/
 
