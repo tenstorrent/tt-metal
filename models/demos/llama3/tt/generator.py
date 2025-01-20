@@ -25,8 +25,6 @@ from models.demos.llama3.tt.llama_common import (
     get_max_prefill_chunk_size,
 )
 
-from time import time
-
 
 class LlamaGenerator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
@@ -216,27 +214,8 @@ class LlamaGenerator:
             rot_mats=tt_rot_mats,
             page_table=tt_page_table,
             kv_cache=kv_cache,
+            argmax_on_device=argmax_on_device,
         )
-
-        # Gather the output across all devices and untilize the tensor (for argmax)
-        if self.model.args.num_devices > 1:
-            if self.model.args.is_galaxy:
-                tt_logits = ttnn.all_gather(
-                    tt_logits,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.model.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                )
-            else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
-
-        if argmax_on_device:
-            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits, dim=3, use_multicore=False if tokens.shape[0] > 1 else True  # ,output_tensor=tokens
-            )
 
         return tt_logits
 
@@ -265,26 +244,9 @@ class LlamaGenerator:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_decode_forward(*transformed_inputs, kv_cache=kv_cache)
-
-        if self.model.args.num_devices > 1:
-            if self.model.args.is_galaxy:
-                tt_out_trace = ttnn.all_gather(
-                    tt_out_trace,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.model.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                )
-            else:
-                tt_out_trace = ttnn.all_gather(tt_out_trace, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_out_trace = ttnn.untilize(tt_out_trace, use_multicore=True)
-
-        if argmax_on_device:
-            tt_out_trace = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_out_trace, dim=3, use_multicore=False if tokens.shape[0] > 1 else True  # , output_tensor=tokens
-            )
+        tt_out_trace = self.model.ttnn_decode_forward(
+            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
@@ -474,6 +436,7 @@ class LlamaGenerator:
         cross_page_table=None,
         enable_trace=True,
         read_from_device=True,
+        argmax_on_device=False,
     ):
         decode_kwargs = {
             "position_id": start_pos,
@@ -484,6 +447,7 @@ class LlamaGenerator:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "cross_page_table": cross_page_table,
+            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace(**decode_kwargs)
@@ -509,6 +473,7 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -547,21 +512,8 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
+            argmax_on_device=argmax_on_device,
         )
-
-        if self.model.args.num_devices > 1:
-            if self.model.args.is_galaxy:
-                tt_logits = ttnn.all_gather(
-                    tt_logits,
-                    dim=3,
-                    num_links=2,
-                    cluster_axis=0,
-                    mesh_device=self.model.mesh_device,
-                    topology=ttnn.Topology.Linear,
-                )
-            else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         return tt_logits
 
@@ -575,6 +527,7 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -607,6 +560,7 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
+            argmax_on_device=argmax_on_device,
         )
         logger.info("Done Compiling Model")
 
@@ -676,6 +630,7 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
+            argmax_on_device=argmax_on_device,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -752,7 +707,7 @@ class LlamaGenerator:
             ),
         )
 
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return trace_logits_rm
 
@@ -766,6 +721,7 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -790,6 +746,7 @@ class LlamaGenerator:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 cross_page_table=cross_page_table,
+                argmax_on_device=argmax_on_device,
             )
             self.trace_id = trace_id
             self.trace_inputs = {
@@ -901,8 +858,8 @@ class LlamaGenerator:
         top_p: float = 0.9,
         max_gen_len=None,
     ):
-        # if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model.configuration.max_seq_len:
-        # max_gen_len = self.model.configuration.max_seq_len - 1
+        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model.configuration.max_seq_len:
+            max_gen_len = self.model.configuration.max_seq_len - 1
 
         tokens = []
 
