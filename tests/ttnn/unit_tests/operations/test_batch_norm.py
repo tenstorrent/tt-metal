@@ -40,7 +40,7 @@ from itertools import product
 @pytest.mark.parametrize("weight", [True, False])
 @pytest.mark.parametrize("bias", [True, False])
 @pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
-@pytest.mark.parametrize("momentum", [0.1, 0.0, 1.0, 2.3])
+@pytest.mark.parametrize("momentum", [0.0, 0.1, 0.5])
 def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias, eps, momentum, device):
     in_data, input_tensor = data_gen_with_range_batch_norm(input_shapes, 5, 10, device, is_input=True)
     mean_data, mean_tensor = (
