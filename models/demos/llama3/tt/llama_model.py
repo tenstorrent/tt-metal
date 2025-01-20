@@ -250,8 +250,7 @@ class TtTransformer(LightweightModule):
         """
         if argmax_on_device:
             tt_out = ttnn.to_torch(
-                # tt_out.cpu(blocking=True, cq_id=1),
-                tt_out,
+                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     self.mesh_device,
                     dims=(3, 1) if self.args.is_galaxy else (1, -1),
@@ -302,6 +301,7 @@ class TtTransformer(LightweightModule):
         rot_mats,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -318,6 +318,28 @@ class TtTransformer(LightweightModule):
         # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
         if not self.args.is_galaxy:
             tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        return tt_logits
+
+        # Gather the output across all devices and untilize the tensor (for argmax)
+        if self.args.num_devices > 1:
+            if self.args.is_galaxy:
+                tt_logits = ttnn.all_gather(
+                    tt_logits,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.mesh_device,
+                    topology=ttnn.Topology.Linear,
+                )
+            else:
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+        if argmax_on_device:
+            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
+                tt_logits, dim=3, use_multicore=False if self.args.max_batch_size > 1 else True  # ,output_tensor=tokens
+            )
+
         return tt_logits
 
     def forward(
