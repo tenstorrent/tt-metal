@@ -637,7 +637,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_out = tt_out[0, 0, last_token_idx, :]
         return tt_out
 
-    def process_output_decode(self, tt_out, B, S):
+    def process_output_decode(self, tt_out, B, S, argmax_on_device=False):
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         tt_out = tt_out[:, :, :B, :].reshape(B, S, -1)
         return tt_out
@@ -699,6 +699,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
+        argmax_on_device=False,
     ):
         """
         This method runs decode forward. It takes ttnn tensors in, returns ttnn tensors.
