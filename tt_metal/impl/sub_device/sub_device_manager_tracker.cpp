@@ -18,10 +18,19 @@
 #include <sub_device_manager.hpp>
 #include <sub_device_types.hpp>
 #include <span.hpp>
-
+#include <mesh_device.hpp>
 namespace tt::tt_metal {
 
 SubDeviceManagerTracker::SubDeviceManagerTracker(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
+    device_(device) {
+    auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator));
+    default_sub_device_manager_ = sub_device_manager.get();
+    active_sub_device_manager_ = default_sub_device_manager_;
+    sub_device_managers_.insert_or_assign(sub_device_manager->id(), std::move(sub_device_manager));
+}
+
+SubDeviceManagerTracker::SubDeviceManagerTracker(
+    distributed::MeshDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
     device_(device) {
     auto sub_device_manager = std::make_unique<SubDeviceManager>(device, std::move(global_allocator));
     default_sub_device_manager_ = sub_device_manager.get();

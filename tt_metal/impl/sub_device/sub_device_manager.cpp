@@ -19,6 +19,8 @@
 #include <span.hpp>
 #include <tt_align.hpp>
 
+#include <mesh_device.hpp>
+
 namespace tt::tt_metal {
 
 // assert here to avoid the need to include command_queue_interface.hpp in header
@@ -37,6 +39,7 @@ SubDeviceManager::SubDeviceManager(
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
+    this->populate_ethernet_sub_device_id_to_device_id(device_->id());
     this->populate_num_cores();
     this->populate_sub_allocators();
     this->populate_noc_data();
@@ -57,6 +60,38 @@ SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&&
     sub_devices_ = {SubDevice(std::array{
         CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
         CoreRangeSet(std::move(active_eth_core_ranges))})};
+    this->populate_sub_device_ids();
+    this->populate_ethernet_sub_device_id_to_device_id(device_->id());
+    // No need to validate sub-devices since this constructs a sub-device of the entire grid
+    this->populate_num_cores();
+    this->sub_device_allocators_.push_back(std::move(global_allocator));
+    this->populate_noc_data();
+}
+
+SubDeviceManager::SubDeviceManager(
+    distributed::MeshDevice* mesh_device, std::unique_ptr<Allocator>&& global_allocator) :
+    id_(next_sub_device_manager_id_++), device_(mesh_device) {
+    TT_ASSERT(mesh_device != nullptr, "Device must not be null");
+    local_l1_size_ = 0;
+    const auto& compute_grid_size = mesh_device->compute_with_storage_grid_size();
+
+    // Push a single sub-device that covers the tensix-grid
+    sub_devices_.push_back(
+        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))}));
+
+    // Push a sub-device for unique ethernet core instantiations
+    SubDeviceId sub_device_id{1};
+    for (const auto& device : mesh_device->get_devices()) {
+        std::vector<CoreRange> active_eth_core_ranges;
+        const auto active_eth_cores = device->get_active_ethernet_cores(true);
+        active_eth_core_ranges.reserve(active_eth_cores.size());
+        for (const auto& core : active_eth_cores) {
+            active_eth_core_ranges.emplace_back(core, core);
+        }
+        sub_devices_.push_back(SubDevice(std::array{CoreRangeSet(), CoreRangeSet(std::move(active_eth_core_ranges))}));
+        ethernet_sub_device_id_to_device_id_[sub_device_id++] = device->id();
+    }
+
     this->populate_sub_device_ids();
     // No need to validate sub-devices since this constructs a sub-device of the entire grid
     this->populate_num_cores();
@@ -193,8 +228,9 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
-    const auto& device_eth_cores = device_->get_active_ethernet_cores(true);
-    for (const auto& sub_device : sub_devices_) {
+
+    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(sub_device_id);
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
@@ -203,6 +239,8 @@ void SubDeviceManager::validate_sub_devices() const {
             device_worker_cores);
         const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
         uint32_t num_eth_cores = 0;
+        auto device_id = this->ethernet_sub_device_id_to_device_id_.at(sub_device_id);
+        const auto& device_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
         for (const auto& dev_eth_core : device_eth_cores) {
             if (eth_cores.contains(dev_eth_core)) {
                 num_eth_cores++;
@@ -234,6 +272,14 @@ void SubDeviceManager::populate_sub_device_ids() {
         sub_device_ids_[i] = SubDeviceId{i};
     }
     this->reset_sub_device_stall_group();
+}
+
+void SubDeviceManager::populate_ethernet_sub_device_id_to_device_id(chip_id_t device_id) {
+    for (uint8_t i = 0; i < this->num_sub_devices(); ++i) {
+        if (this->sub_device(SubDeviceId{i}).has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
+            ethernet_sub_device_id_to_device_id_[SubDeviceId{i}] = device_id;
+        }
+    }
 }
 
 void SubDeviceManager::populate_num_cores() {

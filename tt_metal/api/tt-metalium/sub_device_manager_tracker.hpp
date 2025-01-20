@@ -18,6 +18,10 @@ inline namespace v0 {
 class IDevice;
 }  // namespace v0
 
+namespace distributed {
+class MeshDevice;
+}
+
 class Allocator;
 class SubDeviceManager;
 
@@ -27,6 +31,7 @@ public:
     // TODO: Potentially move the global allocator creation into here instead of from the device
     // This creates the SubDeviceManagerTracker with a default SubDeviceManager that has the entire grid as a sub-device
     SubDeviceManagerTracker(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
+    SubDeviceManagerTracker(distributed::MeshDevice* device, std::unique_ptr<Allocator>&& global_allocator);
 
     SubDeviceManagerTracker(const SubDeviceManagerTracker& other) = delete;
     SubDeviceManagerTracker& operator=(const SubDeviceManagerTracker& other) = delete;

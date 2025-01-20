@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <mutex>
 #include <utility>
 
 #include "device.hpp"
@@ -247,12 +246,13 @@ public:
 
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
+    std::unique_ptr<Allocator> initialize_allocator(
+        size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     void initialize_cluster();
-    std::unique_ptr<Allocator> initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
     void initialize_build();
     void initialize_device_kernel_defines();
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
