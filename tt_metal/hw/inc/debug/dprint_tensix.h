@@ -1265,46 +1265,56 @@ inline void dprint_tensix_dest_rd_ctrl() {
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
-    std::array<ckernel::packer::pck_edge_offset_t, 4> edge_vec;
+#ifdef ARCH_BLACKHOLE
+    constexpr uint num_of_instances = 1;
+#else
+    constexpr uint num_of_instances = 4;
+#endif
+    std::array<ckernel::packer::pck_edge_offset_t, num_of_instances> edge_vec;
     PACK(
         edge_vec = ckernel::packer::read_pack_edge_offset();
-        if (reg_id >= 1 && reg_id <= 4) {
+        if (reg_id >= 1 && reg_id <= num_of_instances) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1]);
         }
         // Print all registers
         else if (reg_id == 0) {
-            for (uint i = 1; i <= 4; i++) {
+            for (uint i = 1; i <= num_of_instances; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
                 dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1]);
-                if (i != 4) {
+                if (i != num_of_instances) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
-    std::array<ckernel::packer::pack_counters_t, 4> counters_vec;
+#ifdef ARCH_BLACKHOLE
+    constexpr uint num_of_instances = 1;
+#else
+    constexpr uint num_of_instances = 4;
+#endif
+    std::array<ckernel::packer::pack_counters_t, num_of_instances> counters_vec;
     PACK(
         counters_vec = ckernel::packer::read_pack_counters();
-        if (reg_id >= 1 && reg_id <= 4) {
+        if (reg_id >= 1 && reg_id <= num_of_instances) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_counters_helper(counters_vec[reg_id - 1]);
         }
         // Print all registers
         else if (reg_id == 0) {
-            for (uint i = 1; i <= 4; i++) {
+            for (uint i = 1; i <= num_of_instances; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
                 dprint_tensix_pack_counters_helper(counters_vec[i - 1]);
-                if (i != 4) {
+                if (i != num_of_instances) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
 }
 
 #endif  // END OF ELSE
@@ -1360,8 +1370,8 @@ inline void dprint_tensix_pack_config(uint reg_id = 0) {
             if (i != num_of_instances) {
                 DPRINT << ENDL();
             }
-        } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4."
-                      << ENDL();)
+        } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND "
+                      << num_of_instances << "." << ENDL();)
 }
 
 // Choose what register you want printed (1-2). 0 for all.
