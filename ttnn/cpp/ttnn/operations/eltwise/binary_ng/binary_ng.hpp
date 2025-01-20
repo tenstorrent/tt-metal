@@ -7,7 +7,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
-#include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::binary_ng {
@@ -57,11 +56,40 @@ struct BinaryNg {
         tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 };
 
-}  // namespace ttnn::operations::binary_ng
+template <BinaryOpType binary_op_type>
+struct InplaceBinaryNg {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
 
-inline Tensor typecast_to(DataType dtype, const Tensor& input) {
-    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
-}
+    static Tensor invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const float scalar,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const float scalar,
+        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+};
+
+}  // namespace ttnn::operations::binary_ng
 
 namespace ttnn::experimental {
 constexpr auto add = ttnn::register_operation_with_auto_launch_op<
@@ -135,5 +163,77 @@ constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
+
+constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::add_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
+
+constexpr auto sub_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::sub_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
+
+constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::mul_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
+
+constexpr auto div_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::div_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::DIV>>();
+
+constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gt_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GT>>();
+
+constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::lt_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LT>>();
+
+constexpr auto lte_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::lte_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LTE>>();
+
+constexpr auto gte_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gte_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GTE>>();
+
+constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::eq_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::EQ>>();
+
+constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::ne_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::NE>>();
+
+constexpr auto squared_difference_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::squared_difference_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SQUARED_DIFFERENCE>>();
+
+constexpr auto bias_gelu_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::bias_gelu_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::BIAS_GELU>>();
+
+constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_and_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_AND>>();
+
+constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_or_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_OR>>();
+
+constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logical_xor_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_XOR>>();
+
+constexpr auto ldexp_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::ldexp_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LDEXP>>();
+
+constexpr auto logaddexp_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logaddexp_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP>>();
+
+constexpr auto logaddexp2_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::logaddexp2_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
 
 }  // namespace ttnn::experimental

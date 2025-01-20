@@ -102,6 +102,11 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+
+    if (output_tensor.has_value() && (input_tensor_a.buffer()->address() == output_tensor->buffer()->address())) {
+        TT_FATAL(rank_a >= rank_b, "In-place operation rule violation for rank a: {}, rank b: {}", rank_a, rank_b);
+    }
+
     for (int i = -1; i >= -larger_rank; --i) {
         auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
@@ -111,6 +116,14 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             i,
             a_dim,
             b_dim);
+        if (output_tensor.has_value() && (input_tensor_a.buffer()->address() == output_tensor->buffer()->address())) {
+            TT_FATAL(
+                a_dim >= b_dim,
+                "In-place operation rule violation for dimension {}, dim a: {}, dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
     }
 }
 
