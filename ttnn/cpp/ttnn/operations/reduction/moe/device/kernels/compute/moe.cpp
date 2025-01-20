@@ -299,7 +299,7 @@ void top_k() {
                 copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
+                ckernel::topk_merge(0, (uint32_t)a, m_iter, K);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
 

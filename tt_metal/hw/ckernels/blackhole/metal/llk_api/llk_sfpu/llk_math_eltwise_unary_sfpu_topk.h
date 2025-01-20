@@ -40,9 +40,9 @@ inline void llk_math_eltwise_unary_sfpu_topk_local_sort(
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_topk_merge(
-    uint dst_index, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
+    uint dst_index, bool idir, int m_iter, int k, int vector_mode = (int)VectorMode::RC_custom) {
     llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
-        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE>, dst_index, vector_mode, m_iter, k);
+        ckernel::sfpu::calculate_bitonic_topk_merge<APPROXIMATE>, dst_index, vector_mode, idir, m_iter, k);
 }
 
 template <bool APPROXIMATE>
