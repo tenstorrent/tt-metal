@@ -109,6 +109,7 @@ def rand_bf16_gen(shape, device, *, min=0, max=1):
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     (
+        (torch.Size([1, 1, 1, 1]), torch.Size([2, 2, 3, 32, 32])),
         (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
         (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
@@ -262,6 +263,22 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config):
 @pytest.mark.parametrize(
     "input_shapes",
     (
+        (torch.Size([2, 5, 3, 32, 32]), torch.Size([2, 5, 3, 32, 32])),
+        (torch.Size([1, 5, 3, 32, 32]), torch.Size([2, 5, 1, 32, 32])),
+        (torch.Size([5, 3, 2, 64, 128]), torch.Size([5, 3, 2, 64, 1])),
+        (torch.Size([5, 3, 2, 1, 128]), torch.Size([5, 3, 2, 64, 1])),
+        (torch.Size([5, 3, 2, 128, 1]), torch.Size([5, 3, 2, 1, 128])),
+        (torch.Size([5, 3, 2, 1, 128]), torch.Size([5, 3, 2, 128, 1])),
+        (torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 3, 1, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 1, 32])),
+        (torch.Size([5, 3, 32, 1]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 32, 1])),
+        (torch.Size([5, 3, 1, 32]), torch.Size([5, 3, 32, 1])),
+        (torch.Size([2, 5, 3, 1, 1]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([2, 5, 3, 32, 32]), torch.Size([5, 3, 1, 1])),
+        (torch.Size([2, 5, 3, 32, 32]), torch.Size([32, 32])),
+        (torch.Size([2, 5, 3, 32, 32]), torch.Size([1, 1])),
         (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
         (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
@@ -322,6 +339,10 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
+        (torch.Size([5, 3, 2, 64, 128]), torch.Size([5, 3, 2, 64, 1])),
+        (torch.Size([5, 3, 2, 1, 128]), torch.Size([5, 3, 2, 64, 1])),
+        (torch.Size([5, 3, 2, 128, 1]), torch.Size([5, 3, 2, 1, 128])),
+        (torch.Size([5, 3, 2, 1, 128]), torch.Size([5, 3, 2, 128, 1])),
         (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
         (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),

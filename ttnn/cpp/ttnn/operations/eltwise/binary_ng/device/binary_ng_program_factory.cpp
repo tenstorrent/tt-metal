@@ -14,10 +14,18 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const Tensor& x, bool is_5D_output) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
-    return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+    if (is_5D_output) {
+        if (shape.rank() == 5) {
+            return {shape[-5], shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+        } else {
+            return {1, shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+        }
+    } else {
+        return {1, shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
+    }
 }
 
 std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
@@ -56,11 +64,12 @@ void set_or_update_runtime_arguments(
     const auto ashape = a.padded_shape();
     const auto bshape = b.has_value() ? b->padded_shape() : SimpleShape{1, 1};
     const auto cshape = c.padded_shape();
+    const auto out_rank = c.logical_shape().rank();
 
-    const auto [aN, aC, aHt, aWt] = extract_shape_dims(a);
-    const auto [bN, bC, bHt, bWt] = b.has_value() ? extract_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u};
-    const auto [cN, cC, cHt, cWt] = extract_shape_dims(c);
-
+    const auto [aD, aN, aC, aHt, aWt] = extract_shape_dims(a, out_rank > 4);
+    const auto [bD, bN, bC, bHt, bWt] =
+        b.has_value() ? extract_shape_dims(*b, out_rank > 4) : std::tuple{1u, 1u, 1u, 1u, 1u};
+    const auto [cD, cN, cC, cHt, cWt] = extract_shape_dims(c, out_rank > 4);
     uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
 
     constexpr bool row_major = true;
@@ -81,8 +90,8 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 10>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 12>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 13>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 3>{0});
             continue;
         }
@@ -93,8 +102,10 @@ void set_or_update_runtime_arguments(
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
-            aHt * aWt * aC * (aN > 1),
-            aHt * aWt * (aC > 1),
+            aHt * aWt * aC * aN * (aD > 1),  // d-stride
+            aHt * aWt * aC * (aN > 1),       // n-stride
+            aHt * aWt * (aC > 1),            // c-stride
+            cD,                              // 5th Dim
             cN,
             cC,
             cHt,
@@ -108,8 +119,10 @@ void set_or_update_runtime_arguments(
                 start_tile_id,
                 num_tiles_per_core,
                 cHtWt,
+                bHt * bWt * bC * bN * (bD > 1),
                 bHt * bWt * bC * (bN > 1),
                 bHt * bWt * (bC > 1),
+                cD,
                 cN,
                 cC,
                 cHt,
@@ -133,10 +146,12 @@ void set_or_update_runtime_arguments(
                 start_tile_id,
                 num_tiles_per_core,
                 cHtWt,
+                cD,
                 cN,
                 cC,
                 cHt,
                 cWt,
+                0u,
                 0u,
                 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
