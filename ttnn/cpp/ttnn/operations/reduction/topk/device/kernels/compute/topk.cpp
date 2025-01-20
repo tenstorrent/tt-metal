@@ -15,7 +15,6 @@
 int32_t topk_replay_init = 0;
 
 namespace NAMESPACE {
-
 void MAIN {
     constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);

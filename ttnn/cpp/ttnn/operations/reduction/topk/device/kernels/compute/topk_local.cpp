@@ -60,7 +60,7 @@ void MAIN {
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
         for (uint32_t wt = 0; wt < Wt; wt += 2) {
             acquire_dst();
-            // local sort into k groups
+            // transpose tiles and then local sort into k groups
             cb_wait_front(input_cb_index, 2);
             cb_wait_front(index_cb_index, 2);
 
