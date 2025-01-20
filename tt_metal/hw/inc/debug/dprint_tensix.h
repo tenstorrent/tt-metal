@@ -922,56 +922,6 @@ inline void dprint_tensix_pack_config_blackhole(const ckernel::packer::pack_conf
 }
 #endif  // ARCH_BLACKHOLE
 
-// PCK_EDGE_OFFSET
-
-// These function's argument should be return value of read_pack_edge_offset()
-
-inline void dprint_tensix_pack_edge_offset_mask(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.mask << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_mode(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.mode << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack0 << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack1 << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack2 << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack3 << ENDL();
-}
-
-inline void dprint_tensix_pack_edge_offset_reserved(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "0x" << HEX() << edge.reserved << ENDL();
-}
-
-// Printing packer edge offset
-inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edge_offset_t& edge) {
-    DPRINT << "mask: ";
-    dprint_tensix_pack_edge_offset_mask(edge);
-    DPRINT << "mode: ";
-    dprint_tensix_pack_edge_offset_mode(edge);
-    DPRINT << "tile_row_set_select_pack0: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(edge);
-    DPRINT << "tile_row_set_select_pack1: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(edge);
-    DPRINT << "tile_row_set_select_pack2: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(edge);
-    DPRINT << "tile_row_set_select_pack3: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(edge);
-    DPRINT << "reserved: ";
-    dprint_tensix_pack_edge_offset_reserved(edge);
-}
-
 // PACK STRIDES
 
 inline void dprint_tensix_pack_strides_x_stride(const uint32_t& word) {
@@ -1225,6 +1175,58 @@ inline void dprint_tensix_dest_rd_ctrl() {
          dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(dest);)
 }
 
+#endif  // END OF ELSE
+
+// PCK_EDGE_OFFSET
+
+// These function's argument should be return value of read_pack_edge_offset()
+
+inline void dprint_tensix_pack_edge_offset_mask(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.mask << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_mode(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.mode << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack0 << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack1 << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack2 << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.tile_row_set_select_pack3 << ENDL();
+}
+
+inline void dprint_tensix_pack_edge_offset_reserved(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "0x" << HEX() << edge.reserved << ENDL();
+}
+
+// Printing packer edge offset
+inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edge_offset_t& edge) {
+    DPRINT << "mask: ";
+    dprint_tensix_pack_edge_offset_mask(edge);
+    DPRINT << "mode: ";
+    dprint_tensix_pack_edge_offset_mode(edge);
+    DPRINT << "tile_row_set_select_pack0: ";
+    dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(edge);
+    DPRINT << "tile_row_set_select_pack1: ";
+    dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(edge);
+    DPRINT << "tile_row_set_select_pack2: ";
+    dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(edge);
+    DPRINT << "tile_row_set_select_pack3: ";
+    dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(edge);
+    DPRINT << "reserved: ";
+    dprint_tensix_pack_edge_offset_reserved(edge);
+}
+
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
 #ifdef ARCH_BLACKHOLE
@@ -1251,8 +1253,6 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
         } else DPRINT
         << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
 }
-
-#endif  // END OF ELSE
 
 // PACK COUNTERS
 
