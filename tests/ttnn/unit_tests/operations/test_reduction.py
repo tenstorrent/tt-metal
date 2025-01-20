@@ -208,7 +208,7 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
 @pytest.mark.parametrize("c", [1])
 @pytest.mark.parametrize("h", [67])
 @pytest.mark.parametrize("w", [77])
-@pytest.mark.parametrize("dim", [3])
+@pytest.mark.parametrize("dim", [3, -1])
 def test_argmax(device, batch_size, c, h, w, dim):
     torch.manual_seed(0)
 
@@ -225,4 +225,6 @@ def test_argmax(device, batch_size, c, h, w, dim):
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
+    # TODO: fix bad PCC issue for argmax for this test case
+    # it seems like pcc issue is not seen for other cases: https://github.com/tenstorrent/tt-metal/issues/11550#issuecomment-2582410380
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
