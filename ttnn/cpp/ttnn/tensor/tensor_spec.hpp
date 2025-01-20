@@ -16,7 +16,9 @@ public:
         tensor_layout_(std::move(tensor_layout)),
         cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
         cached_logical_2d_shape_(tensor_layout_.compute_logical_2d_shape(logical_shape_)),
-        cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {}
+        cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {
+        validate_shard_spec_with_tensor_shape();
+    }
     TensorSpec(TensorSpec&&) noexcept = default;
     TensorSpec& operator=(TensorSpec&&) = default;
     TensorSpec(const TensorSpec&) = default;
@@ -35,7 +37,7 @@ public:
     const Shape2D& physical_shape() const { return cached_physical_shape_; }
     ttnn::Shape shape() const { return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view()); }
 
-    Tile tile() const { return tensor_layout_.get_page_config().get_tile(); }
+    Tile tile() const { return tensor_layout_.get_tile(); }
 
     Strides compute_strides() const { return tensor_layout_.compute_strides(logical_shape_); }
     std::optional<ShardSpecBuffer> compute_shard_spec_buffer() const {
@@ -50,6 +52,8 @@ public:
     const auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
 
 private:
+    void validate_shard_spec_with_tensor_shape() const;
+
     ttnn::SimpleShape logical_shape_;
     TensorLayout tensor_layout_;
 
