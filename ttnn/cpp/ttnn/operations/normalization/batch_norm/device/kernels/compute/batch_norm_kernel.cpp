@@ -30,7 +30,7 @@ ALWI void subtract_bcast_tiles(
         cb_push_back(cb_out, onetile);
         cb_pop_front(cb_other, onetile);
     }
-    // cb_pop_front(cb_bcast, onetile);
+    cb_pop_front(cb_bcast, onetile);
 }
 
 void MAIN {
@@ -39,9 +39,6 @@ void MAIN {
     uint32_t tile_start = get_arg_val<uint32_t>(2);
     constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t is_training_mode = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(4) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -58,15 +55,6 @@ void MAIN {
     constexpr auto cb_weight = tt::CBIndex::c_16;    // weight tensor
     constexpr auto cb_tmp_1 = tt::CBIndex::c_17;     // (input - batch_mean)/(sqrt(batch_var + eps))
     constexpr auto cb_bias = tt::CBIndex::c_18;      // bias tensor
-    constexpr auto cb_old_running_mean = tt::CBIndex::c_25;  // old running mean tensor
-    constexpr auto cb_old_running_var = tt::CBIndex::c_26;   // old running var tensor
-    constexpr auto cb_updated_running_mean = tt::CBIndex::c_27;  // updated running mean tensor
-    constexpr auto cb_updated_running_var = tt::CBIndex::c_28;   // updated running var tensor
-    constexpr auto cb_momentum = tt::CBIndex::c_24;              // momentum
-    constexpr auto cb_one = tt::CBIndex::c_19;                   // stores 1
-    constexpr auto cb_tmp1 = tt::CBIndex::c_29;                  // tmp 1
-    constexpr auto cb_tmp2 = tt::CBIndex::c_30;                  // tmp 2
-    constexpr auto cb_tmp3 = tt::CBIndex::c_31;                  // tmp 3
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
@@ -106,7 +94,7 @@ void MAIN {
         pack_tile_with_dt(dst0, cb_den);
         tile_regs_release();
 
-        // cb_pop_front(cb_batch_var, 1);
+        cb_pop_front(cb_batch_var, 1);
         cb_pop_front(cb_eps, 1);
         cb_push_back(cb_den, onetile);
 
@@ -127,24 +115,6 @@ void MAIN {
         cb_pop_front(cb_num, 1);
         cb_pop_front(cb_den, 1);
         cb_push_back(cb_affine_or_out, onetile);
-
-        // Updation of running stats
-        if constexpr (is_training_mode) {
-            // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
-            if constexpr (old_running_mean_has_value) {
-                sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);           // 1 - momentum
-                mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, tile_id, 0, 0);    // momentum * running stats
-                mul_tiles_to_cb(cb_tmp1, cb_old_running_mean, cb_tmp3, 0, tile_id, 1, 0);  // cb_tmp1 * batch stat
-                add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_mean, 0, 0, 1, 1);
-            }
-
-            if constexpr (old_running_var_has_value) {
-                sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, tile_id, 0, 0, 0);          // 1 - momentum
-                mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, tile_id, 0, 0);    // momentum * batch stat
-                mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, tile_id, 0, 1);  // cb_tmp1 * running stats
-                add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);
-            }
-        }
 
         if constexpr (weight_has_value) {  // result = result * weight
             cb_reserve_back(cb_scaled_output, onetile);
