@@ -6,6 +6,11 @@
 
 #include "shape_base.hpp"
 
+#if TTNN_WITH_PYTHON_BINDINGS
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#endif
+
 namespace tt::tt_metal {
 
 class SimpleShape final : protected ShapeBase {
@@ -48,3 +53,18 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shap
 namespace ttnn {
 using tt::tt_metal::SimpleShape;
 }  // namespace ttnn
+
+#if TTNN_WITH_PYTHON_BINDINGS
+namespace PYBIND11_NAMESPACE {
+namespace detail {
+template <>
+class type_caster<ttnn::SimpleShape> {
+public:
+    PYBIND11_TYPE_CASTER(ttnn::SimpleShape, _("SimpleShape"));
+
+    bool load(handle src, bool);
+    static handle cast(const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
+};
+}  // namespace detail
+}  // namespace PYBIND11_NAMESPACE
+#endif

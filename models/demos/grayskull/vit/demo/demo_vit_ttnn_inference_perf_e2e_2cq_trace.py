@@ -63,9 +63,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
@@ -97,13 +95,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
-    reshard_out = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    reshard_out = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == reshard_out.buffer_address()
     ttnn.DumpDeviceProfiler(device)

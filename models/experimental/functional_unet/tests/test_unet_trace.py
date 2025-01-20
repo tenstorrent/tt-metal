@@ -77,18 +77,14 @@ def test_unet_trace(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -178,18 +174,14 @@ def test_unet_trace_2cq(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -311,18 +303,14 @@ def test_unet_trace_2cq_multi_device(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = buffer_address(l1_input_tensor)
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, mesh_device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, mesh_device)
     assert input_trace_addr == buffer_address(l1_input_tensor)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
@@ -435,18 +423,14 @@ def test_unet_trace_2cq_same_io(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
