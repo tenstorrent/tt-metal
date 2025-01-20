@@ -13,6 +13,7 @@
 #include <allocator.hpp>
 #include <buffer_constants.hpp>
 #include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
 #include <data_types.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager.hpp>
