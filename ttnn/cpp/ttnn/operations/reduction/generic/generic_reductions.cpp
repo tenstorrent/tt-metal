@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -241,11 +242,14 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
+    float pad_value = reduce_type == ReduceType::Max
+                          ? -std::numeric_limits<float>::infinity()
+                          : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
+    Tensor input_tensor = ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value);
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
-        return std_var_impl<reduce_type>(input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config);
+        return std_var_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config);
     }
-    return reduce_impl<reduce_type>(
-        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+    return reduce_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
 }
 
 template class Reduce<ReduceType::Sum>;
