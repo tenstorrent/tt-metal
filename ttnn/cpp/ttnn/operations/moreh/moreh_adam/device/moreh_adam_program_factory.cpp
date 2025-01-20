@@ -104,7 +104,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
         static_cast<uint32_t>(is_dram(param_out)),
         static_cast<uint32_t>(is_dram(exp_avg_out)),
         static_cast<uint32_t>(is_dram(exp_avg_sq_out)),
-        static_cast<uint32_t>(is_dram(max_exp_avg_sq_out.value()))};
+        static_cast<uint32_t>(max_exp_avg_sq_out.has_value() ? is_dram(max_exp_avg_sq_out.value()) : false)};
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/kernels/"
@@ -272,7 +272,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     auto param_out_buffer = tensor_return_value.at(0)->buffer();
     auto exp_avg_out_buffer = tensor_return_value.at(1)->buffer();
     auto exp_avg_sq_out_buffer = tensor_return_value.at(2)->buffer();
-    auto max_exp_avg_sq_out_buffer = tensor_return_value.at(3)->buffer();
+    auto max_exp_avg_sq_out_buffer = operation_attributes.amsgrad ? tensor_return_value.at(3)->buffer() : nullptr;
 
     auto& core_group_1 = cached_program.shared_variables.core_group_1;
     auto& core_group_2 = cached_program.shared_variables.core_group_2;
