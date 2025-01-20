@@ -177,7 +177,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -188,7 +188,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -199,7 +199,7 @@ def create_tt_model(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
+            "models/demos/llama3/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
