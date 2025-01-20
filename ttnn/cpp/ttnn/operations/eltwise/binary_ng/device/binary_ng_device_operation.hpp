@@ -40,6 +40,7 @@ struct BinaryNgDeviceOperation {
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
+        bool is_sfpu = false;
 
         tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
