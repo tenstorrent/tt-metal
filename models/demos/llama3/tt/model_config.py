@@ -84,15 +84,43 @@ class TtModelArgs:
     def __init__(
         self,
         mesh_device,
+        tensor_parallel=None,
+        data_parallel=1,
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
     ):
-        self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
+        # if tensor_parallel not explicitly set, use all devices
+        self.total_num_devices = mesh_device.get_num_devices() if mesh_device else 0
+        self.num_devices_tp = tensor_parallel if tensor_parallel != None else self.total_num_devices
+        self.num_devices_dp = data_parallel
+        assert (self.num_devices_tp == 1) or (
+            self.num_devices_dp == 1
+        ), f"Hybrid mode not supported. TP({self.num_devices_tp}) and DP({self.num_devices_dp}) cannot be both greater than 1"
+        assert (
+            self.num_devices_tp * self.num_devices_dp == self.total_num_devices
+        ), f"Target TP({self.num_devices_tp}) x DP({self.num_devices_dp}) is not equal to total available devices {self.total_num_devices}"
+
+        # check batch size and data parallel compatiblity
+        assert max_batch_size >= data_parallel, f"Batch size ({max_batch_size}) less than  DP({data_parallel})"
+        assert (
+            max_batch_size % data_parallel == 0
+        ), f"Batch size ({max_batch_size}) isn't multiple of DP({data_parallel})"
+
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+
+        # if data parallel, reshape mesh device to have first dimension as data parallel
+        if self.num_devices_dp > 1:
+            mesh_device.reshape(ttnn.MeshShape(self.num_devices_dp, self.num_devices_tp))
+
+        self.cluster_shape = list(mesh_device.shape)  # this is entire cluster, TBD if this needs to be done differently
+        self.is_galaxy = self.num_devices_tp == 32
+
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[
+            self.num_devices_tp
+        ]  # this might not be the best, but targeting base TP should be OK start
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -220,8 +248,6 @@ class TtModelArgs:
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
-        self.cluster_shape = list(mesh_device.shape)
-        self.is_galaxy = self.num_devices == 32
         if device is not None:  # Avoid issue with test_llama_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
@@ -272,14 +298,14 @@ class TtModelArgs:
 
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
 
-            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+            residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices_tp)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
                 if self.is_galaxy
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
+                        self.dim // residual_grid.num_cores // self.num_devices_tp,
                     ),
                     residual_grid,
                     ttnn.ShardStrategy.WIDTH,
@@ -312,9 +338,9 @@ class TtModelArgs:
                 if self.is_galaxy
                 else self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
-                    k=self.dim // self.num_devices,
+                    k=self.dim // self.num_devices_tp,
                     n=self.dim,
-                    num_cores=self.n_heads // self.num_devices,
+                    num_cores=self.n_heads // self.num_devices_tp,
                 )
             )
 
@@ -323,14 +349,14 @@ class TtModelArgs:
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
                 self.ccl_topology() == ttnn.Topology.Ring
-                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
-                and self.num_devices > 1
+                and (self.dim // self.tile_size // self.num_devices_tp) % self.num_devices_tp == 0
+                and self.num_devices_tp > 1
             )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
                 do_core_grid_size = (8, 1)
                 do_per_core_N = (
-                    self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
+                    self.dim // self.num_devices_tp // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
                 )
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=do_core_grid_size,
@@ -377,7 +403,7 @@ class TtModelArgs:
             )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
-            if self.num_devices == 32:
+            if self.num_devices_tp == 32:
                 lm_head_num_rows = 4
                 while self.dim % (32 * 32 * lm_head_num_rows) != 0:
                     lm_head_num_rows -= 1
@@ -491,7 +517,7 @@ class TtModelArgs:
             mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
                 if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices)
+                else self.dram_shard_core_grid_for_k_and_n(self.dim, self.hidden_dim // self.num_devices_tp)
             )
 
             self.model_config["SHARDED_MLP_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -514,7 +540,7 @@ class TtModelArgs:
             mlp2_core_grid = (
                 ttnn.CoreGrid(y=1, x=8)
                 if self.is_galaxy
-                else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
+                else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices_tp, self.dim)
             )
 
             self.model_config["SHARDED_MLP2_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
@@ -572,7 +598,7 @@ class TtModelArgs:
                 else self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
                     k=self.dim,
-                    n=self.qkv_size // self.num_devices,
+                    n=self.qkv_size // self.num_devices_tp,
                     num_cores=attn_input_grid.num_cores,
                 )
             )
@@ -709,14 +735,14 @@ class TtModelArgs:
             self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
                 k=self.vision_dim,
-                n=self.vision_hidden_dim // self.num_devices,
+                n=self.vision_hidden_dim // self.num_devices_tp,
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= max_seq,
             )
             self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
-                k=self.vision_hidden_dim // self.num_devices,
+                k=self.vision_hidden_dim // self.num_devices_tp,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
@@ -726,14 +752,14 @@ class TtModelArgs:
                 m=min(seq_len, max_seq),
                 k=self.vision_dim,
                 n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
-                // self.num_devices,  # Head dim was padded to nearest 32
+                // self.num_devices_tp,  # Head dim was padded to nearest 32
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= max_seq,
             )
             self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
-                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
+                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices_tp,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
@@ -742,7 +768,7 @@ class TtModelArgs:
             self.model_config["VISION_XATTN_Q_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.dim,
-                n=(self.head_dim * self.n_heads) // self.num_devices,
+                n=(self.head_dim * self.n_heads) // self.num_devices_tp,
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,
@@ -750,7 +776,7 @@ class TtModelArgs:
             self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
                 k=self.dim,
-                n=(self.head_dim * self.n_kv_heads) // self.num_devices,
+                n=(self.head_dim * self.n_kv_heads) // self.num_devices_tp,
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=seq_len <= max_seq,
@@ -773,7 +799,7 @@ class TtModelArgs:
             )
             self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
-                k=self.dim // self.num_devices,
+                k=self.dim // self.num_devices_tp,
                 n=self.dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
@@ -783,7 +809,7 @@ class TtModelArgs:
             self.model_config["VISION_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=seq_len,
                 k=self.vision_dim * 6,
-                n=self.dim // self.num_devices,
+                n=self.dim // self.num_devices_tp,
                 grid_size=(8, 8),
                 in0_block_w=1,
                 fuse_batch=False,
@@ -799,7 +825,7 @@ class TtModelArgs:
             )
 
             def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
+                M = (self.n_kv_heads // self.num_devices_tp) * seq_len
                 cores_x, cores_y = self.find_grid(M // self.tile_size)
                 return ttnn.create_sharded_memory_config(
                     (
@@ -826,10 +852,10 @@ class TtModelArgs:
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.BufferType.L1,
                 ttnn.ShardSpec(
-                    num_to_core_range_set(self.num_devices),
+                    num_to_core_range_set(self.num_devices_tp),
                     [
                         self.tile_padded_batch_rows,
-                        self.dim // self.num_devices,
+                        self.dim // self.num_devices_tp,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
@@ -837,7 +863,7 @@ class TtModelArgs:
 
             self.model_config = set_tg_attention_config(self.model_config, self.dim)
 
-            self.is_multichip = self.num_devices > 1
+            self.is_multichip = self.num_devices_tp > 1
             self.num_reduce_scatter_links = 1
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
@@ -854,9 +880,9 @@ class TtModelArgs:
         return False
 
     def ccl_topology(self):
-        if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
+        if self.num_devices_tp == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
             return ttnn.Topology.Ring
-        elif self.num_devices > 1:  # All other multi chip devices
+        elif self.num_devices_tp > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
         return None
 
