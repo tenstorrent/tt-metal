@@ -167,6 +167,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+    tt::log_info(tt::LogOp, "********  larger_rank : {}", larger_rank);
 
     // Broadcasting Rules Overview:
     // - If the two tensors have different ranks, we virtually pad the smaller-rank tensor's shape
@@ -189,6 +190,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     };
 
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
+    tt::log_info(tt::LogOp, "******** output_shape : {}", output_shape);
     return TensorSpec(
         output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
 }
