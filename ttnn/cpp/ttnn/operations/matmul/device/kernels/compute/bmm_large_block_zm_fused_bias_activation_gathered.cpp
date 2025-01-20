@@ -307,13 +307,6 @@ void MAIN {
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
 
-#ifdef ENABLE_GLOBAL_CB
-                        // Release in1
-                        cb_reserve_back(sync_cb, 1);
-                        cb_push_back(sync_cb, 1);
-                        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
-#endif
-
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
 #endif
@@ -382,6 +375,13 @@ void MAIN {
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
 #endif
         }
+
+#ifdef ENABLE_GLOBAL_CB
+        // Release in1
+        cb_reserve_back(sync_cb, 1);
+        cb_push_back(sync_cb, 1);
+        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+#endif
 
         if constexpr (batch > 1) {
             // reconfigure init for matmul

@@ -153,8 +153,8 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     TT_FATAL(
         memory_config_.shard_spec.has_value(), "MemoryConfig must have Shard Spec specified for sharded memory layout");
 
-    const Size physical_size = compute_physical_shape(shape);
-    const Size page_shape = compute_page_shape(physical_size);
+    const Shape2D physical_size = compute_physical_shape(shape);
+    const Shape2D page_shape = compute_page_shape(physical_size);
 
     TT_FATAL(
         physical_size.width() % page_shape.width() == 0,
@@ -187,8 +187,8 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
-    const Size physical_size = compute_physical_shape(shape);
-    const Size page_shape = compute_page_shape(physical_size);
+    const Shape2D physical_size = compute_physical_shape(shape);
+    const Shape2D page_shape = compute_page_shape(physical_size);
     const auto width_remainder = physical_size.width() % page_shape.width();
     const auto height_remainder = physical_size.height() % page_shape.height();
     TT_FATAL(
@@ -212,25 +212,25 @@ size_t TensorLayout::compute_page_size_bytes(const ttnn::SimpleShape& shape) con
     return compute_page_size_bytes(page_shape);
 }
 
-size_t TensorLayout::compute_page_size_bytes(const Size& page_size) const {
+size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
     return page_config_.get_page_size_bytes(page_size, dtype_);
 }
 
-Size TensorLayout::get_logical_shard_shape() const {
+Shape2D TensorLayout::get_logical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec.has_value(), "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
 
     // Shape in shard spec will always represent logical shard shape in either mode
-    return Size(memory_config_.shard_spec.value().shape);
+    return Shape2D(memory_config_.shard_spec.value().shape);
 }
 
-Size TensorLayout::get_physical_shard_shape() const {
+Shape2D TensorLayout::get_physical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec.has_value(),
         "Shard spec must have value for TensorLayout::get_physical_shard_shape!");
     const auto& shard_spec = memory_config_.shard_spec.value();
 
-    auto compute_physical_shard_shape_for_logical_mode = [&]() -> Size {
+    auto compute_physical_shard_shape_for_logical_mode = [&]() -> Shape2D {
         // TODO: If physical_shard_shape is provided, alignment_ == physical_shard_shape is guaranteed (should we store
         // physical_shard_shape instead?)
         if (shard_spec.physical_shard_shape.has_value()) {
@@ -243,14 +243,14 @@ Size TensorLayout::get_physical_shard_shape() const {
             return physical_shard_shape;
         }
 
-        const auto& logical_shard_shape = Size(shard_spec.shape);
+        const auto& logical_shard_shape = Shape2D(shard_spec.shape);
         // TODO: Alignment is guaranteed to be rank 2 or less if tensor is sharded (remove validate?)
         const int alignment_rank = static_cast<int>(alignment_.size());
         TT_FATAL(
             alignment_rank <= 2, "Alignment {} must be rank 2 or less to compute physical shard shape", alignment_);
         auto physical_shard_height = CMAKE_UNIQUE_NAMESPACE::round_up(logical_shard_shape.height(), alignment_[-2]);
         auto physical_shard_width = CMAKE_UNIQUE_NAMESPACE::round_up(logical_shard_shape.width(), alignment_[-1]);
-        return Size{physical_shard_height, physical_shard_width};
+        return Shape2D{physical_shard_height, physical_shard_width};
     };
 
     switch (shard_spec.mode) {
@@ -260,7 +260,19 @@ Size TensorLayout::get_physical_shard_shape() const {
     }
 }
 
-Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const {
+Shape2D TensorLayout::compute_logical_2d_shape(const ttnn::SimpleShape& shape) const {
+    if (shape.rank() < 2) {
+        return Shape2D{1, shape[-1]};
+    }
+    size_t width = shape[-1];
+    size_t height = shape[-2];
+    for (int i = -3; i >= -shape.rank(); --i) {
+        height *= shape[i];
+    }
+    return Shape2D{height, width};
+}
+
+Shape2D TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const {
     const int rank = static_cast<int>(shape.rank());
     const int alignment_rank = static_cast<int>(alignment_.size());
 
@@ -301,7 +313,7 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
         auto physical_width =
             get_physical_size(width, logical_shard_shape.width(), physical_shard_shape.width(), alignment_[-1]);
 
-        Size size{physical_height, physical_width};
+        Shape2D size{physical_height, physical_width};
         return size;
     }
 
@@ -322,12 +334,12 @@ Size TensorLayout::compute_physical_shape(const ttnn::SimpleShape& shape) const 
         }
     }
 
-    Size size{height, width};
+    Shape2D size{height, width};
     return size;
 }
 
-Size TensorLayout::compute_page_shape(const Size& physical_size) const {
-    std::optional<Size> physical_shard_shape = std::nullopt;
+Shape2D TensorLayout::compute_page_shape(const Shape2D& physical_size) const {
+    std::optional<Shape2D> physical_shard_shape = std::nullopt;
     if (memory_config_.shard_spec.has_value()) {
         physical_shard_shape = get_physical_shard_shape();
     }

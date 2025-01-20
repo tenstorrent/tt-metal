@@ -168,137 +168,6 @@ public:
         core(core) {}
 };
 
-class EnqueueWriteShardedBufferCommand;
-class EnqueueWriteInterleavedBufferCommand;
-class EnqueueWriteBufferCommand : public Command {
-   private:
-    SystemMemoryManager& manager;
-    CoreType dispatch_core_type;
-
-    virtual void add_dispatch_write(HugepageDeviceCommand& command) = 0;
-    virtual void add_buffer_data(HugepageDeviceCommand& command) = 0;
-
-   protected:
-    IDevice* device;
-    uint32_t command_queue_id;
-    NOC noc_index;
-    const void* src;
-    const Buffer& buffer;
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
-    uint32_t bank_base_address;
-    uint32_t padded_page_size;
-    uint32_t dst_page_index;
-    uint32_t pages_to_write;
-    bool issue_wait;
-
-   public:
-    EnqueueWriteBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        const Buffer& buffer,
-        const void* src,
-        SystemMemoryManager& manager,
-        bool issue_wait,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        uint32_t bank_base_address,
-        uint32_t padded_page_size,
-        uint32_t dst_page_index = 0,
-        std::optional<uint32_t> pages_to_write = std::nullopt);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WRITE_BUFFER; }
-
-    constexpr bool has_side_effects() { return true; }
-};
-
-class EnqueueWriteInterleavedBufferCommand : public EnqueueWriteBufferCommand {
-private:
-    void add_dispatch_write(HugepageDeviceCommand& command) override;
-    void add_buffer_data(HugepageDeviceCommand& command) override;
-
-    uint32_t initial_src_addr_offset;
-
-public:
-    EnqueueWriteInterleavedBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        const Buffer& buffer,
-        const void* src,
-        const uint32_t initial_src_addr_offset,
-        SystemMemoryManager& manager,
-        bool issue_wait,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        uint32_t bank_base_address,
-        uint32_t padded_page_size,
-        uint32_t dst_page_index = 0,
-        std::optional<uint32_t> pages_to_write = std::nullopt) :
-        EnqueueWriteBufferCommand(
-            command_queue_id,
-            device,
-            noc_index,
-            buffer,
-            src,
-            manager,
-            issue_wait,
-            expected_num_workers_completed,
-            sub_device_ids,
-            bank_base_address,
-            padded_page_size,
-            dst_page_index,
-            pages_to_write) {
-        this->initial_src_addr_offset = initial_src_addr_offset;
-    }
-};
-
-class EnqueueWriteShardedBufferCommand : public EnqueueWriteBufferCommand {
-private:
-    void add_dispatch_write(HugepageDeviceCommand& command) override;
-    void add_buffer_data(HugepageDeviceCommand& command) override;
-
-    const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping;
-    const CoreCoord core;
-
-public:
-    EnqueueWriteShardedBufferCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        const Buffer& buffer,
-        const void* src,
-        SystemMemoryManager& manager,
-        bool issue_wait,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        uint32_t bank_base_address,
-        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
-        const CoreCoord& core,
-        uint32_t padded_page_size,
-        uint32_t dst_page_index = 0,
-        std::optional<uint32_t> pages_to_write = std::nullopt) :
-        EnqueueWriteBufferCommand(
-            command_queue_id,
-            device,
-            noc_index,
-            buffer,
-            src,
-            manager,
-            issue_wait,
-            expected_num_workers_completed,
-            sub_device_ids,
-            bank_base_address,
-            padded_page_size,
-            dst_page_index,
-            pages_to_write),
-        buffer_page_mapping(buffer_page_mapping),
-        core(core) {}
-};
-
 class EnqueueProgramCommand : public Command {
    private:
     uint32_t command_queue_id;
@@ -439,7 +308,6 @@ class EnqueueTerminateCommand : public Command {
 };
 
 namespace detail {
-inline bool LAZY_COMMAND_QUEUE_MODE = false;
 
 /*
  Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
@@ -513,7 +381,11 @@ class HWCommandQueue {
     void record_end();
     void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
-    void reset_worker_state(bool reset_launch_msg_state);
+
+    void reset_worker_state(
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
 
     uint32_t get_id() const;
     std::optional<uint32_t> get_tid() const;
@@ -521,7 +393,6 @@ class HWCommandQueue {
     SystemMemoryManager& sysmem_manager();
 
     void terminate();
-    void reset_config_buffer_mgr(const uint32_t num_entries);
 
     // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
     uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const;
@@ -553,8 +424,11 @@ private:
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
     // post trace capture.
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> multicast_cores_launch_message_wptr_reset;
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> unicast_cores_launch_message_wptr_reset;
+    std::array<LaunchMessageRingBufferState, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>
+        worker_launch_message_buffer_state_reset;
+    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset;
+    std::array<tt::tt_metal::WorkerConfigBufferMgr, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>
+        config_buffer_mgr_reset;
     IDevice* device;
 
     std::condition_variable reader_thread_cv;
@@ -563,6 +437,9 @@ private:
     std::condition_variable reads_processed_cv;
     std::mutex reads_processed_cv_mutex;
     CoreType get_dispatch_core_type();
+
+    void reset_worker_dispatch_state_on_device(bool reset_launch_msg_state);
+    void reset_config_buffer_mgr(const uint32_t num_entries);
 
     void copy_into_user_space(
         const detail::ReadBufferDescriptor& read_buffer_descriptor, chip_id_t mmio_device_id, uint16_t channel);

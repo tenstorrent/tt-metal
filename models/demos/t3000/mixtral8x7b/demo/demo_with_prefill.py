@@ -446,7 +446,7 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     # Save benchmark data for CI dashboard
     if is_ci_env:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.prep_csvs(
+        benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"demo_with_prefill",
             ml_model_name="Mixtral8x7B",

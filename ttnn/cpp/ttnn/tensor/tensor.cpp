@@ -718,7 +718,7 @@ std::vector<float> Tensor::to_vector<float>() const {
                     : unpack_bfp4_tiles_into_float_vec(
                           packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
 
-            return tensor_impl::decode_tensor_data(unpacked_data, cpu_tensor.tensor_spec());
+            return tensor_impl::decode_tensor_data(std::move(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
             TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.get_dtype());
@@ -1029,7 +1029,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_devices(
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
     const std::vector<IDevice*>& devices,
@@ -1037,7 +1037,9 @@ Tensor allocate_tensor_on_devices(
     const std::optional<Tile>& tile) {
     // Top level wrapper to asynchronously create a device tensor (single- or multi-device).
     Tensor device_tensor = Tensor(devices);
-    TensorSpec tensor_spec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config));
+    TensorSpec tensor_spec(
+        shape.logical_shape(),
+        TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape));
 
     // Save the ref count to later re-set it:
     // 1. device_tensor is copied in the lambda by the main thread, which increments the ref count.

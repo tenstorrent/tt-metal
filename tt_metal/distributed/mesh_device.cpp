@@ -587,10 +587,6 @@ SubDeviceManagerId MeshDevice::get_default_sub_device_manager_id() const {
     TT_THROW("get_default_sub_device_manager_id() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_default_sub_device_manager_id();
 }
-LaunchMessageRingBufferState& MeshDevice::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    TT_THROW("get_worker_launch_message_buffer_state() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_worker_launch_message_buffer_state(sub_device_id);
-}
 CoreCoord MeshDevice::virtual_program_dispatch_core(uint8_t cq_id) const {
     TT_THROW("virtual_program_dispatch_core() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->virtual_program_dispatch_core(cq_id);

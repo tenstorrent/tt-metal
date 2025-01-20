@@ -196,6 +196,13 @@ class Cluster {
     //       CloseDevice(1)
     void set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t>& target_mmio_devices = {}) const;
 
+
+    std::unordered_map<chip_id_t, std::unordered_map<ethernet_channel_t, std::tuple<chip_id_t, ethernet_channel_t>>>
+        get_ethernet_connections() const {
+            return this->cluster_desc_->get_ethernet_connections();
+        }
+
+
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     chip_id_t get_associated_mmio_device(chip_id_t device_id) const {
         return this->device_to_mmio_device_.at(device_id);

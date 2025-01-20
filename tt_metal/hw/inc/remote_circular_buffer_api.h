@@ -98,13 +98,13 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
     uint32_t fifo_rd_ptr = receiver_cb_interface.fifo_rd_ptr;
     uint32_t cb_size_page_aligned = fifo_size - fifo_size % page_size;
     uint32_t fifo_limit_page_aligned = fifo_start_addr + cb_size_page_aligned;
-    uint32_t prev_fifo_limit_page_aligned = receiver_cb_interface.fifo_limit_page_aligned;
 
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
     if constexpr (update_remote_over_noc) {
         uint32_t aligned_page_adjustment = 0;
         if (next_fifo_rd_ptr >= fifo_limit_page_aligned) {
-            aligned_page_adjustment = (fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+            aligned_page_adjustment =
+                (fifo_start_addr + fifo_size - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
             next_fifo_rd_ptr = fifo_start_addr;
         } else if (next_fifo_rd_ptr != fifo_rd_ptr) {
             aligned_page_adjustment = (next_fifo_rd_ptr - fifo_rd_ptr) / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
@@ -123,6 +123,7 @@ FORCE_INLINE void resize_remote_receiver_cb_interface(uint32_t cb_id, uint32_t p
 #ifndef COMPILE_FOR_TRISC
 
 FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
+    WAYPOINT("RCWF");
     RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(cb_id);
     uint32_t len_bytes = num_pages * remote_cb.fifo_page_size;
     uint32_t fifo_limit_page_aligned = remote_cb.fifo_limit_page_aligned;
@@ -144,6 +145,7 @@ FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
         pages_sent = *pages_sent_ptr;
         num_pages_recv = pages_sent - pages_acked;
     } while (num_pages_recv < num_pages_wait);
+    WAYPOINT("RCWD");
 }
 
 FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_t noc = noc_index) {
@@ -164,6 +166,7 @@ FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_
 }
 
 FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
+    WAYPOINT("RCRB");
     RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(cb_id);
     uint32_t len_bytes = num_pages * remote_cb.fifo_page_size;
 
@@ -196,6 +199,28 @@ FORCE_INLINE void remote_cb_reserve_back(uint32_t cb_id, uint32_t num_pages) {
         pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
     }
+
+    WAYPOINT("RCRD");
+}
+
+FORCE_INLINE void remote_cb_sender_barrier(uint32_t cb_id) {
+    WAYPOINT("RCBW");
+    RemoteSenderCBInterface& remote_cb = get_remote_sender_cb_interface(cb_id);
+
+    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr);
+    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_cb.aligned_pages_sent_ptr + L1_ALIGNMENT);
+
+    uint32_t num_receivers = remote_cb.num_receivers;
+
+    for (uint32_t i = 0; i < num_receivers; ++i) {
+        while (*pages_acked_ptr != *pages_sent_ptr) {
+        }
+        pages_acked_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+        pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+    }
+    WAYPOINT("RCBD");
 }
 
 FORCE_INLINE void remote_cb_push_back_and_write_pages(
