@@ -184,7 +184,7 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
@@ -195,14 +195,14 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3/demo/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            64 * 1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
