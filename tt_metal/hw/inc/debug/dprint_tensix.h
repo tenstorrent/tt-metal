@@ -972,44 +972,6 @@ inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edg
     dprint_tensix_pack_edge_offset_reserved(edge);
 }
 
-// PACK COUNTERS
-
-// These functions' argument should be return value of read_pack_counters()
-
-inline void dprint_tensix_pack_counters_pack_per_xy_plane(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << DEC() << counters.pack_per_xy_plane << ENDL();
-}
-
-inline void dprint_tensix_pack_counters_pack_reads_per_xy_plane(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << DEC() << counters.pack_reads_per_xy_plane << ENDL();
-}
-
-inline void dprint_tensix_pack_counters_pack_xys_per_til(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << DEC() << counters.pack_xys_per_til << ENDL();
-}
-
-inline void dprint_tensix_pack_counters_pack_yz_transposed(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << "0x" << HEX() << counters.pack_yz_transposed << ENDL();
-}
-
-inline void dprint_tensix_pack_counters_pack_per_xy_plane_offset(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << DEC() << counters.pack_per_xy_plane_offset << ENDL();
-}
-
-// Printing packer counters
-inline void dprint_tensix_pack_counters_helper(const ckernel::packer::pack_counters_t& counters) {
-    DPRINT << "pack_per_xy_plane: ";
-    dprint_tensix_pack_counters_pack_per_xy_plane(counters);
-    DPRINT << "pack_reads_per_xy_plane: ";
-    dprint_tensix_pack_counters_pack_reads_per_xy_plane(counters);
-    DPRINT << "pack_xys_per_til: ";
-    dprint_tensix_pack_counters_pack_xys_per_til(counters);
-    DPRINT << "pack_yz_transposed: ";
-    dprint_tensix_pack_counters_pack_yz_transposed(counters);
-    DPRINT << "pack_per_xy_plane_offset: ";
-    dprint_tensix_pack_counters_pack_per_xy_plane_offset(counters);
-}
-
 // PACK STRIDES
 
 inline void dprint_tensix_pack_strides_x_stride(const uint32_t& word) {
@@ -1290,6 +1252,46 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
         << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
 }
 
+#endif  // END OF ELSE
+
+// PACK COUNTERS
+
+// These functions' argument should be return value of read_pack_counters()
+
+inline void dprint_tensix_pack_counters_pack_per_xy_plane(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << DEC() << counters.pack_per_xy_plane << ENDL();
+}
+
+inline void dprint_tensix_pack_counters_pack_reads_per_xy_plane(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << DEC() << counters.pack_reads_per_xy_plane << ENDL();
+}
+
+inline void dprint_tensix_pack_counters_pack_xys_per_til(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << DEC() << counters.pack_xys_per_til << ENDL();
+}
+
+inline void dprint_tensix_pack_counters_pack_yz_transposed(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << "0x" << HEX() << counters.pack_yz_transposed << ENDL();
+}
+
+inline void dprint_tensix_pack_counters_pack_per_xy_plane_offset(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << DEC() << counters.pack_per_xy_plane_offset << ENDL();
+}
+
+// Printing packer counters
+inline void dprint_tensix_pack_counters_helper(const ckernel::packer::pack_counters_t& counters) {
+    DPRINT << "pack_per_xy_plane: ";
+    dprint_tensix_pack_counters_pack_per_xy_plane(counters);
+    DPRINT << "pack_reads_per_xy_plane: ";
+    dprint_tensix_pack_counters_pack_reads_per_xy_plane(counters);
+    DPRINT << "pack_xys_per_til: ";
+    dprint_tensix_pack_counters_pack_xys_per_til(counters);
+    DPRINT << "pack_yz_transposed: ";
+    dprint_tensix_pack_counters_pack_yz_transposed(counters);
+    DPRINT << "pack_per_xy_plane_offset: ";
+    dprint_tensix_pack_counters_pack_per_xy_plane_offset(counters);
+}
+
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
 #ifdef ARCH_BLACKHOLE
@@ -1316,8 +1318,6 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
         } else DPRINT
         << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
 }
-
-#endif  // END OF ELSE
 
 // Choose what register you want printed with reg_id (1-4)
 inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
