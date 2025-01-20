@@ -25,7 +25,7 @@ void Sampling::validate_with_output_tensors(
         input_indices_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    TT_FATAL(input_indices_tensor.get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
+    // TT_FATAL(input_indices_tensor.get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
     TT_FATAL(input_indices_tensor.get_layout() == Layout::TILE, "Only TILE_LAYOUT is supported for inputs!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");

@@ -62,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes_input_indices = get_tile_size(input_indices_cb_index);
     constexpr DataFormat data_format_input_indices = get_dataformat(input_indices_cb_index);
 
+    DPRINT << tile_bytes_input_indices << ENDL();
+
     const InterleavedAddrGenFast<input_indices_is_dram> s1 = {
         .bank_base_address = indices_addr,
         .page_size = tile_bytes_input_indices,
@@ -99,10 +101,13 @@ void kernel_main() {
     }
     DPRINT << "Reader done " << ENDL();
 
-    cb_wait_front(input_indices_cb_index, 8);
+    // cb_wait_front(input_indices_cb_index, Wt);
 
-    uint32_t cb_final_indices_addr = get_write_ptr(input_indices_cb_index);
-    volatile tt_l1_ptr uint16_t* final_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_final_indices_addr);
+    // uint32_t cb_final_indices_addr = get_write_ptr(input_indices_cb_index);
+    // volatile tt_l1_ptr uint32_t* final_indices = reinterpret_cast<volatile tt_l1_ptr
+    // uint32_t*>(cb_final_indices_addr);
 
-    DPRINT << "final_indices[start_id_final]" << final_indices[0] << ENDL();
+    // for (uint32_t i = 0; i < 64; ++i) {
+    //     DPRINT << "final_indices" << i << " : " << final_indices[i] << ENDL();
+    // }
 }

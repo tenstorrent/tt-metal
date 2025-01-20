@@ -21,6 +21,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
+    uint32_t seed = 1;
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.get_dtype());
     tt::DataFormat input_indices_cb_data_format =
@@ -144,17 +145,18 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     // RM CBs for sampling
 
-    // const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float32);
-    // constexpr uint32_t rand_cb_id = tt::CBIndex::c_24;
-    // CircularBufferConfig cb_rand_config =
-    //     CircularBufferConfig(rand_tile_size, {{rand_cb_id, tt::DataFormat::Float32}})
-    //         .set_page_size(rand_cb_id, rand_tile_size);
-    // auto cb_rand = tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_rand_config);
+    // random number
+    const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
+    constexpr uint32_t rand_tile_index = tt::CBIndex::c_24;
+    CircularBufferConfig cb_rand_config =
+        CircularBufferConfig(rand_tile_size, {{rand_tile_index, tt::DataFormat::Float16_b}})
+            .set_page_size(rand_tile_index, rand_tile_size);
+    auto cb_rand = tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_rand_config);
 
     // values
     uint32_t num_out0_units = 32;
     uint32_t values_rm_unit_size = input_values_tensor.element_size();
-    uint32_t aligned_values_rm_unit_size = num_out0_units * values_rm_unit_size;
+    uint32_t aligned_values_rm_unit_size = 32 * 32 * values_rm_unit_size;
     uint32_t values_rm_cb_index = tt::CBIndex::c_11;
     tt::tt_metal::CircularBufferConfig values_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -164,7 +166,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     // indices
     uint32_t indices_rm_unit_size = 2;  // uint16 datum size
-    uint32_t aligned_indices_rm_unit_size = num_out0_units * indices_rm_unit_size;
+    uint32_t aligned_indices_rm_unit_size = 32 * 32 * indices_rm_unit_size;
     uint32_t indices_rm_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(aligned_indices_rm_unit_size, {{indices_rm_cb_index, index_cb_data_format}})
@@ -172,8 +174,9 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto cb_indices_rm_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, indices_rm_cb_config);
 
     // final indices
-    uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();
-    uint32_t aligned_final_indices_rm_unit_size = 32 * 32 * final_indices_rm_unit_size;
+    uint32_t final_indices_rm_unit_size = 4;
+
+    uint32_t aligned_final_indices_rm_unit_size = input_indices_tile_size;  // 32 * 32 * final_indices_rm_unit_size;
     uint32_t final_indices_rm_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -240,7 +243,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             aligned_final_indices_rm_unit_size,
             aligned_out0_unit_size,
             Wt,
-            0,
+            rand_tile_index,
             k[i],
             i,
             round_up_to_mul32(k[i])};
@@ -273,7 +276,9 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             Wt,
             (std::uint32_t)std::log2(Wt),
             round_up_to_mul32(k[i]),
-            (std::uint32_t)std::log2(round_up_to_mul32(k[i]))};
+            (std::uint32_t)std::log2(round_up_to_mul32(k[i])),
+            rand_tile_index,
+            seed};
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -308,7 +313,6 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
 }  // namespace ttnn::operations::reduction::detail
 
-// get rand number from rand_tile in compute kernel
 // accept optional seed
 // accept optional core_grid
 // implement top-p sampling

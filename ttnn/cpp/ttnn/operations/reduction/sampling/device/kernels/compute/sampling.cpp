@@ -32,9 +32,11 @@ int32_t topk_replay_init = 0;
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
     DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
-        DPRINT << TSLICE(cb_id, 0, sr) << ENDL();
+    for (uint8_t r = 0; r < 1; ++r) {
+        // DPRINT << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), false, true) << ENDL();
+        DPRINT << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), true, false) << ENDL();
+
+        // DPRINT << TSLICE(cb_id, 0, sr) << ENDL();
     }
 }
 namespace NAMESPACE {
@@ -107,25 +109,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         release_dst();
     }
 }
-void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb and in1_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_cb has num_tiles produced
-    reconfig_data_format(in0_cb, in1_cb);
-    mul_tiles_init();
-    cb_wait_front(in0_cb, num_tiles);
-    cb_wait_front(in1_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        mul_tiles(in0_cb, in1_cb, 0, i, 0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_reconfig_data_format(in0_cb);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst();
-    }
-}
+
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -150,25 +134,6 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_pop_front(in1_cb, rows);
 }
 
-void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
-    // Precondition: in0_cb have num_tiles produced
-    // Postcondition: in0_cb has num_tiles produced
-
-    reconfig_data_format_srca(in0_cb);
-    eqz_tile_init();
-    cb_wait_front(in0_cb, num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
-        eqz_tile(0);
-        cb_pop_front(in0_cb, 1);
-        cb_reserve_back(in0_cb, 1);
-        pack_reconfig_data_format(in0_cb);
-        pack_tile(0, in0_cb);
-        cb_push_back(in0_cb, 1);
-        release_dst();
-    }
-}
-
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
@@ -190,16 +155,19 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
 void untilize_block_fn(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
-    // Postcondition: in_cb has num_tiles produced
+    // Postcondition: out_cb has num_tiles produced
 
-    untilize_init(in_cb, out_cb);
+    // untilize_init(in_cb, out_cb);
     untilize_init_short(in_cb);
     cb_wait_front(in_cb, num_tiles);
+    // print_full_tile(in_cb);
     cb_reserve_back(out_cb, num_tiles);
     untilize_block(in_cb, num_tiles, out_cb);
     cb_push_back(out_cb, num_tiles);
+    cb_wait_front(out_cb, num_tiles);
+    // print_full_tile(out_cb);
     cb_pop_front(in_cb, num_tiles);
-    untilize_uninit(in_cb);
+    // untilize_uninit(in_cb);
 }
 
 template <
@@ -424,7 +392,10 @@ void MAIN {
     constexpr uint32_t logWt = get_compile_time_arg_val(16);
     constexpr uint32_t nearest32_K = get_compile_time_arg_val(17);
     constexpr uint32_t logk = get_compile_time_arg_val(18);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(19);
+    constexpr uint32_t seed = get_compile_time_arg_val(20);
 
+    generate_rand_tile(rand_tile_index, seed);
     // top-k
     top_k<
         Ht,
@@ -440,11 +411,12 @@ void MAIN {
         output_ind_cb_index,
         true>();
     DPRINT << "top-k " << ENDL();
+    // print_full_tile(output_ind_cb_index);
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     // mask out all values except the top-k
-    cb_wait_front(topk_mask_cb_index, Kt);
-    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
-    DPRINT << "done add " << ENDL();
+    // cb_wait_front(topk_mask_cb_index, Kt);
+    // add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
+    // DPRINT << "done add " << ENDL();
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
@@ -452,16 +424,44 @@ void MAIN {
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
     DPRINT << "done softmax " << ENDL();
+
+    untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
+    DPRINT << "untilize values_cb_index " << Ht << Kt << ENDL();
+
     // untilize final indices
     untilize_block_fn(input_indices_cb_index, output_final_indices_rm_cb_index, Ht * Wt);
+    DPRINT << "Wt " << Wt << ENDL();
+    DPRINT << "Kt " << Kt << ENDL();
+    uint32_t in_cb = output_ind_cb_index;
+    uint32_t out_cb = output_local_indices_rm_cb_index;
+    uint32_t num_tiles = Kt;
+    pack_untilize_init_short<Kt>(in_cb, out_cb);
+    // untilize_init_short(in_cb);
+    for (uint32_t b = 0; b < 1; ++b) {
+        cb_wait_front(in_cb, num_tiles);
+        DPRINT << "cb_wait_front" << ENDL();
+        // print_full_tile(in_cb);
+        cb_reserve_back(out_cb, num_tiles);
+        // DPRINT<<"cb_reserve_back"<<ENDL();
+        tile_regs_wait();
+        pack_untilize_block<Kt>(in_cb, 1, out_cb);
+        tile_regs_release();
+        // DPRINT<<"pack_untilize_block"<<ENDL();
+        cb_push_back(out_cb, num_tiles);
+        // DPRINT<<"cb_push_back"<<ENDL();
+        cb_wait_front(out_cb, num_tiles);
+        // DPRINT << out_cb << " waited for tile "<< num_tiles << ENDL();
 
-    DPRINT << "untilize input_indices_cb_index " << ENDL();
+        // print_full_tile(out_cb);
+        cb_pop_front(in_cb, num_tiles);
+    }
+    pack_untilize_uninit(out_cb);
+
+    // DPRINT << "untilize input_indices_cb_index " << ENDL();
     // // untilize values
-    // untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
-    // DPRINT<<"untilize values_cb_index "<<Ht<<Kt<<ENDL();
-
     // untilize indices
     // untilize_block_fn(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
-    // DPRINT<<"done untilizes "<<ENDL();
+    DPRINT << "done untilizes " << ENDL();
+    // print_full_tile(output_local_indices_rm_cb_index);
 }
 }  // namespace NAMESPACE

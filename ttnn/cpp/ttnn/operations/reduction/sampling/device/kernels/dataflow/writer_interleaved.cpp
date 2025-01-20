@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(10);
     constexpr uint32_t out_stick_size = get_compile_time_arg_val(11);
     constexpr uint32_t ids_per_batch_final = get_compile_time_arg_val(12);
-    constexpr uint32_t rand = get_compile_time_arg_val(13);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
     constexpr uint32_t k = get_compile_time_arg_val(14);
     constexpr uint32_t core_id = get_compile_time_arg_val(15);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(16);
@@ -43,24 +43,31 @@ void kernel_main() {
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one, ids_per_batch / 32>(one, k);
 
-    DPRINT << "generate_mask " << ENDL();
+    DPRINT << "generate_mask " << output_final_indices_rm_cb_index << ENDL();
+
+    // get random number
+    cb_wait_front(rand_tile_index, 1);
+    uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
+    volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
+    uint16_t rand = rand_values[0];
+    DPRINT << "recd random number " << ENDL();
 
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 8);
-    // cb_wait_front(output_local_values_rm_cb_index, values_stick_size/tile_bytes_local_values);
-    // cb_wait_front(output_local_indices_rm_cb_index, im_indices_stick_size/tile_bytes_local_indices);
+    cb_wait_front(output_local_values_rm_cb_index, values_stick_size / tile_bytes_local_values);
+    cb_wait_front(output_local_indices_rm_cb_index, im_indices_stick_size / tile_bytes_local_indices);
 
     DPRINT << "recd from compute kernel " << ENDL();
     // Use cb as L1 scratch memory
-    // uint32_t cb_local_values_addr = get_write_ptr(output_local_values_rm_cb_index);
-    // volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
+    uint32_t cb_local_values_addr = get_write_ptr(output_local_values_rm_cb_index);
+    volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
 
-    // uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_rm_cb_index);
-    // volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr
-    // uint16_t*>(cb_local_indices_addr);
+    uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_rm_cb_index);
+    volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_indices_addr);
 
-    uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
-    volatile tt_l1_ptr uint16_t* final_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_final_indices_addr);
+    // uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
+    // volatile tt_l1_ptr uint32_t* final_indices = reinterpret_cast<volatile tt_l1_ptr
+    // uint32_t*>(cb_final_indices_addr);
 
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
@@ -72,20 +79,21 @@ void kernel_main() {
     uint32_t end_id_final = start_id_final + ids_per_batch_final;
 
     uint32_t cum_sum = 0;
-    for (uint32_t i = 0; i < 256; ++i) {
-        DPRINT << "final_indices" << i << " : " << final_indices[4 * i] << ENDL();
+    for (uint32_t i = 0; i < 32; ++i) {
+        DPRINT << "local_indices" << i << " : " << local_indices[i] << ENDL();
+        DPRINT << "local_values" << i << " : " << local_values[i] << ENDL();
     }
     DPRINT << "core id" << core_id << ENDL();
-    index_out[core_id] = final_indices[start_id_final];  // + local_indices[end_id_local - 1]];
+    index_out[core_id] = local_indices[end_id_local - 1];  // + local_indices[end_id_local - 1]];
     // Sample from the top-k values
-    // for (uint32_t i = start_id_local; i < end_id_local; ++i) {
-    //     // cum sum of local values
-    //     cum_sum = bfloat16_add(cum_sum, local_values[i]);
-    //     if (bfloat16_greater(cum_sum, rand)) {
-    //         index_out[core_id] = final_indices[start_id_final + local_indices[i]];
-    //         break;
-    //     }
-    // }
+    for (uint32_t i = start_id_local; i < end_id_local; ++i) {
+        // cum sum of local values
+        cum_sum = bfloat16_add(cum_sum, local_values[i]);
+        if (bfloat16_greater(cum_sum, rand)) {
+            index_out[core_id] = local_indices[i];  // final_indices[start_id_final + local_indices[i]];
+            break;
+        }
+    }
 
     const InterleavedAddrGen<dst_is_dram> s_out = {.bank_base_address = dst_addr, .page_size = out_stick_size};
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
