@@ -14,10 +14,11 @@ void kernel_main() {
     uint32_t start_tile_id = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t HtWt = get_arg_val<uint32_t>(4);
-    uint32_t N = get_arg_val<uint32_t>(5);
-    uint32_t C = get_arg_val<uint32_t>(6);
-    uint32_t H = get_arg_val<uint32_t>(7);
-    uint32_t W = get_arg_val<uint32_t>(8);
+    uint32_t D = get_arg_val<uint32_t>(5);
+    uint32_t N = get_arg_val<uint32_t>(6);
+    uint32_t C = get_arg_val<uint32_t>(7);
+    uint32_t H = get_arg_val<uint32_t>(8);
+    uint32_t W = get_arg_val<uint32_t>(9);
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
@@ -39,7 +40,13 @@ void kernel_main() {
 
     // we only need to fill a tile with the scalar value once
     cb_reserve_back(cb_id_src, onetile);
-    fill_with_val_bfloat16(cb_id_src, packed_scalar);
+#ifdef FILL_WITH_VALUE_FLOAT
+    float* float_ptr = reinterpret_cast<float*>(&packed_scalar);
+    FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
+#endif
+#ifdef FILL_WITH_VALUE
+    FILL_WITH_VALUE(cb_id_src, packed_scalar);
+#endif
     cb_push_back(cb_id_src, onetile);
 
     uint32_t num_tiles_written = 0;
