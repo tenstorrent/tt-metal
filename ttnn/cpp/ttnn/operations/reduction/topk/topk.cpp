@@ -52,7 +52,8 @@ auto ExecuteTopK::invoke(
     const bool sorted,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    return invoke(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+    return invoke(
+        DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, std::move(optional_output_tensors));
 }
 
 }  // namespace ttnn::operations::reduction
