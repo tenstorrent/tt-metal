@@ -73,6 +73,14 @@ void read_interleaved_buffer_from_device(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type);
 
+void copy_completion_queue_data_into_user_space(
+    const detail::ReadBufferDescriptor& read_buffer_descriptor,
+    chip_id_t mmio_device_id,
+    uint16_t channel,
+    uint32_t cq_id,
+    SystemMemoryManager& sysmem_manager,
+    volatile bool& exit_condition);
+
 template <typename T>
 std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_read_buffer_descriptor(
     void* dst, T& dispatch_params, Buffer& buffer);
