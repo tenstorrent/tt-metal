@@ -87,14 +87,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if not isinstance(test_vector["dim"], int):
         return True, "dim can only be integer value"
 
-    device = ttnn.open_device(device_id=0)
-    if (
-        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["grad_dtype"] == ttnn.float32
-    ) and ttnn.device.is_grayskull(device):
-        return True, "Dest Fp32 mode is not supported for arch grayskull"
-    ttnn.close_device(device)
-    del device
-
     return False, None
 
 
@@ -117,6 +109,9 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+
+    if (input_a_dtype == ttnn.float32 or grad_dtype == ttnn.float32) and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=0, high=100, dtype=torch.float32), input_a_dtype
