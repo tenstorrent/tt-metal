@@ -438,7 +438,7 @@ void MAIN {
                 reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
 #endif
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
-                copy_tile_to_dst_init_short();
+                copy_tile_to_dst_init_short(matmul_partials_cb);
                 uint32_t curr_tile_output_rows_h = 0;
                 uint32_t TILE_SIZE = is_non_tile_height ? 32 : out_block_w;
                 TILE_SIZE = TILE_SIZE * out_subblock_h;

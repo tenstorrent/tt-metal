@@ -65,7 +65,7 @@ inline void reblock_and_untilize(
         int block_offset = 0;
 
         // Reblock
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(interm_cb_id);
         cb_reserve_back(reblock_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -170,7 +170,7 @@ void MAIN {
                         tile_regs_acquire();
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short();
+                            copy_tile_to_dst_init_short(matmul_partials_cb);
                             UNPACK((llk_unpack_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
                             MATH((llk_math_reconfig_data_format(1, matmul_partials_cb, 0, 0)));
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
