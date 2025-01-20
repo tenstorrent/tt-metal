@@ -76,6 +76,20 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     }
 }
 
+TEST_P(BinaryOpTraceRuntime, AddChain) {
+    const auto& input_spec_a = std::get<0>(GetParam());
+    const auto& input_spec_b = std::get<1>(GetParam());
+
+    {
+        auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
+        tt::tt_metal::IDevice* device = &getDevice();
+        auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+        std::cout << "Runtime: " << query.runtime << " ns\n";
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(
     QueryOpRuntime,
     BinaryOpTraceRuntime,
