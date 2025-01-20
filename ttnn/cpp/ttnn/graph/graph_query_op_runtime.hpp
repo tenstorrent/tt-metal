@@ -33,7 +33,7 @@ static constexpr int NUM_TRACE_EXECUTIONS = 10;
  * @param op The operation or op chain that will be traced and have its runtime measured.
  * @param device A pointer to the Device object, which provides information about the compute grid size.
  * @param args The arguments that will be passed to the operation or callable op chain.
- * @return QueryResponse containing the execution status and the runtime, in nanoseconds.
+ * @return RuntimeQueryResponse containing the execution status and the runtime, in nanoseconds.
  *         - On success: ExecutionStatus::Success and the resource usage details.
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
