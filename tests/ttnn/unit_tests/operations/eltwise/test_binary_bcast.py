@@ -267,8 +267,12 @@ def test_binary_add(input_shapes, device):
     # a_pt = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
     # b_pt = torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16)
 
-    a_tt = ttnn.from_torch(a_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    b_tt = ttnn.from_torch(b_pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    a_tt = ttnn.from_torch(
+        a_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_tt = ttnn.from_torch(
+        b_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     cq_id = 0
     out_tt = ttnn.experimental.add(a_tt, b_tt, queue_id=cq_id)
     # print(out_tt)
