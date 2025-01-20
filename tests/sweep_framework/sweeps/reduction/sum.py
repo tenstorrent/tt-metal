@@ -75,12 +75,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
 
-    device = ttnn.open_device(device_id=0)
-    if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return True, "Dest Fp32 mode is not supported for arch grayskull"
-    ttnn.close_device(device)
-    del device
-
     return False, None
 
 
