@@ -84,8 +84,8 @@ ttnn::SmallVector<int64_t> find_reduce_dim(
 
 bool is_same_batch_dim(const Tensor& tensor_a, const Tensor& tensor_b) {
     // check batch dims
-    const auto& a_shape = tensor_a.get_shape().value;
-    const auto& b_shape = tensor_b.get_shape().value;
+    const auto& a_shape = tensor_a.get_padded_shape();
+    const auto& b_shape = tensor_b.get_padded_shape();
     ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);

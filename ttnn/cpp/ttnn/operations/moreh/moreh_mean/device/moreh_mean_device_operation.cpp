@@ -33,7 +33,7 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
 
-    auto rank = input.get_shape().rank();
+    const auto& rank = input.get_logical_shape().rank();
 
     if (operation_attributes.dim + 1 == rank) {
         return MorehMeanWFactory{};
@@ -59,56 +59,34 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
         return {tensor_args.output->get_tensor_spec()};
     }
 
-    auto input_shape = tensor_args.input.get_shape();
-    auto output_shape = input_shape;
+    const auto& input_shape = tensor_args.input.get_logical_shape();
+    auto output_shape = tenosr_args.input.get_padded_shape();
     auto input_rank = input_shape.rank();
 
     auto dim = operation_attributes.dim;
 
     if (operation_attributes.keepdim) {
-        auto padding = output_shape.value.padding();
-        if (dim + 1 == input_rank) {
-            output_shape.value[dim] = tt::constants::TILE_WIDTH;
-            padding[dim] = Padding::PadDimension{0, 31};
-        } else if (dim + 2 == input_rank) {
-            output_shape.value[dim] = tt::constants::TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
-        } else {
-            output_shape.value[dim] = 1;
-        }
-
-        Shape result_shape(tt::tt_metal::LegacyShape(output_shape.value, padding));
         return TensorSpec(
-            result_shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(
-                tensor_args.input.get_dtype(),
-                PageConfig(tensor_args.input.get_layout()),
-                operation_attributes.memory_config,
-                result_shape));
+        ttnn::SimpleShape(output_shape)
+        TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config,
+         ));
     }
 
     ttnn::SmallVector<uint32_t> shape;
     ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
     const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
+    // Replace
     auto input_padding = input_shape.value.padding();
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)
-    for (int i = 0; i < input_rank; ++i) {
-        bool is_reduced_dim = (i == dim);
-        if (is_reduced_dim && !is_tile_dim) {
-            continue;
-        }
-
-        shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
-        pad_dimensions.push_back((is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
-    }
-
-    auto padding = Padding(pad_dimensions, input_padding.pad_value());
-    Shape result_shape(tt::tt_metal::LegacyShape(shape, padding));
+    
     return TensorSpec(
-        result_shape.logical_shape(),
+        ttnn::SimpleShape(output_shape),
         TensorLayout::fromLegacyPaddedShape(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

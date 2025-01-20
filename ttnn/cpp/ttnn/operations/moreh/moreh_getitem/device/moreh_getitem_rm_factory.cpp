@@ -37,8 +37,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_shape();
-    auto output_shape = output.get_shape();
+    const auto& input_shape = input.get_logical_shape();
+    const auto& output_shape = output.get_logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -53,8 +53,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     for (auto index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape[index];
     }
-    ttnn::Shape input_5d_shape(new_input_shape);
-    ttnn::Shape output_5d_shape(new_output_shape);
+    ttnn::SimpleShape input_5d_shape(new_input_shape);
+    ttnn::SimpleShape output_5d_shape(new_output_shape);
 
     uint32_t index_start_dim = index_dims.front();
     uint32_t index_end_dim = index_dims.back();
@@ -62,7 +62,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     Tensor input_5d = input;
     input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
 
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
+    auto input_5d_shape_without_padding = input_5d_shape.get_logical_shape();
 
     IndexInfo index_info[5] = {0};
 
@@ -73,10 +73,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
         index_info[dim].is_dram = is_dram(index_tensors[i]);
-        index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
+        index_info[dim].unit_size = index.get_logical_shape()[-1] * index.element_size();
     }
 
-    uint32_t index_size = index_tensors.front().get_shape().value[-1];
+    const uint32_t& index_size = index_tensors.front().get_logical_shape()[-1];
+
 
     uint32_t input_unit_size = input_5d_shape[-1] * input_5d.element_size();
     uint32_t output_unit_size = input_unit_size;
