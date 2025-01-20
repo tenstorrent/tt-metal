@@ -266,7 +266,7 @@ public:
     void run_command(CommandInterface&& command);
 
     // API for setting/getting the mode of the command queue
-    // TODO: disallow changing the mode of the queue. This is error prone, because chaning mode requires
+    // TODO: disallow changing the mode of the queue. This is error prone, because changing mode requires
     // accordingly updating the higher-level abstractions.
     void set_mode(const CommandQueueMode& mode);
     CommandQueueMode get_mode() const { return this->mode; }
