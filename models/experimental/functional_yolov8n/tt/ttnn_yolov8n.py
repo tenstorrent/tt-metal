@@ -60,7 +60,7 @@ def Conv(
         packer_l1_acc=False,
     )
 
-    fused_weight, fused_bias = fold_batch_norm2d_into_conv2d(device, state_dict, path, bfloat8=bfloat8)
+    fused_weight, fused_bias = state_dict[path]
 
     if bfloat8:
         conv_config.weights_dtype = ttnn.bfloat8_b
@@ -292,11 +292,14 @@ def Detect_cv2(device, x, state_dict, path, c1, c2, k, reg_max, bfloat8=False):
         packer_l1_acc=False,
     )
 
-    conv_weight = state_dict[f"{path}.2.weight"]
-    conv_bias = state_dict[f"{path}.2.bias"]
+    conv_weight, conv_bias = state_dict[path]
 
-    conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-    conv_bias = ttnn.reshape(ttnn.from_torch(conv_bias, dtype=ttnn.bfloat16), (1, 1, 1, -1))
+    # print(f"{path}.2.weight")
+    # print(f"{path}.2.bias")
+
+    # print('----------')
+    # conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+    # conv_bias = ttnn.reshape(ttnn.from_torch(conv_bias, dtype=ttnn.bfloat16), (1, 1, 1, -1))
 
     [x, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=x,
@@ -363,9 +366,9 @@ def DFL(device, x, state_dict, path, c1=16):
         packer_l1_acc=False,
     )
 
-    conv_weight = state_dict[f"{path}.conv.weight"]
+    conv_weight = state_dict[path]
 
-    conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+    # conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
 
     [x, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=x,

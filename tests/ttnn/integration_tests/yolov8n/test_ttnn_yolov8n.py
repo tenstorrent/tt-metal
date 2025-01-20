@@ -17,6 +17,7 @@ from models.experimental.functional_yolov8n.tt.ttnn_yolov8n import Conv, C2f, SP
 from models.experimental.functional_yolov8n.tt.ttnn_yolov8n_utils import (
     ttnn_decode_bboxes,
     ttnn_make_anchors,
+    custom_preprocessor,
 )
 
 try:
@@ -99,10 +100,12 @@ def test_demo(device, input_tensor):
 
     state_dict = torch_model.state_dict()
 
+    parameters = custom_preprocessor(device, state_dict)
+
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     with torch.inference_mode():
-        ttnn_model_output = YOLOv8n(device, ttnn_input, state_dict)[0]
+        ttnn_model_output = YOLOv8n(device, ttnn_input, parameters)[0]
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
 
     with torch.inference_mode():

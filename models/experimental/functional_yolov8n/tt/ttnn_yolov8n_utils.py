@@ -96,3 +96,102 @@ def ttnn_make_anchors(device, feats, strides, grid_cell_offset=0.5):
     b = ttnn.concat(stride_tensor, dim=0)
 
     return (a, b)
+
+
+def preprocess_parameters(state_dict, path, bias=True):
+    if bias:
+        conv_weight = state_dict[f"{path}.2.weight"]
+        conv_bias = state_dict[f"{path}.2.bias"]
+
+        conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+        conv_bias = ttnn.reshape(ttnn.from_torch(conv_bias, dtype=ttnn.bfloat16), (1, 1, 1, -1))
+
+        return (conv_weight, conv_bias)
+
+    else:
+        conv_weight = state_dict[f"{path}.conv.weight"]
+        conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+
+        return conv_weight
+
+
+def custom_preprocessor(device, state_dict):
+    pairs = [
+        ("model.0", False),
+        ("model.1", False),
+        ("model.2.cv1", False),
+        ("model.2.m.0.cv1", False),
+        ("model.2.m.0.cv2", False),
+        ("model.2.cv2", False),
+        ("model.3", False),
+        ("model.4.cv1", True),
+        ("model.4.m.0.cv1", False),
+        ("model.4.m.0.cv2", False),
+        ("model.4.m.1.cv1", False),
+        ("model.4.m.1.cv2", False),
+        ("model.4.cv2", True),
+        ("model.5", False),
+        ("model.6.cv1", False),
+        ("model.6.m.0.cv1", False),
+        ("model.6.m.0.cv2", False),
+        ("model.6.m.1.cv1", False),
+        ("model.6.m.1.cv2", False),
+        ("model.6.cv2", False),
+        ("model.7", False),
+        ("model.8.cv1", True),
+        ("model.8.m.0.cv1", False),
+        ("model.8.m.0.cv2", False),
+        ("model.8.cv2", True),
+        ("model.9.cv1", False),
+        ("model.9.cv2", False),
+        ("model.12.cv1", True),
+        ("model.12.m.0.cv1", False),
+        ("model.12.m.0.cv2", False),
+        ("model.12.cv2", True),
+        ("model.15.cv1", False),
+        ("model.15.m.0.cv1", False),
+        ("model.15.m.0.cv2", False),
+        ("model.15.cv2", False),
+        ("model.16", False),
+        ("model.18.cv1", True),
+        ("model.18.m.0.cv1", False),
+        ("model.18.m.0.cv2", False),
+        ("model.18.cv2", True),
+        ("model.19", False),
+        ("model.21.cv1", True),
+        ("model.21.m.0.cv1", False),
+        ("model.21.m.0.cv2", False),
+        ("model.21.cv2", True),
+        ("model.22.cv2.0.0", False),
+        ("model.22.cv2.0.1", False),
+        ("model.22.cv3.0.0", True),
+        ("model.22.cv3.0.1", True),
+        ("model.22.cv2.1.0", False),
+        ("model.22.cv2.1.1", False),
+        ("model.22.cv3.1.0", True),
+        ("model.22.cv3.1.1", True),
+        ("model.22.cv2.2.0", False),
+        ("model.22.cv2.2.1", False),
+        ("model.22.cv3.2.0", True),
+        ("model.22.cv3.2.1", True),
+    ]
+
+    parameters = {}
+
+    for path, bfloat8 in pairs:
+        parameters[path] = fold_batch_norm2d_into_conv2d(device, state_dict, path=path, bfloat8=bfloat8)
+
+    # detect cv2 without batch norm
+
+    parameters["model.22.cv2.0"] = preprocess_parameters(state_dict, "model.22.cv2.0")
+    parameters["model.22.cv3.0"] = preprocess_parameters(state_dict, "model.22.cv3.0")
+
+    parameters["model.22.cv2.1"] = preprocess_parameters(state_dict, "model.22.cv2.1")
+    parameters["model.22.cv3.1"] = preprocess_parameters(state_dict, "model.22.cv3.1")
+
+    parameters["model.22.cv2.2"] = preprocess_parameters(state_dict, "model.22.cv2.2")
+    parameters["model.22.cv3.2"] = preprocess_parameters(state_dict, "model.22.cv3.2")
+
+    parameters["model.22.dfl"] = preprocess_parameters(state_dict, "model.22.dfl", bias=False)
+
+    return parameters
