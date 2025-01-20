@@ -7,6 +7,7 @@
 #include "device/batch_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_mean/device/moreh_mean_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
+#include "device/running_statistics_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -42,6 +43,8 @@ Tensor BatchNorm::invoke(
         Tensor mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config);
         Tensor batch_var =
             ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
+        Tensor stats =
+            ttnn::prim::running_statistics(batch_mean, batch_var, momentum, running_mean, running_var, memory_config);
         return ttnn::prim::batch_norm(input, batch_mean, batch_var, eps, weight, bias, output, memory_config);
     }
     TT_FATAL(
