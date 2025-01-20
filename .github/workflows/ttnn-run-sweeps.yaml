@@ -362,6 +362,7 @@ on:
           - eltwise.binary.ne.ne_forge
           - eltwise.binary.pow.pow
           - eltwise.binary.pow.pow_output
+          - eltwise.binary.pow.pow_sharded
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
