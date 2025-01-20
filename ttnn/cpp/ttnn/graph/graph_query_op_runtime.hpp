@@ -31,7 +31,8 @@ static constexpr int NUM_TRACE_EXECUTIONS = 10;
  * @tparam Op The type of the operation or a callable op chain that will be invoked to capture the trace operations.
  * @tparam Args The types of the arguments that will be passed to the operation or op chain.
  * @param op The operation or op chain that will be traced and have its runtime measured.
- * @param device A pointer to the Device object, which provides information about the compute grid size.
+ * @param device A pointer to the Device object. Must be opened with trace region size set to a sufficiently high
+ * amount.
  * @param args The arguments that will be passed to the operation or callable op chain.
  * @return RuntimeQueryResponse containing the execution status and the runtime, in nanoseconds.
  *         - On success: ExecutionStatus::Success and the resource usage details.
