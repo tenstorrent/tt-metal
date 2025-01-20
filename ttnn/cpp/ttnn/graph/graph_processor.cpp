@@ -117,7 +117,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
         graph.push_back(
-            Vertex{.counter = counter, .node_type = kNodeBufferAllocate, .params = params, .connections = {buffer_id}});
+            Vertex(counter, kNodeBufferAllocate, params, {buffer_id}));
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -134,8 +134,8 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kNumCores, std::to_string(buffer->num_cores().value_or(0))},  // use 0 for interleaved
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
-        graph.push_back(Vertex{
-            .counter = counter, .node_type = kNodeBufferDeallocate, .params = params, .connections = {buffer_id}});
+        graph.push_back(Vertex(
+            counter, kNodeBufferDeallocate, params, {buffer_id}));
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -156,7 +156,7 @@ void GraphProcessor::track_allocate_cb(
         {kDeviceId, std::to_string(device->id())}};
     auto counter = graph.size();
     {
-        graph.emplace_back(Vertex{.counter = counter, .node_type = kNodeCBAllocate, .params = params, .connections = {}});
+        graph.emplace_back(Vertex(counter, kNodeCBAllocate, params, {}));
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -166,11 +166,11 @@ void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
     const std::lock_guard<std::mutex> lock(mutex);
     auto counter = graph.size();
     {
-        graph.push_back(Vertex{
-            .counter = counter,
-            .node_type = kNodeCBDeallocateAll,
-            .params = {{kDeviceId, std::to_string(device->id())}},
-            .connections = {current_op_id.top()}});
+        graph.push_back(Vertex(
+            counter,
+            kNodeCBDeallocateAll,
+            {{kDeviceId, std::to_string(device->id())}},
+            {current_op_id.top()}));
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -200,11 +200,11 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
     };
     auto counter = graph.size();
     {
-        graph.emplace_back(Vertex{
-            .counter = counter,
-            .node_type = kNodeFunctionStart,
-            .params = params,
-            .connections = {/*current_op_id.top()*/}});
+        graph.emplace_back(Vertex(
+            counter,
+            kNodeFunctionStart,
+            params,
+            {/*current_op_id.top()*/}));
         if (last_finished_op_id != -1) {
             graph[last_finished_op_id].connections.push_back(counter);
             last_finished_op_id = -1;
@@ -231,7 +231,7 @@ void GraphProcessor::track_function_end_impl() {
 
     auto counter = graph.size();
     {
-        graph.emplace_back();
+        graph.emplace_back(counter, kNodeFunctionEnd, std::unordered_map<std::string, std::string>{{kName, name}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
     last_finished_op_id = counter;
@@ -290,7 +290,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
 
     if (tensor_id_to_counter.count(tensor_id) == 0) {
         graph.emplace_back(
-            Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
+            Vertex(tensor_counter, kNodeTensor, params, {}));
         tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
@@ -317,7 +317,7 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
             {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
             {kDeviceId, std::to_string(buffer->device()->id())}};
 
-        graph.emplace_back(Vertex{.counter = counter, .node_type = kNodeBuffer, .params = params, .connections = {}});
+        graph.emplace_back(Vertex( counter, kNodeBuffer, params, {}));
         graph[current_op_id.top()].connections.push_back(counter);
         buffer_id_to_counter[buffer_id] = counter;
         return counter;
@@ -426,7 +426,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     graph.clear();
     buffer_id_to_counter.clear();
     tensor_id_to_counter.clear();
-    graph.emplace_back();
+    graph.emplace_back( 0, kNodeCaptureStart);
 
     if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
         hook = std::make_shared<ProcessorHooks>();
@@ -438,7 +438,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
 nlohmann::json GraphProcessor::end_capture() {
     const std::lock_guard<std::mutex> lock(mutex);
     int counter = graph.size();
-    graph.emplace_back();
+    graph.emplace_back(counter, kNodeCaptureEnd);
     if (last_finished_op_id != -1) {
         graph[last_finished_op_id].connections.push_back(counter);
     } else {

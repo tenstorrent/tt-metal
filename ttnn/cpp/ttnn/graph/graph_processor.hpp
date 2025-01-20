@@ -68,6 +68,14 @@ public:
         std::string node_type;
         std::unordered_map<std::string, std::string> params;
         std::vector<int> connections;
+
+        Vertex(int counter, std::string node_type,
+           std::unordered_map<std::string, std::string> params = {},
+           std::vector<int> connections = {})
+        : counter(counter),
+          node_type(std::move(node_type)),
+          params(std::move(params)),
+          connections(std::move(connections)) {}
     };
     using ProcessFunc = std::function<void(const std::any&)>;
 
