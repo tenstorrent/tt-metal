@@ -1006,9 +1006,9 @@ def parse_output_line(line, previous_line, current_status):
         return "Prefill", None, speed, pcc
     elif "Starting decode..." in line:
         return "Decode", None, speed, pcc
-    elif line == "output:":
+    elif "- OUTPUT" in line:
         return "Waiting for output", None, speed, pcc
-    elif current_status == "Waiting for output" and previous_line == "output:":
+    elif current_status == "Waiting for output" and "- OUTPUT" in previous_line: #previous_line == "output:":
         if "<|start_header_id|>assistant<|end_header_id|>" in line:
             output = line.split("<|start_header_id|>assistant<|end_header_id|>", 1)[1].strip()
             if output:
