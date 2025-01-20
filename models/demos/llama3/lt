@@ -79,10 +79,10 @@ def get_device():
     if total_devices == 1:
         device = "N150"
     elif total_devices == 2:
-        device = "N150"
+        device = "N300"
     elif total_devices == 8:
         device = "T3K"
-    else: # TG has 36 devices
+    else:  # TG has 36 devices
         device = "TG"
 
     # Old method of getting device name based on hostname
@@ -109,11 +109,13 @@ def list_supported_devices(device):
 # Counts number of devices using `tt-smi -ls` output
 def count_devices(output):
     # Split the output into available boards section
-    sections = output.split('All available boards on host')
-    available_boards = sections[1].split('Boards that can be reset')[0]
+    sections = output.split("All available boards on host")
+    available_boards = sections[1].split("Boards that can be reset")[0]
 
     # Count total PCI devices (ignoring N/A)
-    total_pci_devices = len([line for line in available_boards.split('\n') if ('Wormhole' or 'Grayskull' or 'Blackhole') in line])
+    total_pci_devices = len(
+        [line for line in available_boards.split("\n") if ("Wormhole" or "Grayskull" or "Blackhole") in line]
+    )
 
     return total_pci_devices
 
@@ -448,9 +450,7 @@ def main(stdscr):
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
                         model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
-                        device_input = (
-                            input_fields[2]["value"] or list_supported_devices(host_device)
-                        )
+                        device_input = input_fields[2]["value"] or list_supported_devices(host_device)
 
                         if command_input == "modules":
                             command_input = "rmsnorm,attention,attention-prefill,mlp,lm-head"
