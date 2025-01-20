@@ -2,9 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <ostream>
-#include <string>
-
 #include <tt-metalium/constants.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/event.hpp>
@@ -72,7 +69,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
         auto query = ttnn::graph::query_op_runtime(ttnn::add, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        std::cout << "Runtime: " << query.runtime << " ns\n";
+        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 
@@ -86,7 +83,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
         auto query = ttnn::graph::query_op_runtime(add_chain, device, input_spec_a, input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
-        std::cout << "Runtime: " << query.runtime << " ns\n";
+        tt::log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
     }
 }
 
