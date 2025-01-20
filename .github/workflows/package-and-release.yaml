@@ -149,6 +149,8 @@ jobs:
           name: eager-dist-${{ matrix.os }}-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
+      - name: Copy Model Updates
+        run: cp models/MODEL_UPDATES.md MODEL_UPDATES.md
       - name : Download release notes
         uses: actions/download-artifact@v4
         with:
@@ -174,6 +176,7 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
+            MODEL_UPDATES.md
             ttnn-*+*.whl
           fail_on_unmatched_files: true
   create-docker-release-image:
