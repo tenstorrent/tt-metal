@@ -11,6 +11,7 @@
 #include <wandbcpp.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/clip_grad_norm.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -329,6 +330,7 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
+    std::optional<ttml::core::ClipGradNormConfig> clip_grad_norm_config;
 
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
@@ -352,6 +354,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+    config.clip_grad_norm_config =
+        training_config["clip_grad_norm_config"].as<std::optional<ttml::core::ClipGradNormConfig>>();
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
@@ -416,6 +420,15 @@ int main(int argc, char **argv) {
                  ? "trainable"
                  : "fixed"},
             {"scheduler_type", config.scheduler_type},
+            {"using_clip_grad_norm", config.clip_grad_norm_config.has_value()},
+            {"clip_grad_norm_max_norm",
+             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->max_norm) : "n/a"},
+            {"clip_grad_norm_p_norm_type",
+             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->p_norm_type)
+                                                      : "n/a"},
+            {"clip_grad_norm_error_if_nonfinite",
+             config.clip_grad_norm_config.has_value() ? std::to_string(config.clip_grad_norm_config->error_if_nonfinite)
+                                                      : "n/a"},
         });
     }
 
@@ -622,6 +635,9 @@ int main(int argc, char **argv) {
             float loss_float = get_loss_value(loss);
 
             loss->backward();
+            if (config.clip_grad_norm_config.has_value()) {
+                ttml::core::clip_grad_norm(model->parameters(), *config.clip_grad_norm_config);
+            }
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().get_shape()[0];

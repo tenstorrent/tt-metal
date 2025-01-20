@@ -50,6 +50,7 @@
 #include <ttnn/operations/full_like/full_like.hpp>                                                 // NOLINT
 #include <ttnn/operations/matmul/matmul.hpp>                                                       // NOLINT
 #include <ttnn/operations/moreh/moreh_adamw/moreh_adamw.hpp>                                       // NOLINT
+#include <ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm.hpp>                     // NOLINT
 #include <ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm.hpp>                             // NOLINT
 #include <ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward.hpp>           // NOLINT
 #include <ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp>                   // NOLINT
