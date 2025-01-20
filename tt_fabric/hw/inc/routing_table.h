@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include <tt-metalium/risc_attribs.h>
+#include "risc_attribs.h"
 #else
 #define tt_l1_ptr
 #define tt_reg_ptr

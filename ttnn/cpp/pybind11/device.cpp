@@ -604,11 +604,6 @@ void device_module(py::module& m_device) {
         py::arg("device"),
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
-    m_device.def("SetLazyCommandQueueMode", &tt::tt_metal::detail::SetLazyCommandQueueMode, R"doc(
-        If set to true, the host does not notify the device that there are commands available other than
-        the FinishCommand. Once set to false, all subsequent commands will immediately notify the device
-        that the write pointer has been updated.
-    )doc");
     m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
 

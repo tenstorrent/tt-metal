@@ -34,7 +34,6 @@ void bind_dram_prefetcher_operation(py::module& module) {
 
         ttnn::pybind_arguments_t{
             py::arg("tensors"),
-            py::arg("tensor_addrs"),
             py::arg("num_layers"),
             py::arg("global_cb"),
         });
