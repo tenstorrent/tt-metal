@@ -23,6 +23,7 @@ from llama_models.llama3.api.tokenizer import Tokenizer
 from models.demos.llama3.tt.generator import LlamaGenerator
 from models.demos.llama3.tt.model_config import LlamaOptimizations
 from models.demos.llama3.tt.llama_common import (
+    preprocess_inputs_prefill,
     get_prefill_rot_mat,
     get_rot_transformation_mat,
     encode_prompt_llama_instruct,
@@ -98,82 +99,6 @@ def load_inputs(user_input, batch, instruct):
                 prompt = context_text
         in_prompt.append(prompt)
     return in_prompt
-
-
-def preprocess_inputs_prefill(
-    input_prompts,
-    tokenizer,
-    model_args,
-    instruct,
-    max_generated_tokens,
-    max_prefill_len=128 * 1024,
-):
-    """
-    Run tokenizer on inputs, and create embeddings for the first token of each input
-    """
-    # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
-    if max_prefill_len == 128 * 1024:
-        max_prefill_len = 128 * 1024 - max_generated_tokens
-
-    if instruct:
-        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-    else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
-
-    # Print the length of encoded prompts
-    logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
-
-    prompt_lens = [len(x) for x in encoded_prompts]
-    min_prompt_len = min(prompt_lens)
-    max_prompt_len = max(prompt_lens)
-
-    # To avoid running out of memory when giving prompts larger than the maximum, clip to max_prefill_len
-    if min_prompt_len > max_prefill_len:
-        logger.warning(f"Prompt too long. Clipping prompts to {max_prefill_len}")
-        if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
-            encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
-            dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in dec_prompts]
-        else:
-            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
-
-        # Update prompt lengths
-        prompt_lens = [len(x) for x in encoded_prompts]
-        min_prompt_len = min(prompt_lens)
-        max_prompt_len = max(prompt_lens)
-
-    assert (
-        max_prompt_len <= model_args.max_seq_len
-    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
-    assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
-    assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
-
-    logger.info(f"# of users: {len(encoded_prompts)}")
-    input_tokens_prefill = []
-    decoding_pos = []
-    prefill_lens = []
-
-    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
-    # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
-    for i, encoded in enumerate(encoded_prompts):
-        # Prefill size is nearest power of 2
-        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
-
-        # Initial prefill tensors full of pad tokens
-        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
-        input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
-        input_tokens_prefill.append(input_tokens_prefill_i)
-
-        # Keep the correct decoding position of each user
-        decoding_pos.append(len(encoded))
-        prefill_lens.append(prefill_seq_len)
-
-    return (
-        input_tokens_prefill,
-        encoded_prompts,
-        decoding_pos,
-        prefill_lens,
-    )
 
 
 def create_tt_model(
@@ -259,7 +184,7 @@ def create_tt_model(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
@@ -270,7 +195,7 @@ def create_tt_model(
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
@@ -280,8 +205,8 @@ def create_tt_model(
             64 * 1024,  # max_seq_len
             1,  # batch_size
             200,  # max_generated_tokens
-            False,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params  # TODO This will be serviced by vLLM
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         ),
     ],
