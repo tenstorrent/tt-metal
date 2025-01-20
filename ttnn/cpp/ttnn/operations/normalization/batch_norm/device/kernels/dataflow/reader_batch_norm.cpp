@@ -10,15 +10,14 @@
 
 void kernel_main() {
     const auto eps = get_arg_val<uint32_t>(0);
-    const auto momentum = get_arg_val<uint32_t>(1);
-    uint32_t src_addr = get_arg_val<uint32_t>(2);  // input tensor
-    uint32_t start_tile_id = get_arg_val<uint32_t>(3);
-    uint32_t num_tiles = get_arg_val<uint32_t>(4);
-    uint32_t HtWt = get_arg_val<uint32_t>(5);
-    uint32_t n_stride = get_arg_val<uint32_t>(6);
-    uint32_t c_stride = get_arg_val<uint32_t>(7);
-    uint32_t N = get_arg_val<uint32_t>(8);
-    uint32_t C = get_arg_val<uint32_t>(9);
+    uint32_t src_addr = get_arg_val<uint32_t>(1);  // input tensor
+    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
+    uint32_t num_tiles = get_arg_val<uint32_t>(3);
+    uint32_t HtWt = get_arg_val<uint32_t>(4);
+    uint32_t n_stride = get_arg_val<uint32_t>(5);
+    uint32_t c_stride = get_arg_val<uint32_t>(6);
+    uint32_t N = get_arg_val<uint32_t>(7);
+    uint32_t C = get_arg_val<uint32_t>(8);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
@@ -37,23 +36,10 @@ void kernel_main() {
     uint32_t start_t = start_remaining % HtWt;
 
     constexpr auto cb_id_eps = tt::CBIndex::c_4;
-    constexpr auto cb_id_one = tt::CBIndex::c_19;
-    constexpr auto cb_id_momentum = tt::CBIndex::c_24;
 
     cb_reserve_back(cb_id_eps, onetile);
     fill_with_val_bfloat16(cb_id_eps, eps);
     cb_push_back(cb_id_eps, onetile);
-
-    union {
-        float f;
-        uint32_t u;
-    } scalar;
-    scalar.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scalar.u);
-
-    cb_reserve_back(cb_id_momentum, onetile);
-    fill_with_val_bfloat16(cb_id_momentum, momentum);
-    cb_push_back(cb_id_momentum, onetile);
 
     // Input tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
