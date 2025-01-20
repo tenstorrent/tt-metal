@@ -5,7 +5,9 @@
 #pragma once
 
 #include <mesh_device.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
 
+#include "tt_metal/distributed/mesh_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -21,6 +23,16 @@ private:
     void populate_dispatch_core_type();
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
+    void write_shard_to_device(
+        std::shared_ptr<Buffer>& shard_view,
+        const void* src,
+        std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+        tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void read_shard_from_device(
+        std::shared_ptr<Buffer>& shard_view,
+        void* dst,
+        std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+        tt::stl::Span<const SubDeviceId> sub_device_ids);
     tt::tt_metal::WorkerConfigBufferMgr config_buffer_mgr_;
     LaunchMessageRingBufferState worker_launch_message_buffer_state_;
     uint32_t expected_num_workers_completed_ = 0;
@@ -35,6 +47,10 @@ public:
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking);
+    void enqueue_write_shard(
+        std::shared_ptr<MeshBuffer>& mesh_buffer, void* host_data, const Coordinate& coord, bool blocking);
+    void enqueue_read_shard(
+        void* host_data, std::shared_ptr<MeshBuffer>& mesh_buffer, const Coordinate& coord, bool blocking);
     void finish();
 };
 

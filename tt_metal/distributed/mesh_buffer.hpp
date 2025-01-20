@@ -8,6 +8,7 @@
 #include <buffer_constants.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
+#include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -40,19 +41,17 @@ struct ShardedBufferConfig {
     DeviceAddr global_size = 0;
 
     // Global shape of the buffer; at metal-level, we expect the shape to be aligned with the mesh shape.
-    // TODO: Consider a 2D shape class.
-    std::pair<size_t, size_t> global_buffer_shape = {0, 0};
+    Shape2D global_buffer_shape = {0, 0};
 
     // Shard shape, sent to each device.
-    // TODO: Consider a 2D shape class.
-    std::pair<size_t, size_t> shard_shape = {0, 0};
+    Shape2D shard_shape = {0, 0};
 
     // Orientation of the shards in a mesh.
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
     // Computes the number of bytes per datum in the sharded buffer.
     uint32_t compute_datum_size_bytes() const {
-        return global_size / (global_buffer_shape.first * global_buffer_shape.second);
+        return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
     }
 };
 
@@ -80,32 +79,46 @@ public:
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
     std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord);
+    uint32_t datum_size_bytes() const;
+    Shape2D physical_shard_shape() const;
 
 private:
     MeshBuffer(
         const MeshBufferConfig& config,
         const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
-        address_(address),
         device_local_size_(device_local_size),
         backing_buffer_(std::move(backing_buffer)) {}
 
-    void allocate();
+    MeshBuffer(
+        const MeshBufferConfig& config,
+        const DeviceLocalBufferConfig& device_local_config,
+        DeviceAddr address,
+        DeviceAddr device_local_size,
+        MeshDevice* mesh_device) :
+        config_(config),
+        device_local_config_(device_local_config),
+        mesh_device_(mesh_device),
+        address_(address),
+        device_local_size_(device_local_size) {}
 
+    void allocate();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     MeshDevice* mesh_device_ = nullptr;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
-    // TODO: Conisder optimizing with SmallVector.
+    // TODO: Consider optimizing with SmallVector.
     std::vector<std::vector<std::shared_ptr<Buffer>>> buffers_;
+    // Buffer owned by the MeshBuffer. Responsible for interfacing with the
+    // single device allocator. This data-structure is not populated if memory
+    // for the MeshBuffer is externally owned.
     std::shared_ptr<Buffer> backing_buffer_;
 };
 
