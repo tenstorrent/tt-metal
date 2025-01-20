@@ -7,7 +7,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_fabric/control_plane.hpp"
-// #include <tt-metalium/cq_commands.hpp>
+// #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "kernels/tt_fabric_traffic_gen_test.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
@@ -38,8 +38,8 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_routing_table_start_addr = 0x7EC00;
     constexpr uint32_t default_tx_queue_start_addr = 0x80000;
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
-    constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
-    constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
+    constexpr uint32_t default_rx_queue_start_addr = 0x80000;
+    constexpr uint32_t default_rx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_tx_signal_address = 0x70000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
@@ -262,7 +262,7 @@ int main(int argc, char** argv) {
 
         std::map<chip_id_t, std::vector<CoreCoord>> device_router_map;
 
-        auto const& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
+        const auto& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
             log_info(
@@ -299,14 +299,14 @@ int main(int argc, char** argv) {
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(tt::tt_fabric::fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(tt::tt_fabric::fabric_router_l1_config_t) * 4;
-        ;
+        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(tt_fabric_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.second->id());
+            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.first);
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
@@ -338,20 +338,25 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Device {} router_mask = 0x{:04X}", device.first, router_mask);
             uint32_t sem_count = device_router_cores.size();
             device_router_map[device.first] = device_router_phys_cores;
-            std::vector<uint32_t> runtime_args = {
-                sem_count,    // 0: number of active fabric routers
-                router_mask,  // 1: active fabric router mask
-            };
+
             gk_phys_core = (device.second->worker_core_from_logical_core(gk_core));
+            uint32_t gk_noc_offset = tt_metal::hal.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
+
+            std::vector<uint32_t> router_compile_args = {
+                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                tunneler_test_results_addr,        // 1: test_results_addr
+                tunneler_test_results_size,        // 2: test_results_size
+                0,                                 // 3: timeout_cycles
+            };
+
+            std::vector<uint32_t> router_runtime_args = {
+                sem_count,          // 0: number of active fabric routers
+                router_mask,        // 1: active fabric router mask
+                gk_interface_addr,  // 2: gk_message_addr_l
+                gk_noc_offset,      // 3: gk_message_addr_h
+            };
+
             for (auto logical_core : device_router_cores) {
-                std::vector<uint32_t> router_compile_args = {
-                    (tunneler_queue_size_bytes >> 4),                // 0: rx_queue_size_words
-                    gk_interface_addr,                               // 1: gk_message_addr_l
-                    (gk_phys_core.y << 10) | (gk_phys_core.x << 4),  // 2: gk_message_addr_h
-                    tunneler_test_results_addr,                      // 3: test_results_addr
-                    tunneler_test_results_size,                      // 4: test_results_size
-                    0,                                               // 5: timeout_cycles
-                };
                 auto router_kernel = tt_metal::CreateKernel(
                     program_map[device.first],
                     "tt_fabric/impl/kernels/tt_fabric_router.cpp",
@@ -359,7 +364,7 @@ int main(int argc, char** argv) {
                     tt_metal::EthernetConfig{
                         .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = defines});
 
-                tt_metal::SetRuntimeArgs(program_map[device.first], router_kernel, logical_core, runtime_args);
+                tt_metal::SetRuntimeArgs(program_map[device.first], router_kernel, logical_core, router_runtime_args);
 
                 log_debug(
                     LogTest,
@@ -378,6 +383,11 @@ int main(int argc, char** argv) {
                 0,                   // 5: timeout_cycles
             };
 
+            std::vector<uint32_t> gk_runtime_args = {
+                sem_count,    // 0: number of active fabric routers
+                router_mask,  // 1: active fabric router mask
+            };
+
             auto kernel = tt_metal::CreateKernel(
                 program_map[device.first],
                 "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
@@ -388,7 +398,7 @@ int main(int argc, char** argv) {
                     .compile_args = gk_compile_args,
                     .defines = defines});
 
-            tt_metal::SetRuntimeArgs(program_map[device.first], kernel, gk_core, runtime_args);
+            tt_metal::SetRuntimeArgs(program_map[device.first], kernel, gk_core, gk_runtime_args);
         }
 
         if (check_txrx_timeout) {
@@ -424,7 +434,7 @@ int main(int argc, char** argv) {
                 atomic_increment,
                 tx_signal_address,
                 client_interface_addr,
-
+                client_pull_req_buf_addr,
             };
 
             // setup runtime args
@@ -442,7 +452,7 @@ int main(int argc, char** argv) {
             log_info(LogTest, "run traffic_gen_tx at x={},y={}", core.x, core.y);
             auto kernel = tt_metal::CreateKernel(
                 program_map[test_device_id_l],
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx.cpp",
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx_socket.cpp",
                 {core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -451,6 +461,45 @@ int main(int argc, char** argv) {
                     .defines = defines});
 
             tt_metal::SetRuntimeArgs(program_map[test_device_id_l], kernel, core, runtime_args);
+        }
+
+        std::vector<CoreCoord> rx_phys_core;
+        for (uint32_t i = 0; i < num_dest_endpoints; i++) {
+            CoreCoord core = {rx_x + i, rx_y};
+            rx_phys_core.push_back(device_map[test_device_id_r]->worker_core_from_logical_core(core));
+            CoreCoord rx_gk_phys_core = device_map[test_device_id_r]->worker_core_from_logical_core(gk_core);
+
+            std::vector<uint32_t> compile_args = {
+                prng_seed,                                             // 0: prng seed
+                data_kb_per_tx,                                        // 1: total data kb
+                max_packet_size_words,                                 // 2: max packet size (in words)
+                fabric_command,                                        // 3: fabric command
+                target_address,                                        // 4: target address
+                atomic_increment,                                      // 5: atomic increment
+                test_results_addr,                                     // 6: test results addr
+                test_results_size,                                     // 7: test results size in bytes
+                gk_interface_addr,                                     // 8: gk_message_addr_l
+                (rx_gk_phys_core.y << 10) | (rx_gk_phys_core.x << 4),  // 9: gk_message_addr_h
+                client_interface_addr,                                 // 10:
+                client_pull_req_buf_addr,                              // 11:
+                rx_queue_start_addr,                                   // 12: queue_start_addr_words
+                (rx_queue_size_bytes >> 4),                            // 13: queue_size_words
+            };
+
+            std::vector<uint32_t> runtime_args = {(dev_l_mesh_id << 16 | dev_l_chip_id)};
+
+            log_info(LogTest, "run socket rx at x={},y={}", core.x, core.y);
+            auto kernel = tt_metal::CreateKernel(
+                program_map[test_device_id_r],
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_rx_socket.cpp",
+                {core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .compile_args = compile_args,
+                    .defines = defines});
+
+            tt_metal::SetRuntimeArgs(program_map[test_device_id_r], kernel, core, runtime_args);
         }
 
         if (check_txrx_timeout) {
