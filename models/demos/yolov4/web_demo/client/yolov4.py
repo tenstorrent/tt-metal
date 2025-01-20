@@ -11,7 +11,9 @@ import argparse
 import cv2
 import requests
 import torch
+import orjson
 import av
+import logging
 import streamlit as st
 import numpy as np
 
@@ -20,77 +22,15 @@ from torch import nn
 from streamlit_webrtc import VideoProcessorBase, webrtc_streamer
 
 
+# Configure the logger
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", handlers=[logging.StreamHandler()]
+)
+
+
 class VideoProcessor(VideoProcessorBase):
     def __init__(self):
         self.frame_count = 0
-
-    def post_processing(self, img, conf_thresh, nms_thresh, output):
-        box_array = output[0]
-        confs = output[1].float()
-
-        t1 = time.time()
-
-        if type(box_array).__name__ != "ndarray":
-            box_array = box_array.cpu().detach().numpy()
-            confs = confs.cpu().detach().numpy()
-
-        num_classes = confs.shape[2]
-
-        # [batch, num, 4]
-        box_array = box_array[:, :, 0]
-
-        # [batch, num, num_classes] --> [batch, num]
-        max_conf = np.max(confs, axis=2)
-        max_id = np.argmax(confs, axis=2)
-
-        t2 = time.time()
-
-        bboxes_batch = []
-        for i in range(box_array.shape[0]):
-            argwhere = max_conf[i] > conf_thresh
-            l_box_array = box_array[i, argwhere, :]
-            l_max_conf = max_conf[i, argwhere]
-            l_max_id = max_id[i, argwhere]
-
-            bboxes = []
-            # nms for each class
-            for j in range(num_classes):
-                cls_argwhere = l_max_id == j
-                ll_box_array = l_box_array[cls_argwhere, :]
-                ll_max_conf = l_max_conf[cls_argwhere]
-                ll_max_id = l_max_id[cls_argwhere]
-
-                keep = self.nms_cpu(ll_box_array, ll_max_conf, nms_thresh)
-
-                if keep.size > 0:
-                    ll_box_array = ll_box_array[keep, :]
-                    ll_max_conf = ll_max_conf[keep]
-                    ll_max_id = ll_max_id[keep]
-
-                    for k in range(ll_box_array.shape[0]):
-                        bboxes.append(
-                            [
-                                ll_box_array[k, 0],
-                                ll_box_array[k, 1],
-                                ll_box_array[k, 2],
-                                ll_box_array[k, 3],
-                                ll_max_conf[k],
-                                ll_max_conf[k],
-                                ll_max_id[k],
-                            ]
-                        )
-
-            bboxes_batch.append(bboxes)
-
-        t3 = time.time()
-
-        print("-----------------------------------")
-        print("       max and argmax : %f" % (t2 - t1))
-        print("                  nms : %f" % (t3 - t2))
-        print("Post processing total : %f" % (t3 - t1))
-        print("-----------------------------------")
-
-        return bboxes_batch
 
     def load_class_names(self, namesfile):
         class_names = []
@@ -100,41 +40,6 @@ class VideoProcessor(VideoProcessorBase):
                 line = line.rstrip()
                 class_names.append(line)
         return class_names
-
-    def nms_cpu(self, boxes, confs, nms_thresh=0.5, min_mode=False):
-        x1 = boxes[:, 0]
-        y1 = boxes[:, 1]
-        x2 = boxes[:, 2]
-        y2 = boxes[:, 3]
-
-        areas = (x2 - x1) * (y2 - y1)
-        order = confs.argsort()[::-1]
-
-        keep = []
-        while order.size > 0:
-            idx_self = order[0]
-            idx_other = order[1:]
-
-            keep.append(idx_self)
-
-            xx1 = np.maximum(x1[idx_self], x1[idx_other])
-            yy1 = np.maximum(y1[idx_self], y1[idx_other])
-            xx2 = np.minimum(x2[idx_self], x2[idx_other])
-            yy2 = np.minimum(y2[idx_self], y2[idx_other])
-
-            w = np.maximum(0.0, xx2 - xx1)
-            h = np.maximum(0.0, yy2 - yy1)
-            inter = w * h
-
-            if min_mode:
-                over = inter / np.minimum(areas[order[0]], areas[order[1:]])
-            else:
-                over = inter / (areas[order[0]] + areas[order[1:]] - inter)
-
-            inds = np.where(over <= nms_thresh)[0]
-            order = order[inds + 1]
-
-        return np.array(keep)
 
     def plot_boxes_cv2(self, bgr_img, boxes, savename=None, class_names=None, color=None):
         img = np.copy(bgr_img)
@@ -196,52 +101,60 @@ class VideoProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         t0 = time.time()
+
+        # Convert frame to PIL image and resize
         pil_image = frame.to_image()
-        # resize on the client side
-        new_size = (320, 320)
-        pil_image = pil_image.resize(new_size)
+        pil_image = pil_image.resize((320, 320))  # Resize to target dimensions
         t1 = time.time()
+
+        # Save image as JPEG in-memory with optimized settings
         buf = io.BytesIO()
-        pil_image.save(buf, format="JPEG")
+        pil_image.save(buf, format="JPEG", quality=85, optimize=True)
         byte_im = buf.getvalue()
         file = {"file": byte_im}
-        # Argument Parser to grab namespace_id of server pod from user
-        parser = argparse.ArgumentParser(description="YOLOv4 script")
-        parser.add_argument("--api-url", type=str, help="URL for the object detection API", required=True)
-        args = parser.parse_args()
-        apiurl = args.api_url
-        url = f"{apiurl}/objdetection_v2"
-        r = requests.post(url, files=file)
 
-        if r.status_code == 200:
-            try:
-                # Get the JSON response as a dictionary
-                response_dict = r.json()
-                output = [torch.tensor(tensor_data) for tensor_data in response_dict["output"]]
-            except ValueError:
-                st.error("Failed to parse JSON. The response is not in JSON format.")
-        else:
-            st.error(f"Request failed with status code {r.status_code}")
+        # Parse API URL once at the class level for efficiency
+        if not hasattr(self, "api_url"):
+            parser = argparse.ArgumentParser(description="YOLOv4 script")
+            parser.add_argument("--api-url", type=str, required=True, help="URL for the object detection API")
+            args = parser.parse_args()
+            self.api_url = args.api_url
+
+        url = f"{self.api_url}/objdetection_v2"
+
+        try:
+            # Use a persistent session for multiple requests
+            with requests.Session() as session:
+                # Post request with a timeout
+                response = session.post(url, files=file, timeout=5)
+
+                # Check if response is successful
+                if response.status_code == 200:
+                    # Parse JSON response
+                    output = orjson.loads(response.content)
+                else:
+                    print(f"Request failed with status code {response.status_code}")
+                    # return None
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
+            return None
 
         t3 = time.time()
+        # Convert frame to ndarray and perform post-processing
         bgr_image = frame.to_ndarray(format="bgr24")
         conf_thresh = 0.6
         nms_thresh = 0.5
-        boxes = self.post_processing(bgr_image, conf_thresh, nms_thresh, output)
+
+        # Load class names and plot bounding boxes
         namesfile = "coco.names"
         class_names = self.load_class_names(namesfile)
+        image_final = self.plot_boxes_cv2(bgr_image, output, None, class_names)
 
-        # random_number = random.randint(1, 100)
-        # save_name = "ttnn_prediction_demo" + str(random_number) + ".jpg"
-        save_name = None
-
-        image_final = self.plot_boxes_cv2(bgr_image, boxes[0], save_name, class_names)
         t4 = time.time()
-        print()
-        print(f" IMG-IN | WH | Post | Total time: ")
-        print(f" {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} ")
+        logging.info(
+            f" IMG-IN | WH | Post | Total time: {(t1-t0):.3f} | {(t3-t1):.3f} | {(t4-t3):.3f} || {(t4-t0):.3f} "
+        )
 
-        # return image_final
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
@@ -254,10 +167,8 @@ webrtc_streamer(
     media_stream_constraints={
         "video": {
             "width": {"min": 320, "ideal": 400, "max": 960},
-            # "height": {"min": 180, "ideal": 225, "max": 450},
             "height": {"min": 320, "ideal": 400, "max": 960},
             "frameRate": {"min": 1, "ideal": 50, "max": 60},
         }
     },
-    # async_processing=True  # Use asynchronous processing for long tasks
 )
