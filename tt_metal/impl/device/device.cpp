@@ -12,6 +12,8 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
+#include "lightmetal_replay.hpp"
+#include "lightmetal_capture.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
 #include <dprint_server.hpp>
@@ -1590,6 +1592,31 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
         this->id_,
         active_sub_device_manager->id());
     this->hw_command_queues_[cq_id]->record_end();
+
+    // Capture Trace if light metal trace capturing is enabled.
+    auto& lm_capture_ctx = LightMetalCaptureContext::Get();
+    if (lm_capture_ctx.IsTracing()) {
+        lm_capture_ctx.CaptureTraceDescriptor(*trace_buffer->desc, tid);
+    }
+
+    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+    this->mark_allocations_unsafe();
+}
+
+// Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
+void Device::load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor &trace_desc) {
+    this->mark_allocations_safe();
+
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    TT_FATAL(
+        active_sub_device_manager->get_trace(tid) == nullptr,
+        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+        tid,
+        this->id_,
+        active_sub_device_manager->id());
+
+    auto& trace_buffer = active_sub_device_manager->create_trace(tid);
+    *trace_buffer->desc = trace_desc;
     Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
     this->mark_allocations_unsafe();
 }

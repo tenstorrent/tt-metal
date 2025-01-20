@@ -40,6 +40,7 @@
 #include "umd/device/tt_xy_pair.h"
 
 #include <hal.hpp>
+#include "host_api_capture_helpers.hpp"
 
 using namespace tt::tt_metal;
 
@@ -2013,6 +2014,8 @@ void EnqueueReadBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
+    TRACE_FUNCTION_ENTRY();
+    TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
@@ -2040,6 +2043,8 @@ void EnqueueWriteBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
+    TRACE_FUNCTION_ENTRY();
+    TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
@@ -2064,6 +2069,8 @@ void EnqueueWriteSubBuffer(
 
 void EnqueueProgram(
     CommandQueue& cq, Program& program, bool blocking) {
+    TRACE_FUNCTION_ENTRY();
+    TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
     detail::DispatchStateCheck(true);
     cq.run_command(
         CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = &program});
@@ -2125,6 +2132,8 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 }
 
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    TRACE_FUNCTION_ENTRY();
+    TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);
     cq.run_command(CommandInterface{.type = EnqueueCommandType::FINISH, .blocking = true, .sub_device_ids = sub_device_ids});
     TT_ASSERT(
@@ -2137,6 +2146,8 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
 }
 
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
+    TRACE_FUNCTION_ENTRY();
+    TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.run_command(

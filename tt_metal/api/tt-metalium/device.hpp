@@ -48,6 +48,10 @@ class JitBuildEnv;
 class HWCommandQueue;
 class TraceBuffer;
 
+namespace detail {
+struct TraceDescriptor;
+}
+
 inline namespace v0 {
 
 class IDevice {
@@ -187,6 +191,9 @@ public:
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
+
+    // Light Metal
+    virtual void load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor& trace_desc) = 0;
 
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
