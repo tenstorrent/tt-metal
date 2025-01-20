@@ -33,7 +33,7 @@ def run_reshape_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config
         dtype=[dtype],
         layout=[dlayout],
         input_mem_config=[in_mem_config],
-        output_mem_config=out_mem_config,
+        memory_config=out_mem_config,
     )
 
     # compare tt and golden outputs
