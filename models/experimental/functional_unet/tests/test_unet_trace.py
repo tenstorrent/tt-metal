@@ -40,7 +40,7 @@ def test_unet_trace(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
 
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
@@ -127,7 +127,7 @@ def test_unet_trace_2cq(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
 
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)
@@ -248,7 +248,7 @@ def test_unet_trace_2cq_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -258,9 +258,7 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Using {num_devices} devices for this test")
 
     total_batch = num_devices * batch
-    torch_input, ttnn_input = create_unet_input_tensors(
-        total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
-    )
+    torch_input, ttnn_input = create_unet_input_tensors(total_batch, groups, mesh_mapper=inputs_mesh_mapper)
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
         f"Created multi-device input tensors: shape={list(ttnn_input.shape)} on devices={mesh_device.get_device_ids()}"
@@ -370,7 +368,7 @@ def test_unet_trace_2cq_same_io(
     use_program_cache,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
 
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
     torch_output_tensor = model(torch_input)

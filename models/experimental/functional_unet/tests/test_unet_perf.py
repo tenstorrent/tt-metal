@@ -76,7 +76,7 @@ def test_unet_perf_e2e(
 ):
     profiler.clear()
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
 
     profiler.start(f"initialize_ref_model")
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
@@ -159,7 +159,7 @@ def test_unet_data_parallel_perf_e2e(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
 
     profiler.start(f"initialize_ref_model")
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
@@ -172,9 +172,7 @@ def test_unet_data_parallel_perf_e2e(
 
     num_devices = len(mesh_device.get_device_ids())
     total_batch = num_devices * batch
-    torch_input, ttnn_input = create_unet_input_tensors(
-        total_batch, groups, pad_input=True, mesh_mapper=inputs_mesh_mapper
-    )
+    torch_input, ttnn_input = create_unet_input_tensors(total_batch, groups, mesh_mapper=inputs_mesh_mapper)
     logger.info(f"Created reference input tensors: {list(torch_input.shape)}")
     logger.info(
         f"Created multi-device input tensors: shape={list(ttnn_input.shape)} on devices={mesh_device.get_device_ids()}"

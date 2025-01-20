@@ -18,13 +18,13 @@ from models.experimental.functional_unet.tests.common import verify_with_pcc
 @pytest.mark.parametrize("batch, groups", [(1, 2)])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_unet_output_layer(batch, groups, device, reset_seeds):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False, input_channels=16)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, input_channels=16)
     torch_output = model.output_layer(torch_input)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
