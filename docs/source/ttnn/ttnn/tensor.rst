@@ -122,6 +122,27 @@ ttnn supports the following data types:
         * - ttnn.bfloat8_b
           - 32 (Special case because the tensor has to be in tile layout)
 
+.. _bfloat8_b_limitations:
+
+Limitation of BFLOAT8_B
+***********************
+
+The BFLOAT8_B format utilizes a block-floating point (BFP) representation, where 16 consecutive numbers share a single exponent, determined by the largest value in the group.
+
+This shared exponent introduces specific behaviors and limitations, as observed during operations like reciprocal:
+
+- When the group contains numbers with large magnitude differences, smaller values may be flushed to zero, resulting in inaccurate reciprocal results or numerical instability.
+- Inputs with extreme values (e.g., infinities) can dominate the shared exponent, causing other numbers in the group to lose precision or be rounded off to zero.
+
+For inputs that include zero, the reciprocal result is a large constant value: 1.7014118346046923e+38.
+
+.. note::
+
+    - Avoid using the BFLOAT8_B format for operations like reciprocal on datasets with high variance in magnitude or frequent occurrences of zero.
+    - Preprocess data to ensure a more uniform distribution of magnitudes within groups of 16.
+    - Validate the outputs using higher precision formats when dealing with critical applications.
+
+    The BFLOAT8_B format is optimized for scenarios with homogeneous values across groups but is unsuitable for operations that expand the range, such as reciprocal, due to inherent precision constraints.
 
 .. _ttnn.Storage:
 
