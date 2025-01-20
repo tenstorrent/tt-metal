@@ -59,37 +59,24 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             }},
         mesh_buffer_config);
 
-    // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
-    std::shared_ptr<Buffer> backing_buffer = Buffer::create(
-        mesh_device,
-        /*address=*/address.value_or(0),
-        device_local_size,
-        device_local_config.page_size,
-        device_local_config.buffer_type,
-        device_local_config.buffer_layout,
-        device_local_config.shard_parameters,
-        device_local_config.bottom_up);
     std::shared_ptr<MeshBuffer> mesh_buffer;
     if (!address.has_value()) {
-        *address = tt::tt_metal::detail::AllocateBuffer(backing_buffer.get());
-        auto* backing_buffer_ptr = backing_buffer.get();
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(
-                mesh_buffer_config,
-                device_local_config,
-                *address,
-                device_local_size,
-                mesh_device,
-                std::move(backing_buffer)),
-            [backing_buffer_ptr](MeshBuffer*) { tt::tt_metal::detail::DeallocateBuffer(backing_buffer_ptr); });
-    } else {
-        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
-            mesh_buffer_config,
-            device_local_config,
-            *address,
-            device_local_size,
+        // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
+        // The address provided to the backing buffer is used as the address for the MeshBuffer object.
+        std::shared_ptr<Buffer> backing_buffer = Buffer::create(
             mesh_device,
-            std::move(backing_buffer)));
+            device_local_size,
+            device_local_config.page_size,
+            device_local_config.buffer_type,
+            device_local_config.buffer_layout,
+            device_local_config.shard_parameters,
+            device_local_config.bottom_up);
+
+        mesh_buffer = std::shared_ptr<MeshBuffer>(
+            new MeshBuffer(mesh_buffer_config, device_local_config, device_local_size, mesh_device, backing_buffer));
+    } else {
+        mesh_buffer = std::shared_ptr<MeshBuffer>(
+            new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
     }
 
     mesh_buffer->allocate();
@@ -98,12 +85,19 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 }
 
 void MeshBuffer::allocate() {
+    if (backing_buffer_) {
+        TT_FATAL(
+            !address_, "The address for a MeshBuffer should not explicitly be initialized when it is being allocated");
+        address_ = backing_buffer_->address();
+    } else {
+        TT_FATAL(address_, "A MeshBuffer should be provided a valid address if its not being allocated");
+    }
     buffers_ = std::vector<std::vector<std::shared_ptr<Buffer>>>(
         mesh_device_->num_rows(), std::vector<std::shared_ptr<Buffer>>(mesh_device_->num_cols()));
 
     auto allocate_device_buffer_at_address = [this](const Coordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            mesh_device_,
+            mesh_device_->get_device(coord.row, coord.col),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -116,11 +110,7 @@ void MeshBuffer::allocate() {
 
     for (int row = 0; row < mesh_device_->num_rows(); row++) {
         for (int col = 0; col < mesh_device_->num_cols(); col++) {
-            if (row == 0 and col == 0) {
-                buffers_[row][col] = backing_buffer_;
-            } else {
-                buffers_[row][col] = allocate_device_buffer_at_address(Coordinate{row, col});
-            }
+            buffers_[row][col] = allocate_device_buffer_at_address(Coordinate{row, col});
         }
     }
 }
@@ -153,6 +143,29 @@ const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
     TT_FATAL(
         global_layout() == MeshBufferLayout::SHARDED, "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
+}
+
+uint32_t MeshBuffer::datum_size_bytes() const {
+    // Limitation for now.
+    TT_FATAL(
+        this->global_layout() == MeshBufferLayout::SHARDED,
+        "Can only query datum size for buffers sharded across the Mesh");
+    return this->global_shard_spec().compute_datum_size_bytes();
+}
+
+Shape2D MeshBuffer::physical_shard_shape() const {
+    TT_FATAL(
+        this->global_layout() == MeshBufferLayout::SHARDED,
+        "Can only query physical shard shape for buffers sharded across the Mesh");
+    auto sharded_config = std::get<ShardedBufferConfig>(config_);
+    Shape2D physical_shard_shape = sharded_config.shard_shape;
+    if (physical_shard_shape.height() == 0) {
+        physical_shard_shape = {sharded_config.global_buffer_shape.height(), physical_shard_shape.width()};
+    }
+    if (physical_shard_shape.width() == 0) {
+        physical_shard_shape = {physical_shard_shape.height(), sharded_config.global_buffer_shape.width()};
+    }
+    return physical_shard_shape;
 }
 
 }  // namespace tt::tt_metal::distributed
