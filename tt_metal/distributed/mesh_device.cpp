@@ -159,12 +159,6 @@ void MeshDevice::initialize() {
 
 MeshDevice::~MeshDevice() {}
 
-IDevice* MeshDevice::get_device_index(size_t device_index) const {
-    TT_FATAL(device_index >= 0 and device_index < num_devices(), "Invalid device index");
-    const auto& devices = scoped_devices_->get_devices();
-    return devices.at(device_index);
-}
-
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->get_devices()) {
         if (device->id() == physical_device_id) {
@@ -178,10 +172,7 @@ std::vector<IDevice*> MeshDevice::get_devices(const std::optional<MeshType>& req
     return view_->get_devices(requested_type.value_or(type_));
 }
 
-// TODO: Remove this function once we have a proper view interface
-IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return this->get_device_index(row_idx * num_cols() + col_idx);
-}
+IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const { return view_->get_device(row_idx, col_idx); }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue() {
     TT_FATAL(this->using_fast_dispatch(), "Can only acess the MeshCommandQueue when using Fast Dispatch.");
