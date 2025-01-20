@@ -411,7 +411,9 @@ on:
           - fused.layer_norm_traces
           - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
+          - reduction.topk.topk_output
           - reduction.argmax.argmax
+          - reduction.argmax.argmax_output
           - reduction.prod
           - reduction.sum
           - reduction.var.var
