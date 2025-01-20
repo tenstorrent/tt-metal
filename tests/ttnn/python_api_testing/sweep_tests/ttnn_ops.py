@@ -3183,21 +3183,24 @@ def var(x, *args, dim, device, dtype, layout, input_mem_config, output_mem_confi
 
 def max_pool2d_tt(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
     batch_size = x.shape[0]
+    C = x.shape[1]
     input_height = x.shape[2]
     input_width = x.shape[3]
 
-    m = ttnn.MaxPool2d(
-        kernel_size=3,
-        stride=2,
-        device=device,
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        reader_patterns_cache={},
-    )
-
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = m(t0)
+
+    t1 = ttnn.max_pool2d(
+        t0,
+        batch_size=batch_size,
+        input_h=input_height,
+        input_w=input_width,
+        channels=C,
+        kernel_size=[3, 3],
+        stride=[2, 2],
+        padding=[0, 0],
+        dilation=[1, 1],
+        memory_config=output_mem_config,
+    )
 
     return ttnn_tensor_to_torch(t1)
 
