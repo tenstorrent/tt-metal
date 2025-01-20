@@ -5,6 +5,7 @@
 import math
 import torch
 import ttnn
+from loguru import logger
 
 
 class HostEmbedding(torch.nn.Module):
@@ -42,6 +43,82 @@ def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None
     user_prompt = start_header + user + end_header + prompt + end_turn
     assistant_reply = start_header + assistant + end_header
     return begin_of_text + system_prompt + user_prompt + assistant_reply
+
+
+def preprocess_inputs_prefill(
+    input_prompts,
+    tokenizer,
+    model_args,
+    instruct,
+    max_generated_tokens,
+    max_prefill_len=128 * 1024,
+):
+    """
+    Run tokenizer on inputs, and create embeddings for the first token of each input
+    """
+    # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
+    if max_prefill_len == 128 * 1024:
+        max_prefill_len = 128 * 1024 - max_generated_tokens
+
+    if instruct:
+        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
+    else:
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+
+    # Print the length of encoded prompts
+    logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
+
+    prompt_lens = [len(x) for x in encoded_prompts]
+    min_prompt_len = min(prompt_lens)
+    max_prompt_len = max(prompt_lens)
+
+    # To avoid running out of memory when giving prompts larger than the maximum, clip to max_prefill_len
+    if min_prompt_len > max_prefill_len:
+        logger.warning(f"Prompt too long. Clipping prompts to {max_prefill_len}")
+        if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
+            encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
+            dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
+            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in dec_prompts]
+        else:
+            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
+
+        # Update prompt lengths
+        prompt_lens = [len(x) for x in encoded_prompts]
+        min_prompt_len = min(prompt_lens)
+        max_prompt_len = max(prompt_lens)
+
+    assert (
+        max_prompt_len <= model_args.max_seq_len
+    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
+    assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
+
+    logger.info(f"# of users: {len(encoded_prompts)}")
+    input_tokens_prefill = []
+    decoding_pos = []
+    prefill_lens = []
+
+    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
+    # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
+    for i, encoded in enumerate(encoded_prompts):
+        # Prefill size is nearest power of 2
+        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
+
+        # Initial prefill tensors full of pad tokens
+        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
+        input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
+        input_tokens_prefill.append(input_tokens_prefill_i)
+
+        # Keep the correct decoding position of each user
+        decoding_pos.append(len(encoded))
+        prefill_lens.append(prefill_seq_len)
+
+    return (
+        input_tokens_prefill,
+        encoded_prompts,
+        decoding_pos,
+        prefill_lens,
+    )
 
 
 def apply_scaling(freqs: torch.Tensor, scale_factor: float = 8):
