@@ -51,7 +51,6 @@ auto query_op_runtime(Op op, IDevice* device, Args&&... args) {
         };
         auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
-        device->enable_async(false);
         device->enable_program_cache();
         {  // warm up the program cache - required for trace capture
             std::apply(op, transformed_args);
@@ -66,7 +65,7 @@ auto query_op_runtime(Op op, IDevice* device, Args&&... args) {
         uint64_t duration = 0;
         for (int i = 0; i < NUM_TRACE_EXECUTIONS; ++i) {
             auto start = std::chrono::high_resolution_clock::now();
-            ttnn::operations::core::execute_trace(device, trace_id, ttnn::DefaultQueueId, true);
+            ttnn::operations::core::execute_trace(device, trace_id, ttnn::DefaultQueueId, /* blocking = */ true);
             auto end = std::chrono::high_resolution_clock::now();
             duration += std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
         }
