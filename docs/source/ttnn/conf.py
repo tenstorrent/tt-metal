@@ -108,6 +108,7 @@ html_static_path = ["_static"]
 
 html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
 
+
 def setup(app):
     app.add_css_file("tt_theme.css")
 
