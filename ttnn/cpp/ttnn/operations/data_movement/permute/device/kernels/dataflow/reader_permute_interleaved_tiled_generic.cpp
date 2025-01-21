@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr bool needs_x_padding = static_cast<bool>(get_compile_time_arg_val(24));
     constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(25));
     constexpr uint32_t non_x_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t read_alignment = get_compile_time_arg_val(27);
+    constexpr uint32_t misalignment = get_compile_time_arg_val(27);
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -53,8 +53,6 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t tile_bytes = TILE_HW * element_size;
-
-    constexpr uint32_t misalignment = read_alignment - SUBTILE_LINE_BYTES;
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);

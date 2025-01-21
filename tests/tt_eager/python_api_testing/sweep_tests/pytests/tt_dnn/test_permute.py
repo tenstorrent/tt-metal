@@ -26,6 +26,7 @@ def test_run_permute_test(input_shapes, permute_args, device, function_level_def
         generation_funcs.gen_func_with_cast(partial(generation_funcs.gen_rand, low=-100, high=100), torch.bfloat16)
     ]
     comparison_func = partial(comparison_funcs.comp_equal)
+    print(permute_args)
     run_single_pytorch_test(
         "permute",
         input_shapes,
