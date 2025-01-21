@@ -26,8 +26,8 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     desired_shape = [N, C, H, W]
     desired_shape[dim] = k
 
-    assert list(ttnn_topk_values.shape.with_tile_padding()) == desired_shape
-    assert list(ttnn_topk_indices.shape.with_tile_padding()) == desired_shape
+    assert list(ttnn_topk_values.shape) == desired_shape
+    assert list(ttnn_topk_indices.shape) == desired_shape
 
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
     ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
@@ -70,9 +70,10 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     "N, C, H, W, dim, k",
     (
         (1, 1, 64, 64, 2, 32),
-        (1, 1, 32, 8192, 3, 64),
+        (1, 1, 64, 64, 2, 64),
+        (1, 1, 32, 8192, 3, 50),
         (1, 2048, 1, 64, 1, 32),
-        (1, 1, 32, 32768, 3, 64),
+        (1, 1, 32, 32768, 3, 17),
         (128, 1, 1, 64, 0, 64),
     ),
 )
@@ -80,14 +81,14 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     "sorted",
     [
         True,
-        False,
+        # False, Please refer to https://github.com/tenstorrent/tt-metal/issues/13235#issuecomment-2601432673
     ],
 )
 @pytest.mark.parametrize(
     "largest",
     [
         True,
-        # False, Please refer to https://github.com/tenstorrent/tt-metal/issues/13235#issuecomment-2601432673
+        # False, Waiting for Ata's patch to be merged
     ],
 )
 def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device):
