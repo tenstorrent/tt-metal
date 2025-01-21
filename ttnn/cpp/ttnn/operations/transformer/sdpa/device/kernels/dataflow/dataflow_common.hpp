@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <algorithm>
 #include "dataflow_api.h"
+#include <tt-metalium/constants.hpp>
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -161,7 +162,7 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
         // Fill 2 uint16 datums in each writes to optimize for performance
         volatile tt_l1_ptr uint32_t* ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
-        constexpr int num_uint32_datums_tile = (32 * 32) / 2;
+        constexpr int num_uint32_datums_tile = (tt::constants::TILE_HW) / 2;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
         }
@@ -182,9 +183,9 @@ void fill_diagonal_tile(uint32_t cb_id, uint32_t tile_id, uint32_t partial_val) 
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
-    constexpr uint32_t uint16_datums_per_face_row = 16;
-    constexpr uint32_t uint32_datums_per_face_row = 8;
-    constexpr uint32_t uint32_datums_per_face = (16 * 16) / 2;
+    constexpr uint32_t uint16_datums_per_face_row = tt::constants::FACE_WIDTH;
+    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / 2;
+    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / 2;
     // Fill diagonal faces with diagonal -inf
     for (uint32_t k = 0; k < 4; k += 3) {
         uint32_t uint16_face_idx = k << 8;
@@ -223,9 +224,9 @@ void fill_vertical_tile(uint32_t cb_id, uint32_t tile_id, uint32_t unpad_col_in_
     volatile tt_l1_ptr uint32_t* uint32_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
 
-    constexpr uint32_t uint16_datums_per_face_row = 16;
-    constexpr uint32_t uint32_datums_per_face_row = 8;
-    constexpr uint32_t uint32_datums_per_face = (16 * 16) / 2;
+    constexpr uint32_t uint16_datums_per_face_row = tt::constants::FACE_WIDTH;
+    constexpr uint32_t uint32_datums_per_face_row = tt::constants::FACE_WIDTH / 2;
+    constexpr uint32_t uint32_datums_per_face = (tt::constants::FACE_HW) / 2;
     // Fill cols unpad_col_in_tile: with partial_val
     // Start with left faces
     if (unpad_col_in_tile < uint16_datums_per_face_row) {
@@ -322,9 +323,10 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     int zero_tile_idx = -1;
     int inf_tile_idx = -1;
     int vertical_tile_idx = -1;
-    const uint32_t unpadded_Sk_in_chunk = unpadded_Sk % (Sk_chunk_t * 32);  // TODO: constant for tile width
-    uint32_t unpad_tile_col_in_chunk = unpadded_Sk_in_chunk / 32;
-    uint32_t unpad_col_in_tile = unpadded_Sk_in_chunk % 32;
+    const uint32_t unpadded_Sk_in_chunk =
+        unpadded_Sk % (Sk_chunk_t * tt::constants::TILE_WIDTH);  // TODO: constant for tile width
+    uint32_t unpad_tile_col_in_chunk = unpadded_Sk_in_chunk / tt::constants::TILE_WIDTH;
+    uint32_t unpad_col_in_tile = unpadded_Sk_in_chunk % tt::constants::TILE_WIDTH;
 
     for (uint32_t q_tile = 0; q_tile < Sq_chunk_t; ++q_tile) {
         for (uint32_t k_tile = 0; k_tile < Sk_chunk_t; ++k_tile) {

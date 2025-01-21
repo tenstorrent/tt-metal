@@ -6,6 +6,7 @@
 
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -127,15 +128,15 @@ void ScaledDotProductAttention::validate(
             auto k_chunk_size = program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % TILE_SIZE == 0,
+                q_chunk_size % tt::constants::TILE_WIDTH == 0,
                 "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                TILE_SIZE);
+                tt::constants::TILE_WIDTH);
             TT_FATAL(
-                k_chunk_size % TILE_SIZE == 0,
+                k_chunk_size % tt::constants::TILE_WIDTH == 0,
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                TILE_SIZE);
+                tt::constants::TILE_WIDTH);
         }
     };
 
@@ -198,15 +199,15 @@ void ScaledDotProductAttention::validate(
             auto k_chunk_size = program_config->k_chunk_size;
 
             TT_FATAL(
-                q_chunk_size % TILE_SIZE == 0,
+                q_chunk_size % tt::constants::TILE_WIDTH == 0,
                 "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
                 q_chunk_size,
-                TILE_SIZE);
+                tt::constants::TILE_WIDTH);
             TT_FATAL(
-                k_chunk_size % TILE_SIZE == 0,
+                k_chunk_size % tt::constants::TILE_WIDTH == 0,
                 "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
                 k_chunk_size,
-                TILE_SIZE);
+                tt::constants::TILE_WIDTH);
         }
 
         // In chunked mode, K's sequence dimension should be >= Q's sequence dimension + chunk_start_idx
