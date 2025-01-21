@@ -440,7 +440,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 
     for (uint32_t core_h = 0; core_h < 1; core_h++) {
-        bool ascending = false;
+        bool ascending = !largest;
         for (uint32_t core_w = 0; core_w < num_cores - 1; core_w++) {
             CoreCoord core = {core_h, core_w};
             SetRuntimeArgs(
