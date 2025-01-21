@@ -87,7 +87,10 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_shape = {tt::div_up(fused_height, num_cores), output_shape[-1]};
+            const auto tile = input_tensor_a.get_tensor_spec().tile();
+            uint32_t tile_height = tile.get_height();
+            uint32_t shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+            shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
         }

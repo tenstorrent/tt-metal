@@ -9,12 +9,12 @@
 #include <cstdint>
 
 #include "debug/dprint.h"
-#include "tt_metal/hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
-#include "tt_metal/hw/inc/risc_attribs.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "risc_attribs.h"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 namespace tt::fabric {
 // Increments val and wraps to 0 if it reaches limit

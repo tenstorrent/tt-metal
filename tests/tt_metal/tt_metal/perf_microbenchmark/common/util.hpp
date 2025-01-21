@@ -8,11 +8,11 @@
 
 #include <vector>
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
-#include "llrt/hal.hpp"
-#include "llrt/llrt.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/llrt.hpp>
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)

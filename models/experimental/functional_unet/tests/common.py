@@ -7,7 +7,7 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-UNET_FULL_MODEL_PCC = 0.999
+UNET_FULL_MODEL_PCC = 0.99999
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:
@@ -26,10 +26,10 @@ def is_t3k_with_eth_dispatch_cores(mesh_device) -> bool:
 
 def verify_with_pcc(torch_tensor, ttnn_tensor, pcc):
     _, computed_pcc = assert_with_pcc(torch_tensor, ttnn_tensor, pcc)
-    logger.info(f"PCC check was successful ({computed_pcc:.5f} > {pcc:.5f})")
+    logger.info(f"PCC check was successful ({computed_pcc:.6f} > {pcc:.6f})")
     if (computed_pcc - pcc) / pcc > 0.0025:
         logger.warning(
-            f"Computed PCC ({computed_pcc:.5f}) was higher than the expected PCC ({pcc:.5f}) - consider updating the expected PCC value"
+            f"Computed PCC ({computed_pcc:.6f}) was higher than the expected PCC ({pcc:.6f}) - consider updating the expected PCC value"
         )
 
 

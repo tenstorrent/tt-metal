@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/types.hpp"
@@ -758,6 +758,7 @@ void bind_unary_backward_rdiv(
                  - TILE
                  - 2, 3, 4
 
+            Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
             {9}
 
         Example:
@@ -1124,6 +1125,8 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
                  - TILE
                  - 4
 
+            For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.
+
         Example:
 
             >>> grad_tensor = ttnn.from_torch(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -1326,7 +1329,9 @@ void py_module(py::module& module) {
         "eps",
         "eps value for the logiteps formula ",
         0.0,
-        R"doc(Performs backward operations for logiteps on :attr:`input_tensor`, :attr:`eps`, with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for logiteps on :attr:`input_tensor`, :attr:`eps`, with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_two_float(
         module,
@@ -1342,7 +1347,9 @@ void py_module(py::module& module) {
         "threshold",
         "Threshold value",
         20.0,
-        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for softplus on :attr:`input_tensor`, :attr:`beta`, :attr:`threshold` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_rdiv(
         module,
@@ -1377,7 +1384,8 @@ void py_module(py::module& module) {
         "exponent",
         "Exponent value [must be non-negative]",
         R"doc(Performs backward operations for power on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_optional(
         module,
@@ -1393,7 +1401,9 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_optional(
         module,
         ttnn::sqrt_bw,
-        R"doc(Performs backward operations for square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1470,7 +1480,9 @@ void py_module(py::module& module) {
         module,
         ttnn::log_sigmoid_bw,
         R"doc(Performs backward operations for log sigmoid on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1518,7 +1530,10 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::logit_bw,
-        R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for logit on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1545,7 +1560,10 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::log_bw,
-        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for logarithm on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1556,7 +1574,8 @@ void py_module(py::module& module) {
         module,
         ttnn::abs_bw,
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_neg(
         module,
@@ -1617,12 +1636,18 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::log10_bw,
-        R"doc(Performs backward operations for log10 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for log10 on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
         ttnn::log1p_bw,
-        R"doc(Performs backward operations for log1p on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for log1p on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1649,7 +1674,10 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op(
         module,
         ttnn::log2_bw,
-        R"doc(Performs backward operations for log2 on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for log2 on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(TILE)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,
@@ -1681,7 +1709,9 @@ void py_module(py::module& module) {
     detail::bind_unary_backward_op_reciprocal(
         module,
         ttnn::reciprocal_bw,
-        R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc");
+        R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_op(
         module,

@@ -7,17 +7,18 @@
 #include <unordered_set>
 #include <vector>
 
-#include "tt_metal/impl/sub_device/sub_device_manager_tracker.hpp"
+#include <sub_device_manager_tracker.hpp>
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/kernels/data_types.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <device.hpp>
+#include <allocator.hpp>
+#include <buffer_constants.hpp>
+#include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
+#include <data_types.hpp>
+#include <sub_device.hpp>
+#include <sub_device_manager.hpp>
+#include <sub_device_types.hpp>
+#include <span.hpp>
 
 namespace tt::tt_metal {
 
@@ -60,20 +61,11 @@ std::tuple<SubDeviceManagerId, SubDeviceId> SubDeviceManagerTracker::create_sub_
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
-    // TODO: This could be further optimized by combining all of these into a single prefetch entry
-    // Currently each one will be pushed into its own prefetch entry
     for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
         auto& hw_cq = device_->hw_command_queue(cq_id);
         // Only need to reset launch messages once, so reset on cq 0
-        TT_FATAL(!hw_cq.sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
-        hw_cq.reset_worker_state(cq_id == 0);
-        hw_cq.set_num_worker_sems_on_dispatch(num_sub_devices);
-        hw_cq.set_go_signal_noc_data_on_dispatch(sub_device_manager->noc_mcast_unicast_data());
-        hw_cq.reset_config_buffer_mgr(num_sub_devices);
+        hw_cq.reset_worker_state(cq_id == 0, num_sub_devices, sub_device_manager->noc_mcast_unicast_data());
     }
-    // Reset the launch_message ring buffer state seen on host
-    sub_device_manager->reset_worker_launch_message_buffer_state();
-
     sub_device_manager->reset_sub_device_stall_group();
 }
 

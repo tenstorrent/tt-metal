@@ -20,7 +20,7 @@ void MAIN {
     constexpr uint32_t cb_chunk_count_scratch = tt::CBIndex::c_25;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(cb_grad);
+    unary_op_init_common(cb_grad, cb_out);
 
     for (uint32_t i = 0; i < input_height; ++i) {
         cb_wait_front(cb_grad, max_tiles_per_core);

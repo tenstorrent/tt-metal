@@ -12,12 +12,7 @@ set(PERF_MICROBENCH_TESTS_SRCS
     routing/test_mux_demux.cpp
     routing/test_vc_mux_demux.cpp
     routing/test_mux_demux_2level.cpp
-    routing/test_tunnel_1cq.cpp
-    routing/test_tunnel_2cq.cpp
-    routing/test_uni_tunnel.cpp
     routing/test_vc_uni_tunnel.cpp
-    routing/test_uni_tunnel_single_chip.cpp
-    routing/test_bi_tunnel.cpp
     routing/test_vc_bi_tunnel_2ep.cpp
     routing/test_vc_bi_tunnel_4ep.cpp
     routing/test_vc_loopback_tunnel.cpp
@@ -71,6 +66,9 @@ foreach(arch ${ARCHITECTURES})
                 yaml-cpp::yaml-cpp
                 tt_fabric
         )
+        if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
+            target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+        endif()
         target_include_directories(
             ${TEST_TARGET}
             BEFORE

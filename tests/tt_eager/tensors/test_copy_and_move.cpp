@@ -2,15 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 using namespace tt;
 using namespace tt_metal;
@@ -37,8 +38,8 @@ bool test_tensor_copy_semantics(IDevice* device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::arange(/*start=*/0, /*stop=*/single_tile_shape.volume(), /*step=*/1)
-                        .reshape(single_tile_shape)
+    Tensor host_c = ttnn::experimental::view(
+                        ttnn::arange(/*start=*/0, /*stop=*/single_tile_shape.volume(), /*step=*/1), single_tile_shape)
                         .to(Layout::TILE);
     Tensor host_c_copy = ttnn::random::random(single_tile_shape).to(Layout::TILE);
     host_c_copy = host_c;

@@ -5,7 +5,7 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "untilize_with_halo_v2_program_factory.hpp"
 
 using namespace tt::tt_metal;

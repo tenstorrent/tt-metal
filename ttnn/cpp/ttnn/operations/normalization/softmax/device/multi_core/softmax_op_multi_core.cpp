@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/logger.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 

@@ -10,8 +10,8 @@
 #include <cstring>
 #include <string>
 
-#include "impl/debug/dprint_server.hpp"
-#include "tools/profiler/profiler_state.hpp"
+#include <dprint_server.hpp>
+#include <profiler_state.hpp>
 
 using std::vector;
 
@@ -300,6 +300,11 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
+        // Can also have "all"
+        if (strcmp(env_var_str, "all") == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
         uint32_t chip;
         if (sscanf(env_var_str, "%d", &chip) != 1) {
             TT_THROW("Invalid {}", env_var_str);
@@ -311,9 +316,9 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    // Default is no chips are specified is chip 0.
+    // Default is no chips are specified is all
     if (chips.size() == 0) {
-        chips.push_back(0);
+        feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
 }

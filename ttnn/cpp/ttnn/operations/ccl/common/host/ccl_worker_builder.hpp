@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <cstdint>
 #include <optional>

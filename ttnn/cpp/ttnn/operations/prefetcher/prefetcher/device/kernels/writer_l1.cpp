@@ -67,5 +67,8 @@ void kernel_main() {
             }
         }
     }
+
+    experimental::remote_cb_sender_barrier(remote_cb_id);
+
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
 }

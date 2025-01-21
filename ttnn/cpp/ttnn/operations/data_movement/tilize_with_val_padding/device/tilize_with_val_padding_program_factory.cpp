@@ -8,9 +8,9 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 
 using namespace tt::constants;
@@ -374,15 +374,30 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         };
 
         uint32_t nblocks_per_core = 0;
-
+        BlockRep ref_el = assignment[0];
+        uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
-            reader_rt_args.push_back(el.n_data);
-            reader_rt_args.push_back(el.n_mixed);
-            reader_rt_args.push_back(el.n_pads);
-            reader_rt_args.push_back(el.times);
+            if (compare_assignments(ref_el, el)) {
+                count_repeated++;
+            } else {
+                // push back information for previous elements
+                reader_rt_args.push_back(ref_el.n_data);
+                reader_rt_args.push_back(ref_el.n_mixed);
+                reader_rt_args.push_back(ref_el.n_pads);
+                reader_rt_args.push_back(ref_el.times);
+                reader_rt_args.push_back(count_repeated);
+                // set up assignment for this element
+                ref_el = el;
+                count_repeated = 1;
+            }
         }
+        reader_rt_args.push_back(ref_el.n_data);
+        reader_rt_args.push_back(ref_el.n_mixed);
+        reader_rt_args.push_back(ref_el.n_pads);
+        reader_rt_args.push_back(ref_el.times);
+        reader_rt_args.push_back(count_repeated);
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 

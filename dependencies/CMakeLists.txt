@@ -111,3 +111,25 @@ CPMAddPackage(
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
+
+############################################################################################################################
+# benchmark : https://github.com/google/benchmark
+############################################################################################################################
+
+CPMAddPackage(NAME benchmark GITHUB_REPOSITORY google/benchmark GIT_TAG v1.9.1)
+
+if(benchmark_ADDED)
+    set_target_properties(
+        benchmark
+        PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY
+                "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
+
+############################################################################################################################
+# taskflow : https://github.com/taskflow/taskflow
+############################################################################################################################
+
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
+add_library(Taskflow::Taskflow ALIAS Taskflow)

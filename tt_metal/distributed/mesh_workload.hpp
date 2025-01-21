@@ -4,9 +4,11 @@
 
 #pragma once
 
-#include "mesh_device.hpp"
+#include <host_api.hpp>
+#include <mesh_device.hpp>
+
+#include "tt_metal/distributed/mesh_buffer.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
-#include "tt_metal/host_api.hpp"
 
 namespace tt::tt_metal::distributed {
 // The LogicalDeviceRange concept is fundamentally identical to the CoreRange concept
@@ -44,7 +46,7 @@ private:
     ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program);
 
-    std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status;
+    std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
     std::unordered_set<std::shared_ptr<Buffer>> kernel_bin_buffers_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

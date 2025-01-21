@@ -77,6 +77,13 @@ def concatenate(inputs: List, dim=-1, groups=2):
     return ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=groups)
 
 
+def is_valid_device_for_unet(device):
+    if isinstance(device, ttnn.MeshDevice):
+        return all([is_valid_device_for_unet(d) for d in device.get_devices()])
+    else:
+        return 8 == device.core_grid.x and 8 == device.core_grid.y
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -91,6 +98,8 @@ class UNetConv2D:
         reshard_if_not_optimal=False,
         mesh_mapper=None,
     ):
+        assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
+
         self.device = device
         self.batch_size = conv.batch_size
         self.input_height = conv.input_height
@@ -402,7 +411,12 @@ class UNet:
         )
 
         self.output_layer = UNetConv2D(
-            parameters.output_layer, device=device, cache=self.conv_cache, activation="", mesh_mapper=mesh_mapper
+            parameters.output_layer,
+            device=device,
+            cache=self.conv_cache,
+            activation="",
+            mesh_mapper=mesh_mapper,
+            activation_dtype=ttnn.bfloat16,
         )
 
         self.parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
@@ -438,12 +452,18 @@ class UNet:
 
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
-        return ttnn.to_layout(
-            ttnn.reshape(
-                x, shape=ttnn.Shape([1, 1, x.shape[2], 16], [1, 1, x.shape[2], 32])
-            ),  # At the moment we can only reduce the padding from 32 to 16 because reshape is broken.
-            ttnn.ROW_MAJOR_LAYOUT,
+        assert x.is_sharded(), "Expected output tensor to be sharded"
+        input_shard_spec = x.memory_config().shard_spec
+        output_shard_shape = (x.shape[-1], input_shard_spec.shape[0])
+        output_shard_spec = ttnn.ShardSpec(
+            input_shard_spec.grid,
+            output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
         )
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config)
 
     def __call__(self, x, move_input_tensor_to_device=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
@@ -462,7 +482,6 @@ class UNet:
         ttnn.deallocate(c4_residual)
         x = self.upblock2(x, c3_residual)
         ttnn.deallocate(c3_residual)
-        c2_residual = ttnn.to_memory_config(c2_residual, ttnn.L1_MEMORY_CONFIG)
         x = self.upblock3(x, c2_residual)
         ttnn.deallocate(c2_residual)
         x = self.upblock4(x, c1_residual)

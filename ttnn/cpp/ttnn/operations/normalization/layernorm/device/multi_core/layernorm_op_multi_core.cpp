@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 
@@ -1189,12 +1189,21 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // in1 sharded
     uint32_t in1_cb_index = tt::CBIndex::c_1;
     CBHandle cb_in1 = 0;
+    CBHandle cb_add_out = 0;
     if (b) {
         tt::tt_metal::CircularBufferConfig in1_cb_config =
             tt::tt_metal::CircularBufferConfig(in1_CB_size, {{in1_cb_index, in_data_format}})
                 .set_page_size(in1_cb_index, in_single_tile_size)
                 .set_globally_allocated_address(*b.value().buffer());
         cb_in1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in1_cb_config);
+        if (is_pre_all_gather) {
+            uint32_t add_out_cb_index = tt::CBIndex::c_14;
+            tt::tt_metal::CircularBufferConfig add_out_cb_config =
+                tt::tt_metal::CircularBufferConfig(in1_CB_size, {{add_out_cb_index, in_data_format}})
+                    .set_page_size(add_out_cb_index, in_single_tile_size)
+                    .set_globally_allocated_address(*a.buffer());
+            cb_add_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, add_out_cb_config);
+        }
     }
     // in2 scaler
     uint32_t in2_cb_index = tt::CBIndex::c_2;
@@ -1597,9 +1606,11 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
          writer_mcast_sender_kernels_id,
          writer_mcast_receiver_kernels_id,
          num_none_all_to_all_workers,
+         is_pre_all_gather,
          cb_in0,
          cb_in1,
          cb_stats,
+         cb_add_out,
          cb_output,
          cores](
             const void* operation,
@@ -1618,6 +1629,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *b_tensor.value().buffer());
+                if (is_pre_all_gather) {
+                    UpdateDynamicCircularBufferAddress(program, cb_add_out, *src_buffer_a);
+                }
             }
             if (stats_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_tensor.value().buffer());

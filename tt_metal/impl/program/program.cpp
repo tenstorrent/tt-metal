@@ -5,28 +5,30 @@
 #include <range/v3/view/filter.hpp>
 #include <range/v3/view/transform.hpp>
 
-#include "buffers/circular_buffer_types.hpp"
+#include <circular_buffer_types.hpp>
 #include "common/executor.hpp"
-#include "tools/profiler/profiler.hpp"
+#include <profiler.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
+#include <persistent_kernel_cache.hpp>
+#include <compilation_reporter.hpp>
+#include <memory_reporter.hpp>
+#include <tt_metal.hpp>
+#include <graph_tracking.hpp>
+#include <host_api.hpp>
+#include <allocator.hpp>
+#include <circular_buffer.hpp>
+#include <semaphore.hpp>
+#include <dprint_server.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
+#include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <llrt.hpp>
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
+#include <tt_align.hpp>
 
 namespace tt::tt_metal {
 
@@ -804,7 +806,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = align(computed_addr, device->get_allocator_alignment());
+        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -1098,7 +1100,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
-                        align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+                        tt::align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
             }

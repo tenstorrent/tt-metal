@@ -63,15 +63,67 @@ jobs:
           command: ./.github/scripts/cloud_utils/mount_weka.sh
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             source tests/scripts/run_python_model_tests.sh && run_python_model_tests_${{ inputs.arch }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U06CXU895AP # Michael Chiou
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
+        if: ${{ !cancelled() }}
+        with:
+          path: |
+            generated/test_reports/
+          prefix: "test_reports_"
+
+  models-tests-slow-runtime-mode:
+    if: ${{ inputs.runner-label != 'E150' }} # Currently no tests for GS so skip it
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-20.04"]
+        test-group: [
+          {name: model},
+        ]
+    name: models slow dispatch
+    env:
+      LOGURU_LEVEL: INFO
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/retry-command
+        with:
+          timeout-seconds: 100
+          max-retries: 10
+          backoff-seconds: 60
+          command: ./.github/scripts/cloud_utils/mount_weka.sh
+      - uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-${{ matrix.os }}-any
+      - name: ${{ matrix.test-group.name }} slow runtime mode tests
+        timeout-minutes: ${{ inputs.timeout }}
+        uses: ./.github/actions/docker-run
+        with:
+          install_wheel: true
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
+            -e SLOW_RUNTIME_MODE=true
+          run_args: |
+            source tests/scripts/run_python_model_tests.sh && run_python_model_tests_slow_runtime_mode_${{ inputs.arch }}
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

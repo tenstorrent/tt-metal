@@ -7,12 +7,12 @@
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
