@@ -46,7 +46,7 @@ inline void dprint_tensix_pack_config_in_data_format(const ckernel::packer::pack
     DPRINT << ENDL();
 }
 
-#ifndef ARCH_BLACKHOLE  // ARCH_GRAYSKULL OR ARCH_WORMHOLE
+#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_reserved_1(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.reserved_1 << ENDL();
 }
@@ -56,7 +56,7 @@ inline void dprint_tensix_pack_config_src_if_sel(const ckernel::packer::pack_con
     DPRINT << "0x" << HEX() << config.src_if_sel << ENDL();
 }
 
-#ifndef ARCH_BLACKHOLE  // ARCH_GRAYSKULL OR ARCH_WORMHOLE
+#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_pack_per_xy_plane(const ckernel::packer::pack_config_t& config) {
     DPRINT << DEC() << config.pack_per_xy_plane << ENDL();
 }
@@ -66,7 +66,7 @@ inline void dprint_tensix_pack_config_l1_src_addr(const ckernel::packer::pack_co
     DPRINT << "0x" << HEX() << config.l1_src_addr << ENDL();
 }
 
-#ifndef ARCH_BLACKHOLE  // ARCH_GRAYSKULL OR ARCH_WORMHOLE
+#if defined(ARCH_GRAYSKULL) || defined(ARCH_WORMHOLE)
 inline void dprint_tensix_pack_config_downsample_mask(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.downsample_mask << ENDL();
 }

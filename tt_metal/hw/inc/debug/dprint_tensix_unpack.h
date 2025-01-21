@@ -148,7 +148,7 @@ inline void dprint_tensix_unpack_config_fifo_size(const ckernel::unpacker::unpac
     DPRINT << DEC() << config.fifo_size << ENDL();
 }
 
-#ifndef ARCH_GRAYSKULL  // ARCH_WORMHOLE OR ARCH_BLACKHOLE
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 inline void dprint_tensix_unpack_config_unpack_src_reg_set_update(const ckernel::unpacker::unpack_config_t& config) {
     DPRINT << "0x" << HEX() << config.unpack_src_reg_set_update << ENDL();
 }
