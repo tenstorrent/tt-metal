@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -1747,7 +1748,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
 
     /* Inner dim padding */
     const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
-    in0_block_w = Kt_pad / num_cores;  // FIXME: in0_block_w does not need to equal shard width.
+    in0_block_w = Kt_pad / num_cores;
+    TT_FATAL(
+        in0_block_w == in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1],
+        "Padded in0_block_w {} must match in0 shard width {}",
+        in0_block_w,
+        in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1]);
 
     uint32_t num_blocks = Kt_pad / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -2203,6 +2209,12 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores = gather_in0 ? a.shard_spec().value().grid.num_cores() : num_cores_x * num_cores_y;
+
+    if (gather_in0) {
+        // Outer dim padding
+        Nt = round_up(Nt, num_cores);
+    }
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -2215,19 +2227,17 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         num_blocks_total <= num_cores_x * num_cores_y,
         "Number of blocks exceeds number of cores: {} blocks > {} cores",
         num_blocks_total,
-        num_cores_x * num_cores_y);
+        num_cores);
 
     if (gather_in0) {
         TT_FATAL(
             num_blocks_total == num_cores_x * num_cores_y,
             "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
             num_blocks_total,
-            num_cores_x * num_cores_y);
+            num_cores);
 
         TT_FATAL(!untilize_out, "Untilize out is not suported wit gather_in0 mode");
-    }
-
-    if (!gather_in0) {
+    } else {
         TT_FATAL(hop_cores.empty(), "Hop cores are not supported for any mode besides gather_in0.");
     }
 

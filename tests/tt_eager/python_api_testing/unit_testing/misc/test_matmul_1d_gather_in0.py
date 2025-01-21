@@ -156,14 +156,16 @@ def run_multi_core_matmul_1d(
 
     K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
     K_padded = K_per_shard * num_cores
+    N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+    N_padded = N_per_shard * num_cores
 
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
     out_block_h = M // ttnn.TILE_SIZE
-    out_block_w = N // num_cores // ttnn.TILE_SIZE
+    out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
 
     num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-    num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+    num_blocks_x = (N_padded // ttnn.TILE_SIZE - 1) // out_block_w + 1
     num_blocks_total = num_blocks_y * num_blocks_x
 
     if num_blocks_total != num_cores:
@@ -237,7 +239,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [K_padded, N // num_cores],
+            [K_padded, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -247,7 +249,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [M, N // num_cores],
+            [M, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -329,8 +331,11 @@ def run_multi_core_matmul_1d(
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
     [
-        # 32, 2304, 3840
-        (1, 32, 2048, 3840, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 2048, 1280, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, (8, 3)),
+        (1, 32, 1280, 2048, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, (8, 3)),
+        (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, False, (8, 3)),
+        (1, 32, 2048, 3584, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, False, (8, 3)),
+        (1, 32, 3584, 2048, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
         (1, 32, 96, 64, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (2, 1)),
     ],
 )
