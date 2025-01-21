@@ -115,7 +115,6 @@ def test_convnet_mnist(
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 def test_perf_device_bare_metal_convnet_mnist(batch_size, expected_perf):
     subdir = "ttnn_convnet_mnist"
     num_iterations = 1
