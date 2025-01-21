@@ -45,6 +45,12 @@ void kernel_main() {
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
+    // When chunked, update the bounds of valid K sequence length based on Q chunk offset
+    uint32_t valid_Skt_bound = valid_Skt;
+    if constexpr (is_chunked) {
+        valid_Skt_bound += chunked_q_chunk_offset * Sq_chunk_t;
+    }
+
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -169,8 +175,8 @@ void kernel_main() {
                     const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                     const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
-                    const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt);
-                    const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt);
+                    const uint32_t k_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
+                    const uint32_t k_row_end_tile = std::min(k_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                     const uint32_t k_row_tile_count = k_row_end_tile - k_row_start_tile;
                     const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 

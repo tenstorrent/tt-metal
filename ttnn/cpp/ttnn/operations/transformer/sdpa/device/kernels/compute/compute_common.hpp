@@ -252,6 +252,25 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
+void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // Precondition: in_cb has num_tiles produced
+    // Precondition: out_cb has num_tiles free
+    // Postcondition: in_cb has num_tiles consumed
+    // Postcondition: out_cb has num_tiles produced
+    copy_tile_to_dst_init_short(in_cb);
+    cb_wait_front(in_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        copy_tile(in_cb, i, 0 /*dst*/);
+        pack_tile(0, out_cb);
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+    cb_pop_front(in_cb, num_tiles);
+}
+
 void matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,

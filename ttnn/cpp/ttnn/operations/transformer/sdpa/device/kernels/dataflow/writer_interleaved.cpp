@@ -81,12 +81,13 @@ void kernel_main() {
 #endif
 
                 if constexpr (is_causal) {
+                    uint32_t offset_q_chunk = q_chunk;
                     if constexpr (is_chunked) {
                         // Bump it up to the chunk start
-                        q_chunk = chunk_start_t_in_q_chunks + q_chunk;
+                        offset_q_chunk += chunk_start_t_in_q_chunks;
                     }
                     uint32_t q_low_idx =
-                        q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
+                        offset_q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
                     uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
@@ -99,7 +100,7 @@ void kernel_main() {
                         // Due to loop bounds, we should never have k_low >= q_high. Can simplify this conditional check
                         // Read mask chunk
                         if (!(q_low_idx >= k_high_idx)) {
-                            generate_causal_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, q_chunk, k_chunk);
+                            generate_causal_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, offset_q_chunk, k_chunk);
                         }
                     }
                 } else if constexpr (use_padded_mask) {

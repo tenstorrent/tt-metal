@@ -334,7 +334,6 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                 k_tile > unpad_tile_col_in_chunk || k_tile == unpad_tile_col_in_chunk && unpad_col_in_tile == 0;
 
             if (do_zero) {
-                DPRINT << "zero tile " << in_mask_tile_id << ENDL();
                 if (zero_tile_idx == -1) {
                     fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, 0);
                     zero_tile_idx = in_mask_tile_id;
@@ -342,7 +341,6 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, zero_tile_idx, in_mask_tile_id);
                 }
             } else if (do_inf) {
-                DPRINT << "inf tile " << in_mask_tile_id << ENDL();
                 if (inf_tile_idx == -1) {
                     fill_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, NEG_INF);
                     inf_tile_idx = in_mask_tile_id;
@@ -350,7 +348,6 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
                     copy_tile<tile_bytes>(noc_write_addr_base, write_ptr_base, inf_tile_idx, in_mask_tile_id);
                 }
             } else {
-                DPRINT << "vertical tile " << in_mask_tile_id << ENDL();
                 if (vertical_tile_idx == -1) {
                     fill_vertical_tile<tile_bytes>(cb_mask_in, in_mask_tile_id, unpad_col_in_tile, NEG_INF);
                     vertical_tile_idx = in_mask_tile_id;
