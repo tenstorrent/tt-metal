@@ -12,16 +12,18 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
-def run_min_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device):
+def run_op_tests(
+    input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, torch_op, tt_op, device
+):
     torch.manual_seed(data_seed)
 
     x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
 
     try:
         # get ref result
-        ref_value = torch.min(x, dim).values
+        ref_value = torch_op(x, dim).values
 
-        tt_result = ttnn_ops.min(
+        tt_result = tt_op(
             x,
             dim=dim,
             device=device,
@@ -34,39 +36,6 @@ def run_min_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
     except Exception as e:
         logger.warning(f"Operation execution crashed")
         raise e
-
-    ref_value = torch.squeeze(ref_value[0])
-    tt_result = torch.squeeze(tt_result[0])
-
-    assert len(tt_result.shape) == len(ref_value.shape)
-    assert_with_pcc(ref_value, tt_result, 0.99)
-
-
-def run_max_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device):
-    torch.manual_seed(data_seed)
-
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
-
-    try:
-        # get ref result
-        ref_value = torch.max(x, dim).values
-
-        tt_result = ttnn_ops.max(
-            x,
-            dim=dim,
-            device=device,
-            dtype=dtype,
-            layout=dlayout,
-            input_mem_config=in_mem_config,
-            output_mem_config=output_mem_config,
-        )
-
-    except Exception as e:
-        logger.warning(f"Operation execution crashed")
-        raise e
-
-    ref_value = torch.squeeze(ref_value[0])
-    tt_result = torch.squeeze(tt_result[0])
 
     assert len(tt_result.shape) == len(ref_value.shape)
     assert_with_pcc(ref_value, tt_result, 0.99)
@@ -108,7 +77,9 @@ test_sweep_args = [
     (test_sweep_args),
 )
 def test_min(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device):
-    run_min_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device)
+    run_op_tests(
+        input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, torch.min, ttnn_ops.min, device
+    )
 
 
 @pytest.mark.parametrize(
@@ -116,4 +87,6 @@ def test_min(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data
     (test_sweep_args),
 )
 def test_max(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device):
-    run_max_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, device)
+    run_op_tests(
+        input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, dim, torch.max, ttnn_ops.max, device
+    )
