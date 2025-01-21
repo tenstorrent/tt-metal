@@ -1085,16 +1085,17 @@ def test_dram_read_remote_cb_sync(
     logger.info("DRAM read throughput: " + str(throughput))
     data.append([throughput])
     # check within range
+    bw_lower_bound = 0.0
     if test == None:
         if arch == "wormhole_b0":
             bw_lower_bound = 21.5
     elif test == "Matmul":
         if arch == "wormhole_b0":
             bw_lower_bound = 18.0
+    bw_upper_bound = bw_lower_bound + 4.0
     if use_sub_devices:
         pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
     assert bw_lower_bound <= throughput
-    bw_upper_bound = bw_lower_bound + 4.0
     assert throughput <= bw_upper_bound
 
 
