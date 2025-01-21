@@ -74,7 +74,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferDispatchConstants& buf_dispatch_constants,
     const BufferRegion& region) {
-    ShardedBufferDispatchParams dispatch_params;
+    ShardedBufferWriteDispatchParams dispatch_params;
     dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_write = region.size / buffer.page_size();
@@ -417,8 +417,12 @@ void write_sharded_buffer_to_core(
         uint32_t host_page = core_host_pages.back();
         uint32_t starting_host_page_index = core_host_pages.size() - 1;
         for (int32_t i = core_host_pages.size() - 1; i >= 0; i--) {
-            if (core_host_pages[i] >= dispatch_params.starting_dst_page_index &&
-                core_host_pages[i] < dispatch_params.starting_dst_page_index + dispatch_params.total_pages_to_write) {
+            const uint32_t ending_dst_page_index = dispatch_params.starting_dst_page_index +
+                                                   dispatch_params.total_pages_written +
+                                                   dispatch_params.total_pages_to_write;
+            const bool host_page_within_region = core_host_pages[i] >= dispatch_params.starting_dst_page_index &&
+                                                 core_host_pages[i] < ending_dst_page_index;
+            if (host_page_within_region) {
                 all_core_host_pages_outside_of_region = false;
                 host_page = core_host_pages[i];
                 starting_host_page_index = i;
@@ -434,6 +438,7 @@ void write_sharded_buffer_to_core(
         starting_dst_device_page_index = dispatch_params.buffer_page_mapping
                                              ->host_page_to_dev_page_mapping_[dispatch_params.starting_dst_page_index];
         curr_page_idx_in_shard = starting_host_page_index * num_dev_pages_per_host_page;
+        remaining_pages_in_shard -= curr_page_idx_in_shard;
     } else {
         starting_dst_device_page_index = dispatch_params.starting_dst_page_index;
         curr_page_idx_in_shard = 0;
@@ -550,7 +555,7 @@ void write_to_device_buffer(
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
     if (is_sharded(buffer.buffer_layout())) {
-        ShardedBufferDispatchParams dispatch_params = initialize_sharded_buf_dispatch_params(
+        ShardedBufferWriteDispatchParams dispatch_params = initialize_sharded_buf_dispatch_params(
             buffer, cq_id, expected_num_workers_completed, buf_dispatch_constants, region);
         const auto cores =
             get_cores_for_sharded_buffer(dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer);
