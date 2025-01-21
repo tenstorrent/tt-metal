@@ -5,7 +5,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for test"
-        default: 1278872273u
+        default: 1278872273
         type: number
       test_workflow_run_attempt:
         description: "Run attempt of the workflow run"
@@ -49,11 +49,16 @@ jobs:
         shell: bash
         run: |
           MAX_ATTEMPTS=5
+          original_trigger=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run_id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt_number }} --jq '.event')
+          conclusion=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run_id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt_number }} --jq '.conclusion')
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt_number }}" == "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was not dispatched - not retrying"
+          elif [[ "$original_trigger" != "workflow_dispatch" ]]; then
+            echo "::notice title=no-continue-is-on-branch::This workflow was not dispatched. Not re-trying"
+            should_continue=false
+          elif [[ "$conclusion" != "failure" ]]; then
+            echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
             should_continue=false
           else
             should_continue=true
