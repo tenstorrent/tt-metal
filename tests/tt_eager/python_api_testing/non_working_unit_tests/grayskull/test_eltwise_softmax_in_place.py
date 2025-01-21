@@ -8,7 +8,7 @@ import torch
 import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.python_api_testing.sweep_tests.ttnn_ops import eltwise_softmax_in_place as tt_eltwise_softmax
+from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
 def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -23,7 +23,7 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     # get ref result
     ref_value = torch.softmax(x_ref, -1)
 
-    tt_result = tt_eltwise_softmax(
+    tt_result = ttnn_ops.eltwise_softmax_in_place(
         x=x, device=device, dtype=[dtype], layout=[dlayout], input_mem_config=[in_mem_config], output_mem_config=None
     )
 
