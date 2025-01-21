@@ -173,6 +173,8 @@ def test_matmul_2d_host_perf(
     dump_profiler_log,
     dump_profiler_log_single_iteration,
 ):
+    SKIP_COUNT = int(os.environ.get("SKIP_COUNT", "0"))
+    logger.info(f"SKIP_COUNT value: {SKIP_COUNT}")
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
@@ -187,7 +189,7 @@ def test_matmul_2d_host_perf(
     HiFi3_cycle = LoFi_cycle * 3
     HiFi4_cycle = LoFi_cycle * 4
 
-    with open(FILE_NAME, mode="w", newline="") as file:
+    with open(FILE_NAME, mode="a", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(
             [
@@ -210,6 +212,8 @@ def test_matmul_2d_host_perf(
             ]
         )
 
+        COUNTER = 0
+
         for dtype, math_fidelity, use_trace in matmul_configs:
             if dtype == ttnn.bfloat16:
                 matmul_shapes = matmul_shapes_bfloat16
@@ -218,6 +222,11 @@ def test_matmul_2d_host_perf(
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
+                if COUNTER != SKIP_COUNT:
+                    # logger.info(f"SKIP TEST #{COUNTER}")
+                    COUNTER += 1
+                    continue
+
                 profiler.clear()
 
                 if dump_profiler_log:
@@ -227,7 +236,7 @@ def test_matmul_2d_host_perf(
                     profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
-                grid_size = (13, 10) if is_blackhole() else (8, 8)
+                grid_size = (8, 8) if is_blackhole() else (8, 8)
 
                 # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
                 m = (m // 8) * grid_size[1]
@@ -449,6 +458,8 @@ def test_matmul_2d_host_perf(
                     ]
                 )
                 file.flush()
+                logger.info(f"FINISHED TEST #{COUNTER}")
+                COUNTER += 1
 
 
 matmul_shapes_oob = [
@@ -495,6 +506,8 @@ def test_matmul_2d_host_perf_out_of_box(
     dump_profiler_log,
     dump_profiler_log_single_iteration,
 ):
+    SKIP_COUNT = int(os.environ.get("SKIP_COUNT", "0"))
+    logger.info(f"SKIP_COUNT value: {SKIP_COUNT}")
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
@@ -509,7 +522,7 @@ def test_matmul_2d_host_perf_out_of_box(
     HiFi3_cycle = LoFi_cycle * 3
     HiFi4_cycle = LoFi_cycle * 4
 
-    with open(FILE_NAME, mode="w", newline="") as file:
+    with open(FILE_NAME, mode="a", newline="") as file:
         writer = csv.writer(file)
         writer.writerow(
             [
@@ -530,6 +543,8 @@ def test_matmul_2d_host_perf_out_of_box(
             ]
         )
 
+        COUNTER = 0
+
         for dtype, use_trace in matmul_configs_oob:
             matmul_shapes = matmul_shapes_oob
             if dtype == ttnn.bfloat16:
@@ -539,6 +554,11 @@ def test_matmul_2d_host_perf_out_of_box(
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
+                if COUNTER != SKIP_COUNT:
+                    # logger.info(f"SKIP TEST #{COUNTER}")
+                    COUNTER += 1
+                    continue
+
                 profiler.clear()
 
                 if dump_profiler_log:
@@ -548,7 +568,7 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
-                grid_size = (13, 10) if is_blackhole() else (8, 8)
+                grid_size = (8, 8) if is_blackhole() else (8, 8)
 
                 # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
                 m = (m // 8) * grid_size[1]
@@ -670,3 +690,5 @@ def test_matmul_2d_host_perf_out_of_box(
                     ]
                 )
                 file.flush()
+                logger.info(f"FINISHED TEST #{COUNTER}")
+                COUNTER += 1

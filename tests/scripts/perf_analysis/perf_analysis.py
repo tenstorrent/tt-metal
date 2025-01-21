@@ -18,7 +18,7 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     x_tick_offset = ((num_of_bins + (num_of_spaces * space_width)) / 2 - 0.5) * width
     multiplier = 0
 
-    fig, ax = plt.subplots(layout="constrained")
+    fig, ax = plt.subplots(layout="tight")
 
     for attribute, measurement in data_dict.items():
         offset = width * multiplier
@@ -38,12 +38,14 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     ax.set_xticks(x + x_tick_offset, x_ticks)
     plt.xticks(rotation=45, ha="right")
     ax.legend(loc="upper left", ncols=num_of_bins // rel_factor)
-    plt.show()
+    fig.set_size_inches(17, 10)
+    plt.savefig(f"{graph_title}.png", dpi=150)
 
 
 test_type = "out of box"
-wh_dir = "/Users/skrsmanovic/perf/yyz-jb-13/run1_800/generated/"
-bh_dir = "/Users/skrsmanovic/perf/yyzo-bh-05/run1/"
+# test_type = "regular"
+wh_dir = "/proj_sw/user_dev/rdjogo/work/wormhole_b0/tt-metal/"
+bh_dir = "/proj_sw/user_dev/rdjogo/work/blackhole/tt-metal/"
 
 y_label = "TFLOPs"
 y_label_relative = "Relative TFLOPs[%]: BH/WH * 100"
@@ -152,10 +154,10 @@ for data in data_groups[test_type]:
     data_dict[f"BH.{data[0]}.{data[1]}"] = bh_exec_time
     relative_dict[f"{data[0]}.{data[1]}"] = (np.array(bh_exec_time) / np.array(wh_exec_time)) * 100
 
-plot_data(data_dict, graph_title, x_label, y_label, [f"{x[0]}x{x[1]}x{x[2]}" for x in input_sizes[test_type]])
+plot_data(data_dict, graph_title + " Abs", x_label, y_label, [f"{x[0]}x{x[1]}x{x[2]}" for x in input_sizes[test_type]])
 plot_data(
     relative_dict,
-    graph_title,
+    graph_title + " Rel",
     x_label,
     y_label_relative,
     [f"{x[0]}x{x[1]}x{x[2]}" for x in input_sizes[test_type]],
