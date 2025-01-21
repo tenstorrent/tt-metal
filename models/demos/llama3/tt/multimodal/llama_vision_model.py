@@ -699,7 +699,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
-        argmax_on_device=False,
     ):
         """
         This method runs decode forward. It takes ttnn tensors in, returns ttnn tensors.

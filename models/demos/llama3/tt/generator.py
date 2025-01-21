@@ -447,7 +447,6 @@ class LlamaGenerator:
         cross_page_table=None,
         enable_trace=True,
         read_from_device=True,
-        argmax_on_device=False,
     ):
         decode_kwargs = {
             "position_id": start_pos,
@@ -458,7 +457,6 @@ class LlamaGenerator:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "cross_page_table": cross_page_table,
-            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace(**decode_kwargs)
@@ -484,7 +482,6 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
-        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -525,7 +522,6 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
-            argmax_on_device=argmax_on_device,
         )
 
         return tt_logits
@@ -540,7 +536,6 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
-        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -575,7 +570,6 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
-            argmax_on_device=argmax_on_device,
         )
         logger.info("Done Compiling Model")
 
@@ -651,7 +645,6 @@ class LlamaGenerator:
             page_table=tt_page_table,
             kv_cache=kv_cache,
             cross_page_table=tt_cross_page_table,
-            argmax_on_device=argmax_on_device,
         )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
@@ -747,7 +740,6 @@ class LlamaGenerator:
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
-        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -773,7 +765,6 @@ class LlamaGenerator:
                 page_table=page_table,
                 kv_cache=kv_cache,
                 cross_page_table=cross_page_table,
-                argmax_on_device=argmax_on_device,
             )
             self.trace_id = trace_id
             self.trace_inputs = {
