@@ -254,7 +254,6 @@ def test_llama_demo_text(
     """
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
-
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     if print_to_file:
@@ -386,8 +385,6 @@ def test_llama_demo_text(
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
-            # Necessary padding to be full tile sized
-            out_tok = torch.nn.functional.pad(out_tok, (0, 32 - len(out_tok)), "constant", 0)
             # Run decode forward
             logits = generator.decode_forward_text(
                 out_tok,
