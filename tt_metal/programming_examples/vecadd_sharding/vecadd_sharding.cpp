@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// this programing example is an advanced example, compare to the vecadd single core example in the
-// contributed folder.  It illustarted sharding tensor inputs to L1 memoery of multiple cores directly,
+// This programming example is an advanced example, compared to the vecadd single core example in the
+// contributed folder.  It illustrated sharding tensor inputs to L1 memory of multiple cores directly,
 // then perform vector addition tile by tile. Because of sharding to L1, DRAM is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
