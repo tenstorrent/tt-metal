@@ -245,7 +245,8 @@ Tensor Reduce<reduce_type>::invoke(
     float pad_value = reduce_type == ReduceType::Max
                           ? -std::numeric_limits<float>::infinity()
                           : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
-    Tensor input_tensor = ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value);
+    bool is_tiled = input_tensor_arg.get_layout() == TILE_LAYOUT;
+    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
         return std_var_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config);
     }
