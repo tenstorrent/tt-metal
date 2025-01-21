@@ -133,16 +133,12 @@ int main(int argc, char** argv) {
         mcast_logical = eth_logical;
     }
 
+    CoreCoord mcast_end = device->worker_core_from_logical_core(workers_logical.end_coord);
     bool virtualization_enabled = tt::tt_metal::hal.is_coordinate_virtualization_enabled();
-    CoreCoord virtual_offset;
-    CoreCoord mcast_end = workers_logical.end_coord;
-    if (virtualization_enabled) {
-        virtual_offset = device->worker_core_from_logical_core({0, 0});
-    } else {
-        virtual_offset = CoreCoord(0, 0);  // In this case pass physical coordinates as runtime args
-        mcast_end = device->worker_core_from_logical_core(mcast_end);
-    }
     uint32_t num_dests = workers_logical.size();
+    CoreCoord virtual_offset = virtualization_enabled
+                                   ? device->worker_core_from_logical_core({0, 0})
+                                   : CoreCoord(0, 0);  // In this case pass physical coordinates as runtime args
 
     std::vector<uint32_t> compile_args = {
         false,
