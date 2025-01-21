@@ -16,7 +16,8 @@ static_assert(sizeof(tt_fabric_endpoint_sync_t) == 4);
 
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
-constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
+constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS =
+    (NUM_WR_CMD_BUFS - 1) * (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
 constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
 
@@ -29,9 +30,6 @@ enum SessionCommand : uint32_t {
     SSOCKET_WR = (0x1 << 5),
     ATOMIC_INC = (0x1 << 6),
     ATOMIC_READ_INC = (0x1 << 7),
-    SOCKET_OPEN = (0x1 << 8),
-    SOCKET_CLOSE = (0x1 << 9),
-    SOCKET_CONNECT = (0x1 << 10),
 };
 
 #define INVALID 0x0
@@ -78,13 +76,7 @@ typedef struct mcast_params {
 } mcast_params;
 
 typedef struct socket_params {
-    uint32_t padding1;
-    uint16_t socket_id;
-    uint16_t epoch_id;
-    uint8_t socket_type;
-    uint8_t socket_direction;
-    uint8_t routing_plane;
-    uint8_t padding;
+    uint32_t socket_id;
 } socket_params;
 
 typedef struct atomic_params {
@@ -124,28 +116,6 @@ const uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 const uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
 static_assert(sizeof(packet_header) == PACKET_HEADER_SIZE_BYTES);
-
-void tt_fabric_add_header_checksum(packet_header_t* p_header) {
-    uint16_t* ptr = (uint16_t*)p_header;
-    uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
-    }
-    sum = ~sum;
-    sum += sum;
-    p_header->packet_parameters.misc_parameters.words[0] = sum;
-}
-
-bool tt_fabric_is_header_valid(packet_header_t* p_header) {
-    uint16_t* ptr = (uint16_t*)p_header;
-    uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
-    }
-    sum = ~sum;
-    sum += sum;
-    return (p_header->packet_parameters.misc_parameters.words[0] == sum);
-}
 
 // This is a pull request entry for a fabric router.
 // Pull request issuer populates these entries to identify
@@ -218,127 +188,11 @@ typedef struct chan_payload_ptr {
 
 static_assert(sizeof(chan_payload_ptr) == CHAN_PTR_SIZE_BYTES);
 
-// Fabric Virtual Control Channel (FVCC) parameters.
-// Each control channel message is 48 Bytes.
-// FVCC buffer is a 16 message buffer each for incoming and outgoing messages.
-// Control message capacity can be increased by increasing FVCC_BUF_SIZE.
-const uint32_t FVCC_BUF_SIZE = 16;     // must be 2^N
-const uint32_t FVCC_BUF_LOG_SIZE = 4;  // must be log2(FVCC_BUF_SIZE)
-const uint32_t FVCC_SIZE_MASK = (FVCC_BUF_SIZE - 1);
-const uint32_t FVCC_PTR_MASK = ((FVCC_BUF_SIZE << 1) - 1);
-const uint32_t FVCC_BUF_SIZE_BYTES = PULL_REQ_SIZE_BYTES * FVCC_BUF_SIZE + 2 * CHAN_PTR_SIZE_BYTES;
-const uint32_t FVCC_SYNC_BUF_SIZE_BYTES = CHAN_PTR_SIZE_BYTES * FVCC_BUF_SIZE;
-
-inline bool fvcc_buf_ptrs_empty(uint32_t wrptr, uint32_t rdptr) { return (wrptr == rdptr); }
-
-inline bool fvcc_buf_ptrs_full(uint32_t wrptr, uint32_t rdptr) {
-    uint32_t distance = wrptr >= rdptr ? wrptr - rdptr : wrptr + 2 * FVCC_BUF_SIZE - rdptr;
-    return !fvcc_buf_ptrs_empty(wrptr, rdptr) && (distance >= FVCC_BUF_SIZE);
-}
-
-// out_req_buf has 16 byte additional storage per entry to hold the outgoing
-// write pointer update. this is sent over ethernet.
-// For incoming requests over ethernet, we only need storate for the request
-// entry. The pointer update goes to fvcc state.
-typedef struct ctrl_chan_msg_buf {
-    chan_ptr wrptr;
-    chan_ptr rdptr;
-    chan_request_entry_t msg_buf[FVCC_BUF_SIZE];
-} ctrl_chan_msg_buf;
-
-typedef struct ctrl_chan_sync_buf {
-    chan_payload_ptr ptr[FVCC_BUF_SIZE];
-} ctrl_chan_sync_buf;
-
-static_assert(sizeof(ctrl_chan_msg_buf) == FVCC_BUF_SIZE_BYTES);
-
-typedef struct sync_word {
-    uint32_t val;
-    uint32_t padding[3];
-} sync_word_t;
-
-typedef struct gatekeeper_info {
-    sync_word_t router_sync;
-    sync_word_t ep_sync;
-    uint32_t routing_planes;
-    uint32_t padding[3];
-    ctrl_chan_msg_buf gk_msg_buf;
-} gatekeeper_info_t;
-
-#define SOCKET_DIRECTION_SEND 1
-#define SOCKET_DIRECTION_RECV 2
-#define SOCKET_TYPE_DGRAM 1
-#define SOCKET_TYPE_STREAM 2
-
-enum SocketState : uint8_t {
-    IDLE = 0,
-    OPENING = 1,
-    ACTIVE = 2,
-    CLOSING = 3,
-};
-
-typedef struct socket_handle {
-    uint16_t socket_id;
-    uint16_t epoch_id;
-    uint8_t socket_state;
-    uint8_t socket_type;
-    uint8_t socket_direction;
-    uint8_t rcvrs_ready;
-    uint32_t routing_plane;
-    uint16_t sender_mesh_id;
-    uint16_t sender_dev_id;
-    uint16_t rcvr_mesh_id;
-    uint16_t rcvr_dev_id;
-    uint32_t sender_handle;
-    uint64_t pull_notification_adddr;
-    uint64_t status_notification_addr;
-    uint32_t padding[2];
-} socket_handle_t;
-
-static_assert(sizeof(socket_handle_t) % 16 == 0);
-
-constexpr uint32_t MAX_SOCKETS = 64;
-typedef struct socket_info {
-    uint32_t socket_count;
-    uint32_t socket_setup_pending;
-    uint32_t padding[2];
-    socket_handle_t sockets[MAX_SOCKETS];
-    chan_ptr wrptr;
-    chan_ptr rdptr;
-    chan_request_entry_t gk_message;
-} socket_info_t;
-static_assert(sizeof(socket_info_t) % 16 == 0);
-
-typedef struct tt_fabric_client_interface {
-    uint64_t gk_interface_addr;
-    uint64_t gk_msg_buf_addr;
-    uint64_t pull_req_buf_addr;
-    uint32_t padding[2];
-    uint32_t return_status[3];
-    uint32_t socket_count;
-    chan_ptr wrptr;
-    chan_ptr rdptr;
-    chan_request_entry_t gk_message;
-    local_pull_request_t local_pull_request;
-    socket_handle_t socket_handles[MAX_SOCKETS];
-} tt_fabric_client_interface_t;
-
-static_assert(sizeof(tt_fabric_client_interface_t) % 16 == 0);
-
 constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
 
-// Fabric Virtual Control Channel start/size
-constexpr uint32_t FVCC_OUT_BUF_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
-constexpr uint32_t FVCC_OUT_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
-constexpr uint32_t FVCC_SYNC_BUF_START = FVCC_OUT_BUF_START + FVCC_OUT_BUF_SIZE;
-constexpr uint32_t FVCC_SYNC_BUF_SIZE = FVCC_SYNC_BUF_SIZE_BYTES;
-constexpr uint32_t FVCC_IN_BUF_START = FVCC_SYNC_BUF_START + FVCC_SYNC_BUF_SIZE;
-constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
-
-// Fabric Virtual Channel start/size
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;

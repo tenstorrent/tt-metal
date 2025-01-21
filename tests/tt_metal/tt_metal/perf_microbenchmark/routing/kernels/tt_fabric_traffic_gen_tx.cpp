@@ -8,7 +8,6 @@
 #include "tt_fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 uint32_t src_endpoint_id;
@@ -21,40 +20,41 @@ constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
 constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
 constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
+// constexpr uint32_t router_x = get_compile_time_arg_val(6);
+// constexpr uint32_t router_y = get_compile_time_arg_val(7);
 
-constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(6);
-constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(7);
+constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
+constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
 
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
-constexpr uint32_t prng_seed = get_compile_time_arg_val(8);
+constexpr uint32_t prng_seed = get_compile_time_arg_val(10);
 
-constexpr uint32_t total_data_kb = get_compile_time_arg_val(9);
+constexpr uint32_t total_data_kb = get_compile_time_arg_val(11);
 constexpr uint64_t total_data_words = ((uint64_t)total_data_kb) * 1024 / PACKET_WORD_SIZE_BYTES;
 
-constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(10);
+constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(12);
 
 static_assert(max_packet_size_words > 3, "max_packet_size_words must be greater than 3");
 
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(11);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(13);
 
-constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(12);
+constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(14);
 constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
-    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(13));
+    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
 
-constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(14);
-constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(15);
-constexpr uint32_t test_command = get_compile_time_arg_val(16);
+constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
+constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
+constexpr uint32_t test_command = get_compile_time_arg_val(18);
 
-uint32_t base_target_address = get_compile_time_arg_val(17);
+uint32_t base_target_address = get_compile_time_arg_val(19);
 
 // atomic increment for the ATOMIC_INC command
-constexpr uint32_t atomic_increment = get_compile_time_arg_val(18);
+constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
 // constexpr uint32_t dest_device = get_compile_time_arg_val(21);
 uint32_t dest_device;
 
-constexpr uint32_t signal_address = get_compile_time_arg_val(19);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
+constexpr uint32_t signal_address = get_compile_time_arg_val(21);
 
 uint32_t max_packet_size_mask;
 
@@ -62,10 +62,8 @@ auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile tt_fabric_client_interface_t* client_interface = (volatile tt_fabric_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
-fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
 
@@ -74,9 +72,6 @@ packet_header_t packet_header __attribute__((aligned(16)));
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t rx_addr_hi;
-
-uint32_t gk_interface_addr_l;
-uint32_t gk_interface_addr_h;
 
 // generates packets with random size and payload on the input side
 inline bool test_buffer_handler_async_wr() {
@@ -248,101 +243,27 @@ inline bool test_buffer_handler_atomic_inc() {
     return false;
 }
 
-inline bool test_buffer_handler_fvcc() {
-    if (input_queue_state.all_packets_done()) {
-        return true;
-    }
-
-    uint32_t free_words = fvcc_test_producer.get_num_msgs_free() * PACKET_HEADER_SIZE_WORDS;
-    if (free_words < PACKET_HEADER_SIZE_WORDS) {
-        return false;
-    }
-
-    uint32_t byte_wr_addr = fvcc_test_producer.get_local_buffer_write_addr();
-    uint32_t words_to_init = std::min(free_words, fvcc_test_producer.words_before_local_buffer_wrap());
-    uint32_t words_initialized = 0;
-    while (words_initialized < words_to_init) {
-        if (input_queue_state.all_packets_done()) {
-            break;
-        }
-
-        if (!input_queue_state.packet_active()) {  // start of a new packet
-            input_queue_state.next_inline_packet(total_data_words);
-
-            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
-
-            packet_header.routing.flags = SYNC;
-            packet_header.routing.dst_mesh_id = dest_device >> 16;
-            packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
-            packet_header.routing.src_dev_id = routing_table->my_device_id;
-            packet_header.routing.src_mesh_id = routing_table->my_mesh_id;
-            packet_header.routing.packet_size_bytes = PACKET_HEADER_SIZE_BYTES;
-            packet_header.session.command = ASYNC_WR_RESP;
-            packet_header.session.target_offset_l = target_address;
-            packet_header.session.target_offset_h = noc_offset;
-            packet_header.packet_parameters.misc_parameters.words[1] = 0;
-            packet_header.packet_parameters.misc_parameters.words[2] = 0;
-            tt_fabric_add_header_checksum(&packet_header);
-            uint32_t words_left = words_to_init - words_initialized;
-            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
-            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
-            if (split_header) {
-                header_words_to_init = words_left;
-            }
-            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
-                header_ptr[i] = ((uint32_t*)&packet_header)[i];
-            }
-
-            words_initialized += header_words_to_init;
-            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
-            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
-        } else {
-            tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
-            uint32_t header_words_initialized =
-                input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
-            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
-            uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
-            uint32_t words_left = words_to_init - words_initialized;
-            header_words_to_init = std::min(words_left, header_words_to_init);
-
-            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
-                header_ptr[i] = ((uint32_t*)&packet_header)[i + header_dword_index];
-            }
-            words_initialized += header_words_to_init;
-            input_queue_state.curr_packet_words_remaining -= header_words_to_init;
-            byte_wr_addr += header_words_to_init * PACKET_WORD_SIZE_BYTES;
-        }
-    }
-    fvcc_test_producer.advance_local_wrptr(words_initialized / PACKET_HEADER_SIZE_WORDS);
-    return false;
-}
-
 bool test_buffer_handler() {
     if constexpr (test_command == ASYNC_WR) {
         return test_buffer_handler_async_wr();
     } else if constexpr (test_command == ATOMIC_INC) {
         return test_buffer_handler_atomic_inc();
-    } else if constexpr (test_command == ASYNC_WR_RESP) {
-        return test_buffer_handler_fvcc();
     }
 }
 
 void kernel_main() {
     tt_fabric_init();
 
-    uint32_t rt_args_idx = 0;
     // TODO: refactor
-    src_endpoint_id = get_arg_val<uint32_t>(rt_args_idx++);
-    noc_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t router_x = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t router_y = get_arg_val<uint32_t>(rt_args_idx++);
-    dest_device = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t rx_buf_size = get_arg_val<uint32_t>(rt_args_idx++);
-    gk_interface_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
-    gk_interface_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
+    src_endpoint_id = get_arg_val<uint32_t>(0);
+    noc_offset = get_arg_val<uint32_t>(1);
+    uint32_t router_x = get_arg_val<uint32_t>(2);
+    uint32_t router_y = get_arg_val<uint32_t>(3);
+    dest_device = get_arg_val<uint32_t>(4);
+    uint32_t rx_buf_size = get_arg_val<uint32_t>(5);
 
     if (ASYNC_WR == test_command) {
-        base_target_address = get_arg_val<uint32_t>(rt_args_idx++);
+        base_target_address = get_arg_val<uint32_t>(6);
     }
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
@@ -363,9 +284,6 @@ void kernel_main() {
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(tt_fabric_client_interface_t));
-    client_interface->gk_msg_buf_addr =
-        (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -376,7 +294,6 @@ void kernel_main() {
     }
 
     test_producer.init(data_buffer_start_addr, data_buffer_size_words, 0x0);
-    fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;
     max_packet_size_mask = 0;
@@ -446,15 +363,6 @@ void kernel_main() {
         } else if (test_producer.packet_corrupted) {
             DPRINT << "Packet Header Corrupted: packet " << packet_count
                    << " Addr: " << test_producer.get_local_buffer_read_addr() << ENDL();
-            break;
-        } else if (fvcc_test_producer.get_curr_packet_valid()) {
-            fvcc_test_producer.fvcc_handler<FVC_MODE_ENDPOINT>();
-#ifdef CHECK_TIMEOUT
-            progress_timestamp = get_timestamp_32b();
-#endif
-        } else if (fvcc_test_producer.packet_corrupted) {
-            DPRINT << "Packet Header Corrupted: packet " << packet_count
-                   << " Addr: " << fvcc_test_producer.get_local_buffer_read_addr() << ENDL();
             break;
         } else if (all_packets_initialized) {
             DPRINT << "all packets done" << ENDL();
