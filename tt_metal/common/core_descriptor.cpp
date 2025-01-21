@@ -126,7 +126,7 @@ const core_descriptor_t& get_core_descriptor_config(
         }
         dispatch_cores.push_back(coord);
     }
-    TT_ASSERT(dispatch_cores.size() || std::getenv("TT_METAL_SIMULATOR_EN"), "Dispatch cores size must be positive");
+    TT_ASSERT(dispatch_cores.size() || std::getenv("TT_METAL_SIMULATOR"), "Dispatch cores size must be positive");
 
     std::vector<CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());

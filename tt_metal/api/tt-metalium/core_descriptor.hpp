@@ -36,13 +36,13 @@ inline std::string get_core_descriptor_file(
     }
     core_desc_dir += "tt_metal/core_descriptors/";
 
-    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR_EN") != nullptr;
+    bool targeting_sim = std::getenv("TT_METAL_SIMULATOR") != nullptr;
     if (targeting_sim) {
         switch (arch) {
             case tt::ARCH::Invalid:
                 throw std::runtime_error(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
-            case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported for simulator");
+            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_versim_1x1_arch.yaml";
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
             default: throw std::runtime_error("Unsupported device arch");
