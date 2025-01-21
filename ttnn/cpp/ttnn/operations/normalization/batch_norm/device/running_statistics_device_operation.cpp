@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,7 @@ void RunningStatistics::validate_tensors(
 
 RunningStatistics::program_factory_t RunningStatistics::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return RunningStatisticsFactory();
+    return RunningStatisticsProgramFactory();
 }
 
 void RunningStatistics::validate_on_program_cache_miss(

@@ -1,11 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "dprint.h"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -48,12 +47,12 @@ void MAIN {
             mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
             add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);  // cb_tmp2 * cb_tmp3
         }
-        cb_pop_front(cb_one, 1);
-        cb_pop_front(cb_momentum, 1);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_out0);
         tile_regs_release();
+        cb_pop_front(cb_one, 1);
+        cb_pop_front(cb_momentum, 1);
         cb_push_back(cb_out0, 1);
     }
 }

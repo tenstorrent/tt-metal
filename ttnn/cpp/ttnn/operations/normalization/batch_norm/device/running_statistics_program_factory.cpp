@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -120,7 +120,8 @@ void set_or_update_runtime_arguments(
 }  // namespace
 
 namespace ttnn::operations::normalization {
-RunningStatistics::RunningStatisticsFactory::cached_program_t RunningStatistics::RunningStatisticsFactory::create(
+RunningStatistics::RunningStatisticsProgramFactory::cached_program_t
+RunningStatistics::RunningStatisticsProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -291,7 +292,7 @@ RunningStatistics::RunningStatisticsFactory::cached_program_t RunningStatistics:
         std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size}};
 }
 
-void RunningStatistics::RunningStatisticsFactory::override_runtime_arguments(
+void RunningStatistics::RunningStatisticsProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

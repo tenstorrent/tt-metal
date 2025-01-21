@@ -133,7 +133,7 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
     return status
 
 
-def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99):
+def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99, stats=False):
     status = True
     for i in range(len(tt_tensor)):
         tt_out_tensor = tt_tensor[i]
@@ -144,7 +144,11 @@ def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99):
         logger.debug(comp_all)
         logger.debug(comp_out)
         logger.debug(comp_out_res)
-        status = status & comp_pass & comp_all
+        if stats:
+            status = status & comp_all
+        else:
+            status = status & comp_pass & comp_all
+
     return status
 
 
