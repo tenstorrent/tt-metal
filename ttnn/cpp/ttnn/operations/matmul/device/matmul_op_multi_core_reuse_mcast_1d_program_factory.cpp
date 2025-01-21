@@ -2059,6 +2059,10 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         std::vector<uint32_t> mm_kernel_compute_args = {
             i,  // ring_idx
         };
+        mm_kernel_compute_args.insert(
+            mm_kernel_compute_args.end(),
+            unpadded_in0_shard_widths_in_tiles.begin(),
+            unpadded_in0_shard_widths_in_tiles.end());
 
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }

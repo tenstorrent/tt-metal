@@ -42,21 +42,6 @@ void kernel_main() {
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
     bool use_padding = unpadded_in0_shard_widths_in_tiles[ring_idx] != shard_width_in_tiles;
-    // DPRINT << "use_padding: " << static_cast<uint32_t>(use_padding) << " and true shard width: " <<
-    // unpadded_in0_shard_widths_in_tiles[ring_idx] << ENDL();
-
-    // Zero out the data
-    if (use_padding) {
-        DeviceZoneScopedN("padding") uint32_t l1_local_write_addr = get_read_ptr(cb_id_in0);
-        volatile tt_l1_ptr uint16_t* l1_local_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_local_write_addr);
-        uint16_t start_addr = unpadded_in0_shard_widths_in_tiles[ring_idx] * shard_height_in_tiles *
-                              in0_single_tile_size_bytes / sizeof(uint16_t);
-        uint16_t end_addr = shard_size_bytes / sizeof(uint16_t);
-
-        for (uint16_t addr = start_addr; addr < end_addr; addr += 1) {
-            l1_local_ptr[addr] = 0;
-        }
-    }
 
     // Reserving/pushing the local shard
     cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
@@ -70,6 +55,9 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
+            uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
+            bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0;
+
             uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
             uint64_t remote_curr_shard_write_addr =
                 get_noc_addr(next_core_noc_x, next_core_noc_y, curr_shard_write_addr, noc);
@@ -81,7 +69,9 @@ void kernel_main() {
 
             // Send data to next core
             if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
-                noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
+                if (!skip_send) {
+                    noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
+                }
 
                 // Signal the next core that data is ready
                 noc_semaphore_inc(remote_signal_semaphore_addr, 1, noc);
