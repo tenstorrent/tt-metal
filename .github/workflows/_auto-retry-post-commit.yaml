@@ -46,6 +46,7 @@ jobs:
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Determine if we should continue
+        steps: determine-should-continue
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -68,6 +69,7 @@ jobs:
 
           echo "should-continue=$should_continue" >> "$GITHUB_OUTPUT"
       - name: Re-run failed jobs
+        if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
