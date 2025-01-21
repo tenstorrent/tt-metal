@@ -19,21 +19,17 @@ namespace tt::tt_metal {
  *
  * This function determines the platform architecture by inspecting the environment
  * variables or available physical devices. If the environment variable
- * `TT_METAL_SIMULATOR` is set, the architecture is retrieved from the
- * `ARCH_NAME` environment variable. Otherwise, the architecture is deduced
- * by detecting available physical devices.
+ * `TT_METAL_SIMULATOR` is set, the architecture is retrieved from simulator.
+ * Otherwise, the architecture is deduced by detecting available physical devices.
  *
  * @return tt::ARCH The detected platform architecture. Returns tt::ARCH::Invalid
  *                  if no valid architecture could be detected.
  *
  * @note
- * - If the system is in simulation mode (`TT_METAL_SIMULATOR` is set),
- *   the `ARCH_NAME` environment variable must be defined.
  * - A fatal error occurs if multiple devices are detected with conflicting
  *   architectures.
  *
  * @exception std::runtime_error Throws a fatal error if:
- * - `ARCH_NAME` is not set when `TT_METAL_SIMULATOR` is enabled.
  * - Multiple devices with inconsistent architectures are detected.
  *
  * Example usage:
