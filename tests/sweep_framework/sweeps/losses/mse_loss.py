@@ -80,7 +80,6 @@ def run(
         reduction_0 = "sum"
         reduction_1 = ttnn.LossReductionMode.SUM
 
-    # print(f"input_shape {input_shape} reduction {reduction_0} {reduction_1} {input_reference_dtype} {input_prediction_dtype}")
     golden_function = ttnn.get_golden_function(ttnn.mse_loss)
 
     torch_output_tensor = golden_function(
@@ -115,11 +114,7 @@ def run(
     )
 
     output_tensor = ttnn.to_torch(result)
-    if reduction_0 != "none":
-        output_tensor = output_tensor.squeeze()
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-
-    # print(f"pcc {pcc}")
     return [pcc, e2e_perf]
