@@ -95,6 +95,10 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
         Class defining tensor shape
     )doc");
 
+    py::class_<ttnn::TensorSpec>(m_tensor, "TensorSpec", R"doc(
+        Class defining the specification of Tensor
+    )doc");
+
     tt_serializable_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
         Class defining memory configuration for storing tensor data on TT Accelerator device.
         There are eight DRAM memory banks on TT Accelerator device, indexed as 0, 1, 2, ..., 7.
@@ -198,6 +202,12 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("without_padding", [](const tt::tt_metal::LegacyShape& self) -> tt::tt_metal::LegacyShape { return self.without_padding(); });
 
     py::implicitly_convertible<std::vector<uint32_t>, LegacyShape>();
+
+    auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
+    pyTensorSpec
+        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig

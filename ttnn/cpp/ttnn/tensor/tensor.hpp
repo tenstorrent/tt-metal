@@ -409,13 +409,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    const std::vector<IDevice*>& devices,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
+Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);

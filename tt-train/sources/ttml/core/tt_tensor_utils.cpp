@@ -103,38 +103,20 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 
 tt::tt_metal::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
-    return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
+    return ttnn::empty(shape.logical_shape(), DataType::BFLOAT16, Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(
     const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    auto padded = shape.with_tile_padding();
-    // if the shape is not divisible by TILE_SIZE, we need to add padding
-    if (padded[2] % ttnn::types::TILE_SIZE != 0 || padded[3] % ttnn::types::TILE_SIZE != 0) {
-        int additional_padding_h =
-            (ttnn::types::TILE_SIZE - (int)padded[2] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        int additional_padding_w =
-            (ttnn::types::TILE_SIZE - (int)padded[3] % ttnn::types::TILE_SIZE) % ttnn::types::TILE_SIZE;
-        auto padded_shape = ttnn::Shape(
-            {shape[0], shape[1], shape[2], shape[3]},
-            {
-                padded[0],
-                padded[1],
-                (padded[2] + additional_padding_h),
-                (padded[3] + additional_padding_w),
-            });
-        return ttnn::full(padded_shape, value, dtype, Layout::TILE, std::ref(*device));
-    }
-    // if not padding available, we can just create a tensor with the given shape
-    return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device));
+    return ttnn::full(shape.logical_shape(), value, dtype, Layout::TILE, std::ref(*device));
 }
 
 tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    return core::full(shape, 0.F, device, dtype);
+    return core::full(shape.logical_shape(), 0.F, device, dtype);
 }
 
 tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
-    return core::full(shape, 1.F, device, dtype);
+    return core::full(shape.logical_shape(), 1.F, device, dtype);
 }
 
 template <class T, DataType TensorType>
