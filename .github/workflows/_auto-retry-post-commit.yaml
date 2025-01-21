@@ -69,11 +69,14 @@ jobs:
 
           echo "should-continue=$should_continue" >> "$GITHUB_OUTPUT"
       - name: Re-run failed jobs
-        if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Re-running jobs here"
+          if [[ ${{ steps.determine-should-continue.outputs.should-continue }} == "true" ]]; then
+            echo "Re-running jobs here"
+          else
+            echo "::notice title=skipping-retry::Skipping retry"
+          fi
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
