@@ -374,7 +374,7 @@ void MAIN {
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }  // for in0_num_blocks_w
-            if constexpr (matmul_partials_cb == mm_out_cb_id) {
+            if constexpr (matmul_partials_cb == mm_out_cb_id && untilize_out == false) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
             }
 #ifdef FUSE_BIAS
@@ -454,6 +454,9 @@ void MAIN {
                     output_rows_h -= curr_tile_output_rows_h;
                 }
                 pack_untilize_uninit(matmul_partials_cb);
+            }
+            if constexpr (matmul_partials_cb == mm_out_cb_id && untilize_out == true) {
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {
 #ifdef FUSE_BIAS
