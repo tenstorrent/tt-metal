@@ -32,7 +32,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
         self.n_heads = configuration.n_heads
         self.n_kv_heads = configuration.n_kv_heads
         self.hidden_size = configuration.dim

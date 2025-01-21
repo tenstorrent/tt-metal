@@ -86,7 +86,7 @@ def test_layernorm_inference(mesh_device, use_program_cache, reset_seeds, ensure
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
     )  # Adjusted dim for LayerNorm
-    tt_outputs = torch.chunk(tt_output_torch, model_args.num_devices, dim=-1)
+    tt_outputs = torch.chunk(tt_output_torch, model_args.num_devices_tp, dim=-1)
 
     # Compare outputs
     pcc_required = 0.99

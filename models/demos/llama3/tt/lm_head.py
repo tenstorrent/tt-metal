@@ -26,7 +26,7 @@ class LMHead(LightweightModule):
         self.dtype = dtype
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
-        self.num_devices = args.num_devices
+        self.num_devices = args.num_devices_tp
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -103,13 +103,15 @@ class LMHead(LightweightModule):
         )
         if args.is_galaxy:
             self.program_configs = [
-                None
-                if args.dim == 2048
-                else args.dram_matmul_config(
-                    args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
-                    args.dim // 4,
-                    16 * 1024,
-                    args.lm_head_core_grid.num_cores,
+                (
+                    None
+                    if args.dim == 2048
+                    else args.dram_matmul_config(
+                        args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
+                        args.dim // 4,
+                        16 * 1024,
+                        args.lm_head_core_grid.num_cores,
+                    )
                 )
             ]
 

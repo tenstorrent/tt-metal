@@ -28,15 +28,15 @@ class TtLlamaImageAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
 
         self.hidden_size = configuration.vision_dim
         self.n_heads = configuration.vision_attn_n_heads
         self.head_dim = self.hidden_size // self.n_heads
         self.n_kv_heads = self.n_heads
 
-        self.n_local_heads = self.n_heads // configuration.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
+        self.n_local_heads = self.n_heads // configuration.num_devices_tp
+        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices_tp
 
         self.dtype = dtype
 

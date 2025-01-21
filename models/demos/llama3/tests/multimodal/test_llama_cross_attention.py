@@ -135,7 +135,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
         xattn_mask = xattn_mask.unsqueeze(1)
         xattn_mask = xattn_mask * -1e9
 
-        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices_tp, -1, -1)
 
         full_text_mask = torch.bernoulli(
             torch.full(
@@ -147,7 +147,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             )
         )
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
-        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices_tp, -1, head_dim)
 
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
@@ -214,7 +214,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
                 shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, vision_seq_len],
+                    [1, batch, n_heads // model_args.num_devices_tp, vision_seq_len],
                     [1, batch, 32, vision_seq_len],
                 ),
             )
@@ -231,7 +231,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             tt_full_text_mask = ttnn.reshape(
                 tt_full_text_mask,
                 shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, head_dim],
+                    [1, batch, n_heads // model_args.num_devices_tp, head_dim],
                     [1, batch, 32, head_dim],
                 ),
             )
