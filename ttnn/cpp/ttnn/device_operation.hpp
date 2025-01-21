@@ -251,8 +251,6 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
 
     auto& program_cache = device->get_program_cache();
 
-    auto& program_cache = device->get_program_cache();
-
     auto program_hash = 0;
     bool program_cache_hit = false;
 
