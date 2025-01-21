@@ -391,8 +391,15 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
+                            // Cooperative means active erisc FW needs to context switch to base FW
+                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0;
                             build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_,
+                                JitBuiltStateConfig{
+                                    .processor_id = processor_class,
+                                    .is_fw = is_fw,
+                                    .dispatch_message_addr = dispatch_message_addr,
+                                    .is_cooperative = is_cooperative});
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
@@ -934,11 +941,11 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
-    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
-    hw_command_queues_.resize(num_hw_cqs());
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    hw_command_queues_.reserve(num_hw_cqs());
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
-        // Need to do this since CommandQueue constructor is private
+        hw_command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
         sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }
@@ -981,10 +988,10 @@ void Device::init_command_queue_device() {
 void Device::initialize_synchronous_sw_cmd_queue() {
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
-        sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
+        sw_command_queues_.push_back(
+            std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
     }
 }
 
