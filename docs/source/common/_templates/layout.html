@@ -8,7 +8,7 @@
 {%- set _root_doc = root_doc|default(master_doc) %}
 
 {%- if logo or logo_url %}
-<a href="{{ pathto(_root_doc) }}">
+<a href="{{ logo_link_url }}">
     <img src="{{ _logo_url }}" class="logo" alt="{{ _('Logo') }}"/>
 </a>
 {%- endif %}

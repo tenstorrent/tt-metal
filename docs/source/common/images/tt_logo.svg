@@ -1,5 +1,5 @@
 <svg
-aria-label="Tenstorrent" 
+      aria-label="Tenstorrent" 
       id="Layer_1"
       data-name="Layer 1"
       xmlns="http://www.w3.org/2000/svg"
@@ -69,4 +69,3 @@ aria-label="Tenstorrent"
         d="M1816.7,291.5h-32.4V117.9h32.4v46.9h.4c7.4-35.3,30.1-51.3,60.6-51.3,45,0,60.6,29.7,60.6,66.9v111.2h-32.4v-103c0-23.8-10-45.7-41.6-45.7s-47.6,16.7-47.6,45.7v103Z"
       />
     </svg>
-

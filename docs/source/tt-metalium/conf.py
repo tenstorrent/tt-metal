@@ -105,9 +105,8 @@ html_baseurl = f"/{metal_sphinx_config.shortname}/" + os.environ["DOCS_VERSION"]
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 
-html_context = {
-    "logo_link_url": "https://docs.tenstorrent.com/"
-}
+html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
+
 
 def setup(app):
     app.add_css_file("tt_theme.css")
