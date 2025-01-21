@@ -86,26 +86,26 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const bool use_provided_mask = attn_mask.has_value();
 
     // log_debug all of the above
-    tt::log_info("B: {}", B);
-    tt::log_info("NQH: {}", NQH);
+    tt::log_debug("B: {}", B);
+    tt::log_debug("NQH: {}", NQH);
 
-    tt::log_info("Sq: {}", Sq);
-    tt::log_info("Sk: {}", Sk);
-    tt::log_info("padded_Sq: {}", padded_Sq);
-    tt::log_info("padded_Sk: {}", padded_Sk);
-    tt::log_info("valid_Sqt: {}", valid_Sqt);
-    tt::log_info("valid_Skt: {}", valid_Skt);
-    tt::log_info("DH: {}", DH);
-    tt::log_info("Sqt: {}", Sqt);
-    tt::log_info("Skt: {}", Skt);
-    tt::log_info("DHt: {}", DHt);
-    tt::log_info("Sq_chunk_t: {}", Sq_chunk_t);
-    tt::log_info("Sk_chunk_t: {}", Sk_chunk_t);
-    tt::log_info("q_chunk_size: {}", q_chunk_size);
-    tt::log_info("k_chunk_size: {}", k_chunk_size);
-    tt::log_info("q_num_chunks: {}", q_num_chunks);
-    tt::log_info("k_num_chunks: {}", k_num_chunks);
-    tt::log_info("NKH: {}", NKH);
+    tt::log_debug("Sq: {}", Sq);
+    tt::log_debug("Sk: {}", Sk);
+    tt::log_debug("padded_Sq: {}", padded_Sq);
+    tt::log_debug("padded_Sk: {}", padded_Sk);
+    tt::log_debug("valid_Sqt: {}", valid_Sqt);
+    tt::log_debug("valid_Skt: {}", valid_Skt);
+    tt::log_debug("DH: {}", DH);
+    tt::log_debug("Sqt: {}", Sqt);
+    tt::log_debug("Skt: {}", Skt);
+    tt::log_debug("DHt: {}", DHt);
+    tt::log_debug("Sq_chunk_t: {}", Sq_chunk_t);
+    tt::log_debug("Sk_chunk_t: {}", Sk_chunk_t);
+    tt::log_debug("q_chunk_size: {}", q_chunk_size);
+    tt::log_debug("k_chunk_size: {}", k_chunk_size);
+    tt::log_debug("q_num_chunks: {}", q_num_chunks);
+    tt::log_debug("k_num_chunks: {}", k_num_chunks);
+    tt::log_debug("NKH: {}", NKH);
 
     // In chunked prefill mode, the offset of Q in terms of Q chunks
     uint32_t chunked_q_chunk_offset = 0;
