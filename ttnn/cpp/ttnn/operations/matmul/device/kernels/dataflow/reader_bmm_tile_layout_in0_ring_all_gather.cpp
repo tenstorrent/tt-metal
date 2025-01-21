@@ -43,9 +43,7 @@ void kernel_main() {
 
     bool use_padding = unpadded_in0_shard_widths_in_tiles[ring_idx] != shard_width_in_tiles;
 
-    // Reserving/pushing the local shard
-    cb_reserve_back(cb_id_in0, batch * shard_size_in_tiles);
-    cb_push_back(cb_id_in0, batch * shard_size_in_tiles);
+    // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 
     uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);
