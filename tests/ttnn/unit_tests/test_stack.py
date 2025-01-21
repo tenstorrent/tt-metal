@@ -1,36 +1,32 @@
-from tests.ttnn.utils_for_testing import assert_with_pcc
-import ttnn
+# # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# # SPDX-License-Identifier: Apache-2.0
+import pytest
 import torch
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
-torch.manual_seed(0)
 
-device_id = 0
-device = ttnn.open_device(device_id=device_id)
+@pytest.mark.parametrize(
+    "input_shapes, dim, layout",
+    [
+        ([(1, 1, 253), (1, 1, 253), (1, 1, 253)], 2, ttnn.ROW_MAJOR_LAYOUT),
+        ([(1, 253), (1, 253), (1, 253)], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([(57, 83), (57, 83), (57, 83)], 0, ttnn.TILE_LAYOUT),
+        ([(8732,), (8732,), (8732,)], 0, ttnn.ROW_MAJOR_LAYOUT),
+        ([(123, 259), (123, 259), (123, 259)], -1, ttnn.TILE_LAYOUT),
+        ([(1, 1, 253), (1, 1, 253), (1, 1, 253)], -3, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+def test_stack(device, input_shapes, dim, layout):
+    torch_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in input_shapes]
 
-ttnn.enable_program_cache(device)
+    ttnn_tensors = [ttnn.from_torch(tensor) for tensor in torch_tensors]
+    ttnn_tensors = [ttnn.to_device(tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG) for tensor in ttnn_tensors]
+    ttnn_tensors = [ttnn.to_layout(tensor, layout) for tensor in ttnn_tensors]
+    torch_result = torch.stack(torch_tensors, dim=dim)
+    ttnn_result = ttnn.stack(ttnn_tensors, dim=dim)
 
-m, n = 4, 4
+    ttnn_result_torch = ttnn.to_torch(ttnn_result)
+    assert_with_pcc(torch_result, ttnn_result_torch)
 
-torch_tensors = [torch.randn((m, n), dtype=torch.bfloat16) for _ in range(3)]
-ttnn_tensors = [ttnn.from_torch(tensor) for tensor in torch_tensors]
-
-ttnn_tensors = [ttnn.to_device(tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG) for tensor in ttnn_tensors]
-
-ttnn_tensors = [ttnn.to_layout(tensor, ttnn.TILE_LAYOUT) for tensor in ttnn_tensors]
-
-torch_result = torch.stack(torch_tensors, dim=0)
-
-ttnn_result = ttnn.stack(ttnn_tensors, dim=0)
-
-print("ttnn_result: ", ttnn_result)
-print(ttnn_result.shape)
-ttnn_result_torch = ttnn.to_torch(ttnn_result)
-
-# assert torch.allclose(torch_result, ttnn_result_torch, atol=1e-2), "TTNN stack result does not match Torch stack result!"
-assert_with_pcc(torch_result, ttnn_result_torch)
-
-print("torch_result: ", torch_result)
-print(torch_result.shape)
-print("Stack operation test passed!")
-
-ttnn.close_device(device)
+    assert torch_result.shape == ttnn_result_torch.shape
