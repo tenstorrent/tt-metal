@@ -90,34 +90,7 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 INSTANTIATE_TEST_SUITE_P(
     QueryOpRuntime,
     BinaryOpTraceRuntime,
-    ::testing::Values(std::make_tuple(g_interleaved_1_3_1024_1024_tiled, g_interleaved_1_3_1024_1024_tiled)),
-    [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>>& info) {
-        std::stringstream ss;
-
-        // print unique id for each test case
-        static int uid = 0;
-        ss << uid++;
-
-        // print tensor layout
-        using detail::operator<<;
-        ss << "_" << std::get<0>(info.param).tensor_layout();
-
-        // print tensor shape; operator<< exists but is too long to be used here
-        ss << "_";
-        detail::operator<<(ss, std::get<0>(info.param).logical_shape());
-
-        ss << "_";
-
-        // print tensor layout
-        using detail::operator<<;
-        ss << "_" << std::get<1>(info.param).tensor_layout();
-
-        // print tensor shape; operator<< exists but is too long to be used here
-        ss << "_";
-        detail::operator<<(ss, std::get<1>(info.param).logical_shape());
-
-        return ss.str();
-    });
+    ::testing::Values(std::make_tuple(g_interleaved_1_3_1024_1024_tiled, g_interleaved_1_3_1024_1024_tiled)));
 
 }  // namespace test
 }  // namespace binary

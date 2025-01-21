@@ -16,7 +16,7 @@ namespace ttnn::graph {
 
 struct RuntimeQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
-    uint64_t runtime;
+    uint64_t runtime = 0;
     std::optional<std::string> error_message;
 };
 
