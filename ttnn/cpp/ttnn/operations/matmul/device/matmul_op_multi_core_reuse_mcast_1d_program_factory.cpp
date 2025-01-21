@@ -1749,11 +1749,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     /* Inner dim padding */
     const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
     in0_block_w = Kt_pad / num_cores;
-    TT_FATAL(
-        in0_block_w == in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1],
-        "Padded in0_block_w {} must match in0 shard width {}",
-        in0_block_w,
-        in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1]);
 
     uint32_t num_blocks = Kt_pad / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise

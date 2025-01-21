@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+import math
 from loguru import logger
 
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
@@ -20,6 +21,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     run_multi_core_matmul_1d,
     PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
+    round_up,
 )
 
 
@@ -210,6 +212,16 @@ def run_prefetcher_mm(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
+    padded_shapes = []
+    for K, N in input_shapes:
+        num_cores = len(receiver_cores_list)
+        K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
+        K_padded = K_per_shard * num_cores
+        N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+        N_padded = N_per_shard * num_cores
+
+        padded_shapes.append((K_padded, N_padded))
+
     cluster_shape = None
     mesh_mapper = None
     mesh_composer = None
@@ -225,7 +237,7 @@ def run_prefetcher_mm(
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):
-        K, N = input_shapes[tid % num_tensors]
+        K, N = padded_shapes[tid % num_tensors]
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
@@ -281,20 +293,29 @@ def run_prefetcher_mm(
     storage_grid = num_cores_to_rectangle_grid(num_cores, device)
     M = 32
 
-    in0_shapes = []
+    in0_shapes, in0_padded_shapes = [], []
     out_shapes = []
     block_dims = []
     for tid in range(num_tensors):
         K, N = input_shapes[tid]
+        K_padded, N_padded = padded_shapes[tid]
+
         in0_shape = [1, 1, M, K]
         in0_shapes.append(in0_shape)
-        out_shape = [1, 1, M, N]
+
+        in0_padded_shape = [1, 1, M, K_padded]
+        in0_padded_shapes.append(in0_padded_shape)
+
+        out_shape = [1, 1, M, N_padded]
         out_shapes.append(out_shape)
 
         in0_block_h = M // ttnn.TILE_SIZE
         in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+            in0_block_w -= 1
+
         out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
 
         out_subblock_h = 1
         out_subblock_w = max_dst_tiles
@@ -362,11 +383,11 @@ def run_prefetcher_mm(
 
     in0_tensors = []
     in0_t_tensors = []
-    for shape in in0_shapes:
+    for shape, padded_shape in zip(in0_shapes, in0_padded_shapes):
         in0 = torch.randn(shape)
         in0_tensors.append(in0)
 
-        _, _, M, K = shape
+        _, _, M, K = padded_shape
 
         in0_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,

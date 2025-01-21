@@ -161,6 +161,9 @@ def run_multi_core_matmul_1d(
 
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
+    while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+        in0_block_w -= 1
+
     out_block_h = M // ttnn.TILE_SIZE
     out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
 
@@ -346,9 +349,10 @@ def run_multi_core_matmul_1d(
     ],
 )
 @pytest.mark.parametrize(
-    "use_arbitrary_cores",
+    "use_arbitrary_cores, hop_grid",
     [
-        False,
+        (False, None),
+        (False, [(3, 6)]),
     ],
 )
 @pytest.mark.parametrize(
@@ -371,6 +375,7 @@ def test_multi_core_matmul_1d_pad_wh(
     N,
     activation,
     grid,
+    hop_grid,
     use_arbitrary_cores,
     num_iters,
     use_program_cache,
@@ -392,6 +397,7 @@ def test_multi_core_matmul_1d_pad_wh(
         grid,
         use_arbitrary_cores,
         num_iters,
+        hop_grid=hop_grid,
     )
 
 

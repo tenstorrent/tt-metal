@@ -42,12 +42,6 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             "Input tensors must be width sharded");
         TT_FATAL(tensor.memory_config().buffer_type == BufferType::DRAM, "Input tensors must be in DRAM");
 
-        // Check that all tensors' k is divisible by number of cores in global CB receiver
-        TT_FATAL(
-            tensor.get_padded_shape()[1] % num_receiver_cores == 0,
-            "All tensors' k must be divisible by the number of receiver cores = {}.",
-            num_receiver_cores);
-
         tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
         TT_FATAL(
             tensor_data_format == tt::DataFormat::Bfp4_b || tensor_data_format == tt::DataFormat::Bfp8_b ||

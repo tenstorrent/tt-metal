@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "debug/dprint.h"
-#include "debug/dprint_tile.h"
 
 void kernel_main() {
     // Compile time args
@@ -41,8 +40,6 @@ void kernel_main() {
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
-    bool use_padding = unpadded_in0_shard_widths_in_tiles[ring_idx] != shard_width_in_tiles;
-
     // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, batch * (ring_size - 1) * shard_size_in_tiles);
 
@@ -54,7 +51,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
             uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
-            bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0;
+            bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
 
             uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
             uint64_t remote_curr_shard_write_addr =
