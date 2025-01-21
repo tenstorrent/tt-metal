@@ -182,13 +182,13 @@ def generate_permutations(N):
         yield perm
 
 
-@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
-@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(7, 7, 7, 7, 7)])
 @pytest.mark.parametrize("perm", generate_permutations(5))
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_width(shape, perm, memory_config, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     input_a = torch.randn(shape)
     torch_output = torch.permute(input_a, perm)
@@ -202,13 +202,13 @@ def test_permute_5d_width(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
-@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
 @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(520)
     input_a = torch.randn(shape)
 
@@ -224,8 +224,6 @@ def test_permute_5d_blocked(shape, perm, memory_config, dtype, device):
     assert_with_pcc(torch_output, tt_output, 0.9999)
 
 
-@skip_for_blackhole("tilize_block gives bad pcc after second iteration")
-@skip_for_grayskull("tilize_block gives bad pcc after second iteration")
 def test_permute_nd(device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand((1, 3, 16, 16, 16, 16), dtype=torch.bfloat16)
@@ -400,7 +398,6 @@ def test_permutations_5d_fixed_w(shape, perm, dtype, device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
-@pytest.mark.skip("#16575 to_layout from tiled to RM fails on reshape")
 @pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
 @pytest.mark.parametrize("perm", [[0, 3, 4, 1, 2]])
 def test_permute_adversarial(shape, perm, device):
@@ -422,64 +419,6 @@ def test_permute_4d_fixed_w(shape, perm, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm)
-    output_tensor = ttnn.to_torch(output_tensor)
-    torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
-
-
-@pytest.mark.skip("#16575 to_layout from tiled to RM fails on reshape")
-@pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
-@pytest.mark.parametrize("perm", [[0, 3, 4, 1, 2]])
-def test_permute_adversarial(shape, perm, device):
-    torch.manual_seed(2005)
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm)
-    output_tensor = ttnn.to_torch(output_tensor)
-    torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
-
-
-@pytest.mark.parametrize(
-    "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 32, 32], [32, 32, 64, 64]]
-)
-@pytest.mark.parametrize("perm", generate_fixed_w_permutations(4))
-def test_permute_4d_fixed_w(shape, perm, device):
-    torch.manual_seed(2005)
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm)
-    output_tensor = ttnn.to_torch(output_tensor)
-    torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
-
-
-@pytest.mark.skip("#16575 to_layout from tiled to RM fails on reshape")
-@pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
-@pytest.mark.parametrize("perm", [[0, 3, 4, 1, 2]])
-def test_permute_adversarial(shape, perm, device):
-    torch.manual_seed(2005)
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm)
-    output_tensor = ttnn.to_torch(output_tensor)
-    torch_output = torch.permute(torch_tensor, perm)
-    assert torch_output.shape == output_tensor.shape
-    assert_with_pcc(torch_output, output_tensor, 0.9999)
-
-
-@pytest.mark.parametrize(
-    "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 32, 32], [32, 32, 64, 64]]
-)
-@pytest.mark.parametrize("perm", generate_fixed_w_permutations(4))
-def test_permute_4d_fixed_w(shape, perm, device):
-    torch.manual_seed(2005)
-    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
@@ -496,7 +435,7 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
 
 @pytest.mark.parametrize("shape", [[7, 7, 7, 17, 17]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_yw(shape, perm, dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
@@ -510,9 +449,9 @@ def test_permute_5d_yw(shape, perm, dtype, device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("shape", [[33, 3, 17, 33, 33]])
+@pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
 @pytest.mark.parametrize("perm", generate_fixed_no_dim0_dim1_transpose_permutations(5, 4, 3))
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_yw_permutations(shape, perm, dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
@@ -574,9 +513,9 @@ def test_permute_4d_other_permutations(shape, perm, dtype, device):
     assert_with_pcc(torch_output, output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("shape", [[33, 33, 33, 33, 33]])
-@pytest.mark.parametrize("perm", [[0, 1, 4, 2, 3], [0, 4, 1, 2, 3], [2, 4, 1, 0, 3]])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
+@pytest.mark.parametrize("perm", [[0, 1, 4, 2, 3], [0, 4, 1, 2, 3], [2, 4, 1, 0, 3], [4, 2, 1, 0, 3]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_permute_5d_wyh(shape, perm, dtype, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
