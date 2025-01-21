@@ -152,7 +152,7 @@ struct BufferPageMapping {
     std::vector<std::optional<uint32_t>> dev_page_to_host_page_mapping_;
     std::vector<uint32_t> host_page_to_dev_page_mapping_;
     std::unordered_map<CoreCoord, uint32_t> core_to_core_id_;
-    std::vector<uint32_t> host_page_to_local_shard_page_mapping_;
+    std::vector<uint32_t> host_page_to_local_shard_page_mapping_;  // use this
     std::vector<std::array<uint32_t, 2>> core_shard_shape_;
 };
 
