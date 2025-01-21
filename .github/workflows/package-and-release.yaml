@@ -174,6 +174,7 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
+            models/MODEL_UPDATES.md
             ttnn-*+*.whl
           fail_on_unmatched_files: true
   create-docker-release-image:
