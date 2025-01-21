@@ -30,7 +30,7 @@ namespace test {
 // ============================================================================
 
 const auto g_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 3, 1024, 1024}),
+    ttnn::SimpleShape({1, 3, 1024, 1024}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -46,8 +46,8 @@ protected:
     }
 
     void TearDown() override {
-        TTNNFixture::TearDown();
         ttnn::close_device(*device_);
+        TTNNFixture::TearDown();
     }
 
     ttnn::IDevice& getDevice() { return *device_; }
