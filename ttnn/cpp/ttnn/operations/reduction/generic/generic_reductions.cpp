@@ -194,7 +194,6 @@ static Tensor reduce_impl(
     if (reshape) {
         output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
     }
-
     return output_tensor;
 }
 
@@ -251,6 +250,22 @@ Tensor Reduce<reduce_type>::invoke(
         return std_var_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config);
     }
     return reduce_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+}
+
+Tensor pool_sum(
+    const Tensor& input_tensor_arg,
+    int dim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar) {
+    return reduce_impl<ReduceType::Sum>(
+        input_tensor_arg,
+        ttnn::SmallVector<int>({dim}),
+        /*keepdim=*/true,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        /*reshape=*/true);
 }
 
 template class Reduce<ReduceType::Sum>;
