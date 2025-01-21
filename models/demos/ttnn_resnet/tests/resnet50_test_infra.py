@@ -7,6 +7,7 @@ import os
 import pytest
 import torch
 import torchvision
+import copy
 
 import ttnn
 from ttnn.model_preprocessing import (
@@ -39,7 +40,7 @@ def load_resnet50_model(model_location_generator):
 
 ## copied from ttlib version test:
 # golden pcc is ordered fidelity, weight dtype, activation dtype
-golden_pcc = {
+golden_pcc_obj = {
     8: {
         (
             ttnn.MathFidelity.HiFi4,
@@ -142,8 +143,8 @@ golden_pcc = {
 }
 
 golden_pcc = {
-    ttnn.device.Arch.WORMHOLE_B0: golden_pcc,
-    ttnn.device.Arch.GRAYSKULL: golden_pcc,
+    ttnn.device.Arch.WORMHOLE_B0: copy.deepcopy(golden_pcc_obj),
+    ttnn.device.Arch.GRAYSKULL: copy.deepcopy(golden_pcc_obj),
 }
 
 golden_pcc[ttnn.device.Arch.GRAYSKULL][16][

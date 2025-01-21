@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 #include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
 #include "tt_metal/distributed/mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/distributed/mesh_workload.hpp"
