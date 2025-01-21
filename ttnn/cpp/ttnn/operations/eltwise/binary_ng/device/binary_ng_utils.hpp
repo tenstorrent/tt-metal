@@ -6,6 +6,7 @@
 
 #include "binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
+#include "ttnn/tensor/types.hpp"
 
 #include <optional>
 #include <string>
@@ -38,19 +39,34 @@ struct BinaryNgKernelConfig {
     std::optional<uint32_t> bcast_input;
 };
 
-std::string get_kernel_file_path(KernelName kernel_name);
+std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu);
 
 struct OpConfig {
     enum class FpuBinaryOp { ADD, SUB, MUL };
+    enum class SfpuBinaryOp {
+        ADD,
+        SUB,
+        MUL,
+        DIV,
+        POWER,
+        RSUB,
+        LEFT_SHIFT,
+        RIGHT_SHIFT,
+        BITWISE_AND,
+        BITWISE_OR,
+        BITWISE_XOR
+    };
 
-    OpConfig(BinaryOpType binary_op_type);
+    OpConfig(BinaryOpType binary_op_type, bool is_sfpu);
 
-    std::map<std::string, std::string> as_defines() const;
+    std::map<std::string, std::string> as_defines(DataType dtype) const;
+    std::pair<std::string, std::string> get_sfpu_init_fn(DataType dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs{};
     std::optional<unary::UnaryOpType> process_rhs{};
     std::optional<unary::UnaryOpType> postprocess{};
-    FpuBinaryOp fpu_binary_op;
+    std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
+    bool is_sfpu_op;
 };
 
 void add_activation_defines(
