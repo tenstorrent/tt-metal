@@ -38,12 +38,23 @@ void kernel_main() {
     const InterleavedAddrGenFast<dst_is_dram> dst = {
         .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
 
-    uint32_t tiles_per_batch = HtWt * C * N;
-    uint32_t start_d = start_tile_id / tiles_per_batch;
-    uint32_t start_remaining = start_tile_id % tiles_per_batch;
-    uint32_t start_n = start_remaining / HtWt * C;
-    uint32_t start_c = (start_remaining / HtWt) % C;
-    uint32_t start_t = start_remaining % HtWt;
+    // uint32_t tiles_per_batch = HtWt * C * N;
+    // uint32_t start_d = start_tile_id / tiles_per_batch;
+    // uint32_t start_remaining = start_tile_id % tiles_per_batch;
+    // uint32_t start_n = start_remaining / (HtWt * C);
+    // uint32_t start_c = (start_remaining % (HtWt % C)) / HtWt;
+    // uint32_t start_t = (start_remaining % (HtWt % C)) % HtWt;
+
+    uint32_t tiles_per_depth = N * C * HtWt;
+    uint32_t start_d = start_tile_id / tiles_per_depth;  // D index
+    uint32_t start_remaining_1 = start_tile_id % tiles_per_depth;
+
+    uint32_t tiles_per_batch = HtWt * C;
+    uint32_t start_n = start_remaining_1 / tiles_per_batch;  // N index
+    uint32_t start_remaining_2 = start_remaining_1 % tiles_per_batch;
+    uint32_t tiles_per_channel = HtWt;
+    uint32_t start_c = start_remaining_2 / tiles_per_channel;  // C index
+    uint32_t start_t = start_remaining_2 % tiles_per_channel;
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_d * d_stride + start_n * n_stride + start_c * c_stride + start_t;

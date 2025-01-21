@@ -257,7 +257,7 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config):
 
 @pytest.mark.parametrize(
     "input_shapes",
-    ((torch.Size([1, 1, 1, 32, 32]), torch.Size([5, 3, 2, 32, 32])),),
+    ((torch.Size([5, 3, 2, 32, 32]), torch.Size([5, 3, 2, 32, 32])),),
 )
 def test_binary_add(input_shapes, device):
     a_shape, b_shape = input_shapes

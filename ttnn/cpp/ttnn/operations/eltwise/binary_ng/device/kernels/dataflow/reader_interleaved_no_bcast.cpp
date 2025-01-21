@@ -28,12 +28,23 @@ void kernel_main() {
     const InterleavedAddrGenFast<src_is_dram> src = {
         .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
-    uint32_t tiles_per_batch = HtWt * C * N;
-    uint32_t start_d = start_tile_id / tiles_per_batch;
-    uint32_t start_remaining = start_tile_id % tiles_per_batch;
-    uint32_t start_n = start_remaining / HtWt * C;
-    uint32_t start_c = (start_remaining / HtWt) % C;  // check here
-    uint32_t start_t = start_remaining % HtWt;
+    // uint32_t tiles_per_batch = HtWt * C * N;
+    // uint32_t start_d = start_tile_id / tiles_per_batch;
+    // uint32_t start_remaining = start_tile_id % tiles_per_batch;
+    // uint32_t start_n = start_remaining / (HtWt * C);
+    // uint32_t start_c = (start_remaining % (HtWt % C)) / HtWt;
+    // uint32_t start_t = (start_remaining % (HtWt % C)) % HtWt;
+
+    uint32_t tiles_per_depth = N * C * HtWt;
+    uint32_t start_d = start_tile_id / tiles_per_depth;  // D index
+    uint32_t start_remaining_1 = start_tile_id % tiles_per_depth;
+
+    uint32_t tiles_per_batch = HtWt * C;
+    uint32_t start_n = start_remaining_1 / tiles_per_batch;  // N index
+    uint32_t start_remaining_2 = start_remaining_1 % tiles_per_batch;
+    uint32_t tiles_per_channel = HtWt;
+    uint32_t start_c = start_remaining_2 / tiles_per_channel;  // C index
+    uint32_t start_t = start_remaining_2 % tiles_per_channel;  // Get tile index within HtWt
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_d * d_stride + start_n * n_stride + start_c * c_stride + start_t;
@@ -43,7 +54,7 @@ void kernel_main() {
     uint32_t next_depth_shift = d_stride - n_stride * N;
 
     uint32_t num_tiles_read = 0;
-    for (uint32_t d = start_d; d < D && num_tiles_read < num_tiles; ++d, start_d = 0) {
+    for (uint32_t d = start_d; d < D && num_tiles_read < num_tiles; ++d, start_n = 0) {
         for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
             for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
                 for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles;
