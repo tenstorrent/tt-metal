@@ -55,7 +55,7 @@ class TtQwenAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
 
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
@@ -66,8 +66,8 @@ class TtQwenAttention(LightweightModule):
         self.paged_attention_config = configuration.paged_attention_config
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
 
-        self.n_local_heads = self.n_heads // configuration.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
+        self.n_local_heads = self.n_heads // configuration.num_devices_tp
+        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices_tp
 
         self.dtype = dtype
 
@@ -105,7 +105,7 @@ class TtQwenAttention(LightweightModule):
 
         # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim, configuration.qkv_size // configuration.num_devices
+            configuration.dim, configuration.qkv_size // configuration.num_devices_tp
         )
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -181,7 +181,7 @@ class TtQwenAttention(LightweightModule):
         else:  # For line topology we can't do all gather matmul for now, but we can height shard and reduce scatter
             # wo: 2048 (2devices) x 4096: width-sharded on 12 banks, 4224 over 12 banks.
             wo_mem_config = configuration.create_dram_sharded_mem_config(
-                configuration.dim // configuration.num_devices, configuration.dim
+                configuration.dim // configuration.num_devices_tp, configuration.dim
             )
             self.wo = ttnn.as_tensor(
                 torch.transpose(
@@ -201,7 +201,7 @@ class TtQwenAttention(LightweightModule):
             cache_k = torch.zeros(
                 (
                     self.paged_attention_config.max_num_blocks,
-                    self.n_kv_heads // configuration.num_devices,
+                    self.n_kv_heads // configuration.num_devices_tp,
                     self.paged_attention_config.block_size,
                     self.head_dim,
                 )
@@ -209,7 +209,7 @@ class TtQwenAttention(LightweightModule):
             cache_v = torch.zeros(
                 (
                     self.paged_attention_config.max_num_blocks,
-                    self.n_kv_heads // configuration.num_devices,
+                    self.n_kv_heads // configuration.num_devices_tp,
                     self.paged_attention_config.block_size,
                     self.head_dim,
                 )
@@ -239,9 +239,11 @@ class TtQwenAttention(LightweightModule):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 dtype=self.dtype,
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             for k_or_v in [cache_k, cache_v]
@@ -334,7 +336,7 @@ class TtQwenAttention(LightweightModule):
 
         # k_heads, [seqlen, n_kv_heads, bsz, head_dim]
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
-        # keys, [max_batch_size, n_kv_heads // configuration.num_devices, sliding_window, head_dim]
+        # keys, [max_batch_size, n_kv_heads // configuration.num_devices_tp, sliding_window, head_dim]
         ttnn.experimental.paged_update_cache(keys, k_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(
             values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table

@@ -24,7 +24,7 @@ class LMHead(LightweightModule):
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.vocab_size = args.vocab_size
-        self.num_devices = args.num_devices
+        self.num_devices = args.num_devices_tp
 
         size_per_device = self.vocab_size // self.num_devices
 

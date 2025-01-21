@@ -10,11 +10,11 @@ class DistributedNorm(LightweightModule):
     def __init__(self, norm, args):
         self.norm = norm
         self.args = args
-        norm_input_grid = args.dram_shard_core_grid_for_k(args.dim // args.num_devices)
+        norm_input_grid = args.dram_shard_core_grid_for_k(args.dim // args.num_devices_tp)
         self.gather_in_mem_cfg = ttnn.create_sharded_memory_config(
             (
                 args.tile_padded_batch_rows,
-                args.dim // args.num_devices // norm_input_grid.num_cores,
+                args.dim // args.num_devices_tp // norm_input_grid.num_cores,
             ),
             norm_input_grid,
             ttnn.ShardStrategy.WIDTH,

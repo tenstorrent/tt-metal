@@ -360,7 +360,7 @@ def run_qwen_demo(
                 current_rot_mat, rot_matrix = get_single_rot_mat(
                     model_args.head_dim,
                     mesh_device,
-                    model_args.num_devices,
+                    model_args.num_devices_tp,
                     start_pos=start_pos,
                 )
                 pt_decode_input = model_args.prepare_inputs_ttnn_decode(
@@ -378,7 +378,7 @@ def run_qwen_demo(
             pt_out.append(ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, 0, 0, :])
             ttnn.deallocate(tt_out)
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
+        for i in range(model_args.num_devices_tp):
             ttnn.synchronize_device(mesh_device.get_devices()[i])
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -409,7 +409,7 @@ def run_qwen_demo(
         current_rot_mat, rot_matrix = get_single_rot_mat(
             model_args.head_dim,
             mesh_device,
-            model_args.num_devices,
+            model_args.num_devices_tp,
             start_pos=decoding_pos[0] - 2,
         )
         profiler.end(f"get_single_rot_mat_decode_{batch_idx}")
@@ -430,7 +430,7 @@ def run_qwen_demo(
         logger.info(f"Compiling model trace...")
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        if tt_model.args.num_devices > 1:
+        if tt_model.args.num_devices_tp > 1:
             tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
@@ -451,7 +451,7 @@ def run_qwen_demo(
 
         decode_input = ttnn.unsqueeze_to_4D(tt_embd(tt_out_tok))
         tt_out = tt_model(decode_input, current_pos, rot_mat=current_rot_mat)
-        if tt_model.args.num_devices > 1:
+        if tt_model.args.num_devices_tp > 1:
             tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             ttnn.deallocate(tt_out)
         else:
@@ -470,12 +470,12 @@ def run_qwen_demo(
         current_pos_reset = ttnn.from_torch(
             torch.tensor(decoding_pos, dtype=torch.int32),
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices_tp > 1 else None,
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 31), "constant", 0),
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices_tp > 1 else None,
         )
 
         ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos)
@@ -563,7 +563,7 @@ def run_qwen_demo(
                 current_rot_mat_reset, rot_matrix_reset = get_single_rot_mat(
                     model_args.head_dim,
                     mesh_device,
-                    model_args.num_devices,
+                    model_args.num_devices_tp,
                     start_pos=decoding_pos[0] + iteration,
                     on_host=True,
                 )
