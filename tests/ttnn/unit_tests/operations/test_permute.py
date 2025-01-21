@@ -498,14 +498,12 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_yw(shape, perm, dtype, device):
-    torch.set_printoptions(threshold=300000000)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
     output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
-    print(ttnn.from_device(output_tensor).to_torch())
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape
@@ -570,6 +568,22 @@ def test_permute_4d_other_permutations(shape, perm, dtype, device):
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
     output_tensor = ttnn.permute(input_tensor, perm)
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch_output = torch.permute(torch_tensor, perm)
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[33, 33, 33, 33, 33]])
+@pytest.mark.parametrize("perm", [[0, 1, 4, 2, 3], [0, 4, 1, 2, 3], [2, 4, 1, 0, 3]])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_permute_5d_wyh(shape, perm, dtype, device):
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Grayskull doesn't support float32")
+    torch.manual_seed(2005)
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+    output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
     assert torch_output.shape == output_tensor.shape

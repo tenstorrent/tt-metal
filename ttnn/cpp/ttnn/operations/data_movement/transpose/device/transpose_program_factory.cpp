@@ -570,7 +570,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
         }
     }
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t)needs_padding};
+        (uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -26,7 +26,7 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
             return MultiCoreTileInvariant{};
-        } else if (dims[rank - 1] == rank - 1) {
+        } else if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {
             return MultiCoreTileRowInvariant{};
         } else {
             return MultiCoreTiledGeneric{};
