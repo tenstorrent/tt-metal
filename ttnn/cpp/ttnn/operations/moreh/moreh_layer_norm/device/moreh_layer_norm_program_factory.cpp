@@ -64,10 +64,10 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
- 
+
     const auto& input_shape = input.get_padded_shape();
     const auto& input_shape_without_padding = input.get_logical_shape();
-    
+
     const auto input_rank = input_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -89,7 +89,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
 
     if (mean_has_value) {
         const auto& mean_rstd_shape = mean->get_padded_shape();
-        const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+        const auto mean_rstd_shape_without_padding = mean->get_logical_shape();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
     }

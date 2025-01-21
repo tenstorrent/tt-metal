@@ -31,21 +31,22 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::Legacy
 tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
+        // TODO: address return type mismatch
         return output_grad.get_padded_shape();
     }
 
     auto shape = input_grad.get_padded_shape();
     auto rank = shape.rank();
-    // Replace? ->
-    auto padding = shape.value.padding();
+    // TODO: Address the use of padding problem
+    auto padding = shape.padding();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         if (is_tile_dim) {
-            shape.value[dim] = tt::constants::TILE_HEIGHT;
+            shape[dim] = tt::constants::TILE_HEIGHT;
             padding[dim] = Padding::PadDimension{0, 31};
         } else {
-            shape.value[dim] = 1;
+            shape[dim] = 1;
         }
     }
 

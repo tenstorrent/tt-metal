@@ -110,6 +110,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         auto dimensions_pads = SmallVector<Padding::PadDimension>();
         SmallVector<uint32_t> output_size_vec;
         for (int dim = 0; dim < output_shape.size(); dim++) {
+            // TODO: Address the use of padding problem
             dimensions_pads.push_back(input_tensor.get_padded_shape().padding()[dim]);
             output_size_vec.push_back(input_tensor.get_padded_shape()[dim]);
         }
@@ -175,7 +176,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(
-        output_shape.logical_shape(),
+        output_shape.get_logical_shape(),
         TensorLayout::fromLegacyPaddedShape(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

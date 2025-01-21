@@ -86,7 +86,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::compute_output_specs(
     dgamma_dbeta_origin_shape[1] = 1;
     dgamma_dbeta_origin_shape[2] = TILE_HEIGHT;
     dgamma_dbeta_origin_shape[3] = TILE_WIDTH * ((c + TILE_WIDTH - 1) / TILE_WIDTH);
-
+    // TODO: Address the use of padding problem
     auto dgamma_dbeta_padding = output_grad_shape.padding();
     dgamma_dbeta_padding[2] = Padding::PadDimension{0, TILE_HEIGHT - 1};
     dgamma_dbeta_padding[3] = Padding::PadDimension{0, TILE_WIDTH - (c % TILE_WIDTH)};

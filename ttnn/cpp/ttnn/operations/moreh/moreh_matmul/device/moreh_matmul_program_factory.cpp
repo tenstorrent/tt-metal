@@ -9,6 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
+// TODO: Address shape type mismatch (type LegacyShape is being passed SimpleShape)
 void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {

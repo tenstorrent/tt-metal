@@ -18,7 +18,9 @@ std::tuple<bool, bool, bool> MorehLinearBackward::get_required_outputs(const std
     return {are_required_outputs[0], are_required_outputs[1], are_required_outputs[2]};
 }
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+// void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+//  SimpleShape?
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_nn::SimpleShape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
