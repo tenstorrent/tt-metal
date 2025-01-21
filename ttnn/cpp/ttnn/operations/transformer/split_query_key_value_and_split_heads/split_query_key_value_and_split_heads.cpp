@@ -158,7 +158,6 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
                 transpose_key,
                 memory_config.value_or(input_tensor.memory_config())),
             sequence_size,
-            sequence_size_padded,
             transpose_key);
     } else {
         const auto input_tensor_4d = ttnn::experimental::view(
@@ -177,6 +176,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         }
         const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
             input_tensor_4d,
+            input_tensor_kv_4d,
             num_heads,
             num_kv_heads.value_or(num_heads),
             transpose_key,
