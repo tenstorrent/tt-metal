@@ -45,17 +45,6 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
     }
 }
 
-inline void print_cb_details(uint32_t cb_id) {
-    DPRINT << "cb_id " << cb_id << ": { "
-           << "size: " << get_local_cb_interface(cb_id).fifo_size << ", "
-           << "limit: " << get_local_cb_interface(cb_id).fifo_limit << ", "
-           << "page_size: " << get_local_cb_interface(cb_id).fifo_page_size << ", "
-           << "num_pages: " << get_local_cb_interface(cb_id).fifo_num_pages << ", "
-           << "rd_ptr: " << get_local_cb_interface(cb_id).fifo_rd_ptr << ", "
-           << "wr_ptr: " << get_local_cb_interface(cb_id).fifo_wr_ptr << ", "
-           << "wr_tile_ptr: " << get_local_cb_interface(cb_id).fifo_wr_tile_ptr << " }" << ENDL();
-}
-
 }  // namespace tt::data_movement::common
 
 #endif
@@ -66,43 +55,41 @@ namespace tt::compute::common {
 
 inline void print_tile_rows(uint32_t cb_id, uint32_t rows = 32, uint32_t tile_id = 0, bool untilize = false) {
     for (uint16_t r = 0; r < rows; ++r) {
-        UNPACK(
-            (DPRINT << (uint)r << " :: "
-                    << TileSlice(
-                           cb_id,
-                           tile_id,
-                           SliceRange{
-                               .h0 = (uint8_t)r,
-                               .h1 = (uint8_t)(r + 1),
-                               .hs = (uint8_t)1,
-                               .w0 = (uint8_t)0,
-                               .w1 = (uint8_t)32,
-                               .ws = (uint8_t)1},
-                           true,
-                           untilize)));
+        DPRINT << (uint)r << " :: "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize);
     }
 }
 
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    UNPACK((DPRINT << "======" << ENDL()));
+    DPRINT << "======" << ENDL();
     for (uint16_t r = 0; r < 32; ++r) {
-        UNPACK(
-            (DPRINT << (uint)r << " : "
-                    << TileSlice(
-                           cb_id,
-                           tile_id,
-                           SliceRange{
-                               .h0 = (uint8_t)r,
-                               .h1 = (uint8_t)(r + 1),
-                               .hs = (uint8_t)1,
-                               .w0 = (uint8_t)0,
-                               .w1 = (uint8_t)32,
-                               .ws = (uint8_t)1},
-                           true,
-                           untilize)
-                    << ENDL()));
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
     }
-    UNPACK((DPRINT << "++++++" << ENDL()));
+    DPRINT << "++++++" << ENDL();
 }
 
 }  // namespace tt::compute::common
