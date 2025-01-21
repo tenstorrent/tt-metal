@@ -5,6 +5,7 @@
 #include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <tt-metalium/hal_exp.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -70,6 +71,13 @@ ttnn::SmallVector<uint32_t> get_inverse_permutation(const ttnn::SmallVector<uint
     }
 
     return inverse_permutation;
+}
+
+uint32_t get_buffer_alignment(const ttnn::Tensor& tensor) {
+    return (
+        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+            ? tt::tt_metal::experimental::hal::get_dram_alignment()
+            : tt::tt_metal::experimental::hal::get_l1_alignment());
 }
 
 }  // namespace detail
@@ -497,6 +505,10 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t H_t = H_p / tile_shape[0];
     uint32_t W_t = W_p / tile_shape[1];
 
+    uint32_t subtile_line_bytes = face_shape[1] * element_size;
+    uint32_t read_alignment = detail::get_buffer_alignment(input_tensor);
+    uint32_t misalignment = read_alignment - subtile_line_bytes;
+
     uint32_t permuted_w_dim = 0;  // Will hold the position of w_dim in the permuted array
     for (uint32_t i = 0; i < N; ++i) {
         if (dims[i] == N - 1) {
@@ -591,10 +603,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
-    uint32_t input_page_size = detail::tile_size(tensor_return_value);
-
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    uint32_t output_page_size = detail::tile_size(tensor_return_value);
+    uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
@@ -650,6 +659,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         (uint32_t)needs_x_padding,
         (uint32_t)needs_y_padding,
         non_x_rows,
+        read_alignment,
     };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -664,9 +674,11 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         x_blocks,
         w_blocks,
         input_shape[N - 2],
+        read_alignment,
+        subtile_line_bytes,
     };
 
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
+    bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_tiled.cpp",
