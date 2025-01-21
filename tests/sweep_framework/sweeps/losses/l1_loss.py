@@ -81,7 +81,6 @@ def run(
 
     golden_function = ttnn.get_golden_function(ttnn.l1_loss)
 
-    # print(f"input_shape {input_shape} reduction {reduction_0} {reduction_1} {input_reference_dtype} {input_prediction_dtype}")
     torch_output_tensor = golden_function(
         torch_input_reference_tensor, torch_input_prediction_tensor, reduction=reduction_0
     )
@@ -114,13 +113,10 @@ def run(
         )
 
         output_tensor = ttnn.to_torch(result)
-        if reduction_0 != "none":
-            output_tensor = output_tensor.squeeze()
         e2e_perf = stop_measuring_time(start_time)
 
     except Exception as e:
         print(e)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(f"pcc {pcc}")
     return [pcc, e2e_perf]
