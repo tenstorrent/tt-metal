@@ -716,7 +716,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         (uint32_t)needs_x_padding,
         (uint32_t)needs_y_padding,
         non_x_rows,
-        read_alignment,
+        misalignment,
     };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -731,8 +731,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         x_blocks,
         w_blocks,
         input_shape[N - 2],
-        read_alignment,
-        subtile_line_bytes,
+        misalignment,
     };
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;

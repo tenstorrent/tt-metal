@@ -18,11 +18,10 @@ void MAIN {
     constexpr uint32_t x_blocks = get_compile_time_arg_val(1);
     constexpr uint32_t w_blocks = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
-    constexpr uint32_t read_alignment = get_compile_time_arg_val(4);
-    constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(5);
+    constexpr uint32_t misalignment = get_compile_time_arg_val(4);
 
-    constexpr uint32_t misalignment = read_alignment - SUBTILE_LINE_BYTES;
     constexpr uint32_t misalignment_div_16 = misalignment >> cb_addr_shift;
+
     uint32_t offset_div_16 = 0;
     uint32_t start_block = get_arg_val<uint32_t>(0);
     uint32_t end_block = get_arg_val<uint32_t>(1);
