@@ -315,7 +315,8 @@ class TtTransformer(LightweightModule):
             kv_cache=kv_cache,
         )
         # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-        tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        if not self.args.is_galaxy:
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
         return tt_logits
 
     def forward(
