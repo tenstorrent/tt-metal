@@ -18,7 +18,7 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     x_tick_offset = ((num_of_bins + (num_of_spaces * space_width)) / 2 - 0.5) * width
     multiplier = 0
 
-    fig, ax = plt.subplots(layout="constrained")
+    fig, ax = plt.subplots(layout="tight")
 
     for attribute, measurement in data_dict.items():
         offset = width * multiplier
@@ -38,12 +38,16 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     ax.set_xticks(x + x_tick_offset, x_ticks)
     plt.xticks(rotation=45, ha="right")
     ax.legend(loc="upper left", ncols=num_of_bins // rel_factor)
-    plt.show()
+    fig.set_size_inches(17, 10)
+    plt.savefig(f"{graph_title}.png", dpi=150)
 
 
-test_type = "D2H DRAM"
-bh_dir = "/Users/skrsmanovic/perf/yyzo-bh-04/run3/generated/profiler/.logs/"
-wh_dir = "/Users/skrsmanovic/perf/yyz-jb-13/run4_800/generated/profiler/.logs/"
+test_type = "H2D DRAM"
+# test_type = "D2H DRAM"
+# test_type = "H2D L1"
+# test_type = "D2H L1"
+bh_dir = "/proj_sw/user_dev/rdjogo/work/blackhole/tt-metal/"
+wh_dir = "/proj_sw/user_dev/rdjogo/work/wormhole_b0/tt-metal/"
 
 graph_title = f"{test_type} Bandwidth: WH[aiclk forced to 800MHz] vs BH[aiclk forced to 800MHz]"
 y_label = "Bandwidth[GB/s]"
@@ -105,5 +109,5 @@ for data in data_groups[test_type]:
     data_dict[f"BH.{data}"] = bh_data
     relative_dict[f"{data}"] = (np.array(bh_data) / np.array(wh_data)) * 100
 
-plot_data(data_dict, graph_title, x_label, y_label, input_sizes[test_type])
-plot_data(relative_dict, graph_title, x_label, y_label_relative, input_sizes[test_type], True)
+plot_data(data_dict, graph_title + " Abs", x_label, y_label, input_sizes[test_type])
+plot_data(relative_dict, graph_title + " Rel", x_label, y_label_relative, input_sizes[test_type], True)

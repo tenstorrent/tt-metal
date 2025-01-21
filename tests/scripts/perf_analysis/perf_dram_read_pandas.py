@@ -18,7 +18,7 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     x_tick_offset = ((num_of_bins + (num_of_spaces * space_width)) / 2 - 0.5) * width
     multiplier = 0
 
-    fig, ax = plt.subplots(layout="constrained")
+    fig, ax = plt.subplots(layout="tight")
 
     for attribute, measurement in data_dict.items():
         offset = width * multiplier
@@ -38,7 +38,8 @@ def plot_data(data_dict, graph_title, x_label, y_label, x_ticks, relative_plot=F
     ax.set_xticks(x + x_tick_offset, x_ticks)
     # plt.xticks(rotation=45, ha='right')
     ax.legend(loc="best", ncols=num_of_bins // rel_factor)
-    plt.show()
+    fig.set_size_inches(17, 10)
+    plt.savefig(f"{graph_title}.png", dpi=150)
 
 
 def generate_bin_name_remote_cb_sync(data_frame):
@@ -90,9 +91,11 @@ def generate_bin_name_all_core(data_frame):
     return bin_names
 
 
+# test_type = "all_core"
 test_type = "remote_cb_sync"
-bh_dir = "/Users/skrsmanovic/perf/yyzo-bh-04/run3/generated/profiler/.logs/"
-wh_dir = "/Users/skrsmanovic/perf/yyz-jb-13/run4_800/generated/profiler/.logs/"
+# test_type = "l1_write_core"
+bh_dir = "/proj_sw/user_dev/rdjogo/work/blackhole/tt-metal/"
+wh_dir = "/proj_sw/user_dev/rdjogo/work/wormhole_b0/tt-metal/"
 
 graph_title = f"DRAM read_{test_type} Bandwidth: WH[aiclk forced to 800MHz] vs BH[aiclk forced to 800MHz]"
 y_label = "Bandwidth[GB/s]"
@@ -190,5 +193,5 @@ for group in group_configurations[test_type]:
     data_dict[bh_key] = bh_data
     relative_dict[relative_key] = (bh_data / wh_data) * 100
 
-plot_data(data_dict, graph_title, x_label[test_type], y_label, bh_bin_name)
-plot_data(relative_dict, graph_title, x_label[test_type], y_label_relative, bh_bin_name, True)
+plot_data(data_dict, graph_title + " Abs", x_label[test_type], y_label, bh_bin_name)
+plot_data(relative_dict, graph_title + " Rel", x_label[test_type], y_label_relative, bh_bin_name, True)
