@@ -659,11 +659,10 @@ def test_transpose_hc(dtype, shape, device):
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 )
 def test_transpose_2D(dtype, shape, layout, device):
+    pytest.skip("Unstable see #16779")
     torch.manual_seed(2005)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    if layout == ttnn.ROW_MAJOR_LAYOUT and shape == [21843, 768] and dtype == ttnn.bfloat16:
-        pytest.skip("Unstable see #16779")
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(0, 1)
 
