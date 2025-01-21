@@ -4,13 +4,13 @@
 
 from typing import Optional, Tuple
 from functools import partial
-
+import pytest
 import torch
 import random
 import ttnn
+from tests.sweep_framework.framework.permutations import *
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -66,23 +66,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-# This is the run instructions for the test, defined by the developer.
-# The run function must take the above-defined parameters as inputs.
-# The runner will call this run function with each test vector, and the returned results from this function will be stored.
-# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
-def run(
-    input_shape,
-    dim,
-    input_a_dtype,
-    output_dtype,
-    input_layout,
-    input_a_memory_config,
-    output_memory_config,
-    *,
-    device,
-) -> list:
+def run_argmax(
+    input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config, device
+):
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+
+    input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
@@ -120,3 +110,27 @@ def run(
     output_tensor = ttnn.to_torch(output_tensor)
 
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+
+
+@pytest.mark.parametrize("params", list(permutations(parameters["nightly"])))
+def test_nightly(device, params):
+    invalidated, output_str = invalidate_vector(params)
+
+    if invalidated:
+        pytest.skip(output_str)
+
+    res, _ = run_argmax(**params, device=device)
+
+    assert res[0], res[1]
+
+
+# This is the run instructions for the test, defined by the developer.
+# The run function must take the above-defined parameters as inputs.
+# The runner will call this run function with each test vector, and the returned results from this function will be stored.
+# If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
+def run(
+    input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config, *, device
+) -> list:
+    return run_argmax(
+        input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config, device
+    )
