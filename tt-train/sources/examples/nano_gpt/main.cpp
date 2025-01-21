@@ -629,13 +629,16 @@ int main(int argc, char **argv) {
             float loss_float = get_loss_value(loss);
 
             loss->backward();
-            if (config.use_clip_grad_norm) {
-                ttml::core::clip_grad_norm(model->parameters(), config.clip_grad_norm_max_norm);
-            }
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().get_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
+
+            // synchronize gradients for multi-device case, no-op if single device
+            ttml::optimizers::distributed::synchronize_and_update_grads(model->parameters());
+            if (config.use_clip_grad_norm) {
+                ttml::core::clip_grad_norm(model->parameters(), config.clip_grad_norm_max_norm);
+            }
 
             if (gradient_accumulator_helper.should_step()) {
                 optimizer->step();

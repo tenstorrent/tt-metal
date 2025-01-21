@@ -11,6 +11,7 @@ namespace ttml::optimizers {
 namespace distributed {
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+void synchronize_and_update_grads(const serialization::NamedParameters& parameters);
 
 }  // namespace distributed
 

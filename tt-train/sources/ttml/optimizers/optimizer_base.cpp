@@ -27,6 +27,14 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
     return result;
 }
 
+void synchronize_and_update_grads(const serialization::NamedParameters& parameters) {
+    for (auto& [name, tensor] : parameters) {
+        if (tensor->is_grad_initialized()) {
+            tensor->set_grad(synchronize_tensor(tensor->get_grad()));
+        }
+    }
+}
+
 }  // namespace distributed
 
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
