@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);               // batch_var
     uint32_t old_running_mean_addr = get_arg_val<uint32_t>(1);  // old running_mean
-    uint32_t old_running_var_addr = get_arg_val<uint32_t>(2);   // ols running_var
+    uint32_t old_running_var_addr = get_arg_val<uint32_t>(2);   // old running_var
     uint32_t dst_addr = get_arg_val<uint32_t>(3);               // output
     uint32_t start_tile_id = get_arg_val<uint32_t>(4);
     uint32_t num_tiles = get_arg_val<uint32_t>(5);

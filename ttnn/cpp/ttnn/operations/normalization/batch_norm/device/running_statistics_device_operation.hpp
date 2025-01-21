@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,7 +29,7 @@ struct RunningStatistics {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct RunningStatisticsFactory {
+    struct RunningStatisticsProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
@@ -51,7 +51,7 @@ struct RunningStatistics {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<RunningStatisticsFactory>;
+    using program_factory_t = std::variant<RunningStatisticsProgramFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
