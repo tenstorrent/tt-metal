@@ -58,7 +58,6 @@ void MAIN {
         if constexpr (misalignment > 0) {
             // if h is an odd number, offset_div_16 by misalignment
             if ((h & 1) == 1) {
-                // offset_div_16 = misalignment_div_16;
                 std::uint32_t operand_id = get_operand_id(cb_in);
                 get_local_cb_interface(operand_id).fifo_rd_ptr += misalignment_div_16;
             }
@@ -71,7 +70,6 @@ void MAIN {
         if constexpr (misalignment > 0) {
             // if h is an odd number, offset_div_16 by misalignment
             if ((h & 1) == 1) {
-                // offset_div_16 = misalignment_div_16;
                 std::uint32_t operand_id = get_operand_id(cb_in);
                 get_local_cb_interface(operand_id).fifo_rd_ptr -= misalignment_div_16;
             }
