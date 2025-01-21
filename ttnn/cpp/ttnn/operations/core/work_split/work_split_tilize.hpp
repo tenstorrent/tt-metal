@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 
@@ -181,6 +181,11 @@ struct FullRep {
         return block_reps;
     }
 };
+
+inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
+    return (
+        el0.n_data == el1.n_data && el0.n_mixed == el1.n_mixed && el0.n_pads == el1.n_pads && el0.times == el1.times);
+}
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
     const ttnn::SimpleShape& logical_shape,

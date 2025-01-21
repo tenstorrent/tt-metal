@@ -8,8 +8,6 @@ import pytest
 
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
@@ -17,6 +15,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
+    verify_with_pcc,
     check_pcc_conv,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
@@ -78,18 +77,14 @@ def test_unet_trace(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -106,7 +101,9 @@ def test_unet_trace(
     logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(outputs[-1]).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -177,18 +174,14 @@ def test_unet_trace_2cq(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
@@ -213,7 +206,9 @@ def test_unet_trace_2cq(
     ttnn.DumpDeviceProfiler(device)
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(outputs[-1]).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
 
     ttnn.release_trace(device, tid)
 
@@ -308,18 +303,14 @@ def test_unet_trace_2cq_multi_device(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = buffer_address(l1_input_tensor)
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, mesh_device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, mesh_device)
     assert input_trace_addr == buffer_address(l1_input_tensor)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
 
@@ -343,7 +334,9 @@ def test_unet_trace_2cq_multi_device(
     logger.info(f"Average model performance={iterations * total_batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC, mesh_composer=output_mesh_composer)
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(outputs[-1], mesh_composer=output_mesh_composer).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
 
     ttnn.release_trace(mesh_device, tid)
 
@@ -355,7 +348,7 @@ def test_unet_trace_2cq_multi_device(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((1, 2, 32),),
+    ((1, 2, 128),),
 )
 def test_unet_trace_2cq_same_io(
     batch: int,
@@ -389,12 +382,12 @@ def test_unet_trace_2cq_same_io(
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    dram_memory_config = ttnn.MemoryConfig(
+    input_dram_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
     )
 
     input_tensor = ttnn.allocate_tensor_on_device(
-        ttnn_input.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, dram_memory_config
+        ttnn_input.shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, input_dram_memory_config
     )
     ttnn.record_event(0, op_event)
     ttnn.record_event(1, read_event)
@@ -408,20 +401,17 @@ def test_unet_trace_2cq_same_io(
     l1_input_tensor = ttnn.reshard(input_tensor, ttnn_model.input_sharded_memory_config)
     ttnn.record_event(0, op_event)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
-    dram_shard_spec = ttnn.ShardSpec(
+    output_dram_shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
         ),
-        [
-            divup(output_tensor.volume() // output_tensor.shape[-1], dram_grid_size.x),
-            output_tensor.shape[-1],
-        ],
+        [output_tensor.shape[-2], output_tensor.shape[-1] // dram_grid_size.x],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
-    dram_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+    output_dram_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
     )
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config)
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
     logger.info(f"Done compile run")
 
     logger.info(f"Capturing trace")
@@ -433,21 +423,17 @@ def test_unet_trace_2cq_same_io(
     ttnn.record_event(0, op_event)
 
     input_trace_addr = l1_input_tensor.buffer_address()
-    shape = l1_input_tensor.shape
-    dtype = l1_input_tensor.dtype
-    layout = l1_input_tensor.layout
+    spec = l1_input_tensor.spec
     output_tensor.deallocate(force=True)
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     output_tensor = ttnn_model(l1_input_tensor, move_input_tensor_to_device=False)
 
     # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-    l1_input_tensor = ttnn.allocate_tensor_on_device(
-        shape, dtype, layout, device, ttnn_model.input_sharded_memory_config
-    )
+    l1_input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     assert input_trace_addr == l1_input_tensor.buffer_address()
     ttnn.end_trace_capture(device, tid, cq_id=0)
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.synchronize_device(device)
 
     outputs = []
@@ -461,7 +447,7 @@ def test_unet_trace_2cq_same_io(
         ttnn.record_event(0, op_event)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
         ttnn.wait_for_event(0, read_event)
-        dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+        dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
         ttnn.record_event(0, model_event)
         ttnn.wait_for_event(1, op_event)
         ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
@@ -474,15 +460,16 @@ def test_unet_trace_2cq_same_io(
     ttnn.record_event(0, op_event)
     ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
     ttnn.wait_for_event(0, read_event)
-    dram_output_tensor = ttnn.reshard(output_tensor, dram_memory_config, dram_output_tensor)
+    dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config, dram_output_tensor)
     ttnn.record_event(0, model_event)
     ttnn.wait_for_event(1, model_event)
     outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
     ttnn.synchronize_device(device)
     end = time.time()
     logger.info(f"Average model time={1000.0 * (end-start) / iterations : .2f} ms")
-    logger.info(f"Average model performance={iterations * batch / (end-start) : .2f} fps")
+    logger.info(f"Average model performance={iterations * groups * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, outputs[-1], UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    verify_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1]).reshape(B, C, H, W), pcc=UNET_FULL_MODEL_PCC)
     ttnn.release_trace(device, tid)

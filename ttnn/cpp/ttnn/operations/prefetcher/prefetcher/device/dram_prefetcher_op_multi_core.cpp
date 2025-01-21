@@ -5,13 +5,14 @@
 #include <stdint.h>
 
 #include "dram_prefetcher_op.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::operations::dram_prefetcher {
 
@@ -33,14 +34,19 @@ std::pair<uint32_t, uint32_t> get_max_page_size_and_num_pages(
 }
 
 operation::ProgramWithCallbacks dram_prefetcher_multi_core(
-    const std::vector<Tensor>& tensors,
-    const Tensor& tensor_addrs,
+    const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
     const tt::tt_metal::v1::experimental::GlobalCircularBuffer& global_cb) {
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
+    // tensors that with addresses
+    ttnn::Tensor tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
     Buffer* tensor_addrs_buffer = tensor_addrs.buffer();
     std::vector<Buffer*> tensor_buffers;
+    // tensors that with actual data
+    std::vector<Tensor> tensors;
+    tensors.resize(input_tensors.size() - 1);
+    std::copy(input_tensors.begin(), input_tensors.end() - 1, tensors.begin());
     tensor_buffers.reserve(tensors.size());
     std::transform(
         tensors.begin(), tensors.end(), std::back_inserter(tensor_buffers), [](const auto& t) { return t.buffer(); });
@@ -87,12 +93,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t max_tile_size_tensor_idx = std::distance(tensor_tile_sizes.begin(), max_tile_size_iterator);
     tt::DataFormat max_tile_size_df = tensor_data_formats[max_tile_size_tensor_idx];
 
-    std::vector<uint32_t> block_sizes;
-    for (uint32_t i = 0; i < num_tensors; i++) {
-        block_sizes.push_back(tensor_block_num_tiles[i] * tensor_tile_sizes[i]);
-    }
-    uint32_t max_block_size_per_reader_core = *std::max_element(block_sizes.begin(), block_sizes.end());
+    uint32_t max_block_size_per_reader_core = max_tile_size * max_block_tiles;
     uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
+
     TT_FATAL(
         max_tensor_size <= global_cb.size(),
         "largest tensor {} must fit in global cb {}",
@@ -114,6 +117,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     CircularBufferConfig reader_cb_config = CircularBufferConfig(reader_cb_size, {{reader_cb_index, max_tile_size_df}})
                                                 .set_page_size(reader_cb_index, reader_cb_single_tile_size)
                                                 .set_globally_allocated_address(global_cb_buffer);
+
     auto reader_cb = CreateCircularBuffer(program, reader_core_range, reader_cb_config);
 
     /* tensor addresses cb setup */
@@ -133,10 +137,11 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t remote_cb_size = global_cb.size();
     uint32_t remote_cb_single_tile_size = max_tile_size;
 
+    auto L1_ALIGNMENT = tt::tt_metal::experimental::hal::get_l1_alignment();
     uint32_t remote_cb_index = tt::CBIndex::c_31;
     CircularBufferConfig remote_cb_config = CircularBufferConfig(remote_cb_size);
     remote_cb_config.remote_index(remote_cb_index)
-        .set_page_size(remote_cb_single_tile_size)
+        .set_page_size(L1_ALIGNMENT)  // set to 16B so that the infra won't update write pointers to wrong location
         .set_data_format(max_tile_size_df);
     auto remote_cb =
         tt::tt_metal::v1::experimental::CreateCircularBuffer(program, reader_core_range, remote_cb_config, global_cb);
@@ -249,7 +254,21 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = {}};
+    auto override_runtime_arguments_callback =
+        [tensor_addrs_cb](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            TT_ASSERT(output_tensors.size() == 1);
+
+            auto tensor_addrs = input_tensors.back();  // Last tensor is tensor_addrs
+            auto tensor_addrs_buffer = tensor_addrs.buffer();
+            UpdateDynamicCircularBufferAddress(program, tensor_addrs_cb, *tensor_addrs_buffer);
+        };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn::operations::dram_prefetcher

@@ -15,6 +15,7 @@ public:
         logical_shape_(std::move(logical_shape)),
         tensor_layout_(std::move(tensor_layout)),
         cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
+        cached_logical_2d_shape_(tensor_layout_.compute_logical_2d_shape(logical_shape_)),
         cached_physical_shape_(tensor_layout_.compute_physical_shape(logical_shape_)) {}
     TensorSpec(TensorSpec&&) noexcept = default;
     TensorSpec& operator=(TensorSpec&&) = default;
@@ -30,7 +31,8 @@ public:
     PageConfig page_config() const { return tensor_layout_.get_page_config(); }
     const MemoryConfig& memory_config() const { return tensor_layout_.get_memory_config(); }
     const ttnn::SimpleShape& padded_shape() const { return cached_padded_shape_; }
-    const Size& physical_shape() const { return cached_physical_shape_; }
+    const Shape2D& logical_2d_shape() const { return cached_logical_2d_shape_; }
+    const Shape2D& physical_shape() const { return cached_physical_shape_; }
     ttnn::Shape shape() const { return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view()); }
 
     Tile tile() const { return tensor_layout_.get_page_config().get_tile(); }
@@ -52,7 +54,8 @@ private:
     TensorLayout tensor_layout_;
 
     ttnn::SimpleShape cached_padded_shape_;
-    Size cached_physical_shape_;
+    Shape2D cached_logical_2d_shape_;
+    Shape2D cached_physical_shape_;
 };
 
 }  // namespace tt::tt_metal

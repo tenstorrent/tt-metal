@@ -10,21 +10,22 @@
 #include <variant>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/test_tiles.hpp"
-#include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/impl/tile/tile.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/reflection.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -157,12 +158,18 @@ struct Tensor {
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
-    // Same as `from_span`, but takes a vector instead.
+    // Same as `from_span`, but operates on a vector instead.
     template <typename T>
     static Tensor from_vector(
         const std::vector<T>& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
-        return from_span(tt::stl::Span<const T>(buffer.data(), buffer.size()), spec, device);
+        return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
+
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
+    // type conversion is needed.
+    template <typename T>
+    static Tensor from_vector(
+        std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
     // Converts a `Tensor` to a `std::vector<T>`.
     // Elements in the vector will be stored in row-major order. The type of the requested vector has to match that of
@@ -216,9 +223,7 @@ struct Tensor {
     //                                  Low Level APIs
     // ======================================================================================
     Tensor reshape(const ttnn::SimpleShape& new_shape) const;
-    Tensor reshape(const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) const;
     Tensor reshape(const ttnn::Shape& new_shape) const;
-
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
@@ -277,7 +282,7 @@ struct Tensor {
 
     bool is_contiguous() const {
         if (this->get_layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-            return this->get_legacy_shape() == this->get_legacy_shape().without_padding();
+            return this->get_logical_shape() == this->get_padded_shape();
         } else {
             return false;
         }
@@ -404,13 +409,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    const std::vector<IDevice*>& devices,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
+Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);

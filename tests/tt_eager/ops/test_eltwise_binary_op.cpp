@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -12,7 +12,6 @@
 using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
-using tt::tt_metal::LegacyShape;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
 
@@ -35,8 +34,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
 }
 
 template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(
-    const tt::tt_metal::LegacyShape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
+bool run_test(const ttnn::SimpleShape& shape, const DeviceFunction& device_function, IDevice* device, Args... args) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
@@ -57,51 +55,51 @@ int main() {
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     {
-        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
         TT_FATAL(allclose, "Error");
     }
 
     {
-        tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
         TT_FATAL(allclose, "Error");
     }
 
     auto run_binary_ops = [&] {
         {
-            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose = run_test<host_function<std::minus<float>>>(shape, ttnn::subtract, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2};
+            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT * 2, tt::constants::TILE_WIDTH * 2});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose =
                 run_test<host_function<std::multiplies<float>>>(shape, ttnn::multiply, device, 1e-2f, 1e-3f);
             TT_FATAL(allclose, "Error");
         }
 
         {
-            tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4};
+            ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT * 4, tt::constants::TILE_WIDTH * 4});
             auto allclose = run_test<host_function<std::plus<float>>>(shape, ttnn::add, device);
             TT_FATAL(allclose, "Error");
         }
@@ -114,7 +112,7 @@ int main() {
 
     // Allocate a tensor to show that the addresses aren't cached
     auto input_tensor =
-        ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), {1, 1, 32, 32}).to(Layout::TILE).to(device);
+        ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), SimpleShape({1, 1, 32, 32})).to(Layout::TILE).to(device);
 
     run_binary_ops();
 

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <common/math.hpp>
+#include <tt-metalium/math.hpp>
 #include <optional>
 #include <random>
 #include <ttnn/tensor/host_buffer/functions.hpp>
@@ -13,7 +13,7 @@
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_impl.hpp>
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include "cpp/ttnn/common/constants.hpp"
 
 namespace ttnn {
 
@@ -479,10 +479,11 @@ inline auto RANDOM_GENERATOR = std::mt19937(0);
 static void seed(std::size_t seed) { RANDOM_GENERATOR = std::mt19937(seed); }
 
 template <typename T>
-static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, const Layout layout = Layout::ROW_MAJOR) {
+static Tensor uniform(T low, T high, const ttnn::SimpleShape& shape, const Layout layout = Layout::ROW_MAJOR) {
     constexpr DataType data_type = tt::tt_metal::convert_to_data_type<T>();
 
-    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(tt::tt_metal::compute_volume(shape));
+    TensorSpec spec(shape, TensorLayout(data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(spec.padded_shape().volume());
 
     if constexpr (std::is_same_v<T, uint32_t>) {
         auto rand_value = std::bind(std::uniform_int_distribution<T>(low, high), RANDOM_GENERATOR);
@@ -502,11 +503,11 @@ static Tensor uniform(T low, T high, const tt::tt_metal::LegacyShape& shape, con
         }
     }
 
-    return Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR).to(layout);
+    return Tensor(OwnedStorage{owned_buffer}, spec).to(layout);
 }
 
 static Tensor random(
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     const DataType data_type = DataType::BFLOAT16,
     const Layout layout = Layout::ROW_MAJOR) {
     switch (data_type) {

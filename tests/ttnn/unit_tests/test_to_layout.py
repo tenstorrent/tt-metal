@@ -166,7 +166,9 @@ def test_to_layout_6D(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]])
+@pytest.mark.parametrize(
+    "shape", [[3, 1370, 1, 1, 1280], [3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]]
+)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_to_layout_nd_hangs(shape, input_layout, output_layout, device):
@@ -190,10 +192,10 @@ def test_to_layout_for_2D(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("w", [1, 5, 14, 97])
-def test_to_from_1d(device, w):
+@pytest.mark.parametrize("shape", [1, 5, 14, 97, 0, ()])
+def test_to_from_01d(device, shape):
     torch.manual_seed(2005)
-    torch_input = torch.rand(w)
+    torch_input = torch.rand(shape)
 
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.float32)
     ttnn_input = ttnn.to_layout(ttnn_input, ttnn.TILE_LAYOUT)
@@ -203,3 +205,29 @@ def test_to_from_1d(device, w):
     ttnn_input = ttnn.to_torch(ttnn_input)
 
     assert_with_pcc(ttnn_input, torch_input)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_to_layout_sharded(dtype, device, use_program_cache):
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 5), ttnn.CoreCoord(1, 5)),
+        }
+    )
+
+    shape1 = [1, 1, 2640, 64]
+
+    shape1_shard_shape = (64, 64)
+
+    shape1_shard_spec = ttnn.ShardSpec(core_grid, shape1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shape1_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shape1_shard_spec
+    )
+    torch_input_tensor1 = torch.randn(shape1, dtype=torch.bfloat16)
+    ttnn_input_tensor1 = ttnn.from_torch(torch_input_tensor1, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor1 = ttnn.to_device(ttnn_input_tensor1, device, memory_config=shape1_memory_config)
+
+    output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)

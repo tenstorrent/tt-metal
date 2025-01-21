@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 namespace tt {
 

@@ -18,19 +18,19 @@
 #include <unordered_set>
 #include <utility>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 
 #include "llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <rtoptions.hpp>
 #include "hal.hpp"
 
-#include "jit_build/settings.hpp"
+#include <settings.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 namespace tt {
 
@@ -219,7 +219,9 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
+    bool is_simulator = std::getenv("TT_METAL_SIMULATOR") != nullptr;
+
+    if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -253,6 +255,11 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+
+        // Continuously polling cores on simulator can cause it to run much slower than real hardware.
+        if (is_simulator)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.

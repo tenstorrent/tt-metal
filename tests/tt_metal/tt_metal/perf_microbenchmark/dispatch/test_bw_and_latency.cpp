@@ -10,13 +10,13 @@
 
 #include "core_coord.hpp"
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;
@@ -41,7 +41,6 @@ uint32_t page_count_g;
 uint32_t source_mem_g;
 uint32_t dram_channel_g;
 bool latency_g;
-bool lazy_g;
 bool time_just_finish_g;
 bool read_one_packet_g;
 bool page_size_as_runtime_arg_g;  // useful particularly on GS multi-dram tests (multiply)
@@ -82,9 +81,8 @@ void init(int argc, char** argv) {
         log_info(LogTest, "  -ty: when issuing a multicast write, Y of end core to write to (default {})", 0);
         log_info(LogTest, "  -wr: issue unicast write instead of read (default false)");
         log_info(LogTest, "  -c: when reading from dram, DRAM channel (default 0)");
-        log_info(LogTest, "  -f: time just the finish call (use w/ lazy mode) (default disabled)");
+        log_info(LogTest, "  -f: time just the finish call (default disabled)");
         log_info(LogTest, "  -o: use read_one_packet API.  restricts page size to 8K max (default {})", 0);
-        log_info(LogTest, "  -z: enable dispatch lazy mode (default disabled)");
         log_info(LogTest, "-link: link mcast transactions");
         log_info(LogTest, " -hr: hammer write_reg while executing (for PCIe test)");
         log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
@@ -97,7 +95,6 @@ void init(int argc, char** argv) {
     uint32_t core_y = test_args::get_command_option_uint32(input_args, "-ry", 0);
     warmup_iterations_g = test_args::get_command_option_uint32(input_args, "-w", DEFAULT_WARMUP_ITERATIONS);
     iterations_g = test_args::get_command_option_uint32(input_args, "-i", DEFAULT_ITERATIONS);
-    lazy_g = test_args::has_command_option(input_args, "-z");
     hammer_write_reg_g = test_args::has_command_option(input_args, "-hr");
     hammer_pcie_g = test_args::has_command_option(input_args, "-hp");
     hammer_pcie_type_g = test_args::get_command_option_uint32(input_args, "-hpt", 0);
@@ -330,7 +327,6 @@ int main(int argc, char** argv) {
                 api = "noc_async_" + read_write;
             }
             log_info(LogTest, "Using API: {}", api);
-            log_info(LogTest, "Lazy: {}", lazy_g);
             log_info(
                 LogTest,
                 "Page size ({}): {}",
@@ -351,10 +347,6 @@ int main(int argc, char** argv) {
                 EnqueueProgram(cq, program, false);
             }
             Finish(cq);
-
-            if (lazy_g) {
-                tt_metal::detail::SetLazyCommandQueueMode(true);
-            }
 
             auto start = std::chrono::system_clock::now();
             EnqueueProgram(cq, program, false);

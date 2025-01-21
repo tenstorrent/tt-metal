@@ -10,6 +10,7 @@ import pytest
 import subprocess
 
 import pandas as pd
+import numpy as np
 
 from tt_metal.tools.profiler.common import (
     TT_METAL_HOME,
@@ -260,10 +261,20 @@ def test_profiler_host_device_sync():
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
     for device in devices:
-        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
 
-        assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
-        assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
+        else:  # device sync entry
+            deviceFreqRatio = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["device_frequency_ratio"]
+            assert deviceFreqRatio < (
+                1 + TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too large on device {device}"
+            assert deviceFreqRatio > (
+                1 - TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too small on device {device}"
 
     deviceData = run_device_profiler_test(testName="pytest ./tests/ttnn/tracy/test_profiler_sync.py::test_with_ops")
     reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
@@ -272,10 +283,12 @@ def test_profiler_host_device_sync():
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
     for device in devices:
-        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
 
-        assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
-        assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
 
     os.environ["TT_METAL_PROFILER_SYNC"] = "0"
 

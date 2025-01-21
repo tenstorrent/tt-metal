@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/utils.hpp"
+#include <utils.hpp>
 
 namespace tt::tt_metal {
 

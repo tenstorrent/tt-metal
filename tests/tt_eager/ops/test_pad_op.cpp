@@ -4,12 +4,12 @@
 
 #include <cmath>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using tt::tt_metal::DataType;
@@ -25,7 +25,7 @@ void test_operation_infrastructure() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     using namespace tt::tt_metal;
 
-    tt::tt_metal::Array4D input_shape = {1, 1, 18, 13};
+    ttnn::SimpleShape input_shape({1, 1, 18, 13});
     tt::tt_metal::Array4D padded_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
 
     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);

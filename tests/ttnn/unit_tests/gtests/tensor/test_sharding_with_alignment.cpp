@@ -3,9 +3,10 @@
 
 #include "common_tensor_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "host_api.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -16,7 +17,7 @@
 namespace {
 
 void pretty_print_data_as_shards(
-    const std::vector<float>& data, const Size& shape, const Size& shard_shape, const size_t char_count = 3) {
+    const std::vector<float>& data, const Shape2D& shape, const Shape2D& shard_shape, const size_t char_count = 3) {
     TT_FATAL(
         data.size() == shape.height() * shape.width(),
         "Data size {} should be same as shape size {}",
@@ -58,15 +59,15 @@ void pretty_print_data_as_shards(
 namespace {
 struct ShardWithAlignmentInputs {
     SimpleShape shape;
-    Size logical_shard_shape;
-    std::optional<Size> physical_shard_shape;
+    Shape2D logical_shard_shape;
+    std::optional<Shape2D> physical_shard_shape;
     PageConfig page_config;
     std::vector<float> logical_data;
 };
 
 struct ShardWithAlignmentExpected {
-    Size physical_shard_shape;
-    Size physical_shape;
+    Shape2D physical_shard_shape;
+    Shape2D physical_shape;
     std::vector<float> physical_data;
 };
 
@@ -106,19 +107,19 @@ TEST_P(ShardWithAlignmentTests, LogicalToPhysical) {
     auto physical_shape = tensor_spec.physical_shape();
     ASSERT_EQ(physical_shape, params.expected.physical_shape);
 
-    const auto& logical_data = params.inputs.logical_data;
+    auto logical_data = params.inputs.logical_data;
     const auto& expected_physical_data = params.expected.physical_data;
 
     // Convert output physical data to row major (if necessary) for testing
-    auto physical_data = tensor_impl::encode_tensor_data(logical_data, tensor_spec);
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
     if (tensor_spec.layout() == Layout::TILE) {
         // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
         physical_data = tensor_impl::convert_layout_tile_to_row_major(
             physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
     }
 
-    // auto shape_2D = tt::tt_metal::get_2d_shape(tensor_spec.logical_shape());
-    // pretty_print_data_as_shards(logical_data, shape_2D, logical_shard_shape);
+    // auto shape_2d = tensor_spec.logical_2d_shape();
+    // pretty_print_data_as_shards(params.inputs.logical_data, shape_2d, logical_shard_shape);
     // pretty_print_data_as_shards(physical_data, physical_shape, physical_shard_shape);
 
     ASSERT_EQ(physical_data.size(), expected_physical_data.size());
@@ -164,11 +165,11 @@ TEST_P(ShardWithAlignmentTests, PhysicalToLogical) {
         physical_data = tensor_impl::convert_layout_row_major_to_tile(
             physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
     }
-    auto logical_data = tensor_impl::decode_tensor_data(physical_data, tensor_spec);
+    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
 
-    // auto shape_2D = tt::tt_metal::get_2d_shape(tensor_spec.logical_shape());
-    // pretty_print_data_as_shards(physical_data, physical_shape, physical_shard_shape);
-    // pretty_print_data_as_shards(logical_data, shape_2D, logical_shard_shape);
+    // auto shape_2d = tensor_spec.logical_2d_shape();
+    // pretty_print_data_as_shards(params.expected.physical_data, physical_shape, physical_shard_shape);
+    // pretty_print_data_as_shards(logical_data, shape_2d, logical_shard_shape);
 
     ASSERT_EQ(logical_data.size(), expected_data.size());
     for (size_t i = 0; i < logical_data.size(); i++) {
@@ -186,7 +187,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 15, 20},
-                .logical_shard_shape = Size{15, 20},
+                .logical_shard_shape = Shape2D{15, 20},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,
@@ -222,8 +223,8 @@ INSTANTIATE_TEST_SUITE_P(
                                  580, 581, 582, 583, 584, 585, 586, 587, 588, 589, 590, 591, 592, 593, 594, 595, 596, 597, 598, 599}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{16, 32},
-                .physical_shape = Size{32, 32},
+                .physical_shard_shape = Shape2D{16, 32},
+                .physical_shape = Shape2D{32, 32},
                 .physical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
                                    20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
                                    40,  41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
@@ -264,7 +265,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 1, 15, 15},
-                .logical_shard_shape = Size{5, 15},
+                .logical_shard_shape = Shape2D{5, 15},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,
@@ -286,8 +287,8 @@ INSTANTIATE_TEST_SUITE_P(
                                  210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{16, 16},
-                .physical_shape = Size{48, 16},
+                .physical_shard_shape = Shape2D{16, 16},
+                .physical_shape = Shape2D{48, 16},
                 .physical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,   0,
                                    15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,   0,
                                    30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,   0,
@@ -344,7 +345,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 5, 20},
-                .logical_shard_shape = Size{10, 10},
+                .logical_shard_shape = Shape2D{10, 10},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = { 0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  /**/  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,
@@ -359,8 +360,8 @@ INSTANTIATE_TEST_SUITE_P(
                                 180, 181, 182, 183, 184, 185, 186, 187, 188, 189,  /**/ 190, 191, 192, 193, 194, 195, 196, 197, 198, 199}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{16, 16},
-                .physical_shape = Size{16, 32},
+                .physical_shard_shape = Shape2D{16, 16},
+                .physical_shape = Shape2D{16, 32},
                 .physical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,   0,   0,   0,   0,   0,   0,  /**/  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,   0,   0,   0,   0,   0,   0,
                                    20,  21,  22,  23,  24,  25,  26,  27,  28,  29,   0,   0,   0,   0,   0,   0,  /**/  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,   0,   0,   0,   0,   0,   0,
                                    40,  41,  42,  43,  44,  45,  46,  47,  48,  49,   0,   0,   0,   0,   0,   0,  /**/  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,   0,   0,   0,   0,   0,   0,
@@ -383,7 +384,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 1, 30, 30},
-                .logical_shard_shape = Size{18, 20},
+                .logical_shard_shape = Shape2D{18, 20},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::TILE, Tile({16, 16})),
                 .logical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  /**/  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,
@@ -419,8 +420,8 @@ INSTANTIATE_TEST_SUITE_P(
                                  870, 871, 872, 873, 874, 875, 876, 877, 878, 879, 880, 881, 882, 883, 884, 885, 886, 887, 888, 889,  /**/ 890, 891, 892, 893, 894, 895, 896, 897, 898, 899}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{32, 32},
-                .physical_shape = Size{48, 48},
+                .physical_shard_shape = Shape2D{32, 32},
+                .physical_shape = Shape2D{48, 48},
                 .physical_data = {  0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  /**/  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,   0,   0,   0,   0,   0,   0,
                                    30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,  49,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  /**/  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,   0,   0,   0,   0,   0,   0,
                                    60,  61,  62,  63,  64,  65,  66,  67,  68,  69,  70,  71,  72,  73,  74,  75,  76,  77,  78,  79,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  /**/  80,  81,  82,  83,  84,  85,  86,  87,  88,  89,   0,   0,   0,   0,   0,   0,
@@ -476,7 +477,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 5, 1},
-                .logical_shard_shape = Size{1, 1},
+                .logical_shard_shape = Shape2D{1, 1},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,
@@ -500,8 +501,8 @@ INSTANTIATE_TEST_SUITE_P(
                                    9}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{1, 1},
-                .physical_shape = Size{10, 1},
+                .physical_shard_shape = Shape2D{1, 1},
+                .physical_shape = Shape2D{10, 1},
                 .physical_data = {  0,
 
                                     1,
@@ -527,8 +528,8 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 5, 1},
-                .logical_shard_shape = Size{3, 1},
-                .physical_shard_shape = Size{3, 4},
+                .logical_shard_shape = Shape2D{3, 1},
+                .physical_shard_shape = Shape2D{3, 4},
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,
                                    1,
@@ -545,8 +546,8 @@ INSTANTIATE_TEST_SUITE_P(
                                    9}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{3, 4},
-                .physical_shape = Size{12, 4},
+                .physical_shard_shape = Shape2D{3, 4},
+                .physical_shape = Shape2D{12, 4},
                 .physical_data = {  0,   0,   0,   0,
                                     1,   0,   0,   0,
                                     2,   0,   0,   0,
@@ -568,7 +569,7 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 5, 10},
-                .logical_shard_shape = Size{10, 3},
+                .logical_shard_shape = Shape2D{10, 3},
                 .physical_shard_shape = std::nullopt,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,  /**/   3,   4,   5,  /**/   6,   7,   8,  /**/   9,
@@ -583,8 +584,8 @@ INSTANTIATE_TEST_SUITE_P(
                                   90,  91,  92,  /**/  93,  94,  95,  /**/  96,  97,  98,  /**/  99}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{10, 3},
-                .physical_shape = Size{10, 12},
+                .physical_shard_shape = Shape2D{10, 3},
+                .physical_shape = Shape2D{10, 12},
                 .physical_data = {  0,   1,   2,  /**/   3,   4,   5,  /**/   6,   7,   8,  /**/   9,   0,   0,
                                    10,  11,  12,  /**/  13,  14,  15,  /**/  16,  17,  18,  /**/  19,   0,   0,
                                    20,  21,  22,  /**/  23,  24,  25,  /**/  26,  27,  28,  /**/  29,   0,   0,
@@ -601,8 +602,8 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 5, 10},
-                .logical_shard_shape = Size{10, 3},
-                .physical_shard_shape = Size{10, 4},
+                .logical_shard_shape = Shape2D{10, 3},
+                .physical_shard_shape = Shape2D{10, 4},
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,  /**/   3,   4,   5,  /**/   6,   7,   8,  /**/   9,
                                   10,  11,  12,  /**/  13,  14,  15,  /**/  16,  17,  18,  /**/  19,
@@ -616,8 +617,8 @@ INSTANTIATE_TEST_SUITE_P(
                                   90,  91,  92,  /**/  93,  94,  95,  /**/  96,  97,  98,  /**/  99}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{10, 4},
-                .physical_shape = Size{10, 16},
+                .physical_shard_shape = Shape2D{10, 4},
+                .physical_shape = Shape2D{10, 16},
                 .physical_data = {  0,   1,   2,   0,  /**/   3,   4,   5,   0,  /**/   6,   7,   8,   0,  /**/   9,   0,   0,   0,
                                    10,  11,  12,   0,  /**/  13,  14,  15,   0,  /**/  16,  17,  18,   0,  /**/  19,   0,   0,   0,
                                    20,  21,  22,   0,  /**/  23,  24,  25,   0,  /**/  26,  27,  28,   0,  /**/  29,   0,   0,   0,
@@ -634,8 +635,8 @@ INSTANTIATE_TEST_SUITE_P(
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
                 .shape = SimpleShape{1, 2, 10, 10},
-                .logical_shard_shape = Size{3, 4},
-                .physical_shard_shape = Size{5, 7},
+                .logical_shard_shape = Shape2D{3, 4},
+                .physical_shard_shape = Shape2D{5, 7},
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .logical_data = {  0,   1,   2,   3,  /**/   4,   5,   6,   7,  /**/   8,   9,
                                   10,  11,  12,  13,  /**/  14,  15,  16,  17,  /**/  18,  19,
@@ -665,8 +666,8 @@ INSTANTIATE_TEST_SUITE_P(
                                  190, 191, 192, 193,  /**/ 194, 195, 196, 197,  /**/ 198, 199}
             },
             ShardWithAlignmentExpected{
-                .physical_shard_shape = Size{5, 7},
-                .physical_shape = Size{35, 21},
+                .physical_shard_shape = Shape2D{5, 7},
+                .physical_shape = Shape2D{35, 21},
                 .physical_data = { 0,   1,   2,   3,   0,   0,   0,  /**/   4,   5,   6,   7,   0,   0,   0,  /**/   8,   9,   0,   0,   0,   0,   0,
                                   10,  11,  12,  13,   0,   0,   0,  /**/  14,  15,  16,  17,   0,   0,   0,  /**/  18,  19,   0,   0,   0,   0,   0,
                                   20,  21,  22,  23,   0,   0,   0,  /**/  24,  25,  26,  27,   0,   0,   0,  /**/  28,  29,   0,   0,   0,   0,   0,
@@ -725,7 +726,7 @@ struct CreateShardedTensorWithAlignmentInputs {
 };
 
 struct CreateShardedTensorWithAlignmentExpected {
-    Size physical_shape;
+    Shape2D physical_shape;
 };
 
 struct CreateShardedTensorWithAlignmentParams {
@@ -776,7 +777,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{3584, 32}
+                .physical_shape = Shape2D{3584, 32}
             }
         },
         // Example 1b: Logical shard shape that is already aligned
@@ -799,7 +800,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{2688, 32}
+                .physical_shape = Shape2D{2688, 32}
             }
         },
         // Example 1c: For interleaved, we treat entire height/width as "logical shard shape" for calculations
@@ -817,7 +818,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{3072, 32}
+                .physical_shape = Shape2D{3072, 32}
             }
         },
         /////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -844,7 +845,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{20, 5}
+                .physical_shape = Shape2D{20, 5}
             }
         },
         // Example 2b: Logical shard shape that is already aligned
@@ -867,7 +868,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{20, 8}
+                .physical_shape = Shape2D{20, 8}
             }
         },
         // Example 2c: For interleaved, we treat entire height/width as "logical shard shape" for calculations
@@ -885,7 +886,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{20, 5}
+                .physical_shape = Shape2D{20, 5}
             }
         },
         ////////////////////////////////////////////////////////////////////
@@ -911,7 +912,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{384, 192}
+                .physical_shape = Shape2D{384, 192}
             }
         },
         // Example 3b: ROW_MAJOR block sharded tensor with 2 and 1 extra rows and col per shard, respectively
@@ -934,7 +935,7 @@ INSTANTIATE_TEST_SUITE_P(
                     }
             },
             CreateShardedTensorWithAlignmentExpected{
-                .physical_shape = Size{28, 9}
+                .physical_shape = Shape2D{28, 9}
             }
         }
     )  // Values

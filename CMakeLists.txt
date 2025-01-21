@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16..3.30)
+cmake_minimum_required(VERSION 3.18..3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -257,6 +257,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_fabric)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -272,6 +273,15 @@ endif()
 # Install for build artifacts that will upload build/lib
 include(GNUInstallDirs)
 
+install(
+    TARGETS
+        tt_fabric
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
+)
 install(
     TARGETS
         tt_metal

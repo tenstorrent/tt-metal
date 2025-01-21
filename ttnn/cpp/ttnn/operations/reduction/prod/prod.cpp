@@ -6,13 +6,13 @@
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "cpp/ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
+#include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 namespace ttnn::operations::reduction {
@@ -22,7 +22,7 @@ inline Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& outp
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_padded_shape(), false, false, true, true);
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -35,7 +35,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_legacy_shape(), false, false, true, true);
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_padded_shape(), false, false, true, true);
         auto out_shape = input_a.get_legacy_shape();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
@@ -51,7 +51,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     // layout conversion
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_legacy_shape(), false, false, true, true);
+        auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_padded_shape(), false, false, true, true);
         auto out_shape = temp.get_legacy_shape();
         out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
@@ -68,7 +68,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::Shape(required);
+    auto ttnn_shape = ttnn::SimpleShape(required);
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(

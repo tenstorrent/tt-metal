@@ -15,6 +15,10 @@ std::vector<NodeId> get_links(Tensors&&... tensors) {
     std::vector<NodeId> links;
     links.reserve(sizeof...(Tensors));
     auto process_node = [&links](auto&& tensor) {
+        if (tensor == nullptr) {
+            return;
+        }
+
         const auto& node = tensor->get_node();
         if (node) {
             links.push_back(node.value());

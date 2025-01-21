@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_pybind.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "dram_prefetcher.hpp"
 
 namespace ttnn::operations::dram_prefetcher::detail {
@@ -34,7 +34,6 @@ void bind_dram_prefetcher_operation(py::module& module) {
 
         ttnn::pybind_arguments_t{
             py::arg("tensors"),
-            py::arg("tensor_addrs"),
             py::arg("num_layers"),
             py::arg("global_cb"),
         });

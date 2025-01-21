@@ -5,8 +5,8 @@
 #include "prefetch.hpp"
 #include "eth_tunneler.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -45,8 +45,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
     } else {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
         logical_core_ = dispatch_core_manager::instance().demux_d_core(device_->id(), channel, placement_cq_id_);
-        static_config_.rx_queue_start_addr_words =
-            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) >> 4;
+        static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
         static_config_.rx_queue_size_words = 0x8000 >> 4;
 
         static_config_.kernel_status_buf_addr_arg = 0;

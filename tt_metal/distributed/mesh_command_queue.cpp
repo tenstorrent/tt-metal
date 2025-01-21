@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_command_queue.hpp"
-#include "mesh_workload_utils.hpp"
+#include "tt_metal/distributed/mesh_command_queue.hpp"
+#include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -75,7 +75,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     auto sub_device_id = *(sub_device_ids.begin());
-    auto mesh_device_id = this->mesh_device_->get_mesh_id();
+    auto mesh_device_id = this->mesh_device_->id();
     TT_FATAL(
         mesh_workload.get_program_binary_status(mesh_device_id) != ProgramBinaryStatus::NotSent,
         "Expected program binaries to be written to the MeshDevice.");

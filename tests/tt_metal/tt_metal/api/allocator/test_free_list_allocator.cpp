@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include "host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
 
 // TODO: Add a variant with randomized allocations and deallocations

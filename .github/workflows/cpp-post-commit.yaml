@@ -81,9 +81,9 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
+        #GH Issue 16167
+        if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:

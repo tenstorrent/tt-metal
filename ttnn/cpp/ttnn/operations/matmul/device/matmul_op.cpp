@@ -9,9 +9,9 @@
 #include <numeric>
 #include <optional>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
@@ -1223,6 +1223,10 @@ Matmul create_matmul_struct(
          (input_tensor_b.get_dtype() == DataType::BFLOAT8_B || input_tensor_b.get_dtype() == DataType::BFLOAT4_B));
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
+    bool are_inputs_32F =
+        (input_tensor_a.get_dtype() == DataType::FLOAT32 && input_tensor_b.get_dtype() == DataType::FLOAT32);
+    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+
     bool broadcast_batch =
         parameters.bcast_batch.value_or(get_broadcast_batch(input_tensor_a, input_tensor_b, parameters.program_config));
     TT_FATAL(!(has_user_grid && has_program_config), "Cannot use both user core grid/coordinates and a program config");
@@ -2105,6 +2109,10 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.fused_activation,
                     this->untilize_out);
             } else if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                std::optional<tt::tt_metal::v1::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
+                if (this->global_cb.has_value()) {
+                    global_cb = get_global_circular_buffer(*this->global_cb, input_tensor_a.device()->id());
+                }
                 return matmul_multi_core_reuse_mcast_1d_optimized(
                     input_tensor_a,
                     input_tensor_b,
@@ -2126,7 +2134,7 @@ operation::ProgramWithCallbacks Matmul::create_program(
                     program_config.gather_in0,
                     program_config.hop_cores,
                     this->untilize_out,
-                    this->global_cb,
+                    global_cb,
                     program_config.num_global_cb_receivers);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,

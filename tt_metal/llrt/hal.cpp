@@ -4,8 +4,8 @@
 
 #include "hal.hpp"
 
-#include "tt_metal/common/tt_backend_api_types.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt_backend_api_types.hpp>
+#include <assert.hpp>
 
 #include "get_platform_architecture.hpp"
 namespace tt {
@@ -21,6 +21,8 @@ Hal::Hal() : arch_(get_platform_architecture()) {
         case tt::ARCH::WORMHOLE_B0: initialize_wh(); break;
 
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
+
+        case tt::ARCH::QUASAR: TT_THROW("HAL doesn't support Quasar"); break;
 
         case tt::ARCH::Invalid: /*TT_THROW("Unsupported arch for HAL")*/; break;
     }

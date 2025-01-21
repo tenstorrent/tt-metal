@@ -25,11 +25,14 @@
 #include "watcher_common.h"
 
 #include "dataflow_cmd_bufs.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#ifndef ARCH_GRAYSKULL
+#include "eth_l1_address_map.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -177,7 +180,8 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     return DebugSanitizeNocOK;
 }
 
-inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len) {
+#ifndef ARCH_GRAYSKULL
+inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
@@ -187,8 +191,14 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len) {
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END)) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+#endif
     return DebugSanitizeNocOK;
 }
+#endif
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
@@ -337,7 +347,7 @@ uint32_t debug_sanitize_noc_addr(
                 multicast,
                 dir,
                 DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_eth_addr(noc_local_addr, noc_len));
+                debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
         }
 #endif
     } else if (core_type == AddressableCoreType::TENSIX) {
@@ -380,6 +390,7 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
+        // TODO: Use debug_valid_eth_addr on ethernet cores.
         debug_sanitize_post_noc_addr_and_hang(
             noc_id,
             noc_addr,
