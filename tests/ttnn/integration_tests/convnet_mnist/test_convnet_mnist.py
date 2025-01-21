@@ -26,7 +26,6 @@ def model_location_generator(rel_path):
         return Path("/opt/tt-metal-models") / rel_path
 
 
-@pytest.mark.skip("#16824: Failing when whole suite is run on all archs")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_convnet_mnist(device, reset_seeds):
     model_path = model_location_generator("tt_dnn-models/ConvNetMNIST/")
