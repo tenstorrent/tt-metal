@@ -16,6 +16,61 @@ uint16_t get_nearest_power_of_2(uint16_t k) {
     return nearest_power_of_2;
 }
 
+inline Tensor perform_transpose(
+    const Tensor& input_tensor, const bool is_dim_last_idx, const int8_t dim1 = -1, const int8_t dim2 = -1) {
+    return is_dim_last_idx ? input_tensor : ttnn::transpose(input_tensor, dim1, dim2, input_tensor.memory_config());
+}
+
+inline Tensor transform_to_4d_tensor(const Tensor& input_tensor, const bool is_rank_le_4d) {
+    return is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor) : data_movement::squeeze_from_ND_to_4D(input_tensor);
+}
+
+// one stop for all transformations needed after executing top-k
+// do we need seperate function for each case? revisit this later
+std::vector<Tensor> post_topk_transform_tensor(
+    const Tensor& input_tensor,
+    std::vector<Tensor>& result,
+    const int8_t dim,
+    const bool is_dim_last_idx,
+    const uint16_t k,
+    const uint16_t adjusted_k,
+    const MemoryConfig& input_memory_config) {
+    TT_ASSERT(result[0].get_shape().rank() == 4, "Output shape rank must be 4");
+    TT_ASSERT(result[1].get_shape().rank() == 4, "Output shape rank must be 4");
+
+    auto input_shape = input_tensor.get_logical_shape();
+    const auto orig_rank = input_shape.rank();
+
+    // case 1 : K is not pow of 2
+    if (adjusted_k != k) {
+        auto output_shape = result[0].get_shape();
+        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
+        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
+        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
+        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+    }
+
+    // case 2 : rank is not 4
+    if (orig_rank < 4) {
+        result[0] = ttnn::squeeze_from_4D(result[0], orig_rank);
+        result[1] = ttnn::squeeze_from_4D(result[1], orig_rank);
+    } else if (orig_rank > 4) {
+        ttnn::SmallVector<uint32_t> result_shape(input_shape.cbegin(), input_shape.cend());
+        result_shape[result_shape.size() - 1] = k;
+        result[0] = ttnn::reshape(result[0], ttnn::SimpleShape{result_shape});
+        result[1] = ttnn::reshape(result[1], ttnn::SimpleShape{result_shape});
+    }
+
+    // case 3 : dim is not last index
+    if (!is_dim_last_idx) {
+        result[0] = ttnn::transpose(result[0], dim, -1, input_tensor.memory_config());
+        result[1] = ttnn::transpose(result[1], dim, -1, input_tensor.memory_config());
+    }
+
+    return result;
+}
+
 std::vector<Tensor> ExecuteTopK::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
@@ -33,16 +88,10 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
     // K may not be power of 2
     uint16_t adjusted_k = get_nearest_power_of_2(k);
-    // TODO : we may also have to address N-D tensor inputs in future
-    // tensor transformed_input_tensor = is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor_arg) :
-    // data_movement::squeeze_from_ND_to_4D(input_tensor);
-
-    // support any dim value
-    auto transform_tensor = [&](const Tensor& input_tensor, const int8_t dim1, const int8_t dim2 = -1) {
-        return ttnn::transpose(input_tensor, dim1, dim2, input_memory_config);
-    };
-
-    Tensor transformed_tensor = is_dim_last_idx ? input_tensor : transform_tensor(input_tensor, dim);
+    // if dim is not last dimension, transpose it
+    Tensor transposed_tensor = perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
+    // if input is not 4d, convert it to 4d
+    Tensor transformed_tensor = transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     auto output_tensor_vec = operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config},
@@ -52,23 +101,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
                                             : std::vector<std::optional<Tensor>>{},
         queue_id);
 
-    if (adjusted_k != k) {
-        auto output_shape = output_tensor_vec[0].get_shape();
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
-        output_tensor_vec[0] = ttnn::slice(output_tensor_vec[0], start_index, end_index, step, input_memory_config);
-        output_tensor_vec[1] = ttnn::slice(output_tensor_vec[1], start_index, end_index, step, input_memory_config);
-    }
-
-    if (is_dim_last_idx) {
-        return output_tensor_vec;
-    }
-
-    std::vector<Tensor> result_vec(2);
-    result_vec[0] = transform_tensor(output_tensor_vec[0], -1, dim);
-    result_vec[1] = transform_tensor(output_tensor_vec[1], -1, dim);
-    return result_vec;
+    return post_topk_transform_tensor(
+        transposed_tensor, output_tensor_vec, dim, is_dim_last_idx, k, adjusted_k, input_memory_config);
 }
 
 auto ExecuteTopK::invoke(
