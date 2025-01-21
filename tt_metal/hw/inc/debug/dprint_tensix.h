@@ -261,7 +261,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         uint32_t field_value = (reg_val & reg_field_name##_MASK) >> reg_field_name##_SHAMT;     \
         DPRINT << name << " = ";                                                                \
         if (printDec) DPRINT << DEC();                                                          \
-        else DPRINT << HEX();                                                                   \
+        else DPRINT << "0x" << HEX();                                                           \
         DPRINT << field_value << "; ";                                                          \
     }
 
