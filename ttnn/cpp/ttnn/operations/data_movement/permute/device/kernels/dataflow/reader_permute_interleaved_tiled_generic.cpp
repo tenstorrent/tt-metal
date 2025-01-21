@@ -37,6 +37,7 @@ void kernel_main() {
     constexpr bool needs_x_padding = static_cast<bool>(get_compile_time_arg_val(24));
     constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(25));
     constexpr uint32_t non_x_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t read_alignment = get_compile_time_arg_val(27);
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -52,6 +53,8 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t tile_bytes = TILE_HW * element_size;
+
+    constexpr uint32_t misalignment = read_alignment - SUBTILE_LINE_BYTES;
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);
@@ -165,6 +168,11 @@ void kernel_main() {
         // Reserve a slot in the circular buffer, get L1 pointer
         cb_reserve_back(tt::CBIndex::c_0, 1);
         uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
+        if constexpr (misalignment > 0) {
+            if ((h & 1) == 1) {
+                src_buffer_l1_addr += misalignment;
+            }
+        }
 
         // --------------------------------------------------------------------
         // 5.1) Async read for [x_start..x_end)

@@ -496,7 +496,7 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
 
 @pytest.mark.parametrize("shape", [[7, 7, 7, 17, 17]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
-@pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_permute_5d_yw(shape, perm, dtype, device):
     torch.set_printoptions(threshold=300000000)
     if is_grayskull() and dtype == ttnn.float32:
@@ -504,7 +504,7 @@ def test_permute_5d_yw(shape, perm, dtype, device):
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm, pad_value=None)
+    output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
     print(ttnn.from_device(output_tensor).to_torch())
     output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, perm)
