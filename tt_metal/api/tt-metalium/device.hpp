@@ -252,8 +252,8 @@ public:
     virtual uint32_t num_sub_devices() const = 0;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
-    virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
-    virtual std::optional<SubDeviceId> get_fabric_sub_device_id() const = 0;
+    virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual uint32_t get_completion_queue_reader_core() const = 0;
 

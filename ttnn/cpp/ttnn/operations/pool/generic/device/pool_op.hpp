@@ -46,6 +46,7 @@ struct Pool2D {
             CBHandle cb_out;
             uint32_t ncores;
             uint32_t ncores_w;
+            std::shared_ptr<Buffer> reader_indices_buffer;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
