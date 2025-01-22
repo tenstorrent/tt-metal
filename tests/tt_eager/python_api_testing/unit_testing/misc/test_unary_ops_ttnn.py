@@ -29,7 +29,6 @@ def test_unary_square_ttnn(input_shapes, device):
     assert comp_pass
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize(
     "input_shapes",
     (
