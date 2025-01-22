@@ -10,7 +10,7 @@ import ttnn
 from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-from models.utility_functions import comp_pcc, comp_allclose, skip_for_parallelism, skip_for_batch_parallism
+from models.utility_functions import comp_pcc, comp_allclose, skip_for_parallelism, skip_for_batch_parallelism
 from models.utility_functions import skip_for_grayskull
 
 
@@ -48,7 +48,7 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     batch_size, data_parallel, tensor_parallel = batch_dp_tp
 
-    skip, reason = skip_for_batch_parallism(batch_size, data_parallel)
+    skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
     if skip:
         pytest.skip(reason)
 

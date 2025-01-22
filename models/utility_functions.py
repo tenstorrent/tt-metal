@@ -1023,7 +1023,7 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
     return torch_tensor
 
 
-def skip_for_batch_parallism(batch_size: int, data_parallel: int) -> Union[bool, str]:
+def skip_for_batch_parallelism(batch_size: int, data_parallel: int) -> Union[bool, str]:
     if batch_size % data_parallel != 0:
         return (
             True,
