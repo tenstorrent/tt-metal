@@ -6,6 +6,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multiprod_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_multi_cq_multi_dev.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_constraints.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
 )
