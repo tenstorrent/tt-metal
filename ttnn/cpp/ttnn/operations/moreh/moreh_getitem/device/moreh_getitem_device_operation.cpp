@@ -110,14 +110,13 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         auto dimensions_pads = SmallVector<Padding::PadDimension>();
         SmallVector<uint32_t> output_size_vec;
         for (int dim = 0; dim < output_shape.size(); dim++) {
-            dimensions_pads.push_back(input_tensor.get_padded_shape().padding()[dim]);
-            output_size_vec.push_back(input_tensor.get_padded_shape()[dim]);
+            dimensions_pads.push_back(output_shape.value.padding()[dim]);
+            output_size_vec.push_back(output_shape.value[dim]);
         }
 
         auto index = index_tensors[0];
-        // Why are they both logical shape?
-        uint32_t index_size = index.get_logical_shape()[-1];
-        uint32_t index_size_without_padding = index.get_logical_shape()[-1];
+        uint32_t index_size = index.get_shape()[-1];
+        uint32_t index_size_without_padding = index.get_shape().value.without_padding()[-1];
 
         uint32_t last_dim = index_dims.back() + dim_offset;
 

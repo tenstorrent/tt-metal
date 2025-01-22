@@ -60,16 +60,18 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
     }
 
     const auto& input_shape = tensor_args.input.get_logical_shape();
-    auto output_shape = tenosr_args.input.get_padded_shape();
+    auto output_shape = tensor_args.input.get_padded_shape();
     auto input_rank = input_shape.rank();
 
     auto dim = operation_attributes.dim;
 
     if (operation_attributes.keepdim) {
-        return TensorSpec(ttnn::SimpleShape(output_shape) TensorLayout(
-            tensor_args.input.get_dtype(),
-            PageConfig(tensor_args.input.get_layout()),
-            operation_attributes.memory_config, ));
+        return TensorSpec(
+            ttnn::SimpleShape(output_shape),
+            TensorLayout(
+                tensor_args.input.get_dtype(),
+                PageConfig(tensor_args.input.get_layout()),
+                operation_attributes.memory_config, ));
     }
 
     ttnn::SmallVector<uint32_t> shape;

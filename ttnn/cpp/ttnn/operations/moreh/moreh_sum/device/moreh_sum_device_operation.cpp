@@ -69,7 +69,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     const auto& input = tensor_args.input;
-    const auto& input_shape = input.get_logical_shape();
+    const auto& input_shape = input.get_shape();
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
     log_debug(
@@ -82,7 +82,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
 
     ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keepdim) {
-        auto shape = input.get_padded_shape();
+        auto shape = input_shape.value;
         auto padding = shape.padding();
 
         if (is_tile_dim) {
@@ -99,7 +99,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         ttnn::SmallVector<uint32_t> shape;
         ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
-        auto input_padding = input.get_shape().padding();
+        auto input_padding = input_shape.value.padding();
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)

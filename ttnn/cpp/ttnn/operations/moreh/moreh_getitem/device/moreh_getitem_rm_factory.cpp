@@ -52,8 +52,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     for (auto index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape[index];
     }
-    ttnn::SimpleShape input_5d_shape(new_input_shape);
-    ttnn::SimpleShape output_5d_shape(new_output_shape);
+    ttnn::Shape input_5d_shape(new_input_shape);
+    ttnn::Shape output_5d_shape(new_output_shape);
 
     uint32_t index_start_dim = index_dims.front();
     uint32_t index_end_dim = index_dims.back();
@@ -61,7 +61,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     Tensor input_5d = input;
     input_5d = input_5d.reshape(input_5d_shape);
 
-    auto input_5d_shape_without_padding = input_5d_shape.get_logical_shape();
+    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
 
     IndexInfo index_info[5] = {0};
 
