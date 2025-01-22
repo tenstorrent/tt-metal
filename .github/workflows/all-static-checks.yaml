@@ -129,6 +129,7 @@ jobs:
       # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
       run: |
         echo "Checking compatibility with $(cmake --version)"
+        # FIXME: Why is HAVE_STD_REGEX needed? Clean up when we solve it.
         cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
   clang-tidy:
     runs-on: ubuntu-latest
