@@ -747,6 +747,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
                 }
             }
             if (all_core_host_pages_outside_of_region) {
+                dispatch_params.pages_per_txn = pages_per_txn;
                 return;
             }
 
@@ -839,6 +840,7 @@ std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_
         dispatch_params.unpadded_dst_offset,
         dispatch_params.pages_per_txn,
         initial_src_page_index,
+        dispatch_params.starting_src_host_page_index,
         dispatch_params.buffer_page_mapping);
 }
 
@@ -862,7 +864,7 @@ void copy_completion_queue_data_into_user_space(
     uint32_t cq_id,
     SystemMemoryManager& sysmem_manager,
     volatile bool& exit_condition) {
-    const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id] =
+    const auto& [buffer_layout, page_size, padded_page_size, buffer_page_mapping, dst, dst_offset, num_pages_read, cur_dev_page_id, starting_host_page_id] =
         read_buffer_descriptor;
     uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
     uint32_t contig_dst_offset = dst_offset;
@@ -1011,7 +1013,7 @@ void copy_completion_queue_data_into_user_space(
                         dev_page_id++;
                     }
                     if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
+                        dst_offset_bytes = (*host_page_id - starting_host_page_id) * page_size;
                     } else {
                         src_offset_bytes += src_offset_increment;
                         continue;
@@ -1021,7 +1023,7 @@ void copy_completion_queue_data_into_user_space(
                     host_page_id = buffer_page_mapping->dev_page_to_host_page_mapping_[dev_page_id];
                     dev_page_id++;
                     if (host_page_id.has_value()) {
-                        dst_offset_bytes = *host_page_id * page_size;
+                        dst_offset_bytes = (*host_page_id - starting_host_page_id) * page_size;
                     } else {
                         src_offset_bytes += src_offset_increment;
                         continue;
