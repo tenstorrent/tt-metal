@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,21 +20,11 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace ttnn {
-namespace operations {
-namespace binary {
-namespace test {
+namespace ttnn::operations::binary::test {
 
 // ============================================================================
 // Test data
 // ============================================================================
-
-const auto g_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape({1, 3, 1024, 1024}),
-    tt::tt_metal::TensorLayout(
-        tt::tt_metal::DataType::BFLOAT16,
-        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-        ttnn::L1_MEMORY_CONFIG));
 
 class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
 protected:
@@ -51,7 +41,17 @@ protected:
     }
 
     ttnn::IDevice& getDevice() { return *device_; }
+
+public:
+    static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;
 };
+
+const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
+    ttnn::SimpleShape({1, 3, 1024, 1024}),
+    tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+        ttnn::L1_MEMORY_CONFIG));
 
 // ============================================================================
 // Binary Eltwise Op tests
@@ -61,8 +61,7 @@ class BinaryOpTraceRuntime : public TTNNFixtureWithTraceEnabledDevice,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(BinaryOpTraceRuntime, Add) {
-    const auto& input_spec_a = std::get<0>(GetParam());
-    const auto& input_spec_b = std::get<1>(GetParam());
+    const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
         tt::tt_metal::IDevice* device = &getDevice();
@@ -74,8 +73,7 @@ TEST_P(BinaryOpTraceRuntime, Add) {
 }
 
 TEST_P(BinaryOpTraceRuntime, AddChain) {
-    const auto& input_spec_a = std::get<0>(GetParam());
-    const auto& input_spec_b = std::get<1>(GetParam());
+    const auto& [input_spec_a, input_spec_b] = GetParam();
 
     {
         auto add_chain = [](const auto& i0, const auto& i1) { return ttnn::add(i0, ttnn::add(i0, i1)); };
@@ -90,9 +88,8 @@ TEST_P(BinaryOpTraceRuntime, AddChain) {
 INSTANTIATE_TEST_SUITE_P(
     QueryOpRuntime,
     BinaryOpTraceRuntime,
-    ::testing::Values(std::make_tuple(g_interleaved_1_3_1024_1024_tiled, g_interleaved_1_3_1024_1024_tiled)));
+    ::testing::Values(std::make_tuple(
+        BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled,
+        BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled)));
 
-}  // namespace test
-}  // namespace binary
-}  // namespace operations
-}  // namespace ttnn
+}  // namespace ttnn::operations::binary::test
