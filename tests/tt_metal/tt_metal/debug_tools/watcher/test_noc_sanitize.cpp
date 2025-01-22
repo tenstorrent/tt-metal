@@ -36,12 +36,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
 
     // Set up program
     Program program = Program();
-    CoreCoord phys_core;
+    CoreCoord virtual_core;
     if (is_eth_core)
-        phys_core = device->ethernet_core_from_logical_core(core);
+        virtual_core = device->ethernet_core_from_logical_core(core);
     else
-        phys_core = device->worker_core_from_logical_core(core);
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());
+        virtual_core = device->worker_core_from_logical_core(core);
+    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up dram buffers
     uint32_t single_tile_size = 2 * 1024;
@@ -164,14 +164,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeAddress:
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
-                "bytes from local L1[{:#08x}] to Unknown core w/ physical coords {} [addr=0x{:08x}] (NOC target "
+                "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
                 core.y,
-                phys_core.x,
-                phys_core.y,
+                virtual_core.x,
+                virtual_core.y,
                 (is_eth_core) ? "erisc" : "brisc",
                 l1_buffer_size,
                 l1_buffer_addr,
@@ -181,14 +181,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeAlignmentL1Write: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
-                "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
+                "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
                 core.y,
-                phys_core.x,
-                phys_core.y,
+                virtual_core.x,
+                virtual_core.y,
                 risc_name,
                 noc,
                 l1_buffer_size,
@@ -200,14 +200,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeAlignmentL1Read: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
-                "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
                 core.y,
-                phys_core.x,
-                phys_core.y,
+                virtual_core.x,
+                virtual_core.y,
                 risc_name,
                 noc,
                 l1_buffer_size,
@@ -218,14 +218,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeZeroL1Write: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
-                "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (NOC target "
+                "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                 "overwrites mailboxes).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
                 core.y,
-                phys_core.x,
-                phys_core.y,
+                virtual_core.x,
+                virtual_core.y,
                 risc_name,
                 noc,
                 l1_buffer_size,
@@ -236,14 +236,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast read {} "
-                "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (Local L1 "
+                "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
                 core.y,
-                phys_core.x,
-                phys_core.y,
+                virtual_core.x,
+                virtual_core.y,
                 (is_eth_core) ? "erisc" : "brisc",
                 l1_buffer_size,
                 l1_buffer_addr,
