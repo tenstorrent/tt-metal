@@ -17,9 +17,9 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         static_cast<int>(input_tensor.storage_type()));
 
     TT_FATAL(
-        input_tensor.get_legacy_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
+        input_tensor.get_padded_shape()[-1] % (tt::constants::TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be divisible by {} for tiling.",
-        input_tensor.get_legacy_shape()[-1],
+        input_tensor.get_padded_shape()[-1],
         tt::constants::TILE_WIDTH * 2);
 
     ttnn::SimpleShape pad_shape =

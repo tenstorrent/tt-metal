@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     auto output_shape = output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.get_legacy_shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.get_padded_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
@@ -100,13 +100,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     {
         log_debug("src0_buffer_addr: {}", src0_buffer->address());
         log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        log_debug("a.shape[0]: {}", a.get_legacy_shape()[0]);
+        log_debug("a.shape[0]: {}", a.get_padded_shape()[0]);
         log_debug("out.shape[0]: {}", output_shape[0]);
-        log_debug("a.shape[1]: {}", a.get_legacy_shape()[1]);
+        log_debug("a.shape[1]: {}", a.get_padded_shape()[1]);
         log_debug("out.shape[1]: {}", output_shape[1]);
-        log_debug("a.shape[2]: {}", a.get_legacy_shape()[2]);
+        log_debug("a.shape[2]: {}", a.get_padded_shape()[2]);
         log_debug("out.shape[2]: {}", output_shape[2]);
-        log_debug("s.shape[3]: {}", a.get_legacy_shape()[3]);
+        log_debug("s.shape[3]: {}", a.get_padded_shape()[3]);
         log_debug("out.shape[3]: {}", output_shape[3]);
         log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -122,13 +122,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const std::array reader_rt_args = {
         src0_buffer->address(),
         dst_buffer->address(),
-        a.get_legacy_shape()[0],
+        a.get_padded_shape()[0],
         output_shape[0],
-        a.get_legacy_shape()[1],
+        a.get_padded_shape()[1],
         output_shape[1],
-        a.get_legacy_shape()[2],
+        a.get_padded_shape()[2],
         output_shape[2],
-        a.get_legacy_shape()[3],
+        a.get_padded_shape()[3],
         output_shape[3],
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
@@ -142,11 +142,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         std::uint32_t{0},
         std::uint32_t{0},
         output_shape[2],
-        a.get_legacy_shape()[2],
+        a.get_padded_shape()[2],
         unpadded_row_size_nbytes,
         padded_row_size_nbytes,
         std::uint32_t{0},
-        output.get_legacy_shape()[0]};
+        output.get_padded_shape()[0]};
     const auto& writer_rt_args = reader_rt_args;
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
@@ -220,16 +220,16 @@ operation::ProgramWithCallbacks pad_tile(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    uint32_t num_unpadded_Xt = a.get_legacy_shape()[3] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = a.get_padded_shape()[3] / TILE_WIDTH;
     uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = a.get_legacy_shape()[2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = a.get_padded_shape()[2] / TILE_HEIGHT;
     uint32_t num_total_Yt = output_shape[2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
-    uint32_t num_unpadded_Z = a.get_legacy_shape()[1];
+    uint32_t num_unpadded_Z = a.get_padded_shape()[1];
     uint32_t num_total_Z = output_shape[1];
     uint32_t num_padded_Zt = (num_total_Z - num_unpadded_Z) * num_total_Yt * num_total_Xt;
-    uint32_t num_unpadded_W = a.get_legacy_shape()[0];
+    uint32_t num_unpadded_W = a.get_padded_shape()[0];
     uint32_t num_total_W = output_shape[0];
     uint32_t num_padded_Wt = (num_total_W - num_unpadded_W) * num_total_Z * num_total_Yt * num_total_Xt;
 
@@ -457,7 +457,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     auto output_shape = output_padded_shape;
 
-    uint32_t unpadded_row_size_nbytes = a.get_legacy_shape()[3] * a.element_size();
+    uint32_t unpadded_row_size_nbytes = a.get_padded_shape()[3] * a.element_size();
     uint32_t padded_row_size_nbytes = output_shape[3] * a.element_size();  // Assuming output is same datatype as input
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
@@ -560,13 +560,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         tt::log_debug("ntiles_per_core_w: {}", ntiles_per_core_w);
         tt::log_debug("src0_buffer_addr: {}", src0_buffer->address());
         tt::log_debug("dst_buffer_addr: {}", dst_buffer->address());
-        tt::log_debug("a.shape[0]: {}", a.get_legacy_shape()[0]);
+        tt::log_debug("a.shape[0]: {}", a.get_padded_shape()[0]);
         tt::log_debug("out.shape[0]: {}", output_shape[0]);
-        tt::log_debug("a.shape[1]: {}", a.get_legacy_shape()[1]);
+        tt::log_debug("a.shape[1]: {}", a.get_padded_shape()[1]);
         tt::log_debug("out.shape[1]: {}", output_shape[1]);
-        tt::log_debug("a.shape[2]: {}", a.get_legacy_shape()[2]);
+        tt::log_debug("a.shape[2]: {}", a.get_padded_shape()[2]);
         tt::log_debug("out.shape[2]: {}", output_shape[2]);
-        tt::log_debug("s.shape[3]: {}", a.get_legacy_shape()[3]);
+        tt::log_debug("s.shape[3]: {}", a.get_padded_shape()[3]);
         tt::log_debug("out.shape[3]: {}", output_shape[3]);
         tt::log_debug("unpadded_row_size_nbytes: {}", unpadded_row_size_nbytes);
         tt::log_debug("padded_row_size_nbytes: {}", padded_row_size_nbytes);
@@ -589,7 +589,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     int32_t rem_nbatch =
         nbatch;  // per core h, there are ncores_per_batch_h cores, ie each batch ncores_h = ncores_per_batch_h
     for (int32_t b = 0; b < nbatch; ++b) {
-        int32_t rem_src_nsticks = a.get_legacy_shape()[2];
+        int32_t rem_src_nsticks = a.get_padded_shape()[2];
         for (uint32_t j = 0; j < ncores_per_batch_h; ++j) {
             uint32_t num_local_unpadded_nsticks = local_nsticks;
             if (rem_src_nsticks - local_nsticks >= 0) {
@@ -619,13 +619,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                 const std::array reader_rt_args = {
                     src0_buffer->address(),
                     dst_buffer->address(),
-                    a.get_legacy_shape()[0],
+                    a.get_padded_shape()[0],
                     output_shape[0],
-                    a.get_legacy_shape()[1],
+                    a.get_padded_shape()[1],
                     output_shape[1],
-                    a.get_legacy_shape()[2],
+                    a.get_padded_shape()[2],
                     output_shape[2],
-                    a.get_legacy_shape()[3],
+                    a.get_padded_shape()[3],
                     output_shape[3],
                     curr_stick_size_nbytes,
                     (uint32_t)dst_nbytes_per_core_w,
@@ -707,8 +707,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t num_w_sticks_per_core_group_2) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -1030,8 +1030,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();

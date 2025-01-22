@@ -34,7 +34,7 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
 
 std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_padded_shape();
     ttnn::SimpleShape output_shape = ttnn::SimpleShape(input_shape.to_array_4D());
 
     uint32_t nbatch = input_shape[0];
