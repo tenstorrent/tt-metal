@@ -5,25 +5,42 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    // X = output width
+    // Y = output height
+    // input shape = (..., H, W)
+    // output shape = (..., Y, X)
+
+    /**
+     * The reader kernel reads in a XW block, and then compute kernel transposes the XW block into a WX block
+     * X is our output width dimension, so the X values are contiguous in the buffer
+     * As a result we can write them out into chunks
+     * However, since our output has subtiles/faces, where each face line is 16 elements, we have bubbles every 16
+     * elements Thus we can only write out 16 elements at a time This kernel takes in the transpose XW block (now WX
+     * where X is the contiguous dimension) and writes out the subtile/face lines along the X to their final, permuted
+     * positions in the output tensor. If the Y dimension is not a multiple of TILE_HEIGHT, we pad the last set of tiles
+     * along the Y dimension with the pad value until it is
+     */
+
     //--------------------------------------------------------------------------
     // 1) Compile-time Arguments
     //--------------------------------------------------------------------------
+
     constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t RANK = get_compile_time_arg_val(1);
+    // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
     constexpr uint32_t element_size = get_compile_time_arg_val(3);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(4);
     constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(5);
     constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(6);
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(7);
-    constexpr uint32_t x_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t x_dim_in_input = get_compile_time_arg_val(8);
     constexpr uint32_t X = get_compile_time_arg_val(9);
     constexpr uint32_t W = get_compile_time_arg_val(10);
-    constexpr uint32_t output_H = get_compile_time_arg_val(11);
+    constexpr uint32_t Y = get_compile_time_arg_val(11);
     constexpr uint32_t X_p = get_compile_time_arg_val(12);
     constexpr uint32_t W_p = get_compile_time_arg_val(13);
-    constexpr uint32_t non_x_rows = get_compile_time_arg_val(14);
-    // 15 is output_H_t, see below
+    constexpr uint32_t rows_per_x = get_compile_time_arg_val(14);
+    // 15 is Y_t, see below
     constexpr uint32_t W_t = get_compile_time_arg_val(16);
     constexpr uint32_t final_tile_real_x = get_compile_time_arg_val(17);
     constexpr uint32_t final_tile_real_faces_x = get_compile_time_arg_val(18);
@@ -48,11 +65,11 @@ void kernel_main() {
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
 
     constexpr uint32_t tile_bytes = TILE_HW * element_size;
-    constexpr uint32_t w_dim = N - 1;
+    constexpr uint32_t w_dim = RANK - 1;
 
     // For output height, tile-based:
-    constexpr uint32_t H_p = TILE_HEIGHT * ((output_H + TILE_HEIGHT - 1) / TILE_HEIGHT);
-    constexpr uint32_t output_H_t = H_p / TILE_HEIGHT;
+    constexpr uint32_t H_p = TILE_HEIGHT * ((Y + TILE_HEIGHT - 1) / TILE_HEIGHT);
+    constexpr uint32_t Y_t = H_p / TILE_HEIGHT;
     // For X dimension:
     constexpr uint32_t X_t = X_p / TILE_HEIGHT;
 
@@ -68,38 +85,38 @@ void kernel_main() {
     uint32_t end_padding_tile_idx = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t array_start_offset = 5;
-    uint32_t input_shape[N], dims[N];
-    for (uint32_t i = 0; i < N; i++) {
+    uint32_t input_shape[RANK], dims[RANK];
+    for (uint32_t i = 0; i < RANK; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + array_start_offset);
-        dims[i] = get_arg_val<uint32_t>(i + N + array_start_offset);
+        dims[i] = get_arg_val<uint32_t>(i + RANK + array_start_offset);
     }
 
     // Build the permuted output shape
-    uint32_t output_shape[N];
-    for (uint32_t i = 0; i < N; i++) {
+    uint32_t output_shape[RANK];
+    for (uint32_t i = 0; i < RANK; i++) {
         output_shape[i] = input_shape[dims[i]];
     }
 
     //--------------------------------------------------------------------------
     // 4) Build padded/tiled shapes
     //--------------------------------------------------------------------------
-    uint32_t output_tiled_shape[N];
-    for (uint32_t i = 0; i < N; i++) {
-        if (i < N - 2) {
+    uint32_t output_tiled_shape[RANK];
+    for (uint32_t i = 0; i < RANK; i++) {
+        if (i < RANK - 2) {
             output_tiled_shape[i] = output_shape[i];
-        } else if (i == N - 2) {
-            output_tiled_shape[i] = output_H_t;
+        } else if (i == RANK - 2) {
+            output_tiled_shape[i] = Y_t;
         } else {
-            output_tiled_shape[i] = X_t;  // i == N - 1
+            output_tiled_shape[i] = X_t;  // i == RANK - 1
         }
     }
 
     //--------------------------------------------------------------------------
     // 5) Row strides in the padded shape
     //--------------------------------------------------------------------------
-    uint32_t dest_tiled_strides[N];
-    dest_tiled_strides[N - 1] = 1;
-    for (int i = N - 2; i >= 0; i--) {
+    uint32_t dest_tiled_strides[RANK];
+    dest_tiled_strides[RANK - 1] = 1;
+    for (int i = RANK - 2; i >= 0; i--) {
         dest_tiled_strides[i] = dest_tiled_strides[i + 1] * output_tiled_shape[i + 1];
     }
 
@@ -110,9 +127,9 @@ void kernel_main() {
     const InterleavedAddrGenFast<dst_is_dram> s = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    uint32_t idxs[N];
-    idxs[N - 1] = 0;
-    uint32_t dest_multi_idx[N];
+    uint32_t idxs[RANK];
+    idxs[RANK - 1] = 0;
+    uint32_t dest_multi_idx[RANK];
 
     // If the new X dimension can have partial faces in the last tile:
     uint32_t real_faces_x = 0;
@@ -132,53 +149,54 @@ void kernel_main() {
         const uint32_t x_block = rem % x_blocks;
         rem /= x_blocks;
 
-        uint32_t xw_block = rem % non_x_rows;
+        uint32_t xw_block = rem % rows_per_x;
         uint32_t remainder = xw_block;
 
         // W range
         uint32_t w_start = w_block * w_block_size;
-        uint32_t w_end = (w_start + w_block_size < input_shape[N - 1]) ? (w_start + w_block_size) : input_shape[N - 1];
+        uint32_t w_end =
+            (w_start + w_block_size < input_shape[RANK - 1]) ? (w_start + w_block_size) : input_shape[RANK - 1];
 
-        // Fill idxs except for x_dim
-        for (int32_t d = N - 2; d >= 0; --d) {
-            if (d == (int32_t)x_dim) {
+        // Fill idxs except for x_dim_in_input
+        for (int32_t d = RANK - 2; d >= 0; --d) {
+            if (d == (int32_t)x_dim_in_input) {
                 idxs[d] = 0;
                 continue;
             }
             idxs[d] = remainder % input_shape[d];
             remainder /= input_shape[d];
         }
-        idxs[N - 1] = w_start;
+        idxs[RANK - 1] = w_start;
 
         // Build dest_multi_idx from dims[]
-        for (uint32_t d = 0; d < N; d++) {
+        for (uint32_t d = 0; d < RANK; d++) {
             dest_multi_idx[d] = idxs[dims[d]];
         }
 
-        // If permuted_w_dim != N-2, we compute sub-tile offsets once per block
+        // If permuted_w_dim != RANK-2, we compute sub-tile offsets once per block
         // else we recalc them inside the W loop below.
-        uint32_t output_h = 0;
+        uint32_t y = 0;
         uint8_t output_sub_tile_line = 0;
         uint8_t output_face_h = 0;
         uint16_t base_face_line_offset_bytes = 0;
 
-        if constexpr (permuted_w_dim != (N - 2)) {
-            output_h = dest_multi_idx[N - 2];
-            output_sub_tile_line = output_h % FACE_HEIGHT;
-            output_face_h = (output_h % TILE_HEIGHT) / FACE_HEIGHT;
+        if constexpr (permuted_w_dim != (RANK - 2)) {
+            y = dest_multi_idx[RANK - 2];
+            output_sub_tile_line = y % FACE_HEIGHT;
+            output_face_h = (y % TILE_HEIGHT) / FACE_HEIGHT;
             base_face_line_offset_bytes =
                 static_cast<uint16_t>(output_face_h * FACE_H_STRIDE_BYTES + output_sub_tile_line * SUBTILE_LINE_BYTES);
         }
 
-        // The tile index for the N-2 dimension
-        dest_multi_idx[N - 2] /= TILE_HEIGHT;
+        // The tile index for the RANK-2 dimension
+        dest_multi_idx[RANK - 2] /= TILE_HEIGHT;
         // The tile index for the last dimension => x_block
-        dest_multi_idx[N - 1] = x_block;
+        dest_multi_idx[RANK - 1] = x_block;
 
         // Flatten => base_tile_offset
         uint32_t base_tile_offset = 0;
-        for (uint32_t i = 0; i < N; i++) {
-            if constexpr (permuted_w_dim != (N - 2)) {
+        for (uint32_t i = 0; i < RANK; i++) {
+            if constexpr (permuted_w_dim != (RANK - 2)) {
                 if (i == permuted_w_dim) {
                     continue;
                 }
@@ -204,7 +222,7 @@ void kernel_main() {
                 uint16_t local_face_offset_bytes = base_face_line_offset_bytes;
                 uint32_t tile = 0;
 
-                if constexpr (permuted_w_dim != (N - 2)) {
+                if constexpr (permuted_w_dim != (RANK - 2)) {
                     tile = base_tile_offset + (w * W_stride_tile);
                 } else {
                     // Recompute sub-tile offsets for each W
@@ -240,12 +258,12 @@ void kernel_main() {
     //--------------------------------------------------------------------------
     if constexpr (needs_y_padding) {
         // Some sites used const or runtime logic; here we do everything at compile time:
-        constexpr uint32_t y_t = output_H_t - 1;
-        constexpr uint8_t Y_in_tile = (output_H % TILE_HEIGHT);
+        constexpr uint32_t y_t = Y_t - 1;
+        constexpr uint8_t Y_in_tile = (Y % TILE_HEIGHT);
         constexpr uint8_t face_y_start = (Y_in_tile / FACE_HEIGHT);
 
         // We'll reuse 'dest_multi_idx' for tile indexing
-        dest_multi_idx[N - 2] = y_t;  // fix the tile dimension in the N-2 dimension
+        dest_multi_idx[RANK - 2] = y_t;  // fix the tile dimension in the RANK-2 dimension
 
         cb_wait_front(tt::CBIndex::c_3, 1);
         uint32_t l1_read_ptr = get_read_ptr(tt::CBIndex::c_3);
@@ -253,9 +271,9 @@ void kernel_main() {
         for (uint32_t tile_idx = start_padding_tile_idx; tile_idx < end_padding_tile_idx; ++tile_idx) {
             // Unflatten 'tile_idx' => dest_multi_idx
             size_t remaining = tile_idx;
-            for (uint32_t i = 0; i < N; ++i) {
-                size_t dim = N - 1 - i;
-                if (dim == (N - 2)) {
+            for (uint32_t i = 0; i < RANK; ++i) {
+                size_t dim = RANK - 1 - i;
+                if (dim == (RANK - 2)) {
                     continue;
                 }
                 dest_multi_idx[dim] = (remaining % output_tiled_shape[dim]);
@@ -264,7 +282,7 @@ void kernel_main() {
 
             // Flatten => linear_idx
             uint32_t linear_idx = 0;
-            for (uint32_t i = 0; i < N; ++i) {
+            for (uint32_t i = 0; i < RANK; ++i) {
                 linear_idx += dest_tiled_strides[i] * dest_multi_idx[i];
             }
 
