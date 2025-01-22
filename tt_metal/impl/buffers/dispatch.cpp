@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <device_command.hpp>
 #include <device.hpp>
 #include "dispatch.hpp"
@@ -46,7 +47,7 @@ struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
 // Parameters specific to sharded buffers
 struct ShardedBufferWriteDispatchParams : BufferWriteDispatchParams {
     bool width_split;
-    uint32_t starting_dst_page_index;
+    uint32_t starting_dst_host_page_index;
     uint32_t initial_pages_skipped;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
     uint32_t max_pages_per_shard;
@@ -82,7 +83,7 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
-    dispatch_params.starting_dst_page_index = region.offset / buffer.page_size();
+    dispatch_params.starting_dst_host_page_index = region.offset / buffer.page_size();
     dispatch_params.initial_pages_skipped = 0;
     dispatch_params.device = buffer.device();
     dispatch_params.cq_id = cq_id;
@@ -242,7 +243,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
             auto& host_page = page_mapping.dev_page_to_host_page_mapping_[dev_page];
             if (host_page.has_value()) {
                 const uint32_t src_offset =
-                    (host_page.value() - dispatch_params.starting_dst_page_index) * buffer.page_size();
+                    (host_page.value() - dispatch_params.starting_dst_host_page_index) * buffer.page_size();
                 command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
             }
             dst_offset += dispatch_params.page_size_to_write;
@@ -417,11 +418,11 @@ void write_sharded_buffer_to_core(
         uint32_t host_page = core_host_pages.back();
         uint32_t starting_host_page_index = core_host_pages.size() - 1;
         for (int32_t i = core_host_pages.size() - 1; i >= 0; i--) {
-            const uint32_t ending_dst_page_index = dispatch_params.starting_dst_page_index +
-                                                   dispatch_params.total_pages_written +
-                                                   dispatch_params.total_pages_to_write;
-            const bool host_page_within_region = core_host_pages[i] >= dispatch_params.starting_dst_page_index &&
-                                                 core_host_pages[i] < ending_dst_page_index;
+            const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
+                                                        dispatch_params.total_pages_written +
+                                                        dispatch_params.total_pages_to_write;
+            const bool host_page_within_region = core_host_pages[i] >= dispatch_params.starting_dst_host_page_index &&
+                                                 core_host_pages[i] < ending_dst_host_page_index;
             if (host_page_within_region) {
                 all_core_host_pages_outside_of_region = false;
                 host_page = core_host_pages[i];
@@ -435,14 +436,15 @@ void write_sharded_buffer_to_core(
         }
 
         dispatch_params.dst_page_index = dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-        starting_dst_device_page_index = dispatch_params.buffer_page_mapping
-                                             ->host_page_to_dev_page_mapping_[dispatch_params.starting_dst_page_index];
+        starting_dst_device_page_index =
+            dispatch_params.buffer_page_mapping
+                ->host_page_to_dev_page_mapping_[dispatch_params.starting_dst_host_page_index];
         curr_page_idx_in_shard = starting_host_page_index * num_dev_pages_per_host_page;
         remaining_pages_in_shard -= curr_page_idx_in_shard;
     } else {
-        starting_dst_device_page_index = dispatch_params.starting_dst_page_index;
+        starting_dst_device_page_index = dispatch_params.starting_dst_host_page_index;
         curr_page_idx_in_shard = 0;
-        while (dispatch_params.initial_pages_skipped < dispatch_params.starting_dst_page_index) {
+        while (dispatch_params.initial_pages_skipped < dispatch_params.starting_dst_host_page_index) {
             dispatch_params.initial_pages_skipped += 1;
             curr_page_idx_in_shard += 1;
             remaining_pages_in_shard -= 1;
@@ -583,18 +585,24 @@ void write_to_device_buffer(
 
 // Initialize Dispatch Parameters - reused across write txns
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed) {
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    const BufferRegion& region) {
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = buffer.device();
     dispatch_params.padded_page_size = buffer.aligned_page_size();
-    dispatch_params.src_page_index = 0;
+    dispatch_params.initial_pages_skipped = 0;
+    dispatch_params.src_page_index = region.offset / buffer.page_size();
+    dispatch_params.starting_src_host_page_index = region.offset / buffer.page_size();
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
-    dispatch_params.num_total_pages = buffer.num_pages();
+    dispatch_params.total_pages_to_read = region.size / buffer.page_size();
+    dispatch_params.total_pages_read = 0;
     dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
@@ -707,31 +715,86 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     const CoreCoord core,
     CoreType dispatch_core_type) {
     uint32_t pages_per_txn;
+    uint32_t host_page;
+    uint32_t bank_base_address = buffer.address();
 
     if (dispatch_params.width_split) {
         pages_per_txn = dispatch_params.buffer_page_mapping->core_shard_shape_[core_id][0] *
                         buffer.shard_spec().shape_in_pages()[1];
+
+        if (pages_per_txn > 0) {
+            const std::vector<uint32_t> core_host_pages =
+                dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id];
+            TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
+            TT_ASSERT(pages_per_txn % core_host_pages.size() == 0);
+            const uint32_t num_dev_pages_per_host_page = pages_per_txn / core_host_pages.size();
+            bool all_core_host_pages_outside_of_region = true;
+            host_page = core_host_pages.back();
+            // uint32_t starting_host_page_index = core_host_pages.size() - 1;
+            for (int32_t i = core_host_pages.size() - 1; i >= 0; i--) {
+                const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
+                                                            dispatch_params.total_pages_to_read +
+                                                            dispatch_params.total_pages_read;
+                const bool host_page_within_region =
+                    core_host_pages[i] >= dispatch_params.starting_src_host_page_index &&
+                    core_host_pages[i] < ending_src_host_page_index;
+                if (host_page_within_region) {
+                    all_core_host_pages_outside_of_region = false;
+                    host_page = core_host_pages[i];
+                    // starting_host_page_index = i;
+                } else {
+                    pages_per_txn -= num_dev_pages_per_host_page;
+                }
+            }
+            if (all_core_host_pages_outside_of_region) {
+                return;
+            }
+
+            dispatch_params.src_page_index =
+                dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
+            bank_base_address +=
+                (dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page] *
+                 buffer.page_size());
+        }
     } else {
-        pages_per_txn = std::min(dispatch_params.num_total_pages, dispatch_params.max_pages_per_shard);
-        dispatch_params.num_total_pages -= pages_per_txn;
+        host_page = dispatch_params.src_page_index;
+        pages_per_txn = std::min(dispatch_params.total_pages_to_read, dispatch_params.max_pages_per_shard);
+
+        if (dispatch_params.initial_pages_skipped + dispatch_params.max_pages_per_shard <=
+            dispatch_params.starting_src_host_page_index) {
+            pages_per_txn = 0;
+            dispatch_params.initial_pages_skipped += dispatch_params.max_pages_per_shard;
+        } else if (core_id == dispatch_params.starting_src_host_page_index / dispatch_params.max_pages_per_shard) {
+            dispatch_params.initial_pages_skipped +=
+                (dispatch_params.starting_src_host_page_index - dispatch_params.initial_pages_skipped);
+            const uint32_t remaining_pages_in_shard =
+                ((core_id + 1) * dispatch_params.max_pages_per_shard) - dispatch_params.initial_pages_skipped;
+            const uint32_t curr_page_idx_in_shard = dispatch_params.max_pages_per_shard - remaining_pages_in_shard;
+            pages_per_txn = std::min(pages_per_txn, remaining_pages_in_shard);
+            bank_base_address += curr_page_idx_in_shard * buffer.page_size();
+        }
     }
-    uint32_t bank_base_address = buffer.address();
+
     if (buffer.is_dram()) {
         bank_base_address +=
             buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
 
+    dispatch_params.total_pages_to_read -= pages_per_txn;
+    dispatch_params.total_pages_read += pages_per_txn;
     dispatch_params.pages_per_txn = pages_per_txn;
 
     if (dispatch_params.pages_per_txn > 0) {
-        if (dispatch_params.width_split) {
-            uint32_t host_page = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id][0];
-            dispatch_params.src_page_index =
-                dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-            dispatch_params.unpadded_dst_offset = host_page * buffer.page_size();
-        } else {
-            dispatch_params.unpadded_dst_offset = dispatch_params.src_page_index * buffer.page_size();
-        }
+        // if (dispatch_params.width_split) {
+        //     // uint32_t host_page = dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id][0];
+        //     // dispatch_params.src_page_index =
+        //     //     dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
+        //     dispatch_params.unpadded_dst_offset = host_page * buffer.page_size();
+        // } else {
+        //     dispatch_params.unpadded_dst_offset = host_page * buffer.page_size();
+        // }
+        dispatch_params.unpadded_dst_offset =
+            (host_page - dispatch_params.starting_src_host_page_index) * buffer.page_size();
         dispatch_params.address = bank_base_address;
         dispatch_params.core = core;
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);

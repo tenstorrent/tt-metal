@@ -27,8 +27,11 @@ struct BufferReadDispatchParams {
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     bool width_split;
+    uint32_t initial_pages_skipped;
+    uint32_t starting_src_host_page_index;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    uint32_t num_total_pages;
+    uint32_t total_pages_to_read;
+    uint32_t total_pages_read;
     uint32_t max_pages_per_shard;
     CoreCoord core;
 };
@@ -43,7 +46,10 @@ void write_to_device_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    const BufferRegion& region);
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,
