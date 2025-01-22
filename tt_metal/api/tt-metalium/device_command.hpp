@@ -17,6 +17,7 @@
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {
+
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
