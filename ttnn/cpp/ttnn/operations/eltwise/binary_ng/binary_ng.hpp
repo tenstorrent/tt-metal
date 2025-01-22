@@ -9,10 +9,6 @@
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-inline Tensor typecast_to(DataType dtype, const Tensor& input) {
-    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
-}
-
 inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
     return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
 }
@@ -33,27 +29,7 @@ struct BinaryNg {
         tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor_a,
-        float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
-
-    static Tensor invoke(
         const Tensor& input_tensor_a,
         float scalar,
         const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -74,19 +50,7 @@ struct BinaryNgBitwise {
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor_a,
-        float scalar,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor_a,
         float scalar,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -104,21 +68,7 @@ struct InplaceBinaryNg {
         tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        float scalar,
-        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         float scalar,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
