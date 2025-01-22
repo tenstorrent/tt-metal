@@ -243,7 +243,7 @@ ttnn::Tensor ExecutePad::invoke(
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
         auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
-        auto output_shape = to_vec(output_tensor.get_logical_shape().view());
+        auto output_shape = to_vec(output_tensor.get_padded_shape().view());
         auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
         if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
@@ -255,7 +255,7 @@ ttnn::Tensor ExecutePad::invoke(
         }
     } else {
         auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
-        auto output_shape = to_vec(output_tensor.get_logical_shape().view());
+        auto output_shape = to_vec(output_tensor.get_padded_shape().view());
         auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
         auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
         output_tensor =

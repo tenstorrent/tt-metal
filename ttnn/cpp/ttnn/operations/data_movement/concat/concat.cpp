@@ -133,9 +133,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                         {std::nullopt},
                         queue_id)[0];
 
-                    untilized_tensor = ttnn::reshape(
-                        untilized_tensor,
-                        ttnn::Shape{input_tensor.get_logical_shape().view(), input_tensor.get_logical_shape().view()});
+                    untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.get_logical_shape());
                     return untilized_tensor;
                 });
             return std::make_tuple(itensors, dim, groups);
