@@ -306,7 +306,7 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        return self.forward(
+        tt_logits = self.forward(
             x,
             current_pos,
             rot_mats=rot_mats,
@@ -314,6 +314,10 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
+        # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+        if not self.args.is_galaxy:
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        return tt_logits
 
     def forward(
         self,
