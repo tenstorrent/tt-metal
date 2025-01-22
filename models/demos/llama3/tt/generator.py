@@ -316,18 +316,27 @@ class LlamaGenerator:
         """
         B = tokens.shape[0]
         last_token_idx = prefill_len - 1
-        vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
-            batch_images=[vision_images],
-            batch_masks=[vision_mask],
-            total_len=total_len,
-        )
+
+        text_only_inference = vision_images is None
+        if not text_only_inference:
+            (
+                vision_tokens,
+                cross_attention_masks,
+                full_text_row_masked_out_mask,
+            ) = self.model.compute_vision_tokens_masks(
+                batch_images=[vision_images],
+                batch_masks=[vision_mask],
+                total_len=total_len,
+            )
+
+            if cross_page_table is not None:
+                num_vision_tokens = vision_tokens.shape[2]
+                cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
+        else:
+            vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = None, None, None
 
         if page_table is not None:
             page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
-
-        if cross_page_table is not None:
-            num_vision_tokens = vision_tokens.shape[2]
-            cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
 
         (
             tt_h,
@@ -344,6 +353,7 @@ class LlamaGenerator:
             prefill_len=prefill_len,
             page_table=page_table,
             cross_page_table=cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
@@ -359,6 +369,7 @@ class LlamaGenerator:
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
             cross_page_table=tt_cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         del tt_page_table
