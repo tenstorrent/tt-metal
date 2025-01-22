@@ -145,7 +145,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
     if (write && (addr < MEM_MAP_END)) {
-        return DebugSanitizeNocAddrUnderflow;
+        return DebugSanitizeNocAddrMailbox;
     }
 #endif
     return DebugSanitizeNocOK;
@@ -193,7 +193,7 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     }
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
     if (write && (addr < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END)) {
-        return DebugSanitizeNocAddrUnderflow;
+        return DebugSanitizeNocAddrMailbox;
     }
 #endif
     return DebugSanitizeNocOK;
@@ -390,16 +390,14 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
-        // TODO: Use debug_valid_eth_addr on ethernet cores.
+        // Local addr needs to be checked depending on whether we're on eth or tensix.
+#if (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)) && !defined(ARCH_GRAYSKULL)
+        uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#else
+        uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#endif
         debug_sanitize_post_noc_addr_and_hang(
-            noc_id,
-            noc_addr,
-            worker_addr,
-            len,
-            multicast,
-            dir,
-            DEBUG_SANITIZE_NOC_LOCAL,
-            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ));
+            noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
 
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
             debug_sanitize_post_noc_addr_and_hang(
