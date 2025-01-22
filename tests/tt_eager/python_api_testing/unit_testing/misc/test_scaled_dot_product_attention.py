@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -67,13 +67,16 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
     logger.debug(f"K: {K.shape}")
     logger.debug(f"V: {V.shape}")
 
-    tt_Q = ttnn.Tensor(Q, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_K = ttnn.Tensor(K, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_V = ttnn.Tensor(V, dtype).to(ttnn.TILE_LAYOUT).to(device)
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q, tt_K, tt_V, is_causal=True, program_config=program_config, compute_kernel_config=compute_kernel_config
     )
+    logger.debug(f"tt_back: {tt_back.shape}")
     tt_back = ttnn.to_torch(tt_back)
+    # Slice out any tile-padding
+    tt_back = tt_back[:, :, :s, :]
 
     K_repeated = torch.cat([K[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)  # b, nh, d, S
@@ -81,10 +84,42 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
+    logger.debug(f"mse: {((gt - tt_back) ** 2).mean()}")
     assert out_pass
 
 
-# @pytest.mark.skip(reason="ND PCC issues")
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
+@skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp8", "bf16"])
+@pytest.mark.parametrize("q_chunk_size", [128, 512], ids=["q128", "q512"])
+@pytest.mark.parametrize("k_chunk_size", [128, 512], ids=["k128", "k512"])
+@pytest.mark.parametrize("is_causal", [True, False], ids=["causal", "noncausal"])
+@pytest.mark.parametrize("b", [1, 32], ids=["b1", "b32"])
+@pytest.mark.parametrize("nh", [1, 8], ids=["nh1", "nh8"])
+@pytest.mark.parametrize("nkv", [1, 8], ids=["nkv1", "nkv8"])
+@pytest.mark.parametrize("s", [1, 160, 2011], ids=["s1", "s160", "s2011"])
+@pytest.mark.parametrize(
+    "d",
+    [128],
+    ids=[
+        "d128",
+    ],
+)
+def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal, is_ci_env):
+    if q_chunk_size == 512 and k_chunk_size == 512:
+        pytest.skip("OOM config.")
+    if nh % nkv != 0:
+        pytest.skip("nkv must divide nh")
+    if is_ci_env and (b == 1 or nh == 1 or s == 1 or q_chunk_size == 512 or k_chunk_size == 512):
+        pytest.skip("Skipping to avoid CI timeout")
+    ttnn.device.DisablePersistentKernelCache()
+    if is_causal:
+        run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
+    else:
+        run_sdpa_noncausal(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, use_mask=False)
+
+
 @skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
@@ -118,7 +153,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 @pytest.mark.parametrize("k_chunk_size", [128], ids=["k128"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    ([1, 8, 1, 8192 * 16, 128],),  # Llama2-70B 128K sequence
+    ([1, 8, 1, 128 * 1024, 128],),  # Llama2-70B 128K sequence
 )
 def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
@@ -140,11 +175,10 @@ def test_sdpa_tt_large_seq(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size,
     "b, nh, nkv, s, d",
     (
         [1, 8, 1, 128, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 2048 * 16, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 2, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 4, 128],  # Llama2-70B 128K sequence
-        [1, 8, 1, 8192 * 16, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 8 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 16 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 32 * 1024, 128],  # Llama2-70B 128K sequence
+        [1, 8, 1, 64 * 1024, 128],  # Llama2-70B 128K sequence
     ),
 )
 def test_sdpa_tt_perf(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
@@ -183,7 +217,7 @@ def test_sdpa_tt_with_program_cache(device, b, nh, nkv, s, d, q_chunk_size, k_ch
     assert device.num_program_cache_entries() == 1
 
 
-def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None):
+def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dtype, sk=None, use_mask=True):
     torch.manual_seed(1234)
     if sk is None:
         sk = sq
@@ -206,29 +240,32 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
     K = fa_rand(b, nkv, sk, d)
     V = fa_rand(b, nkv, sk, d)
     # Generate random non-causal attention mask
-    mask = torch.bernoulli(
-        torch.full(
-            (
-                b,
-                sq,
-                sk,
-            ),
-            0.25,
+    tt_mask = None
+    mask = None
+    if use_mask:
+        mask = torch.bernoulli(
+            torch.full(
+                (
+                    b,
+                    sq,
+                    sk,
+                ),
+                0.25,
+            )
         )
-    )
-    mask = mask.unsqueeze(1)
-    mask = mask * -1e9
+        mask = mask.unsqueeze(1)
+        mask = mask * -1e9
+        logger.debug(f"mask: {mask.shape}")
+        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Print shapes of all inputs along with input names
     logger.debug(f"Q: {Q.shape}")
     logger.debug(f"K: {K.shape}")
     logger.debug(f"V: {V.shape}")
-    logger.debug(f"mask: {mask.shape}")
 
-    tt_Q = ttnn.Tensor(Q, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_K = ttnn.Tensor(K, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_V = ttnn.Tensor(V, dtype).to(ttnn.TILE_LAYOUT).to(device)
-    tt_mask = ttnn.Tensor(mask, ttnn.bfloat4_b).to(ttnn.TILE_LAYOUT).to(device)
+    tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
@@ -239,6 +276,8 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
         compute_kernel_config=compute_kernel_config,
     )
     tt_back = ttnn.to_torch(tt_back)
+    # Slice out any tile-padding
+    tt_back = tt_back[:, :, :sq, :]
 
     if nkv > 1 and nkv != nh:
         assert nh % nkv == 0
@@ -249,6 +288,7 @@ def run_sdpa_noncausal(device, b, nh, nkv, sq, d, q_chunk_size, k_chunk_size, dt
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
     logger.debug(f"python vs pytorch: {out_pcc}")
+    logger.debug(f"mse: {((gt - tt_back) ** 2).mean()}")
     assert out_pass
 
 
