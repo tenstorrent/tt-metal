@@ -12,7 +12,7 @@
 
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
-#include "core/distributed.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"

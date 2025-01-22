@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "core/distributed.hpp"
+#include "core/distributed/distributed.hpp"
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
