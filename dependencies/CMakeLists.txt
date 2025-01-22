@@ -122,6 +122,7 @@ CPMAddPackage(
     GIT_TAG v1.9.1
     OPTIONS
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
+        "BENCHMARK_ENABLE_TESTING OFF"
 )
 
 if(benchmark_ADDED)
