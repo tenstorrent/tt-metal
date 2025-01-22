@@ -19,11 +19,9 @@ extern uint32_t* crta_l1_base;
  *
  * Return value: Associated L1 address of given unique runtime argument index
  *
- * | Argument       | Description                                                             | Type     | Valid Range
- * | Required |
- * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255 |
- * True     |
+ * | Argument       | Description                                                             | Type     | Valid Range | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
+ * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
 
@@ -33,11 +31,9 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  *
  * Return value: Associated L1 address of given common runtime argument index
  *
- * | Argument       | Description                                                             | Type     | Valid Range
- * | Required |
- * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255 |
- * True     |
+ * | Argument       | Description                                                             | Type     | Valid Range | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
+ * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
 
@@ -47,11 +43,10 @@ static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t
  *
  * Return value: The value associated with the unique runtime argument index
  *
- * | Argument              | Description                                    | Type                  | Valid Range |
- * Required |
- * |-----------------------|------------------------------------------------|-----------------------|---------------------------|----------|
- * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255 | True |
- * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A | True     |
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
@@ -66,11 +61,10 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  *
  * Return value: The value associated with the common runtime argument index
  *
- * | Argument              | Description                                    | Type                  | Valid Range |
- * Required |
- * |-----------------------|------------------------------------------------|-----------------------|---------------------------|----------|
- * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255 | True |
- * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A | True     |
+ * | Argument              | Description                                    | Type                  | Valid Range | Required |
+ * |-----------------------|------------------------------------------------|-----------------------|-------------|----------|
+ * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255    | True     |
+ * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
 template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {

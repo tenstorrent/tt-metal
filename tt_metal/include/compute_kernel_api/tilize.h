@@ -69,14 +69,14 @@ ALWI void tilizeA_B_reduce_init(
  *
  * Return value: None
  *
- * | Argument       | Description                                              | Data type | Valid range | required |
- * |----------------|----------------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31 | Yes      | | icb1
- * | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31 | Yes      | | block          | Size
- * of tile block to work on for source A               | uint32_t  | > 0 | Yes      | | ocb            | The identifier
- * of the output circular buffer (CB)        | uint32_t  | 0 to 31                                             | Yes |
- * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4 | Yes      | |
- * face_r_dim     | The number of rows in each face                          | uint32_t  | 1 to 16 | Yes      |
+ * | Argument       | Description                                              | Data type | Valid range | Required |
+ * |----------------|----------------------------------------------------------|-----------|-------------|----------|
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
+ * | icb1           | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31     | Yes      | 
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0         | Yes      | 
+ * | ocb            | The identifier of the output circular buffer (CB)        | uint32_t  | 0 to 31     | Yes      |
+ * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4      | Yes      |
+ * | face_r_dim     | The number of rows in each face                          | uint32_t  | 1 to 16     | Yes      |
  * */
 
 ALWI void tilizeA_B_dot_product_init(
@@ -180,13 +180,13 @@ ALWI void unpack_tilizeA_B_block(
  *
  * Return value: None
  *
- * | Argument       | Description                                              | Data type | Valid range | required |
- * |----------------|----------------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31 | Yes      | | icb1
- * | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31 | Yes      | | block          | Size
- * of tile block to work on for source A               | uint32_t  | > 0 | Yes      | | tile_idx_b     | The index of
- * the tile to copy from the source B input CB | uint32_t  | Must be less than the size of the CB                | Yes |
- * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4 | Yes      |
+ * | Argument       | Description                                              | Data type | Valid range                          | Required |
+ * |----------------|----------------------------------------------------------|-----------|--------------------------------------|----------|
+ * | icb0           | The identifier of the source A circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
+ * | icb1.          | The identifier of the source B circular buffer (CB)      | uint32_t  | 0 to 31                              | Yes      | 
+ * | block          | Size of tile block to work on for source A               | uint32_t  | > 0                                  | Yes      | 
+ * | tile_idx_b     | The index of the tile to copy from the source B input CB | uint32_t  | Must be less than the size of the CB | Yes      |
+ * | num_faces      | The number of faces to in each tile being unpacked       | uint32_t  | 1 to 4                               | Yes      |
  * */
 
 ALWI void unpack_tilizeA_B_dot_product_block(

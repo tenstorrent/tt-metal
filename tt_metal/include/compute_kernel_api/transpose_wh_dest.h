@@ -28,10 +28,9 @@ ALWI void transpose_wh_dest_init_short() { MATH((llk_math_transpose_dest_init())
  *
  * Return value: None
  *
- * | Argument       | Description                                             | Type     | Valid Range | Required |
+ * | Argument       | Description                                             | Type     | Valid Range                                    | Required |
  * |----------------|---------------------------------------------------------|----------|------------------------------------------------|----------|
- * | idst           | The index of the tile in DST REG to transpose           | uint32_t | Must be less than the
- * acquired size of DST REG | True     |
+ * | idst           | The index of the tile in DST REG to transpose           | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
 ALWI void transpose_wh_dest(uint32_t idst) {
     UNPACK((llk_unpack_set_srcb_dummy_valid()));
