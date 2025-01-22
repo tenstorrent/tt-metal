@@ -31,12 +31,10 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | param0         | Constant value that is being subtracted
- * from                               | uint32_t |                                                       | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
 ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
 

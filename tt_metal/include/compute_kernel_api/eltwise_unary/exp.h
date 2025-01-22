@@ -31,12 +31,10 @@ ALWI void exp_tile_init() {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | fast_and_approx | Computation to be done faster and
- * approximate                              | bool     |                                                       | False |
+ * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | fast_and_approx | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 template <bool fast_and_approx = false>
 ALWI void exp_tile(uint32_t idst) {

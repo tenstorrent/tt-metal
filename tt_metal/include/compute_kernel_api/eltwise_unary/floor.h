@@ -27,11 +27,9 @@ ALWI void floor_tile_init() { MATH((llk_math_eltwise_unary_sfpu_floor_init<APPRO
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void floor_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_floor<APPROX>(idst))); }
 
@@ -43,11 +41,9 @@ ALWI void floor_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_floor<AP
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform floor operation    | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void floor_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_floor_float32<APPROX>(idst))); }
 

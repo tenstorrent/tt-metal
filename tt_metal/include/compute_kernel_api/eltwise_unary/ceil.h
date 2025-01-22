@@ -28,11 +28,9 @@ ALWI void ceil_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ceil_init<APPROX>
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform ceil operation    | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform ceil operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void ceil_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ceil<APPROX>(idst))); }
 
@@ -44,11 +42,9 @@ ALWI void ceil_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ceil<APPR
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to perform ceil operation     | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to perform ceil operation     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void ceil_tile_float32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ceil_float32<APPROX>(idst))); }
 

@@ -20,11 +20,9 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void identity_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_identity<APPROX>(idst))); }
 
@@ -39,11 +37,9 @@ ALWI void identity_tile_init() { MATH((llk_math_eltwise_unary_sfpu_identity_init
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform identity operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 ALWI void identity_tile_uint32(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_identity_uint32<APPROX>(idst))); }
 
