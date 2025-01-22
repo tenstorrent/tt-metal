@@ -2219,14 +2219,14 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
-        num_blocks_total <= num_cores_x * num_cores_y,
+        num_blocks_total <= num_cores,
         "Number of blocks exceeds number of cores: {} blocks > {} cores",
         num_blocks_total,
         num_cores);
 
     if (gather_in0) {
         TT_FATAL(
-            num_blocks_total == num_cores_x * num_cores_y,
+            num_blocks_total == num_cores,
             "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
             num_blocks_total,
             num_cores);

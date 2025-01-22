@@ -310,7 +310,7 @@ def run_prefetcher_mm(
 
         in0_block_h = M // ttnn.TILE_SIZE
         in0_block_w = K // num_cores // ttnn.TILE_SIZE
-        while (K / ttnn.TILE_SIZE) % in0_block_w != 0 or (K_per_shard / ttnn.TILE_SIZE) % in0_block_w != 0:
+        while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
             in0_block_w -= 1
 
         out_block_h = M // ttnn.TILE_SIZE
