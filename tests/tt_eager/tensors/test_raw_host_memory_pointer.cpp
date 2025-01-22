@@ -47,7 +47,7 @@ struct NDArray {
     ttnn::SimpleShape shape;
     void* data;
 
-    NDArray(ttnn::SimpleShape shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
+    NDArray(const ttnn::SimpleShape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
     ~NDArray() { free(data); }
 
     std::size_t size() const { return shape.volume(); }
