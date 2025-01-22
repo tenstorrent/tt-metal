@@ -224,8 +224,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         config_tensor = create_config_tensor(
             device,
             shard_spec,
-            input.legacy_shape()[0],
-            input.legacy_shape()[1],
+            input.get_padded_shape()[0],
+            input.get_padded_shape()[1],
             in_w,
             scale_factor_h,
             scale_factor_w,

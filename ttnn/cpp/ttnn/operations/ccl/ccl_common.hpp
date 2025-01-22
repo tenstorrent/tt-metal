@@ -384,7 +384,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::SimpleShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -423,7 +423,7 @@ class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<R
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::SimpleShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -451,7 +451,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::SimpleShape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -603,7 +603,7 @@ public:
 
     // method to create worker slice shapes in a tile layout
     std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        const tt::tt_metal::LegacyShape& tensor_shape,
+        const ttnn::SimpleShape& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
