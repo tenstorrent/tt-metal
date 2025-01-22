@@ -20,11 +20,7 @@ Tensor create_host_multi_device_tensor(const Tensor& tensor, const ReplicateTens
         specs.push_back(tensor.get_tensor_spec());
     }
 
-    return Tensor{
-        MultiDeviceHostStorage(strategy, owned_buffers, specs),
-        tensor.get_legacy_shape(),
-        tensor.get_dtype(),
-        tensor.get_layout()};
+    return Tensor{MultiDeviceHostStorage(strategy, owned_buffers, specs), tensor.get_tensor_spec()};
 }
 
 TEST_F(T3kMultiDeviceFixture, TestGetTensorsFromMultiDeviceStorage) {

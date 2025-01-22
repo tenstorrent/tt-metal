@@ -297,7 +297,12 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 
         auto storage = load_storage(input_stream, data_type, layout, storage_type, device);
 
-        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        auto tensor = Tensor(
+            std::move(storage),
+            TensorSpec(
+                shape.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
             tensor = tensor.to(device, memory_config);
         } else if (has_memory_config) {
@@ -316,7 +321,12 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 
         auto storage = load_owned_storage(input_stream, data_type);
-        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        auto tensor = Tensor(
+            std::move(storage),
+            TensorSpec(
+                shape.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
             tensor = tensor.to(device);
         }

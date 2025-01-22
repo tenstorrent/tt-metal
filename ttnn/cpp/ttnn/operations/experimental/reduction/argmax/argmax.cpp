@@ -15,8 +15,8 @@
 namespace ttnn::operations::experimental::reduction {
 
 Tensor create_mask(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    auto padded_shape = input_a.get_legacy_shape();
-    auto& unpadded_shape = padded_shape.without_padding();
+    auto& padded_shape = input_a.get_padded_shape();
+    auto& unpadded_shape = input_a.get_logical_shape();
     if (padded_shape == unpadded_shape) {
         return input_a;
     }
@@ -50,12 +50,22 @@ Tensor ArgmaxOperation::invoke(
                     Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
                     Tensor max_tensor = ttnn::zeros_like(input_a);
                     Tensor tindex = ttnn::index_width<::bfloat16>(
-                        input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
+                        input.get_logical_shape(),
+                        input.get_padded_shape(),
+                        DataType::BFLOAT16,
+                        Layout::TILE,
+                        input_a.device(),
+                        output_memory_config);
                     if (is_width) {
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     } else {
                         tindex = ttnn::index_height<::bfloat16>(
-                            input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
+                            input.get_logical_shape(),
+                            input.get_padded_shape(),
+                            DataType::BFLOAT16,
+                            Layout::TILE,
+                            input_a.device(),
+                            output_memory_config);
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     }
                     tindex = tindex.to(input_a.device());
@@ -94,10 +104,20 @@ Tensor ArgmaxOperation::invoke(
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
                     concat_out.deallocate();
                     Tensor tindex = ttnn::index_channel<::bfloat16>(
-                        input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
+                        input.get_logical_shape(),
+                        input.get_padded_shape(),
+                        DataType::BFLOAT16,
+                        Layout::TILE,
+                        input_a.device(),
+                        output_memory_config);
                     if (!is_channel) {
                         tindex = ttnn::index_batch<::bfloat16>(
-                            input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
+                            input.get_logical_shape(),
+                            input.get_padded_shape(),
+                            DataType::BFLOAT16,
+                            Layout::TILE,
+                            input_a.device(),
+                            output_memory_config);
                     }
                     tindex = tindex.to(input_a.device());
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
@@ -120,7 +140,12 @@ Tensor ArgmaxOperation::invoke(
             // TODO: Fix the index generation code. With the fix the code will work for argmax that return entire
             // maximum value index
             Tensor tindex = ttnn::index_all<::bfloat16>(
-                input_shape, DataType::BFLOAT16, Layout::TILE, input_a.device(), output_memory_config);
+                input.get_logical_shape(),
+                input.get_padded_shape(),
+                DataType::BFLOAT16,
+                Layout::TILE,
+                input_a.device(),
+                output_memory_config);
             Tensor max_val = ttnn::max(input_a, std::nullopt, true, output_memory_config);
             Tensor max_tensor = ttnn::zeros_like(input_a);
             max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);

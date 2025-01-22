@@ -90,12 +90,6 @@ struct Tensor {
 
     Tensor(
         Storage storage,
-        const ttnn::Shape& shape,
-        DataType dtype,
-        Layout layout,
-        const std::optional<Tile>& tile = std::nullopt);
-    Tensor(
-        Storage storage,
         const ttnn::SimpleShape& shape,
         DataType dtype,
         Layout layout,
