@@ -74,17 +74,27 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
         [&](auto&& buffer) -> Tensor {
             using T = std::decay_t<decltype(buffer)>;
             if constexpr (std::is_same_v<T, tt::tt_metal::OwnedBuffer>) {
-                return Tensor{
+                return Tensor(
                     tt::tt_metal::OwnedStorage{buffer},
-                    input_tensor.get_shape(),
-                    input_dtype,
-                    input_tensor.get_layout()};
+                    TensorSpec(
+                        input_tensor.get_logical_shape(),
+                        TensorLayout::fromPaddedShape(
+                            input_dtype,
+                            PageConfig(input_tensor.get_layout()),
+                            MemoryConfig{},
+                            input_tensor.get_logical_shape(),
+                            input_tensor.get_padded_shape())));
             } else if constexpr (std::is_same_v<T, tt::tt_metal::BorrowedBuffer>) {
                 return Tensor{
                     tt::tt_metal::BorrowedStorage{buffer, []() {}, []() {}},
-                    input_tensor.get_shape(),
-                    input_dtype,
-                    input_tensor.get_layout()};
+                    TensorSpec(
+                        input_tensor.get_logical_shape(),
+                        TensorLayout::fromPaddedShape(
+                            input_dtype,
+                            PageConfig(input_tensor.get_layout()),
+                            MemoryConfig{},
+                            input_tensor.get_logical_shape(),
+                            input_tensor.get_padded_shape()))};
             } else {
                 TT_THROW("Unsupported buffer type");
             }
@@ -112,7 +122,7 @@ inline std::vector<NewT> cast(const tt::tt_metal::borrowed_buffer::Buffer<OldT>&
 }
 
 template <typename T>
-Tensor create_owned_tensor(std::vector<T>&& data, const Shape& shape, DataType data_type, Layout layout) {
+Tensor create_owned_tensor(std::vector<T>&& data, const SimpleShape& shape, DataType data_type, Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = tt::tt_metal::OwnedStorage{std::move(buffer)};
     return Tensor(std::move(storage), shape, data_type, layout);
@@ -121,7 +131,7 @@ Tensor create_owned_tensor(std::vector<T>&& data, const Shape& shape, DataType d
 template <typename T>
 inline Tensor create_tensor_from_buffer(
     const tt::tt_metal::borrowed_buffer::Buffer<T>& input_buffer,
-    const Shape& shape,
+    const SimpleShape& shape,
     const Layout& input_layout,
     const DataType& dtype) {
     switch (dtype) {
@@ -178,23 +188,23 @@ inline Tensor convert_to_dtype(const Tensor& input_tensor, const Layout& input_l
         switch (input_dtype) {
             case DataType::UINT16: {
                 auto buffer = host_buffer::get_as<uint16_t>(input_tensor);
-                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+                return create_tensor_from_buffer(buffer, input_tensor.get_logical_shape(), input_layout, dtype);
             }
             case DataType::INT32: {
                 auto buffer = host_buffer::get_as<int32_t>(input_tensor);
-                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+                return create_tensor_from_buffer(buffer, input_tensor.get_logical_shape(), input_layout, dtype);
             }
             case DataType::UINT32: {
                 auto buffer = host_buffer::get_as<uint32_t>(input_tensor);
-                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+                return create_tensor_from_buffer(buffer, input_tensor.get_logical_shape(), input_layout, dtype);
             }
             case DataType::FLOAT32: {
                 auto buffer = host_buffer::get_as<float>(input_tensor);
-                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+                return create_tensor_from_buffer(buffer, input_tensor.get_logical_shape(), input_layout, dtype);
             }
             case DataType::BFLOAT16: {
                 auto buffer = host_buffer::get_as<::bfloat16>(input_tensor);
-                return create_tensor_from_buffer(buffer, input_tensor.get_shape(), input_layout, dtype);
+                return create_tensor_from_buffer(buffer, input_tensor.get_logical_shape(), input_layout, dtype);
             }
             default: TT_THROW("Unsupported DataType: {}", input_dtype); break;
         }
