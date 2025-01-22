@@ -89,7 +89,6 @@ struct address_map {
                      // l1 locations listed above into internal local memory that starts
                      // at RISC_LOCAL_MEM_BASE address
 
-    static constexpr std::uint32_t FW_VERSION_ADDR = 0x210;
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 };

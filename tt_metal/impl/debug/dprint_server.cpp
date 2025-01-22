@@ -60,8 +60,9 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (hart_id) {
-            case DPRINT_RISCV_INDEX_ER:
-                return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER1:
+                return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {

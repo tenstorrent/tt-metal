@@ -388,8 +388,15 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
+                            // Cooperative means active erisc FW needs to context switch to base FW
+                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0;
                             build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_,
+                                JitBuiltStateConfig{
+                                    .processor_id = processor_class,
+                                    .is_fw = is_fw,
+                                    .dispatch_message_addr = dispatch_message_addr,
+                                    .is_cooperative = is_cooperative});
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
@@ -1747,10 +1754,6 @@ SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevi
 
 std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
-
-std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->fabric_sub_device_id();
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
