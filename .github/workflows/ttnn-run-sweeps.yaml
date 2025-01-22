@@ -191,8 +191,10 @@ on:
           - eltwise.unary.selu.selu
           - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
-          - eltwise.unary_backward.fill_zero_bw
-          - eltwise.unary_backward.log_sigmoid_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
           - eltwise.unary_backward.logit_bw
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
@@ -201,19 +203,26 @@ on:
           - eltwise.unary_backward.acos_bw.acos_bw
           - eltwise.unary_backward.acos_bw.acos_bw_sharded
           - eltwise.unary_backward.acosh_bw.acosh_bw
+          - eltwise.unary_backward.acosh_bw.acosh_bw_sharded
           - eltwise.unary_backward.atan_bw.atan_bw
+          - eltwise.unary_backward.atan_bw.atan_bw_sharded
           - eltwise.unary_backward.cos_bw.cos_bw
           - eltwise.unary_backward.cos_bw.cos_bw_sharded
           - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.frac_bw.frac_bw_sharded
           - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
           - eltwise.unary_backward.relu_bw.relu_bw
           - eltwise.unary_backward.relu_bw.relu_bw_sharded
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
           - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
           - eltwise.unary_backward.trunc_bw.trunc_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
