@@ -576,7 +576,7 @@ _Figure 10: Input tensor (A, B, C, D)_
 Let's define one pixel with the channel dimension as a *stick*
 (shown in Figure 3).
 
-In the Figure 10: A, aside from the full input tenser, we also
+In the Figure 10: A, aside from the full input tensor, we also
 demonstrate a single channel view of this block. This view will be a
 useful visualization tool on which we will build on top of. Let us
 assume we have $p = 3$ cores. The sharding strategy we will be using is
@@ -609,7 +609,7 @@ will need data from its current core, as well as 2 other cores for the 2
 other shards.
 
 
-**The goal of halo is to determine which input data is required forthe output data
+**The goal of halo is to determine which input data is required for the output data
 elements calculated on a specific core and to transfer that data to the core.**
 
 ### Halo implementation
@@ -734,12 +734,13 @@ This is a vector of pairs, where each pair describes a chunk of consecutive padd
 - index of the first stick
 - length
 
-For core 0, we would have 3 chunks (see Figure 16):
-[[0, 9], [15, 2], [23, 2]]
-
+For core 0, we would have 3 chunks:
 
 <img src="media/padconfig.png" style="height:200px;">\
 _Figure 16: Padding chunks for core 0_
+
+<img src="media/tablepad.png" style="height:250px;">\
+_Figure 17: Padding config_
 
 
 ##### Local config
@@ -755,15 +756,15 @@ This is a vector with following data:
 
 
 <img src="media/inputshards.png" style="height:200px;">\
-_Figure 17: Local input shard indices_
+_Figure 18: Local input shard indices_
 
 <img src="media/localconfig.png" style="height:200px;">\
-_Figure 18: Local input shard chunks for core 0_
+_Figure 19: Local input shard chunks for core 0_
 
 For core 0, this vector would describe 2 chunks needed by core 1 (see Figure 18):
 
 <img src="media/tablelocal.png" style="height:450px;">\
-_Figure 19: Local config_
+_Figure 20: Local config_
 
 
 ##### Remote config
@@ -772,11 +773,11 @@ Remote config has the same structure as local config, only now for each chunk
 we also need core x,y info, since we are sending data to a remote core.
 
 <img src="media/remoteconfig.png" style="height:200px;">\
-_Figure 20: Remote input shard chunks for core 1_
+_Figure 21: Remote input shard chunks for core 1_
 
 
 <img src="media/tableremote.png" style="height:450px;">\
-_Figure 21: Remote config_
+_Figure 22: Remote config_
 
 
 CNN Models: ResNet-50 Benchmark
@@ -784,7 +785,7 @@ CNN Models: ResNet-50 Benchmark
 
 <img src="media/resnet1.png" style="width:200px;">\
 <img src="media/resnet2.png" style="width:200px;">\
-_Figure 22: Resnet Blocks_
+_Figure 23: Resnet Blocks_
 
 ResNet-50 is a CNN with 50 layers, part of
 the ResNet (Residual Network) family. Primarily to address the vanishing
