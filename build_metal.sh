@@ -250,7 +250,7 @@ if [ "$build_ttnn_tests" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
 fi
 
-if [ "$build_tt_umd_tests" = "ON" ]; then
+if [ "$build_umd_tests" = "ON" ]; then
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
