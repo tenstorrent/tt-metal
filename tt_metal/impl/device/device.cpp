@@ -1177,7 +1177,13 @@ CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) c
     if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
         TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
 
-    return soc_desc.physical_cores.at(physical_coord).type;
+    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    if (core_type == CoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    }
+    TT_FATAL(soc_desc.physical_cores.at(physical_coord).type == core_type, "Core type mismatch {} {}", to_str(soc_desc.physical_cores.at(physical_coord).type), to_str(core_type));
+
+    return core_type;
 }
 
 CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {

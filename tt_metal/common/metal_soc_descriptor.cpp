@@ -123,7 +123,14 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
         static_cast<size_t>(this->worker_log_to_physical_routing_x.at(logical_coord.x)),
         static_cast<size_t>(this->worker_log_to_physical_routing_y.at(logical_coord.y)),
     });
-    return physical_tensix_core;
+
+    CoordSystem target_system =  (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::VIRTUAL : CoordSystem::PHYSICAL;
+    tt_xy_pair physical_core = translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
+    TT_FATAL(physical_core == physical_tensix_core, "Physical core mismatch {} != {}", physical_core.str(), physical_tensix_core.str());
+    if (physical_core == physical_tensix_core) {
+        std::cout << "Physical core match" << std::endl;
+    }
+    return physical_core;
 }
 
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
@@ -207,10 +214,16 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
     CoreCoord physical_coord({physical_cxy.x, physical_cxy.y});
     const CoreDescriptor& core_desc = this->physical_cores.at(physical_coord);
-    CoreCoord virtual_coord = physical_coord;
+    CoreCoord virtual_coord_old = physical_coord;
     if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
-        virtual_coord.x = static_cast<size_t>(this->physical_routing_to_virtual_routing_x.at(physical_cxy.x));
-        virtual_coord.y = static_cast<size_t>(this->physical_routing_to_virtual_routing_y.at(physical_cxy.y));
+        virtual_coord_old.x = static_cast<size_t>(this->physical_routing_to_virtual_routing_x.at(physical_cxy.x));
+        virtual_coord_old.y = static_cast<size_t>(this->physical_routing_to_virtual_routing_y.at(physical_cxy.y));
+    }
+    CoordSystem target_system =  (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+    tt_xy_pair virtual_coord = translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, target_system);
+    TT_FATAL(virtual_coord == virtual_coord_old, "Virtual core mismatch {} != {}", virtual_coord.str(), virtual_coord_old.str());
+    if (virtual_coord == virtual_coord_old) {
+        std::cout << "Virtual core match" << std::endl;
     }
     return tt_cxy_pair(physical_cxy.chip, virtual_coord);
 }
@@ -279,9 +292,12 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         int physical_y_coord = *virtual_y_coord_it;
         virtual_y_coord_it++;
         this->worker_log_to_physical_routing_y.insert({logical_y_coord, physical_y_coord});
+        tt_xy_pair virtual_coord = translate_coord_to({0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::VIRTUAL);
         int virtual_y_coord = this->worker_log_to_routing_y.at(logical_y_coord);
         this->physical_routing_to_virtual_routing_y.insert({physical_y_coord, virtual_y_coord});
-        virtual_routing_to_physical_routing_y.insert({virtual_y_coord, physical_y_coord});
+        
+        TT_FATAL(virtual_y_coord == virtual_coord.y, "Virtual core mismatch {} != {}", virtual_y_coord, virtual_coord.y);
+        virtual_routing_to_physical_routing_y.insert({virtual_coord.y, physical_y_coord});
     }
 
     // map physical harvested rows to virtual harvested rows

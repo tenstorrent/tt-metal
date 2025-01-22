@@ -450,7 +450,14 @@ CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(chip_id_t ch
     std::size_t c = virtual_chip_coord.x;
     std::size_t r = virtual_chip_coord.y;
     this->driver_->translate_to_noc_table_coords(chip_id, r, c);
-    return CoreCoord{c, r};
+
+    tt_xy_pair translated_coord = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::TRANSLATED);
+    
+    TT_FATAL(translated_coord == tt_xy_pair(c, r), "Translated core mismatch {} != {}", translated_coord, tt_xy_pair(c,r));
+    if (translated_coord == tt_xy_pair(c, r)) {
+        std::cout << "Translated core match " << std::endl;
+    }
+    return translated_coord;
 }
 
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {
