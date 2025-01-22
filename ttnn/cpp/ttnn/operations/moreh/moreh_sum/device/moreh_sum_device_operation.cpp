@@ -83,7 +83,6 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keepdim) {
         auto shape = input.get_padded_shape();
-        // TODO: Address the use of padding problem
         auto padding = shape.padding();
 
         if (is_tile_dim) {
@@ -100,8 +99,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         ttnn::SmallVector<uint32_t> shape;
         ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
-        // TODO: Address the use of padding problemg
-        auto input_padding = input.get_padded_shape().padding();
+        auto input_padding = input.get_shape().padding();
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
@@ -122,7 +120,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
     return TensorSpec(
-        output_shape.get_logical_shape(),
+        output_shape.logical_shape(),
         TensorLayout::fromLegacyPaddedShape(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

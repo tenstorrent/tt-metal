@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
+#include "ttnn/decorators.hpp"s
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_getitem {

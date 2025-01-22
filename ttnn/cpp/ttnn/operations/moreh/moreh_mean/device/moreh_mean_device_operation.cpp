@@ -60,29 +60,28 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
     }
 
     const auto& input_shape = tensor_args.input.get_logical_shape();
-    auto output_shape = tensor_args.input.get_padded_shape();
+    auto output_shape = tenosr_args.input.get_padded_shape();
     auto input_rank = input_shape.rank();
 
     auto dim = operation_attributes.dim;
 
     if (operation_attributes.keepdim) {
-        return TensorSpec(
-            ttnn::SimpleShape(output_shape),
-            TensorLayout(
-                tensor_args.input.get_dtype(),
-                PageConfig(tensor_args.input.get_layout()),
-                operation_attributes.memory_config, ));
+        return TensorSpec(ttnn::SimpleShape(output_shape) TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config, ));
     }
 
     ttnn::SmallVector<uint32_t> shape;
     ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
     const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
+    // Replace
+    auto input_padding = input_shape.value.padding();
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)
 
-    // TODO: Address the use of padding problem
     return TensorSpec(
         ttnn::SimpleShape(output_shape),
         TensorLayout::fromLegacyPaddedShape(

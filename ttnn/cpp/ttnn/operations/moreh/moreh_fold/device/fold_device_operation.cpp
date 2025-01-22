@@ -30,7 +30,7 @@ void MorehFoldOperation::validate_inputs(
              1);
         kernel_size_product *= operation_attributes.kernel_size[i];
     }
-    auto input_rank = input_shape.rank();
+    auto input_rank = input.get_logical_shape().rank();
 
     TT_FATAL((input_rank == 3) || (input_rank == 2), "Fold: Only support 3D or 2D input tensor");
     TT_FATAL(input_shape[input_rank - 1] == l, "Fold: Invalid input tensor size");

@@ -60,8 +60,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     Tensor input_5d = input;
     input_5d = input_5d.reshape(input_5d_shape);
-    // TODO: How to get unpadded shape from SimpleShape (not this->)
-    auto input_5d_shape_without_padding = input_5d_shape.logical_shape();
+
+    auto input_5d_shape_without_padding = input_5d_shape.get_logical_shape();
 
     IndexInfo index_info[5] = {0};
 
@@ -149,9 +149,9 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         writer_defines);
 
     uint32_t input_stick_idx_stride_h = 1;
-    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
-    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape[2];
-    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape[1];
+    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
+    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
+    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
 
     // Set Runtime Args
     auto core_x_offset = core_range.start_coord.x;
