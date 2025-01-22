@@ -11,6 +11,8 @@
 #include "tt_fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
+using namespace tt::tt_fabric;
+
 uint32_t src_endpoint_id;
 // constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
@@ -64,9 +66,9 @@ uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile tt_fabric_client_interface_t* client_interface = (volatile tt_fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
+volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
@@ -355,7 +357,7 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(tt_fabric_client_interface_t));
+    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
     zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
     client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
     client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);

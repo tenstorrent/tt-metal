@@ -11,8 +11,10 @@
 #include "ethernet/dataflow_api.h"
 #include "tt_fabric_interface.h"
 
+using namespace tt::tt_fabric;
+
 extern volatile local_pull_request_t* local_pull_request;
-extern volatile tt_fabric_client_interface_t* client_interface;
+extern volatile fabric_client_interface_t* client_interface;
 
 /*
 inline void fabric_async_write(

@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
-#include "tt_metal/hw/inc/dataflow_api.h"
+#include "dataflow_api.h"
 #include "tt_fabric/hw/inc/tt_fabric.h"
 #include "debug/dprint.h"
 // clang-format on
+
+using namespace tt::tt_fabric;
 
 constexpr uint32_t gatekeeper_info_addr = get_compile_time_arg_val(0);
 constexpr uint32_t socket_info_addr = get_compile_time_arg_val(1);
@@ -33,8 +35,8 @@ constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr);
-volatile tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_addr);
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_addr);
 
 volatile gatekeeper_info_t* gk_info = (volatile gatekeeper_info_t*)gatekeeper_info_addr;
 volatile socket_info_t* socket_info = (volatile socket_info_t*)socket_info_addr;
