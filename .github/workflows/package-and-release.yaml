@@ -44,7 +44,7 @@ jobs:
     secrets: inherit
   tgg-model-perf:
     needs: build-artifact
-    uses: ./.github/workflows/tgg-model-perf-tests.yaml
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     secrets: inherit
   get-params:
     runs-on: ubuntu-latest
