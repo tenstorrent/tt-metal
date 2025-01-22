@@ -717,6 +717,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         (uint32_t)needs_y_padding,
         non_x_rows,
         misalignment,
+        read_alignment,
     };
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -726,13 +727,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> compute_kernel_args = {
-        N,
-        x_blocks,
-        w_blocks,
-        input_shape[N - 2],
-        misalignment,
-    };
+    std::vector<uint32_t> compute_kernel_args = {};
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(

@@ -38,6 +38,7 @@ void kernel_main() {
     constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(25));
     constexpr uint32_t non_x_rows = get_compile_time_arg_val(26);
     constexpr uint32_t misalignment = get_compile_time_arg_val(27);
+    constexpr uint32_t read_alignment = get_compile_time_arg_val(28);
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -53,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t w_block_size = TILE_WIDTH;
     constexpr uint32_t FACE_H_STRIDE_BYTES = NUM_FACES_W * FACE_HW_BYTES;
     constexpr uint32_t tile_bytes = TILE_HW * element_size;
+    constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
 
     // For x-padding logic:
     constexpr uint32_t final_face_real_w = (W % FACE_WIDTH);
@@ -166,11 +168,6 @@ void kernel_main() {
         // Reserve a slot in the circular buffer, get L1 pointer
         cb_reserve_back(tt::CBIndex::c_0, 1);
         uint32_t src_buffer_l1_addr = get_write_ptr(tt::CBIndex::c_0);
-        if constexpr (misalignment > 0) {
-            if ((h & 1) == 1) {
-                src_buffer_l1_addr += misalignment;
-            }
-        }
 
         // --------------------------------------------------------------------
         // 5.1) Async read for [x_start..x_end)
@@ -187,7 +184,28 @@ void kernel_main() {
                 uint16_t w_offset = 0;
                 uint16_t cb_w_offset = 0;
                 for (uint8_t i = 0; i < real_faces_w; i++) {
-                    noc_async_read(src_noc_addr + w_offset, l1_col_base + cb_w_offset, SUBTILE_LINE_BYTES);
+                    // For BH - DRAM read alignment require is 64 bytes, and if the last 6 bits of the address are not
+                    // the same as the last 6 bits of the L1 address, we need to read to an aligned location and then
+                    // copy to the final location We just allocate more space into our input cb, read into an aligned
+                    // section in our buffer and then copy to the final location
+                    // TODO: copy to scratch buffer CB and then do an async copy from that scratch buffer CB to the
+                    // final location in the input CB When it's BH float32, or if it's in L1, or if we're on WH/GS, this
+                    // section is skipped at compile time
+                    if constexpr (misalignment > 0) {
+                        uint64_t final_src_addr = src_noc_addr + w_offset;
+                        uint32_t l1_base = l1_col_base + cb_w_offset;
+                        if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
+                            uint32_t misaligned_addr = l1_base + misalignment;
+                            noc_async_read(final_src_addr, misaligned_addr, SUBTILE_LINE_BYTES);
+                            noc_async_read_barrier();
+                            tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
+                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+                        } else {
+                            noc_async_read(final_src_addr, l1_col_base + cb_w_offset, SUBTILE_LINE_BYTES);
+                        }
+                    } else {
+                        noc_async_read(src_noc_addr + w_offset, l1_col_base + cb_w_offset, SUBTILE_LINE_BYTES);
+                    }
 
                     w_offset += FACE_HW_BYTES;
                     cb_w_offset += SUBTILE_LINE_BYTES;
