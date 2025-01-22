@@ -50,7 +50,7 @@ def run_moreh_adam(shape, lr, betas, eps, weight_decay, amsgrad, fp32_dest_acc_e
     dev_param_out = create_tt_tensor(model.weight, device, dtype=dtype)
     dev_exp_avg_out = create_tt_tensor(cpu_exp_avg, device, dtype=dtype)
     dev_exp_avg_sq_out = create_tt_tensor(cpu_exp_avg_sq, device, dtype=dtype)
-    dev_max_exp_avg_sq_out = create_tt_tensor(cpu_max_exp_avg_sq, device, dtype=dtype)
+    dev_max_exp_avg_sq_out = create_tt_tensor(cpu_max_exp_avg_sq, device, dtype=dtype) if amsgrad else None
 
     criterion = nn.L1Loss()
     optimizer = optim.Adam({model.weight}, lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad)
