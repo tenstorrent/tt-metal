@@ -140,4 +140,18 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
     return out;
 }
 
+autograd::TensorPtr sqrt(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    auto sqrt_tensor = ttnn::sqrt(tensor->get_value());
+    out->set_value(sqrt_tensor);
+    autograd::GradFunction grad = [&tensor, &out, &sqrt_tensor]() {
+        // dL/dx = dL/d(sqrt(x)) * 1/(2*sqrt(x))
+        auto grad = ttnn::divide(out->get_grad(), ttnn::multiply(sqrt_tensor, 2.F));
+        tensor->add_grad(grad);
+    };
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 }  // namespace ttml::ops

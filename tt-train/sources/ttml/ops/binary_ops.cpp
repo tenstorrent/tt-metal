@@ -4,6 +4,7 @@
 
 #include "binary_ops.hpp"
 
+#include <core/compute_kernel_config.hpp>
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
@@ -161,6 +162,56 @@ autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr&
 
 autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
     return a * b;
+}
+
+tt::tt_metal::Tensor ttnn_matmul(
+    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a, bool transpose_b) {
+    return ttnn::matmul(
+        a,
+        b,
+        transpose_a,
+        transpose_b,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
+        /* core_grid */ std::nullopt,  // NOTE: I believe matmul will use the
+                                       // core grid for the device it ends up
+                                       // running on, but should confirm.
+        /* output_tile */ std::nullopt);
+}
+
+autograd::TensorPtr matmul(
+    const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttnn_matmul(a->get_value(), b->get_value(), transpose_a, transpose_b));
+
+    autograd::GradFunction grad = [a, b, out]() {
+        // For loss function L and matmul C = AB:
+        // dL/dA = dL/dC * B^T
+        // dL/dB = A^T * dL/dC
+
+        // where L is the loss function
+        auto grad_a = ttnn_matmul(
+            out->get_grad(),
+            b->get_value(),
+            /* transpose_a */ false,
+            /* transpose_b */ true);
+        auto grad_b = ttnn_matmul(
+            a->get_value(),
+            out->get_grad(),
+            /* transpose_a */ true,
+            /* transpose_b */ false);
+
+        a->add_grad(grad_a);
+        b->add_grad(grad_b);
+    };
+
+    auto links = autograd::get_links(a, b);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
 }
 
 }  // namespace ttml::ops

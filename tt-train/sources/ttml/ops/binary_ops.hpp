@@ -22,4 +22,7 @@ autograd::TensorPtr mul(const autograd::TensorPtr& a, const autograd::TensorPtr&
 autograd::TensorPtr mul(const autograd::TensorPtr& a, float b);
 autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr& b);
 
+autograd::TensorPtr matmul(
+    const autograd::TensorPtr& a, const autograd::TensorPtr& b, bool transpose_a, bool transpose_b);
+
 }  // namespace ttml::ops
