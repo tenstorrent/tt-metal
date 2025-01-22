@@ -19,7 +19,7 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 
     const auto& sharded_config = std::get<ShardedBufferConfig>(config);
     const auto [global_buffer_height, global_buffer_width] = sharded_config.global_buffer_shape;
-    const auto [shard_height, shard_width] = sharded_config.shard_shape;
+    const auto [shard_height, shard_width] = sharded_config.physical_shard_shape();
 
     TT_FATAL(
         (global_buffer_height % shard_height == 0) and (global_buffer_width % shard_width == 0),
@@ -32,13 +32,25 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 
     const auto num_shard_rows = global_buffer_height / shard_height;
     const auto num_shard_cols = global_buffer_width / shard_width;
-    const auto num_shards = num_shard_rows * num_shard_cols;
+    auto num_shards = num_shard_rows * num_shard_cols;
+
+    // The following check needs to account for shard orientation. The scaling factor for
+    // replication depends on which orientation we shard/replicate to when writing to device.
+    const auto& [height_replicated, width_replicated] = sharded_config.replicated_dims();
+    if (height_replicated and width_replicated) {
+        // Pure replication
+        num_shards *= mesh_device.num_cols() * mesh_device.num_rows();
+    } else if (height_replicated or width_replicated) {
+        // Replication along row or column dim.
+        num_shards *=
+            ((sharded_config.shard_orientation == ShardOrientation::ROW_MAJOR) * (mesh_device.num_rows()) +
+             (sharded_config.shard_orientation == ShardOrientation::COL_MAJOR) * (mesh_device.num_cols()));
+    }
     TT_FATAL(
         num_shards <= mesh_device.num_devices(),
-        "The number of shards must align with the mesh shape: number of shards: {}, mesh shape: ({}, {})",
+        "The sharded tensor does not fit on the Mesh. Num shards in buffer {}, Num Devices {}",
         num_shards,
-        mesh_device.num_rows(),
-        mesh_device.num_cols());
+        mesh_device.num_devices());
 }
 
 }  // namespace
@@ -54,7 +66,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         tt::stl::overloaded{
             [](const ReplicatedBufferConfig& c) { return c.size; },
             [mesh_device](const ShardedBufferConfig& config) {
-                const auto [shard_height, shard_width] = config.shard_shape;
+                const auto [shard_height, shard_width] = config.physical_shard_shape();
                 return config.compute_datum_size_bytes() * shard_height * shard_width;
             }},
         mesh_buffer_config);
@@ -158,14 +170,14 @@ Shape2D MeshBuffer::physical_shard_shape() const {
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query physical shard shape for buffers sharded across the Mesh");
     auto sharded_config = std::get<ShardedBufferConfig>(config_);
-    Shape2D physical_shard_shape = sharded_config.shard_shape;
-    if (physical_shard_shape.height() == 0) {
-        physical_shard_shape = {sharded_config.global_buffer_shape.height(), physical_shard_shape.width()};
-    }
-    if (physical_shard_shape.width() == 0) {
-        physical_shard_shape = {physical_shard_shape.height(), sharded_config.global_buffer_shape.width()};
-    }
-    return physical_shard_shape;
+    return sharded_config.physical_shard_shape();
+}
+
+std::pair<bool, bool> MeshBuffer::replicated_dims() const {
+    TT_FATAL(
+        this->global_layout() == MeshBufferLayout::SHARDED,
+        "Can only query replicated dims for buffers sharded across the Mesh");
+    return this->global_shard_spec().replicated_dims();
 }
 
 }  // namespace tt::tt_metal::distributed

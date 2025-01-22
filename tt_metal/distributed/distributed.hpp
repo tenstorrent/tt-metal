@@ -46,6 +46,28 @@ void ReadShard(
     mesh_cq.enqueue_read_shard(dst.data(), mesh_buffer, coord, blocking);
 }
 
+template <typename DType>
+void EnqueueWriteMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    std::vector<DType>& src,
+    bool blocking = false) {
+    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
+}
+
+template <typename DType>
+void EnqueueReadMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::vector<DType>& dst,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    bool blocking = true) {
+    TT_FATAL(
+        mesh_buffer->global_layout() == MeshBufferLayout::SHARDED,
+        "Can only read a Sharded MeshBuffer from a MeshDevice.");
+    dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+}
+
 void Finish(MeshCommandQueue& mesh_cq);
 
 }  // namespace distributed
