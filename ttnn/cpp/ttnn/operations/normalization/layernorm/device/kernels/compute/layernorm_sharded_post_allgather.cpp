@@ -14,6 +14,8 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
+#include "debug/dprint.h"
+
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
@@ -292,15 +294,16 @@ void MAIN {
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
+                cb_push_back(cb_outgamma, subblock_w);
             }
             index_h_offset += block_w;
         }
-        cb_push_back(cb_outgamma, num_tiles_per_block);
+        // cb_push_back(cb_outgamma, num_tiles_per_block);
         cb_pop_front(cb_im, num_tiles_per_block);
-        cb_wait_front(cb_outgamma, num_tiles_per_block);
     }
 
     if constexpr (do_beta) {
+        cb_wait_front(cb_outgamma, num_tiles_per_block);
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short(cb_fusion, cb_beta);
@@ -327,7 +330,6 @@ void MAIN {
         }
         cb_push_back(cb_out, num_tiles_per_block);
         cb_pop_front(cb_fusion, num_tiles_per_block);
-        cb_wait_front(cb_out, num_tiles_per_block);
     }
 }
 

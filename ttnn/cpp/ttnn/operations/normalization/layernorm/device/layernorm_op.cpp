@@ -97,11 +97,13 @@ void LayerNorm::validate(
     }
     if (a.is_sharded()) {
         // TODO: Add support for this (should be similar to interleaved)
-        TT_FATAL(a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            a.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
+            "Hight sharded inputs are not supported.");
         TT_FATAL(
             this->output_mem_config.is_sharded() &&
                 this->output_mem_config.memory_layout != TensorMemoryLayout::HEIGHT_SHARDED,
-            "Error");
+            "Sharded inputs require sharded outputs.");
         if (b.has_value()) {
             TT_FATAL(b.value().is_sharded(), "residual tensor b should be sharded if input a is sharded");
             TT_FATAL(b.value().shard_spec() == a.shard_spec(), "Both a and b should have the same shard spec");
@@ -208,6 +210,17 @@ void LayerNorm::validate(
                 if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
                     const auto stats_shard_spec = stats.value().shard_spec().value();
                     TT_FATAL(stats_shard_spec.num_cores() == 1, "Stats must be sharded with num_cores = 1");
+
+                    if (this->output_mem_config.shard_spec.has_value()) {
+                        const auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                        TT_FATAL(
+                            output_shard_spec.num_cores() * output_shard_spec.shape[1] >=
+                                shard_spec.num_cores() * shard_spec.shape[1],
+                            "Output shard spec must be >= input shard spec.");
+                        TT_FATAL(
+                            output_shard_spec.shape[0] == shard_spec.shape[0],
+                            "Output shard spec must have the same height as input shard spec.");
+                    }
                 }
             }
         },
@@ -216,9 +229,17 @@ void LayerNorm::validate(
 std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.get_logical_shape();
+    auto output_padded_shape = input_tensor.get_padded_shape();
+    auto output_shard_spec = this->output_mem_config.shard_spec.has_value() ? this->output_mem_config.shard_spec.value()
+                                                                            : input_tensor.shard_spec().value();
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
+    } else if (
+        this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER &&
+        this->output_mem_config.shard_spec.has_value() &&
+        output_shard_spec.grid != input_tensor.shard_spec().value().grid) {
+        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
     }
 
     return std::visit(
@@ -241,12 +262,13 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     return {input_tensor.get_tensor_spec()};
                 }
 
-                auto mem_config = this->output_mem_config;
-                mem_config.shard_spec = input_tensor.shard_spec().value();
-                return {TensorSpec(
+                return {ttnn::TensorSpec(
                     output_shape,
-                    TensorLayout(
-                        this->dtype.value_or(input_tensor.get_dtype()), PageConfig(Layout::TILE), mem_config))};
+                    TensorLayout::fromLegacyPaddedShape(
+                        this->dtype.value_or(input_tensor.get_dtype()),
+                        PageConfig(Layout::TILE),
+                        this->output_mem_config,
+                        ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
             } else {
                 return {TensorSpec(
                     output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
@@ -265,6 +287,7 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& 
                 }
             }
             auto output_spec = compute_output_specs(input_tensors)[0];
+            // std::cout << "output_spec: " << output_spec << std::endl;
             return {create_device_tensor(output_spec, input_tensors.at(0).device())};
         },
         this->program_config);

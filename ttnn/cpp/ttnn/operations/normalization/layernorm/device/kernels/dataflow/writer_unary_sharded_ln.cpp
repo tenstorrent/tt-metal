@@ -8,6 +8,8 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
@@ -16,13 +18,26 @@ void kernel_main() {
     constexpr bool beta_is_dram = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t block_w = get_compile_time_arg_val(5);
 
+    // Reshard writer
+    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(12);
+
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
     const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
 
+    // Reshard writer
+    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(7);
+    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(8);
+    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
@@ -71,4 +86,39 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_beta, block_w);
     }
+
+#ifndef SKIP_WRITE_BACK
+
+    uint32_t args_idx = 0;
+    uint32_t worker_core_read_offset = 0;
+
+    cb_wait_front(cb_out, block_ht * block_w);
+    uint32_t cb_out_read_base_addr = get_read_ptr(cb_out);
+    uint32_t cb_out_reshard_write_base_addr = get_write_ptr(cb_out_resharded);
+
+    for (uint32_t i = 0; i < num_segments_to_write_back; ++i) {
+        uint32_t write_size = segment_args[args_idx++];
+        uint32_t storage_core_x = segment_args[args_idx++];
+        uint32_t storage_core_y = segment_args[args_idx++];
+
+        uint32_t worker_core_read_addr = cb_out_read_base_addr + worker_core_read_offset;
+        uint32_t local_storage_core_write_addr = cb_out_reshard_write_base_addr;
+        if (i == 0) {  // For the first segment we need to add the start offset; the following segments will start at 0
+                       // offset
+            local_storage_core_write_addr += storage_core_start_offset;
+        }
+
+        uint64_t remote_storage_core_write_addr =
+            get_noc_addr(storage_core_x, storage_core_y, local_storage_core_write_addr);
+
+        for (uint32_t h = 0; h < block_ht; ++h) {
+            noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, write_size);
+            worker_core_read_addr += worker_core_stride_w_bytes;
+            remote_storage_core_write_addr += storage_core_stride_w_bytes;
+        }
+        worker_core_read_offset += write_size;
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_out, block_ht * block_w);
+#endif
 }
