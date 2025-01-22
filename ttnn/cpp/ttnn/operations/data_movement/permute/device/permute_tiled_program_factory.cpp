@@ -524,6 +524,25 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    // X = output width
+    // Y = output height
+    // input shape = (..., H, W)
+    // output shape = (..., Y, X)
+
+    /**
+     * The algorithm is as follows:
+     * 1. Read in blocks of data along the X and W dimensions (XW blocks, W is contiguous)
+     *  a. TILE_HEIGHT rows along X with TILE_WIDTH elements across W
+     * 2. Tilize, transpose, and untilize the data into a WX block
+     * 3. Write out all the data in WX block to its correct position in the permuted output tensor buffer
+     *  a. We write out on face/subtile line at a time
+     *  a. X is the output width dimension, but it's tiled so we can only write out face/subtile line at a time
+     * 4. Repeat until all XW blocks are processed
+     * 5. If X is not a multiple of TILE_WIDTH, we pad the last face/subtile line with the pad value
+     * 6. If Y is not a multiple of TILE_HEIGHT, we pad the last set of tiles on the Y dimension with the pad value
+     *
+     */
+
     using namespace tt;
     using namespace tt::tt_metal;
     const std::optional<float> pad_value = operation_attributes.pad_value;
@@ -531,7 +550,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.get_logical_shape();
     const auto& dims = operation_attributes.dims;
-    uint32_t N = dims.size();
+    uint32_t rank = dims.size();
     auto& output_tensor = tensor_return_value;
     auto& output_shape = output_tensor.get_logical_shape();
     auto& padded_output_shape = output_tensor.get_padded_shape();
@@ -543,13 +562,13 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     tt::tt_metal::Program program{};
     uint32_t logical_volume = input_shape.volume();
-    uint32_t num_rows = logical_volume / input_shape[N - 1];
-    uint32_t y_dim = dims[N - 2];
+    uint32_t num_rows = logical_volume / input_shape[rank - 1];
+    uint32_t y_dim_index_in_input = dims[rank - 2];
 
-    uint32_t x_dim = dims[N - 1];
-    uint32_t x = input_shape[x_dim];
-    uint32_t y = input_shape[y_dim];
-    uint32_t w = input_shape[N - 1];
+    uint32_t x_dim_index_in_input = dims[rank - 1];
+    uint32_t x = input_shape[x_dim_index_in_input];
+    uint32_t y = input_shape[y_dim_index_in_input];
+    uint32_t w = input_shape[rank - 1];
 
     // X is the new width so we need to pad it to the target tile_shape[1]
     uint32_t x_block_size = tile_shape[1];
@@ -558,7 +577,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t element_size = input_tensor.element_size();
     uint32_t X_p = x_block_size * ((x + x_block_size - 1) / x_block_size);
     uint32_t W_p = tile_shape[1] * ((w + tile_shape[1] - 1) / tile_shape[1]);
-    uint32_t H_p = tile_shape[0] * ((input_shape[N - 2] + tile_shape[0] - 1) / tile_shape[0]);
+    uint32_t H_p = tile_shape[0] * ((input_shape[rank - 2] + tile_shape[0] - 1) / tile_shape[0]);
     uint32_t H_t = H_p / tile_shape[0];
     uint32_t W_t = W_p / tile_shape[1];
 
@@ -567,8 +586,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t misalignment = read_alignment > subtile_line_bytes ? read_alignment - subtile_line_bytes : 0;
 
     uint32_t permuted_w_dim = 0;  // Will hold the position of w_dim in the permuted array
-    for (uint32_t i = 0; i < N; ++i) {
-        if (dims[i] == N - 1) {
+    for (uint32_t i = 0; i < rank; ++i) {
+        if (dims[i] == rank - 1) {
             permuted_w_dim = i;
             break;
         }
@@ -581,8 +600,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t num_faces_h = tile_shape[0] / face_shape[0];
 
     uint32_t padded_xw_volume = X_p * W_p;
-    for (uint32_t i = 0; i < N - 1; i++) {
-        if (i == x_dim) {
+    for (uint32_t i = 0; i < rank - 1; i++) {
+        if (i == x_dim_index_in_input) {
             continue;
         }
         padded_xw_volume *= input_shape[i];
@@ -646,7 +665,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);
 
-    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[N - 2] /
+    uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.get_padded_shape()[rank - 2] /
                                                            tile_shape[0]);  // only last row of Xt should have padding
     auto
         [padded_num_cores,
@@ -690,17 +709,17 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram,
-        N,
+        rank,
         input_page_size,
         element_size,
         tile_shape[0],
         tile_shape[1],
         face_shape[0],
         face_shape[1],
-        x_dim,
+        x_dim_index_in_input,
         x,
         w,
-        input_shape[N - 2],
+        input_shape[rank - 2],
         X_p,
         W_p,
         H_p,
@@ -741,17 +760,17 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)dst_is_dram,
-        N,
+        rank,
         input_page_size,
         element_size,
         tile_shape[0],
         tile_shape[1],
         face_shape[0],
         face_shape[1],
-        x_dim,
+        x_dim_index_in_input,
         x,
         w,
-        output_shape[N - 2],
+        output_shape[rank - 2],
         X_p,
         W_p,
         non_x_rows,

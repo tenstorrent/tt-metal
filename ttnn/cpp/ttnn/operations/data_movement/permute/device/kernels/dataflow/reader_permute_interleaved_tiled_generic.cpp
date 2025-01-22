@@ -7,18 +7,33 @@
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    // X = output width
+    // Y = output height
+    // input shape = (..., H, W)
+    // output shape = (..., Y, X)
+
+    /**
+     * This kernel reads in a TILE_HEIGHT x TILE_WIDTH block of data from the input tensor
+     * The block's height is across the X dimension, the output width
+     * The block's width is the W dimension, the input width
+     * If the X dimension is not a multiple of TILE_WIDTH, we pad until it is
+     * We take this block, and transpose it from an XW block to a WX block in the compute kernel.
+     * In the writer kernel, we write out the data values to its final position in the output tensor
+     */
+
     // ------------------------------------------------------------------------
     // 1) Compile-time arguments
     // ------------------------------------------------------------------------
+
     constexpr bool src0_is_dram = static_cast<bool>(get_compile_time_arg_val(0));
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t RANK = get_compile_time_arg_val(1);
+    // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
     constexpr uint32_t element_size = get_compile_time_arg_val(3);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(4);
     constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(5);
     constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(6);
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(7);
-    constexpr uint32_t x_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t x_dim_index_in_input = get_compile_time_arg_val(8);
     constexpr uint32_t X = get_compile_time_arg_val(9);
     constexpr uint32_t W = get_compile_time_arg_val(10);
     constexpr uint32_t H = get_compile_time_arg_val(11);
@@ -36,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t padding_val_packed = get_compile_time_arg_val(23);
     constexpr bool needs_x_padding = static_cast<bool>(get_compile_time_arg_val(24));
     constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(25));
-    constexpr uint32_t non_x_rows = get_compile_time_arg_val(26);
+    constexpr uint32_t rows_per_x = get_compile_time_arg_val(26);
     constexpr uint32_t misalignment = get_compile_time_arg_val(27);
     constexpr uint32_t read_alignment = get_compile_time_arg_val(28);
 
@@ -70,41 +85,41 @@ void kernel_main() {
     uint32_t start_block = get_arg_val<uint32_t>(1);
     uint32_t end_block = get_arg_val<uint32_t>(2);
 
-    uint32_t input_shape[N], dims[N];
-    for (uint32_t i = 0; i < N; i++) {
+    uint32_t input_shape[RANK], dims[RANK];
+    for (uint32_t i = 0; i < RANK; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + 3);
-        dims[i] = get_arg_val<uint32_t>(i + N + 3);
+        dims[i] = get_arg_val<uint32_t>(i + RANK + 3);
     }
 
     // ------------------------------------------------------------------------
     // 4) Build padded/tiled shapes & strides
     // ------------------------------------------------------------------------
-    uint32_t input_tiled_shape[N];
-    for (uint32_t i = 0; i < N; i++) {
-        if (i < N - 2) {
+    uint32_t input_tiled_shape[RANK];
+    for (uint32_t i = 0; i < RANK; i++) {
+        if (i < RANK - 2) {
             input_tiled_shape[i] = input_shape[i];
-        } else if (i == N - 2) {
+        } else if (i == RANK - 2) {
             input_tiled_shape[i] = H_t;
         } else {
-            input_tiled_shape[i] = W_t;  // i == N - 1
+            input_tiled_shape[i] = W_t;  // i == RANK - 1
         }
     }
 
-    uint32_t src_tiled_strides[N];
-    src_tiled_strides[N - 1] = 1;
-    for (int i = N - 2; i >= 0; i--) {
+    uint32_t src_tiled_strides[RANK];
+    src_tiled_strides[RANK - 1] = 1;
+    for (int i = RANK - 2; i >= 0; i--) {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
     constexpr auto data_format = get_dataformat(tt::CBIndex::c_0);
     const InterleavedAddrGenFast<src0_is_dram> s = {
         .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
 
-    // Stride for stepping along x_dim
-    const uint32_t X_stride_tile = src_tiled_strides[x_dim];
+    // Stride for stepping along x_dim_index_in_input
+    const uint32_t X_stride_tile = src_tiled_strides[x_dim_index_in_input];
 
     // We'll map our multi-dim index into 'idxs'
-    uint32_t idxs[N];
-    idxs[N - 1] = 0;
+    uint32_t idxs[RANK];
+    idxs[RANK - 1] = 0;
 
     // Decide how many faces to read in final W block
     // (If final_tile_real_faces_w < NUM_FACES_W, we have partial data in the last block.)
@@ -132,31 +147,31 @@ void kernel_main() {
         uint32_t face_h = (h % TILE_HEIGHT) / FACE_HEIGHT;
         uint32_t base_face_line_offset_bytes = face_h * FACE_H_STRIDE_BYTES + sub_tile_line * SUBTILE_LINE_BYTES;
 
-        uint32_t xw_block = rem % non_x_rows;
+        uint32_t xw_block = rem % rows_per_x;
         uint32_t remainder = xw_block;
 
         // X range for this block
         uint32_t x_start = x_block * x_block_size;
         uint32_t x_end = (x_start + x_block_size < X) ? (x_start + x_block_size) : X;
 
-        // Fill idxs[] except for x_dim
-        for (int32_t d = N - 2; d >= 0; --d) {
-            if (d == (int32_t)x_dim) {
+        // Fill idxs[] except for x_dim_index_in_input
+        for (int32_t d = RANK - 2; d >= 0; --d) {
+            if (d == (int32_t)x_dim_index_in_input) {
                 idxs[d] = 0;
                 continue;
             }
             idxs[d] = remainder % input_shape[d];
             remainder /= input_shape[d];
         }
-        idxs[N - 1] = w_block;
+        idxs[RANK - 1] = w_block;
 
-        // Compute tile offset ignoring x_dim
+        // Compute tile offset ignoring x_dim_index_in_input
         uint64_t base_tile_offset = 0;
-        for (uint32_t d = 0; d < N; d++) {
-            if (d == x_dim) {
+        for (uint32_t d = 0; d < RANK; d++) {
+            if (d == x_dim_index_in_input) {
                 continue;
             }
-            uint32_t tile_index = (d == (N - 2)) ? (idxs[d] / TILE_HEIGHT) : idxs[d];
+            uint32_t tile_index = (d == (RANK - 2)) ? (idxs[d] / TILE_HEIGHT) : idxs[d];
             base_tile_offset += static_cast<uint64_t>(tile_index) * src_tiled_strides[d];
         }
 

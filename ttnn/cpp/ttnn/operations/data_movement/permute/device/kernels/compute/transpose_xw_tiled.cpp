@@ -14,6 +14,17 @@
 namespace NAMESPACE {
 
 void MAIN {
+    // X = output width
+    // Y = output height
+    // input shape = (..., H, W)
+    // output shape = (..., Y, X)
+
+    /**
+     * This kernel takes in the contiguous XW block read in in the reader kernel and transposes is to a WX block, ready
+     * to be written out The transpose LLK does not support transposing a tile without faces/subtiles, so we need to
+     * rearrange it into its faces, transpose, and then pack it back such that it's de-faced (WX, where X is contiguous
+     * and isn't divided into subtiles)
+     */
     uint32_t start_block = get_arg_val<uint32_t>(0);
     uint32_t end_block = get_arg_val<uint32_t>(1);
 
