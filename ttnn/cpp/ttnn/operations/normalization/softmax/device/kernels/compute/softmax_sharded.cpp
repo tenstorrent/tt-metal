@@ -179,7 +179,7 @@ void MAIN {
         pack_reconfig_data_format(cb_exps);
         // exp(x)
         index_subblock_w_offset = 0;
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(cb_in0);
         exp_tile_init<EXP_APPROX>();
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();
