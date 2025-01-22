@@ -10,20 +10,6 @@ endif()
 ############################################
 include(cmake/compilers.cmake)
 
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
-
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
-endif()
-
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
 ParseGitDescribe()
@@ -45,6 +31,12 @@ if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     )
 endif()
 
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE)
+    message(STATUS "CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
+else()
+    message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
+endif()
+
 include(project_options)
 include(unity)
 include(clang-tidy)
@@ -53,21 +45,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(ENABLE_LIBCXX)
-    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
-    #add_link_options(
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
-    #)
-else()
+if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
-    add_compile_options(-fsized-deallocation)
-endif()
-
-# Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
 endif()
 
 include(CTest)
@@ -115,6 +95,7 @@ set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 # Project Options
 #   The following options and their defaults impact what artifacts get built
 ############################################################################################################################
+message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
 message(STATUS "Build with MSAN: ${ENABLE_MSAN}")

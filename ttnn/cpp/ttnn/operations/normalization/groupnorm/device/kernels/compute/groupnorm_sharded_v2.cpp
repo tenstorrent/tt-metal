@@ -413,7 +413,7 @@ void MAIN {
                 uint32_t index_h1_offset = 0;
 
                 if (copy_or_add == true) {
-                    copy_tile_init();
+                    copy_tile_init(cb_xmm);
                 } else {
                     add_tiles_init();
                 }
