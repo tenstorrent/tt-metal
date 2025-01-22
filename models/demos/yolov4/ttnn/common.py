@@ -30,6 +30,7 @@ def fold_bn_to_conv_weights_bias(model, path):
 class Conv:
     def __init__(
         self,
+        device,
         model,
         path,
         input_params,
@@ -63,20 +64,20 @@ class Conv:
         self.output_layout = output_layout
         self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
+        self.device = device
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            self.input_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         else:
             self.shard_layout = (
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
+            self.input_memory_config = (
+                ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG if height_sharding else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            )
         self.deallocate = deallocate
         self.activation = activation
-
-    def __str__(self) -> str:
-        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
-
-    def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
@@ -92,17 +93,11 @@ class Conv:
             enable_act_double_buffer=self.enable_act_double_buffer,
             output_layout=self.output_layout,
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
-        conv_kwargs = {
+        self.conv_kwargs = {
             "in_channels": self.input_params[3],
             "out_channels": self.out_channels,
             "batch_size": self.input_params[0],
@@ -121,26 +116,37 @@ class Conv:
             self.weights = ttnn.prepare_conv_weights(
                 weight_tensor=self.weights,
                 weights_format="OIHW",
-                input_memory_config=input_tensor.memory_config(),
-                input_layout=input_tensor.get_layout(),
-                **conv_kwargs,
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                **self.conv_kwargs,
             )
 
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
-                input_memory_config=input_tensor.memory_config(),
-                input_layout=input_tensor.get_layout(),
-                **conv_kwargs,
+                input_memory_config=self.input_memory_config,
+                input_layout=ttnn.TILE_LAYOUT,
+                **self.conv_kwargs,
             )
-
             self.weights = ttnn.to_device(self.weights, device)
             self.bias = ttnn.to_device(self.bias, device)
+
+    def __str__(self) -> str:
+        return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
+
+    def __call__(self, input_tensor):
+        compute_config = ttnn.init_device_compute_kernel_config(
+            self.device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
 
         output_tensor = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            **conv_kwargs,
+            **self.conv_kwargs,
             compute_config=compute_config,
             return_output_dim=False,
             return_weights_and_bias=False,

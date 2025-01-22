@@ -183,24 +183,28 @@ class UNetConv2D:
             "device": self.device,
             "conv_config": self.conv_config,
         }
-
-    def __call__(self, x):
         if not ttnn.is_tensor_storage_on_device(self.weight):
             self.weight = ttnn.prepare_conv_weights(
                 weight_tensor=self.weight,
                 weights_format="OIHW",
-                input_memory_config=x.memory_config(),
-                input_layout=x.get_layout(),
+                input_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+                if self.use_1d_systolic_array
+                else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+                input_layout=ttnn.TILE_LAYOUT,  # not used for sharded tensor
                 **self.conv_kwargs,
             )
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
-                input_memory_config=x.memory_config(),
-                input_layout=x.get_layout(),
+                input_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+                if self.use_1d_systolic_array
+                else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+                input_layout=ttnn.TILE_LAYOUT,  # not used for sharded tensor
                 **self.conv_kwargs,
             )
             self.weight = ttnn.to_device(self.weight, self.device)
             self.bias = ttnn.to_device(self.bias, self.device)
+
+    def __call__(self, x):
         x = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,

@@ -569,26 +569,22 @@ static OptimizedConvBlockConfig get_opt_block_config(
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
 
     ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
-    } else {
-        parallel_config = determine_parallel_config(
-            conv_config.shard_layout.value(),
-            batch_size,
-            in_channels,
-            output_height,
-            output_width,
-            out_channels,
-            device->compute_with_storage_grid_size(),
-            shard_orientation,
-            !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
-            conv_config.act_block_h_override);
+    if (input_memory_config.is_sharded()) {
+        conv_config.shard_layout = input_memory_config.memory_layout;
     }
+    parallel_config = determine_parallel_config(
+        conv_config.shard_layout.value(),
+        batch_size,
+        in_channels,
+        output_height,
+        output_width,
+        out_channels,
+        device->compute_with_storage_grid_size(),
+        shard_orientation,
+        !mm_conv,
+        !use_non_tile_height,
+        is_non_tile_mul_width,
+        conv_config.act_block_h_override);
 
     auto output_parallel_config = parallel_config;
     if (conv_config.shard_layout.value() == ttnn::TensorMemoryLayout::WIDTH_SHARDED && !mm_conv) {
@@ -812,27 +808,22 @@ ttnn::Tensor prepare_conv_weights(
     const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
 
-    ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
-    } else {
-        parallel_config = determine_parallel_config(
-            conv_config.shard_layout.value(),
-            batch_size,
-            in_channels,
-            output_height,
-            output_width,
-            out_channels,
-            device->compute_with_storage_grid_size(),
-            shard_orientation,
-            !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
-            conv_config.act_block_h_override);
+    if (input_memory_config.is_sharded()) {
+        conv_config.shard_layout = input_memory_config.memory_layout;
     }
+    ParallelConfig parallel_config = determine_parallel_config(
+        conv_config.shard_layout.value(),
+        batch_size,
+        in_channels,
+        output_height,
+        output_width,
+        out_channels,
+        device->compute_with_storage_grid_size(),
+        shard_orientation,
+        !mm_conv,
+        !use_non_tile_height,
+        is_non_tile_mul_width,
+        conv_config.act_block_h_override);
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
@@ -914,30 +905,24 @@ ttnn::Tensor prepare_conv_bias(
 
     const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
 
-    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
-
     ParallelConfig parallel_config;
-    if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
-        parallel_config = {
-            .grid = input_memory_config.shard_spec.value().grid,
-            .shard_scheme = input_memory_config.memory_layout,
-            .shard_orientation = input_memory_config.shard_spec.value().orientation};
-    } else {
-        bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
-        parallel_config = determine_parallel_config(
-            conv_config.shard_layout.value(),
-            batch_size,
-            in_channels,
-            output_height,
-            output_width,
-            out_channels,
-            device->compute_with_storage_grid_size(),
-            shard_orientation,
-            !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
-            conv_config.act_block_h_override);
+    if (input_memory_config.is_sharded()) {
+        conv_config.shard_layout = input_memory_config.memory_layout;
     }
+    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
+    parallel_config = determine_parallel_config(
+        conv_config.shard_layout.value(),
+        batch_size,
+        in_channels,
+        output_height,
+        output_width,
+        out_channels,
+        device->compute_with_storage_grid_size(),
+        shard_orientation,
+        !mm_conv,
+        !use_non_tile_height,
+        is_non_tile_mul_width,
+        conv_config.act_block_h_override);
     ParallelConfig output_parallel_config = determine_output_parallel_config(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
