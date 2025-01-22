@@ -21,17 +21,19 @@ using MassagedUntilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn:
 
 MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
     auto original_shape = std::make_shared<SimpleShape>();
+    auto original_padded_shape = std::make_shared<SimpleShape>();
     return MassagedUntilize(MassagedUntilizeParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
             return input_tensor.get_logical_shape().rank() > 4;
         },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeArgs {
             *original_shape = input_tensor.get_logical_shape();
+            *original_padded_shape = input_tensor.get_padded_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
+            auto unsqueezed_tensor = ttnn::reshape(output, ttnn::Shape(original_shape->view(), original_padded_shape->view());
             return unsqueezed_tensor;
         },
         .operation = std::move(base_untilize)});
