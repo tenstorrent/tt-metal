@@ -179,11 +179,13 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     auto inv_perm = detail::get_inverse_permutation(operation_attributes.dims);
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
+
     reader_runtime_args.insert(reader_runtime_args.end(), output_shape_view.begin(), output_shape_view.end());
     reader_runtime_args.insert(reader_runtime_args.end(), inv_perm.begin(), inv_perm.end());
     reader_runtime_args.insert(reader_runtime_args.end(), input_tile_strides.begin(), input_tile_strides.end());
 
     std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), 0, 0};
+
     std::vector<uint32_t> compute_runtime_args = {0};
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
@@ -216,7 +218,10 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
+         .core_range = all_cores}};
 }
 
 void PermuteDeviceOperation::MultiCoreTileInvariant::override_runtime_arguments(
@@ -239,6 +244,7 @@ void PermuteDeviceOperation::MultiCoreTileInvariant::override_runtime_arguments(
     for (const auto& core : cores) {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
+
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
     }
@@ -492,7 +498,10 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
+         .core_range = all_cores}};
 }
 
 void PermuteDeviceOperation::MultiCoreTileRowInvariant::override_runtime_arguments(
@@ -855,7 +864,10 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .compute_kernel_id = compute_kernel_id,
+         .core_range = all_cores}};
 }
 
 void PermuteDeviceOperation::MultiCoreTiledGeneric::override_runtime_arguments(
