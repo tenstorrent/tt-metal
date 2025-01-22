@@ -58,7 +58,8 @@ static Tensor reduce_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool reshape) {
+    bool reshape,
+    bool fill = true) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
@@ -153,7 +154,7 @@ static Tensor reduce_impl(
                               ? -std::numeric_limits<float>::infinity()
                               : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
         bool is_tiled = input_tensor.get_layout() == TILE_LAYOUT;
-        input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor, pad_value) : input_tensor;
+        input_tensor = fill && is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor, pad_value) : input_tensor;
 
         if constexpr (reduce_type == ReduceType::Sum) {
             output_tensor = tt::tt_metal::reduce(
@@ -266,7 +267,8 @@ Tensor pool_sum(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        /*reshape=*/true);
+        /*reshape=*/true,
+        /*fill=*/false);
 }
 
 template class Reduce<ReduceType::Sum>;
