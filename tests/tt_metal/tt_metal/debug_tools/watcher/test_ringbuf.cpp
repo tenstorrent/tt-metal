@@ -26,27 +26,26 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     Program program = Program();
 
     // Depending on riscv type, choose one core to run the test on.
-    CoreCoord logical_core, phys_core;
+    CoreCoord logical_core, virtual_core;
     if (riscv_type == DebugErisc) {
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
-        phys_core = device->worker_core_from_logical_core(logical_core);
+        virtual_core = device->worker_core_from_logical_core(logical_core);
     }
-    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, phys_core);
-
+    log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
