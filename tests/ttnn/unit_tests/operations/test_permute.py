@@ -5,6 +5,7 @@
 import pytest
 
 import torch
+import math
 
 import ttnn
 import itertools
@@ -436,17 +437,26 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
 @pytest.mark.parametrize("shape", [[7, 7, 7, 17, 17]])
 @pytest.mark.parametrize("perm", [[0, 1, 4, 3, 2]])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_permute_5d_yw(shape, perm, dtype, device):
+@pytest.mark.parametrize("pad_value", [35.0, float("-inf"), None])
+def test_permute_5d_yw_padded(shape, perm, dtype, pad_value, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Grayskull doesn't support float32")
     torch.manual_seed(2005)
     torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
-    output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
-    output_tensor = ttnn.to_torch(output_tensor)
+    ttnn_output = ttnn.permute(input_tensor, perm, pad_value=pad_value)
+    output_tensor = ttnn.to_torch(ttnn_output)
     torch_output = torch.permute(torch_tensor, perm)
+
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+    if pad_value != None:
+        logical_shape = torch_output.shape
+        output_padded = ttnn.from_device(ttnn_output).to_torch()
+        padded_shape = output_padded.shape
+        num_padded_values = torch.prod(torch.tensor(padded_shape)) - torch.prod(torch.tensor(logical_shape))
+        assert torch.sum(output_padded == pad_value) == num_padded_values
 
 
 @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
