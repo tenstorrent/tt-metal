@@ -62,7 +62,7 @@ build_all="OFF"
 cxx_compiler_path=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86-linux-clang-17-libcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
 
 declare -a cmake_args
 

@@ -130,7 +130,7 @@ jobs:
       run: |
         echo "Checking compatibility with $(cmake --version)"
         # FIXME: Why is HAVE_STD_REGEX needed? Clean up when we solve it.
-        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
+        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
   clang-tidy:
     runs-on: ubuntu-latest
     container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
@@ -158,7 +158,7 @@ jobs:
         sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
     - name: Prepare compile_commands.json
       run: |
-        cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86-linux-clang-17-libcpp-toolchain.cmake
+        cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
     - name: 'Install jq'
       uses: dcarbone/install-jq-action@v2
     - name: Create results directory
