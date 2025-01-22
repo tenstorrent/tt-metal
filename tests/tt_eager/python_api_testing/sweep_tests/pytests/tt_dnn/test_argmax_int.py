@@ -7,6 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -44,8 +45,7 @@ class TestArgmax:
         golden_tensor = torch.argmax(input_data, dim=dim)
 
         pt_out_tensor = golden_tensor
-        tt_out_tensor = tt_output_tensor_on_device.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-        comp_pass, comp_out = comparison_funcs.comp_pcc(pt_out_tensor, tt_out_tensor, pcc=0.99)
+        assert_with_pcc(pt_out_tensor, tt_out_tensor)
         comp_all, _ = comparison_funcs.comp_allclose(pt_out_tensor, tt_out_tensor, atol=0, rtol=0)
 
         # DEBUG
@@ -55,8 +55,5 @@ class TestArgmax:
         # print(flat)
         # print(torch.topk(flat, 8))
 
-        logger.info(comp_pass)
         logger.info(comp_all)
-        logger.info(comp_out)
-        status = comp_pass | comp_all
-        assert status
+        assert comp_all
