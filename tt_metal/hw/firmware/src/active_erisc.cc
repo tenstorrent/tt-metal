@@ -69,6 +69,14 @@ int main() {
     // put this into scratch space similar to idle erisc
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
+    // volatile tt_l1_ptr uint32_t* debug_addr_ptr =
+    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    // debug_addr_ptr[0] = 0xDEADDEAD;
+
+    // debug_addr_ptr[0] = 0x12341234;
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    noc_index = 0;
+
     risc_init();
 
     mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
@@ -79,10 +87,9 @@ int main() {
     }
 
     mailboxes->go_message.signal = RUN_MSG_DONE;
-    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    DPRINT << "eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE " << HEX()
-           << (uint32_t)eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE << ENDL();
+    // DPRINT << "eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE " << HEX()
+    //        << (uint32_t)eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE << ENDL();
 
     while (1) {
         // Wait...
@@ -144,8 +151,8 @@ int main() {
 
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
-            DPRINT << "kernel config mode " << HEX() << (uint32_t)launch_msg_address->kernel_config.mode << DEC()
-                   << ENDL();
+            // DPRINT << "kernel config mode " << HEX() << (uint32_t)launch_msg_address->kernel_config.mode << DEC()
+            //        << ENDL();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

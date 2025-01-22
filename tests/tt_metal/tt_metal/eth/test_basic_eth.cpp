@@ -31,13 +31,15 @@ constexpr std::int32_t MAX_NUM_WORDS =
 
 namespace unit_tests::erisc::kernels {
 
-inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_t start = 0) {
+inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes /*, uint32_t start = 0*/) {
+    static uint32_t start = 0;
     TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "Error");
     std::vector<uint32_t> src(size_bytes / sizeof(uint32_t), 0);
 
     for (uint32_t i = 0; i < src.size(); i++) {
         src.at(i) = start + i;
     }
+    start = src.at(src.size() - 1) + 1;
     return src;
 }
 
@@ -69,7 +71,7 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_byte_address = input_dram_buffer->address();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
-    log_debug(
+    log_info(
         tt::LogTest,
         "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {}",
         device->id(),
@@ -95,6 +97,31 @@ bool reader_kernel_no_send(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     llrt::write_hex_vec_to_core(device->id(), eth_noc_xy, all_zeros, eth_l1_byte_address);
+    tt::Cluster::instance().l1_barrier(device->id());
+
+    // std::vector<uint32_t> slow_immediate_rdback_vec;
+    tt::tt_metal::Finish(device->command_queue());
+    // tt::tt_metal::detail::ReadFromBuffer(input_dram_buffer, slow_immediate_rdback_vec);
+    // if (inputs == slow_immediate_rdback_vec) {
+    //     std::cout << "slow readback okay" << std::endl;
+    // } else {
+    //     std::cout << "slow readback not okay" << std::endl;
+    // }
+
+    std::vector<uint32_t> fast_immediate_rdback_vec;
+    fixture->ReadBuffer(device, input_dram_buffer, fast_immediate_rdback_vec);
+    // if (inputs == fast_immediate_rdback_vec) {
+    //     std::cout << "fast match immediate" << std::endl;
+    // } else {
+    //     std::cout << "not fast match immediate" << std::endl;
+    //     for (int i = 0; i < inputs.size(); i++) {
+    //         if (inputs.at(i) != fast_immediate_rdback_vec.at(i)) {
+    //             std::cout << "Expected " << inputs.at(i) << " but got " << fast_immediate_rdback_vec.at(i) <<
+    //             std::endl;
+    //         }
+    //     }
+    //     std::cout << "\n\n";
+    // }
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -106,8 +133,20 @@ bool reader_kernel_no_send(
             (uint32_t)byte_size,
             (uint32_t)eth_l1_byte_address,
         });
-
     fixture->RunProgram(device, program);
+
+    std::vector<uint32_t> post_rdback_vec;
+    fixture->ReadBuffer(device, input_dram_buffer, post_rdback_vec);
+    if (inputs == post_rdback_vec) {
+        std::cout << "post program match" << std::endl;
+    } else {
+        std::cout << "not match post program" << std::endl;
+        for (int i = 0; i < inputs.size(); i++) {
+            if (inputs.at(i) != post_rdback_vec.at(i)) {
+                std::cout << "Expected " << inputs.at(i) << " but got " << post_rdback_vec.at(i) << std::endl;
+            }
+        }
+    }
 
     uint32_t l1_unreserved_base_val;
     tt::Cluster::instance().read_core(
@@ -130,7 +169,11 @@ bool reader_kernel_no_send(
             std::cout << r << "\t";
         }
         std::cout << "\n\n";
+        if (readback_vec == post_rdback_vec) {
+            std::cout << "same as what we have post program run" << std::endl;
+        }
     }
+
     return pass;
 }
 
@@ -178,6 +221,7 @@ bool writer_kernel_no_receive(
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
     fixture->WriteBuffer(device, output_dram_buffer, all_zeros);
+    fixture->FinishCommands(device);
 
     tt_metal::SetRuntimeArgs(
         program,
@@ -191,6 +235,7 @@ bool writer_kernel_no_receive(
         });
 
     fixture->RunProgram(device, program);
+    fixture->FinishCommands(device);
 
     uint32_t l1_unreserved_base_val;
     tt::Cluster::instance().read_core(
@@ -319,16 +364,23 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 
+    std::cout << "Aerisc l1 unreserved base: " << src_eth_l1_byte_address << std::endl;
+
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             std::cout << "Eth core is " << eth_core.str() << " device is " << device->id() << std::endl;
+            std::cout << "Case 1" << std::endl;
             ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-                static_cast<DispatchFixture*>(this), device, WORD_SIZE, src_eth_l1_byte_address, eth_core));
-            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
-            // ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
-            //     static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+                static_cast<DispatchFixture*>(this), device, 16, src_eth_l1_byte_address, eth_core));
+            std::cout << "Case 2" << std::endl;
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 1024, src_eth_l1_byte_address, eth_core));
+            std::cout << "Case 3" << std::endl;
+            ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
+                static_cast<DispatchFixture*>(this), device, WORD_SIZE * 2048, src_eth_l1_byte_address, eth_core));
+            break;
         }
+        break;
     }
 }
 

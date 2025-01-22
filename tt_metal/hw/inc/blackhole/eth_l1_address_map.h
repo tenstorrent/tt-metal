@@ -21,7 +21,7 @@ struct address_map {
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;  // aligning this to L1_ALIGNMENT
 
-    static constexpr std::int32_t MAX_SIZE = 512 * 1024 - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE -
+    static constexpr std::int32_t MAX_SIZE = (512 * 1024) - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE -
                                              ERISC_APP_ROUTING_INFO_SIZE - ERISC_APP_SYNC_INFO_SIZE -
                                              FABRIC_ROUTER_CONFIG_SIZE;
     static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
@@ -56,8 +56,13 @@ struct address_map {
     static constexpr std::int32_t MEM_ERISC_STACK_BASE =
         RISC_LOCAL_MEM_BASE + MEM_ERISC_LOCAL_SIZE - MEM_ERISC_STACK_SIZE;
 
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH =
-        MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE;
+    static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (MEM_ERISC_MAP_END + (69 * 1024) + 63) & ~63;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_SIZE - ERISC_L1_UNRESERVED_BASE;
+
+    static_assert((ERISC_L1_UNRESERVED_BASE % 64) == 0);
+
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
     // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
     // NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
@@ -65,12 +70,6 @@ struct address_map {
     // NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
-
-    static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = 0;  // don't need this - just to get things to compile
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE = (MEM_ERISC_MAP_END + (69 * 1024) + 63) & ~63;
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_SIZE - ERISC_L1_UNRESERVED_BASE;
-
-    static_assert((ERISC_L1_UNRESERVED_BASE % 64) == 0);
 
     template <std::size_t A, std::size_t B>
     struct TAssertEquality {

@@ -534,26 +534,26 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                 //     sender_core,
                 //     receiver_core));
                 // std::cout << "Done case 1!" << std::endl;
-                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                    static_cast<DispatchFixture*>(this),
-                    sender_device,
-                    receiver_device,
-                    4 * WORD_SIZE,
-                    src_eth_l1_byte_address,
-                    dst_eth_l1_byte_address,
-                    sender_core,
-                    receiver_core));
-                std::cout << "Done case 2!" << std::endl;
                 // ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 //     static_cast<DispatchFixture*>(this),
                 //     sender_device,
                 //     receiver_device,
-                //     256 * WORD_SIZE,
+                //     4 * WORD_SIZE,
                 //     src_eth_l1_byte_address,
                 //     dst_eth_l1_byte_address,
                 //     sender_core,
                 //     receiver_core));
-                // std::cout << "Done case 3!" << std::endl;
+                // std::cout << "Done case 2!" << std::endl;
+                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    256 * WORD_SIZE,
+                    src_eth_l1_byte_address,
+                    dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+                std::cout << "Done case 3!" << std::endl;
                 // ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 //     static_cast<DispatchFixture*>(this),
                 //     sender_device,
