@@ -198,7 +198,6 @@ target_link_libraries(
     metal_common_libs
     INTERFACE
         dl
-        z
         pthread
         atomic
         hwloc
