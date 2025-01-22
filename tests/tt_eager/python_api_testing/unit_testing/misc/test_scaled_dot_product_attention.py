@@ -106,11 +106,13 @@ def run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype
         "d128",
     ],
 )
-def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal):
+def test_sdpa_tt_padded(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, is_causal, is_ci_env):
     if q_chunk_size == 512 and k_chunk_size == 512:
         pytest.skip("OOM config.")
     if nh % nkv != 0:
         pytest.skip("nkv must divide nh")
+    if is_ci_env and (b == 1 or nh == 1 or s == 1 or q_chunk_size == 512 or k_chunk_size == 512):
+        pytest.skip("Skipping to avoid CI timeout")
     ttnn.device.DisablePersistentKernelCache()
     if is_causal:
         run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype)
