@@ -193,11 +193,14 @@ on:
           - eltwise.unary.softshrink.softshrink_sharded
           - eltwise.unary_backward.fill_zero_bw
           - eltwise.unary_backward.log_sigmoid_bw
-          - eltwise.unary_backward.logit_bw
+          - eltwise.unary_backward.logit_bw.logit_bw
+          - eltwise.unary_backward.logit_bw.logit_bw_sharded
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
-          - eltwise.unary_backward.hardshrink_bw
-          - eltwise.unary_backward.softshrink_bw
+          - eltwise.unary_backward.hardshrink_bw.hardshrink_bw
+          - eltwise.unary_backward.hardshrink_bw.hardshrink_bw_sharded
+          - eltwise.unary_backward.softshrink_bw.softshrink_bw
+          - eltwise.unary_backward.softshrink_bw.softshrink_bw_sharded
           - eltwise.unary_backward.acos_bw.acos_bw
           - eltwise.unary_backward.acos_bw.acos_bw_sharded
           - eltwise.unary_backward.acosh_bw.acosh_bw
@@ -212,6 +215,7 @@ on:
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.sigmoid_bw.sigmoid_bw_sharded
           - eltwise.unary_backward.tan_bw.tan_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw
           - eltwise.unary_backward.clamp_bw.clamp_bw
