@@ -111,7 +111,7 @@ FORCE_INLINE void copy(uint32_t cb_in, uint32_t cb_out, uint32_t num_input_units
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    copy_tile_to_dst_init_short();
+    copy_tile_to_dst_init_short(cb_in);
 
     cb_wait_front(cb_in, num_input_units);
     cb_reserve_back(cb_out, 1);

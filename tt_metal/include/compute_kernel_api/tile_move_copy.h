@@ -25,7 +25,7 @@ namespace ckernel {
  * Flag to perform transpose on SrcA                 | uint32_t |  Any positive value will indicate tranpose is set   |
  * False    |
  */
-ALWI void copy_tile_to_dst_init_short(uint32_t cbid = 0, uint32_t transpose = 0) {
+ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, false /*transpose within 16x16 face*/, cbid)));
     MATH((llk_math_eltwise_unary_datacopy_init<A2D, BroadcastType::NONE, DST_ACCUM_MODE>(
@@ -35,7 +35,7 @@ ALWI void copy_tile_to_dst_init_short(uint32_t cbid = 0, uint32_t transpose = 0)
  * Perform a init for the copy tile operation. This calls the short init function and initializes packer dst offset
  * registers.
  */
-ALWI void copy_tile_init() { copy_tile_to_dst_init_short(); }
+ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
 
 /**
  * Return value: None

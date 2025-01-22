@@ -189,7 +189,7 @@ void MAIN {
 #else
         reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);
-        copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
 #endif

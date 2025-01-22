@@ -41,7 +41,7 @@ void MAIN {
         ACQ();
         if (enable_reload) {
             cb_wait_front(tt::CBIndex::c_25, onetile);
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(tt::CBIndex::c_25);
             copy_tile(tt::CBIndex::c_25, 0, 0);
             cb_pop_front(tt::CBIndex::c_25, onetile);
         }
