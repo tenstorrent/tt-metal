@@ -38,6 +38,18 @@ jobs:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
+  t3000-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    secrets: inherit
+  tg-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+  tgg-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/tgg-model-perf-tests.yaml
+    secrets: inherit
   get-params:
     runs-on: ubuntu-latest
     outputs:
