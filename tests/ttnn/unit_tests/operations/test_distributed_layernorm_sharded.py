@@ -466,7 +466,7 @@ def test_simulated_distributed_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
+            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width, input_df
         )
         tt_output_chunks.append(ttnn.to_torch(tt_output_tensor).to(torch.bfloat16))
 
