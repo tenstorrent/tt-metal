@@ -28,7 +28,7 @@ protected:
     }
 };
 
-TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne_BROKEN) {
+TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(24, -1.F);
@@ -43,10 +43,10 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne_BROKEN) {
             all_equal = false;
         }
     }
-    EXPECT_FALSE(all_equal);
+    EXPECT_TRUE(all_equal);
 }
 
-TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch_BROKEN) {
+TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto shape = ttml::core::create_shape({4, 1, 1, 4});
@@ -66,7 +66,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch_BROKEN) {
             all_equal = false;
         }
     }
-    EXPECT_FALSE(all_equal);
+    EXPECT_TRUE(all_equal);
 }
 
 TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {

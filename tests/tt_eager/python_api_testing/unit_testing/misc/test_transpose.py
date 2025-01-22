@@ -937,11 +937,6 @@ def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1], pad_value=pad_value)
-    if pad_value is not None:
-        a = ttnn.min(
-            tt_output
-        )  # if min becomes padding aware, this will fail, so feel free to delete this test then @future op writer
-        assert ttnn.to_torch(a) == float("-inf")
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
 

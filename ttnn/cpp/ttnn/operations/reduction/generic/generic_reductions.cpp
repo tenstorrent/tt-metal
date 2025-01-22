@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -193,7 +194,6 @@ static Tensor reduce_impl(
     if (reshape) {
         output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
     }
-
     return output_tensor;
 }
 
@@ -241,11 +241,31 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
+    float pad_value = reduce_type == ReduceType::Max
+                          ? -std::numeric_limits<float>::infinity()
+                          : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
+    bool is_tiled = input_tensor_arg.get_layout() == TILE_LAYOUT;
+    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
-        return std_var_impl<reduce_type>(input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config);
+        return std_var_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config);
     }
-    return reduce_impl<reduce_type>(
-        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+    return reduce_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+}
+
+Tensor pool_sum(
+    const Tensor& input_tensor_arg,
+    int dim,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    float scalar) {
+    return reduce_impl<ReduceType::Sum>(
+        input_tensor_arg,
+        ttnn::SmallVector<int>({dim}),
+        /*keepdim=*/true,
+        memory_config_arg,
+        compute_kernel_config,
+        scalar,
+        /*reshape=*/true);
 }
 
 template class Reduce<ReduceType::Sum>;
