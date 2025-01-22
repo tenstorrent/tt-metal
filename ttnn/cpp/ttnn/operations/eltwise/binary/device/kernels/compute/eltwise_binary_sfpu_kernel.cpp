@@ -47,7 +47,7 @@ void MAIN {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
 #if PRE_SCALE
-    copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
