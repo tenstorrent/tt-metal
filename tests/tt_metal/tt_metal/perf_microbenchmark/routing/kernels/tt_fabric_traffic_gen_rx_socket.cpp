@@ -11,6 +11,8 @@
 #include "tt_fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
+using namespace tt::tt_fabric;
+
 // seed to re-generate the data and validate against incoming data
 constexpr uint32_t prng_seed = get_compile_time_arg_val(0);
 
@@ -42,7 +44,7 @@ constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(13);
 
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
-volatile tt_fabric_client_interface_t* client_interface = (volatile tt_fabric_client_interface_t*)client_interface_addr;
+volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
 uint64_t xy_local_addr;
 socket_reader_state socket_reader;
 
@@ -67,7 +69,7 @@ void kernel_main() {
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
-    zero_l1_buf((uint32_t*)client_interface, sizeof(tt_fabric_client_interface_t));
+    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
     test_results[PQ_TEST_MISC_INDEX] = 0xff000002;
     zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
     test_results[PQ_TEST_MISC_INDEX] = 0xff000003;

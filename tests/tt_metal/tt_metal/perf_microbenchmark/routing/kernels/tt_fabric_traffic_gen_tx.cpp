@@ -11,6 +11,8 @@
 #include "tt_fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
+using namespace tt::tt_fabric;
+
 uint32_t src_endpoint_id;
 // constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
@@ -21,50 +23,48 @@ constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
 constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
 constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
-constexpr uint32_t gk_interface_addr_l = get_compile_time_arg_val(6);
-constexpr uint32_t gk_interface_addr_h = get_compile_time_arg_val(7);
 
-constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(8);
-constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(9);
+constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(6);
+constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(7);
 
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 
-constexpr uint32_t prng_seed = get_compile_time_arg_val(10);
+constexpr uint32_t prng_seed = get_compile_time_arg_val(8);
 
-constexpr uint32_t total_data_kb = get_compile_time_arg_val(11);
+constexpr uint32_t total_data_kb = get_compile_time_arg_val(9);
 constexpr uint64_t total_data_words = ((uint64_t)total_data_kb) * 1024 / PACKET_WORD_SIZE_BYTES;
 
-constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(12);
+constexpr uint32_t max_packet_size_words = get_compile_time_arg_val(10);
 
 static_assert(max_packet_size_words > 3, "max_packet_size_words must be greater than 3");
 
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(13);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(11);
 
-constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(14);
+constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(12);
 constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
-    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(15));
+    static_cast<pkt_dest_size_choices_t>(get_compile_time_arg_val(13));
 
-constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(16);
-constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(17);
-constexpr uint32_t test_command = get_compile_time_arg_val(18);
+constexpr uint32_t data_sent_per_iter_low = get_compile_time_arg_val(14);
+constexpr uint32_t data_sent_per_iter_high = get_compile_time_arg_val(15);
+constexpr uint32_t test_command = get_compile_time_arg_val(16);
 
-uint32_t base_target_address = get_compile_time_arg_val(19);
+uint32_t base_target_address = get_compile_time_arg_val(17);
 
 // atomic increment for the ATOMIC_INC command
-constexpr uint32_t atomic_increment = get_compile_time_arg_val(20);
+constexpr uint32_t atomic_increment = get_compile_time_arg_val(18);
 // constexpr uint32_t dest_device = get_compile_time_arg_val(21);
 uint32_t dest_device;
 
-constexpr uint32_t signal_address = get_compile_time_arg_val(21);
-constexpr uint32_t client_interface_addr = get_compile_time_arg_val(22);
+constexpr uint32_t signal_address = get_compile_time_arg_val(19);
+constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
 
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
-tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile tt_fabric_client_interface_t* client_interface = (volatile tt_fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
+volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -76,6 +76,9 @@ packet_header_t packet_header __attribute__((aligned(16)));
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t rx_addr_hi;
+
+uint32_t gk_interface_addr_l;
+uint32_t gk_interface_addr_h;
 
 // generates packets with random size and payload on the input side
 inline bool test_buffer_handler_async_wr() {
@@ -321,7 +324,7 @@ bool test_buffer_handler() {
         return test_buffer_handler_async_wr();
     } else if constexpr (test_command == ATOMIC_INC) {
         return test_buffer_handler_atomic_inc();
-    } else if constexpr (test_command == SOCKET_OPEN) {
+    } else if constexpr (test_command == ASYNC_WR_RESP) {
         return test_buffer_handler_fvcc();
     }
 }
@@ -329,24 +332,26 @@ bool test_buffer_handler() {
 void kernel_main() {
     tt_fabric_init();
 
+    uint32_t rt_args_idx = 0;
     // TODO: refactor
-    src_endpoint_id = get_arg_val<uint32_t>(0);
-    noc_offset = get_arg_val<uint32_t>(1);
-    uint32_t router_x = get_arg_val<uint32_t>(2);
-    uint32_t router_y = get_arg_val<uint32_t>(3);
-    dest_device = get_arg_val<uint32_t>(4);
-    uint32_t rx_buf_size = get_arg_val<uint32_t>(5);
+    src_endpoint_id = get_arg_val<uint32_t>(rt_args_idx++);
+    noc_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t router_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t router_y = get_arg_val<uint32_t>(rt_args_idx++);
+    dest_device = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t rx_buf_size = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_interface_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_interface_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     if (ASYNC_WR == test_command) {
-        base_target_address = get_arg_val<uint32_t>(6);
+        base_target_address = get_arg_val<uint32_t>(rt_args_idx++);
     }
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
 
     uint64_t router_config_addr =
         NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-    noc_async_read_one_packet(
-        router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
+    noc_async_read_one_packet(router_config_addr, routing_table_start_addr, sizeof(fabric_router_l1_config_t));
     noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
@@ -359,7 +364,7 @@ void kernel_main() {
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(tt_fabric_client_interface_t));
+    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
     client_interface->gk_msg_buf_addr =
         (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 

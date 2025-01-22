@@ -4,8 +4,10 @@
 
 // clang-format off
 #include "dataflow_api.h"
-#include "hw/inc/tt_fabric.h"
+#include "tt_fabric/hw/inc/tt_fabric.h"
 // clang-format on
+
+using namespace tt::tt_fabric;
 
 router_state_t router_state __attribute__((aligned(16)));
 fvc_consumer_state_t fvc_consumer_state __attribute__((aligned(16)));                // replicate for each fvc
@@ -17,13 +19,13 @@ volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;   
 
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
-constexpr uint32_t gk_message_addr_l = get_compile_time_arg_val(1);
-constexpr uint32_t gk_message_addr_h = get_compile_time_arg_val(2);
-constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(3);
-constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(4);
-constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
+constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
+constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 uint32_t sync_val;
 uint32_t router_mask;
+uint32_t gk_message_addr_l;
+uint32_t gk_message_addr_h;
 
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
@@ -43,9 +45,8 @@ constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
 tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
-tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(
-        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 uint64_t xy_local_addr;
 
 #define SWITCH_THRESHOLD 0x3FF
@@ -79,8 +80,11 @@ inline void notify_gatekeeper() {
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    sync_val = get_arg_val<uint32_t>(0);
-    router_mask = get_arg_val<uint32_t>(1);
+    uint32_t rt_args_idx = 0;
+    sync_val = get_arg_val<uint32_t>(rt_args_idx++);
+    router_mask = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_message_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_message_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt_fabric_init();
 

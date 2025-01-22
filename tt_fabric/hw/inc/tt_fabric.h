@@ -9,9 +9,11 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
-#include "hw/inc/routing_table.h"
-#include "hw/inc/tt_fabric_interface.h"
-#include "hw/inc/eth_chan_noc_mapping.h"
+#include "tt_fabric/hw/inc/routing_table.h"
+#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_fabric/hw/inc/eth_chan_noc_mapping.h"
+
+using namespace tt::tt_fabric;
 
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
@@ -21,10 +23,9 @@ const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
-extern volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table;
+extern volatile fabric_router_l1_config_t* routing_table;
 
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
-bool tt_fabric_is_header_valid(packet_header_t* p_header);
 uint32_t num_words_available_to_pull(volatile pull_request_t* pull_request);
 uint32_t words_before_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr);
 uint32_t advance_ptr(uint32_t buffer_size, uint32_t ptr, uint32_t inc_words);
