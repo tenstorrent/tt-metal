@@ -74,7 +74,8 @@ jobs:
           GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         run: |
           echo "Re-running jobs here"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
+          # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/rerun-failed-jobs
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
