@@ -57,7 +57,8 @@ struct OpConfig {
         BITWISE_XOR
     };
 
-    OpConfig(BinaryOpType binary_op_type, bool is_sfpu);
+    template <class EnumT>
+    OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
 
     std::map<std::string, std::string> as_defines(DataType dtype) const;
     std::pair<std::string, std::string> get_sfpu_init_fn(DataType dtype) const;
@@ -66,7 +67,7 @@ struct OpConfig {
     std::optional<unary::UnaryOpType> process_rhs{};
     std::optional<unary::UnaryOpType> postprocess{};
     std::variant<FpuBinaryOp, SfpuBinaryOp> binary_op;
-    bool is_sfpu_op;
+    bool is_sfpu_op() const;
 };
 
 void add_activation_defines(

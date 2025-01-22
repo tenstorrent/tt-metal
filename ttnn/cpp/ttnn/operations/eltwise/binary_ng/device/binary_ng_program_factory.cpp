@@ -135,11 +135,11 @@ void set_or_update_runtime_arguments(
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            class bfloat16 bfloat_scalar(scalar);
+            // class bfloat16 bfloat_scalar(scalar);
             const auto packed_scalar = a.get_dtype() == DataType::FLOAT32 ? std::bit_cast<uint32_t>(scalar)
                                        : a.get_dtype() == DataType::INT32
                                            ? std::bit_cast<uint32_t>(static_cast<int32_t>(scalar))
-                                           : pack_two_bfloat16_into_uint32({bfloat_scalar, bfloat_scalar});
+                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
@@ -208,7 +208,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     auto op_type = operation_attributes.binary_op_type;
 
-    OpConfig op_config(op_type, is_sfpu_op);
+    // OpConfig op_config(op_type, is_sfpu_op);
+    const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
+                                      : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
 
     auto compute_kernel_defines = op_config.as_defines(a.get_dtype());
 
@@ -350,7 +352,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .defines = compute_kernel_defines});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
