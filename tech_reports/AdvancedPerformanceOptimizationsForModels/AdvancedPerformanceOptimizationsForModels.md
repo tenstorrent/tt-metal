@@ -68,7 +68,7 @@ In order to use trace, we need to use the following trace apis:
 
 In addition, since trace requires the addresses of the used tensors to be the same, we need to statically preallocate our input tensor, and reuse this tensor instead of recreating our input tensor each iteration using the following apis:
 
-* `device_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, input_mem_config)`
+* `device_tensor = ttnn.allocate_tensor_on_device(tensor_spec, device)`
 
   This will allocate a tensor with the specified parameters on the device. The tensor data will be uninitialized
 * `ttnn.copy_host_to_device_tensor(host_tensor, device_tensor, cq_id=0)`
@@ -125,9 +125,7 @@ output_tensor = run_model(input_l1_tensor)
 # Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
 input_l1_tensor = host_tensor.to(device, sharded_l1_mem_config)
 input_trace_addr = input_l1_tensor.buffer_address()
-shape = input_l1_tensor.shape
-dtype = input_l1_tensor.dtype
-layout = input_l1_tensor.layout
+spec = input_l1_tensor.spec
 # Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
 output_tensor.deallocate(force=True)
 tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -135,7 +133,7 @@ tid = ttnn.begin_trace_capture(device, cq_id=0)
 output_tensor = run_model(input_l1_tensor)
 
 # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
+input_l1_tensor = ttnn.allocate_tensor_on_device(spec, device)
 assert input_trace_addr == input_l1_tensor.buffer_address()
 
 ttnn.end_trace_capture(device, tid, cq_id=0)
@@ -403,9 +401,7 @@ input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config
 ttnn.record_event(0, op_event)
 # Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
 input_trace_addr = input_l1_tensor.buffer_address()
-shape = input_l1_tensor.shape
-dtype = input_l1_tensor.dtype
-layout = input_l1_tensor.layout
+spec = input_l1_tensor.spec
 # Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
 output_tensor.deallocate(force=True)
 tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -413,7 +409,7 @@ tid = ttnn.begin_trace_capture(device, cq_id=0)
 output_tensor = run_model(input_l1_tensor)
 
 # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
+input_l1_tensor = ttnn.allocate_tensor_on_device(spec, device)
 assert input_trace_addr == input_l1_tensor.buffer_address()
 
 ttnn.end_trace_capture(device, tid, cq_id=0)
@@ -499,9 +495,7 @@ input_l1_tensor = ttnn.to_memory_config(input_dram_tensor, sharded_l1_mem_config
 ttnn.record_event(0, op_event)
 # Record the address of the input tensor to trace so that we can validate we allocated our input tensor at the right address
 input_trace_addr = input_l1_tensor.buffer_address()
-shape = input_l1_tensor.shape
-dtype = input_l1_tensor.dtype
-layout = input_l1_tensor.layout
+spec = input_l1_tensor.spec
 # Deallocate the previous output tensor here so that we will allocate our input tensor at the right address afterwards
 output_tensor.deallocate(force=True)
 tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -509,7 +503,7 @@ tid = ttnn.begin_trace_capture(device, cq_id=0)
 output_tensor = run_model(input_l1_tensor)
 
 # Try allocating our persistent input tensor here and verifying it matches the address that trace captured
-input_l1_tensor = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, sharded_l1_mem_config)
+input_l1_tensor = ttnn.allocate_tensor_on_device(spec, device)
 assert input_trace_addr == input_l1_tensor.buffer_address()
 
 ttnn.end_trace_capture(device, tid, cq_id=0)
