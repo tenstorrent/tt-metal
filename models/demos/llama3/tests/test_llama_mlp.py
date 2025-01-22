@@ -10,7 +10,7 @@ import ttnn
 from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
-from models.utility_functions import comp_pcc, comp_allclose, skip_for_parallelism
+from models.utility_functions import comp_pcc, comp_allclose, skip_for_parallelism, skip_for_batch_parallism
 from models.utility_functions import skip_for_grayskull
 
 
@@ -39,6 +39,7 @@ from models.utility_functions import skip_for_grayskull
     [
         (1, 1, 8),
         (8, 8, 1),
+        (64, 8, 1),
         (1, 1, 2),
         (2, 2, 1),
     ],
@@ -47,8 +48,12 @@ from models.utility_functions import skip_for_grayskull
 def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     batch_size, data_parallel, tensor_parallel = batch_dp_tp
 
+    skip, reason = skip_for_batch_parallism(batch_size, data_parallel)
+    if skip:
+        pytest.skip(reason)
+
     skip, reason = skip_for_parallelism(
-        mesh_device.get_num_devices() if mesh_device else 0, batch_size, data_parallel, tensor_parallel
+        mesh_device.get_num_devices() if mesh_device else 0, data_parallel, tensor_parallel
     )
     if skip:
         pytest.skip(reason)
@@ -92,7 +97,7 @@ def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cach
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(batch_size, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(model_args.per_chip_batch_dim, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
 
     if model_args.is_galaxy:

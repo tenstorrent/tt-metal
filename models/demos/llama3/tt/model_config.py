@@ -104,10 +104,9 @@ class TtModelArgs:
         ), f"Target TP({self.num_devices_tp}) x DP({self.num_devices_dp}) is not equal to total available devices {self.total_num_devices}"
 
         # check batch size and data parallel compatiblity
-        assert max_batch_size >= data_parallel, f"Batch size ({max_batch_size}) less than  DP({data_parallel})"
         assert (
             max_batch_size % data_parallel == 0
-        ), f"Batch size ({max_batch_size}) isn't multiple of DP({data_parallel})"
+        ), f"Batch size ({max_batch_size}) must be multiple of data parallel chips({data_parallel})"
 
         self.mesh_device = mesh_device
 
@@ -123,7 +122,8 @@ class TtModelArgs:
         ]  # this might not be the best, but targeting base TP should be OK start
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
-        self.max_batch_size = max_batch_size
+        self.max_batch_size = max_batch_size // data_parallel
+        self.per_chip_batch_dim = data_parallel
         self.tile_size = 32
         self.is_70b = False
 
