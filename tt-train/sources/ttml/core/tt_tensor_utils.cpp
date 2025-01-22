@@ -87,7 +87,7 @@ tt::tt_metal::Tensor ttml_create_owned_tensor(
     std::vector<T>&& data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = OwnedStorage{std::move(buffer)};
-    return {std::move(storage), shape, data_type, layout};
+    return {std::move(storage), shape.logical_shape(), data_type, layout};
 }
 
 }  // namespace

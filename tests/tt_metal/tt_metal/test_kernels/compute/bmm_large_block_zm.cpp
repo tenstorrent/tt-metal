@@ -41,7 +41,7 @@ void MAIN {
                     acquire_dst();
 
                     if (enable_reload) {
-                        copy_tile_to_dst_init_short();
+                        copy_tile_to_dst_init_short(tt::CBIndex::c_24);
                         cb_wait_front(tt::CBIndex::c_24, out_subblock_num_tiles);
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             copy_tile(tt::CBIndex::c_24, i, i);

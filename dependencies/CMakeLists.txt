@@ -116,7 +116,14 @@ CPMAddPackage(
 # benchmark : https://github.com/google/benchmark
 ############################################################################################################################
 
-CPMAddPackage(NAME benchmark GITHUB_REPOSITORY google/benchmark GIT_TAG v1.9.1)
+CPMAddPackage(
+    NAME benchmark
+    GITHUB_REPOSITORY google/benchmark
+    GIT_TAG v1.9.1
+    OPTIONS
+        "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
+        "BENCHMARK_ENABLE_TESTING OFF"
+)
 
 if(benchmark_ADDED)
     set_target_properties(
