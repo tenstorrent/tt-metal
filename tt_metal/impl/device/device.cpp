@@ -1756,10 +1756,6 @@ std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_wi
     return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
 }
 
-std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->fabric_sub_device_id();
-}
-
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
