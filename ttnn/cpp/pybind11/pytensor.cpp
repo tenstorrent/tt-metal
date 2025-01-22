@@ -92,30 +92,25 @@ Tensor create_typed_tt_tensor_from_py_data(
     IDevice* device,
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
-    const bool force_disable_borrow) {
-    auto layout = tensor_spec.layout();
-
-    const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
-    const bool requires_tilization = layout != Layout::ROW_MAJOR;
-    const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
-
+    const bool enable_borrow) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     // Use template type for generic function - TODO find better way, maybe decltype or variants w/ array or map?
-    auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
+    auto data_ptr = reinterpret_cast<T*>(py_data_ptr);
 
-    auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
 
-    if (enable_borrow and !(data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B)) {
+    if (enable_borrow) {
         auto storage = BorrowedStorage(
             borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
         return Tensor(std::move(storage), tensor_spec);
     } else {
+        std::size_t num_elements = tensor_spec.logical_shape().volume();
         auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
+        // Abstract away handling by calling from_vector which calls from_span which handles bfloats
         return Tensor::from_vector(
             std::move(logical_data),
             tensor_spec,
@@ -137,33 +132,34 @@ Tensor create_tt_tensor_from_py_data(
     switch (data_type) {
         case DataType::UINT8: {
             return create_typed_tt_tensor_from_py_data<uint8_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         case DataType::UINT16: {
             return create_typed_tt_tensor_from_py_data<uint16_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         case DataType::INT32: {
             return create_typed_tt_tensor_from_py_data<int32_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         case DataType::UINT32: {
             return create_typed_tt_tensor_from_py_data<uint32_t>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         case DataType::FLOAT32: {
             return create_typed_tt_tensor_from_py_data<float>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         // TODO: This is not supported for numpy
         case DataType::BFLOAT16: {
             return create_typed_tt_tensor_from_py_data<bfloat16>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, enable_borrow);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
-            return create_typed_tt_tensor_from_py_data<bfloat16>(
-                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+            // never enable_borrow for bfloat8 and bfloat4 since they're tt specific types
+            return create_typed_tt_tensor_from_py_data<float>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, false);
         }
         case DataType::INVALID: {
             TT_THROW("Unsupported DataType: {}", data_type);
