@@ -34,18 +34,8 @@ def rms_norm(x, dim, gamma, beta, eps):
 # 2,7 -> 2,0 (3) + 2,4 (1)
 
 PREFETCHER_NOC1_GRID = [
-    (5, 1),
-    (5, 2),
-    (5, 4),
-    (1, 4),
-    (1, 5),
-    (1, 9),
-    (1, 0),
-    (2, 0),
-    (2, 4),
-    (2, 5),
-    (2, 9),
-    (6, 6),  # 9,100 ns
+    (2, 9),  # 10,266 ns
+    (6, 6),  # 9,100 ns (OG start)
     (6, 7),  # 9,558 ns
     (6, 9),  # 9,553 ns
     (6, 0),  # 9,613 ns
@@ -58,6 +48,16 @@ PREFETCHER_NOC1_GRID = [
     (5, 7),  # 10,032 ns
     (5, 9),  # 9,772 ns
     (5, 0),  # 9,883 ns
+    (5, 1),  # 10,498 ns
+    (5, 2),  # 10,272 ns
+    (5, 4),  # 10,134 ns
+    (1, 4),  # 10,187 ns
+    (1, 5),  # 10,073 ns
+    (1, 9),  # 10,276 ns
+    (1, 0),
+    (2, 0),
+    (2, 4),
+    (2, 5),
 ]
 
 
@@ -228,7 +228,7 @@ def test_layernorm_perf(mesh_device, input_dim, input_core_grid, output_core_gri
         stats=tt_stats,
         memory_config=output_memory_config,
         # memory_config=input_memory_config,
-        dtype=ttnn.bfloat8_b,
+        # dtype=ttnn.bfloat8_b,
     )
 
     print(tt_out.shape)
@@ -243,7 +243,5 @@ def test_layernorm_perf(mesh_device, input_dim, input_core_grid, output_core_gri
     ref_lnorm = rms_norm(input_tensor_torch, [3], gamma_torch, torch.zeros_like(gamma_torch), 1e-5)
     passing, output = comp_pcc(tt_out_torch, ref_lnorm, 0.999)
     logger.info(output)
-
-    breakpoint()
 
     assert passing
