@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -54,7 +54,10 @@ struct OpConfig {
         RIGHT_SHIFT,
         BITWISE_AND,
         BITWISE_OR,
-        BITWISE_XOR
+        BITWISE_XOR,
+        QUANT,
+        REQUANT,
+        DEQUANT
     };
 
     template <class EnumT>

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -293,6 +293,17 @@ void set_or_update_runtime_arguments(
             cWt};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
+        const bool is_quant_op = (operation_attributes.binary_op_type == BinaryOpType::QUANT) or
+                                 (operation_attributes.binary_op_type == BinaryOpType::REQUANT) or
+                                 (operation_attributes.binary_op_type == BinaryOpType::DEQUANT);
+        TT_FATAL(
+            is_quant_op == ((operation_attributes.post_activations.size() == 1) and
+                            (operation_attributes.post_activations[0].op_type ==
+                             ttnn::operations::unary::UnaryOpType::ZERO_POINT)),
+            "Quantization op needs to exactly one zero-point value as a post activation");
+        const uint32_t quantization_zero_point =
+            is_quant_op ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].params[0]) : 0u;
+
         if (b.has_value()) {
             if (has_sharding) {
                 auto b_shard_shape = b_shard_shape_generator(core);
@@ -315,14 +326,20 @@ void set_or_update_runtime_arguments(
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            std::array compute_runtime_args = {c_num_tiles, freq, counter};
+            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
-            const auto packed_scalar = a.get_dtype() == DataType::FLOAT32 ? std::bit_cast<uint32_t>(scalar)
-                                       : a.get_dtype() == DataType::INT32
-                                           ? std::bit_cast<uint32_t>(static_cast<int32_t>(scalar))
-                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
+            // TODO: extract this to a seperate function?
+            const auto packed_scalar = [=](const DataType dtype) {
+                if (dtype == DataType::FLOAT32) {
+                    return std::bit_cast<uint32_t>(scalar);
+                } else if (dtype != DataType::INT32 or is_quant_op) {
+                    return pack_two_bfloat16_into_uint32({scalar, scalar});
+                } else {
+                    return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+                }
+            }(a.get_dtype());
             std::array writer_runtime_args = {
                 packed_scalar,
                 c.buffer()->address(),
@@ -338,7 +355,7 @@ void set_or_update_runtime_arguments(
                 0u};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {c_num_tiles, 0u, 0u};
+            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
@@ -418,11 +435,18 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS");
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
 
-        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
-            post_activations[0].op_type == unary::UnaryOpType::RELU) {
-            compute_kernel_defines["PACK_RELU"] = "1";
+        if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
-            unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            if (post_activations[0].op_type == unary::UnaryOpType::RELU) {
+                compute_kernel_defines["PACK_RELU"] = "1";
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            } else if (post_activations[0].op_type == unary::UnaryOpType::ZERO_POINT) {
+                // Zero-point is passed as the 4th run-time kernel argument
+                compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
+                unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
+            } else {
+                add_activation_defines(compute_kernel_defines, post_activations, "POST");
+            }
         } else {
             add_activation_defines(compute_kernel_defines, post_activations, "POST");
         }

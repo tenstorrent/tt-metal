@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
@@ -67,6 +66,9 @@ struct Typecast {
                 queue_id, input, output_dtype, memory_config_arg, optional_output_tensor);
         }
         DataType input_dtype = input.get_dtype();
+        if (input_dtype == output_dtype) {
+            return input;
+        }
         return detail::copy_impl(
             queue_id,
             input,
@@ -75,14 +77,6 @@ struct Typecast {
                 {static_cast<float>(input_dtype), static_cast<float>(output_dtype)})},
             memory_config_arg,
             optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const Tensor& input,
-        const DataType& output_dtype,
-        const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-        return invoke(DefaultQueueId, input, output_dtype, memory_config_arg, optional_output_tensor);
     }
 
     // eltwise_typecast implementation in tt_eager :
@@ -109,6 +103,9 @@ struct Typecast {
             TT_FATAL(
                 tt_output_dtype == optional_output_tensor.value().get_dtype(),
                 "If both output dtype and output tensor provided dtype should match");
+        }
+        if (tt_input_dtype == tt_output_dtype) {
+            return input_tensor;
         }
         return detail::copy_impl(
             queue_id,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,11 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
 
 #include <tt-metalium/hal_exp.hpp>
 

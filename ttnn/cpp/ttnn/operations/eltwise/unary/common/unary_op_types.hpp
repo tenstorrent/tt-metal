@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -90,6 +90,7 @@ enum class UnaryOpType {
     DROPOUT,
     FILL,
     PRELU_SFPU,
+    ZERO_POINT
 };
 
 struct UnaryWithParam {
