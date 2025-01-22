@@ -108,6 +108,7 @@ struct PermuteDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
