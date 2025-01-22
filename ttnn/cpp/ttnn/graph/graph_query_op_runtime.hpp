@@ -25,7 +25,7 @@ static constexpr int NUM_TRACE_EXECUTIONS = 10;
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
  *
- * This function guarantees end_trace_capture will be called if begin_trace_capture is called, even if running the op(s)
+ * This function guarantees that the capture will be stopped and released if running the op(s)
  * throws an exception.
  *
  * @tparam Op The type of the operation or a callable op chain that will be invoked to capture the trace operations.
@@ -57,8 +57,9 @@ auto capture_op_trace(Op op, IDevice* device, Args&&... args) {
     try {
         std::apply(op, transformed_args);
     } catch (const std::exception& e) {
-        // Ensure trace capture is stopped before returning to avoid a memory leak
+        // Ensure trace capture is stopped and released before returning to avoid a memory leak
         ttnn::operations::core::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
+        ttnn::operations::core::release_trace(device, trace_id);
         throw e;
     }
     ttnn::operations::core::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
