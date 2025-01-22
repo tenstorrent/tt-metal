@@ -23,10 +23,17 @@ typedef enum sanitization_features {
     SanitizeAddress,
     SanitizeAlignmentL1Write,
     SanitizeAlignmentL1Read,
-    SanitizeZeroL1Write
+    SanitizeZeroL1Write,
+    SanitizeMailboxWrite
 } watcher_features_t;
 
 void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bool is_eth_core, watcher_features_t feature, bool use_ncrisc = false) {
+    // It's not simple to check the watcher server status from the finish loop for slow dispatch, so just run these
+    // tests in FD.
+    if (fixture->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
+
     // Set up program
     Program program = Program();
     CoreCoord phys_core;
@@ -41,6 +48,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     uint32_t num_tiles = 50;
     uint32_t l1_buffer_size = single_tile_size * num_tiles;
     uint32_t l1_buffer_addr = 400 * 1024;
+
+    // For ethernet core, need to have smaller buffer at a different address
+    if (is_eth_core) {
+        l1_buffer_size = 1024;
+        l1_buffer_addr = 200 * 1024;
+    }
 
     tt_metal::InterleavedBufferConfig l1_config{
         .device = device, .size = l1_buffer_size, .page_size = l1_buffer_size, .buffer_type = tt_metal::BufferType::L1};
@@ -103,6 +116,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
             l1_buffer_size--;
             break;
         case SanitizeZeroL1Write: output_l1_buffer_addr = 0; break;
+        case SanitizeMailboxWrite:
+            // This is illegal because we'd be writing to the mailbox memory
+            l1_buffer_addr = hal.get_dev_addr(
+                (is_eth_core) ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::TENSIX,
+                HalL1MemAddrType::MAILBOX);
+            break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -144,7 +163,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     switch(feature) {
         case SanitizeAddress:
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write 102400 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Unknown core w/ physical coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
@@ -154,13 +173,14 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 phys_core.x,
                 phys_core.y,
                 (is_eth_core) ? "erisc" : "brisc",
+                l1_buffer_size,
                 l1_buffer_addr,
                 output_buf_noc_xy.str(),
                 output_l1_buffer_addr);
             break;
         case SanitizeAlignmentL1Write: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 102399 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
@@ -171,6 +191,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 phys_core.y,
                 risc_name,
                 noc,
+                l1_buffer_size,
                 l1_buffer_addr,
                 target_core,
                 output_l1_buffer_addr);
@@ -178,7 +199,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         }
         case SanitizeAlignmentL1Read: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read 102399 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
                 "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
@@ -189,15 +210,16 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 phys_core.y,
                 risc_name,
                 noc,
+                l1_buffer_size,
                 l1_buffer_addr,
                 target_core,
                 input_l1_buffer_addr);
         } break;
         case SanitizeZeroL1Write: {
             expected = fmt::format(
-                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write 102400 "
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast write {} "
                 "bytes from local L1[{:#08x}] to Tensix core w/ physical coords {} L1[addr=0x{:08x}] (NOC target "
-                "address underflow).",
+                "overwrites mailboxes).",
                 device->id(),
                 (is_eth_core) ? "ethnet" : "worker",
                 core.x,
@@ -206,9 +228,27 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 phys_core.y,
                 risc_name,
                 noc,
+                l1_buffer_size,
                 l1_buffer_addr,
                 target_core,
                 output_l1_buffer_addr);
+        } break;
+        case SanitizeMailboxWrite: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc0 tried to unicast read {} "
+                "bytes to local L1[{:#08x}] from Tensix core w/ physical coords {} L1[addr=0x{:08x}] (Local L1 "
+                "overwrites mailboxes).",
+                device->id(),
+                (is_eth_core) ? "ethnet" : "worker",
+                core.x,
+                core.y,
+                phys_core.x,
+                phys_core.y,
+                (is_eth_core) ? "erisc" : "brisc",
+                l1_buffer_size,
+                l1_buffer_addr,
+                input_buf_noc_xy.str(),
+                input_l1_buffer_addr);
         } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
@@ -225,17 +265,23 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     EXPECT_EQ(get_watcher_exception_message(), expected);
 }
 
-static void RunTestEth(WatcherFixture* fixture, IDevice* device) {
+static void RunTestEth(WatcherFixture* fixture, IDevice* device, watcher_features_t feature) {
+    if (fixture->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
     // Run on the first ethernet core (if there are any).
     if (device->get_active_ethernet_cores(true).empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
-    RunTestOnCore(fixture, device, core, true, SanitizeAddress);
+    RunTestOnCore(fixture, device, core, true, feature);
 }
 
 static void RunTestIEth(WatcherFixture* fixture, IDevice* device) {
+    if (fixture->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
@@ -262,64 +308,45 @@ void CheckHostSanitization(IDevice* device) {
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherSanitize) {
-    // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
-    // tricky to check watcher server status from the finish loop for slow dispatch. Once issue #4363
-    // is resolved, we should add a check for print server handing in slow dispatch as well.
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-
     CheckHostSanitization(this->devices_[0]);
 
     // Only run on device 0 because this test takes down the watcher server.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){
+        [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAddress);
         },
-        this->devices_[0]
-    );
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Write) {
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){
+        [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Write);
         },
-        this->devices_[0]
-    );
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1Read) {
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){
+        [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read);
         },
-        this->devices_[0]
-    );
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherSanitizeAlignmentL1ReadNCrisc) {
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, IDevice* device){
+        [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, device, core, false, SanitizeAlignmentL1Read, true);
         },
-        this->devices_[0]
-    );
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
-    if (this->slow_dispatch_) {
-        GTEST_SKIP();
-    }
     this->RunTestOnDevice(
         [](WatcherFixture* fixture, IDevice* device) {
             CoreCoord core{0, 0};
@@ -328,10 +355,25 @@ TEST_F(WatcherFixture, TensixTestWatcherSanitizeZeroL1Write) {
         this->devices_[0]);
 }
 
+TEST_F(WatcherFixture, TensixTestWatcherSanitizeMailboxWrite) {
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, device, core, false, SanitizeMailboxWrite);
+        },
+        this->devices_[0]);
+}
+
 TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeEth) {
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
-    this->RunTestOnDevice(RunTestEth, this->devices_[0]);
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTestEth(fixture, device, SanitizeAddress); },
+        this->devices_[0]);
+}
+
+TEST_F(WatcherFixture, ActiveEthTestWatcherSanitizeMailboxWrite) {
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTestEth(fixture, device, SanitizeMailboxWrite); },
+        this->devices_[0]);
 }
 
 TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeIEth) {
@@ -339,7 +381,5 @@ TEST_F(WatcherFixture, IdleEthTestWatcherSanitizeIEth) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    if (this->slow_dispatch_)
-        GTEST_SKIP();
     this->RunTestOnDevice(RunTestIEth, this->devices_[0]);
 }
