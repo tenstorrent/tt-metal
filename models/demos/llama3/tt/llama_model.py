@@ -315,10 +315,6 @@ class TtTransformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
         )
-        # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-        if not self.args.is_galaxy:
-            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
-        return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -339,6 +335,10 @@ class TtTransformer(LightweightModule):
             tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
                 tt_logits, dim=3, use_multicore=False if self.args.max_batch_size > 1 else True  # ,output_tensor=tokens
             )
+        else:
+            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+            if not self.args.is_galaxy:
+                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 
