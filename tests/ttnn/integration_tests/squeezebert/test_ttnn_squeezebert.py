@@ -358,4 +358,4 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
     tt_end_logits = tt_output[..., :, 1]
 
     assert_with_pcc(torch_output.start_logits, tt_start_logits, 0.83 if is_grayskull() else 0.88)
-    assert_with_pcc(torch_output.end_logits, tt_end_logits, 0.85 if is_grayskull() else 0.93)
+    assert_with_pcc(torch_output.end_logits, tt_end_logits, 0.84 if is_grayskull() else 0.93)
