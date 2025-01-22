@@ -285,6 +285,73 @@ def test_nlp_create_qkv_heads_test(
         )
 
 
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (ttnn.DRAM_MEMORY_CONFIG,),
+    ids=[
+        "out_DRAM",
+    ],
+)
+@pytest.mark.parametrize(
+    "in_mem_config",
+    (ttnn.DRAM_MEMORY_CONFIG,),
+    ids=[
+        "in_DRAM",
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+    ),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize("batch", (1,))
+@pytest.mark.parametrize("seq_len", (128, 1024, 30720, 131072))
+@pytest.mark.parametrize("head_dim", (128,))
+@pytest.mark.parametrize("num_q_heads", (32,))
+@pytest.mark.parametrize("num_kv_heads", (4,))
+@pytest.mark.parametrize("parallel_factor", (1, 2, 4))
+@pytest.mark.parametrize("transpose_k_heads", (False,))
+@pytest.mark.parametrize("read_from_input_tensor_kv", (False,))
+def test_nlp_create_qkv_heads_llama_test(
+    batch,
+    seq_len,
+    head_dim,
+    num_q_heads,
+    num_kv_heads,
+    parallel_factor,
+    transpose_k_heads,
+    read_from_input_tensor_kv,
+    dtype,
+    in_mem_config,
+    out_mem_config,
+    request,
+    device,
+):
+    num_q_heads = num_q_heads // parallel_factor
+    num_kv_heads = num_kv_heads // parallel_factor
+    if is_grayskull() and dtype == ttnn.float32:
+        pytest.skip("Skipping float32 tests on Grayskull")
+    if dtype == ttnn.float32 and (batch == 111 or batch == 5) and in_mem_config == ttnn.L1_MEMORY_CONFIG:
+        logger.warning("fp32 tensor too large to fit L1")
+    else:
+        run_nlp_create_qkv_heads_test(
+            batch,
+            seq_len,
+            head_dim,
+            num_q_heads,
+            num_kv_heads,
+            transpose_k_heads,
+            read_from_input_tensor_kv,
+            dtype,
+            in_mem_config,
+            out_mem_config,
+            device,
+        )
+
+
 def test_nlp_create_qkv_heads_with_program_cache(device, use_program_cache):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.L1_MEMORY_CONFIG
