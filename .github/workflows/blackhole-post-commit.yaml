@@ -2,6 +2,12 @@ name: "Blackhole post-commit tests"
 
 on:
   workflow_call:
+    inputs:
+      runner-label:
+          description: 'Optional: BH'
+          required: false
+          type: string
+          default: 'BH'
   workflow_dispatch:
     inputs:
       runner-label:
