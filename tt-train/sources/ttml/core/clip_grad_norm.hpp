@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <yaml-cpp/yaml.h>
 
 #include "autograd/tensor.hpp"
 #include "serialization/serializable.hpp"

@@ -636,9 +636,10 @@ int main(int argc, char **argv) {
             gradient_accumulator_helper.update(loss_float, samples);
 
             // synchronize gradients for multi-device case, no-op if single device
-            ttml::core::distributed::synchronize_parameters(model->parameters());
+            auto parameters = model->parameters();
+            ttml::core::distributed::synchronize_parameters(parameters);
             if (config.use_clip_grad_norm) {
-                ttml::core::clip_grad_norm(model->parameters(), config.clip_grad_norm_max_norm);
+                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
             }
 
             if (gradient_accumulator_helper.should_step()) {

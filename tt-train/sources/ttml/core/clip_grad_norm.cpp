@@ -23,8 +23,8 @@ autograd::TensorPtr clip_grad_norm(
         max_norm,
         p_norm_type,
         error_if_nonfinite,
-        std::nullopt, /* total_norm*/
-        std::nullopt, /* memory_config*/
+        /* total_norm*/ std::nullopt,
+        /* memory_config*/ std::nullopt,
         ttml::core::ComputeKernelConfig::precise());
     return autograd::create_tensor(tt_result);
 }

@@ -42,13 +42,7 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     // together.
     auto p2_norm = [](const xt::xarray<float>& grad) { return std::sqrt(xt::sum(grad * grad)()); };
 
-    auto concatenated_grads = std::accumulate(
-        expected_grads.begin() + 1,
-        expected_grads.end(),
-        expected_grads[0],
-        [](const xt::xarray<float>& acc, const xt::xarray<float>& curr) {
-            return xt::concatenate(xt::xtuple(acc, curr), 0);
-        });
+    auto concatenated_grads = core::concat(expected_grads);
 
     float expected_total_p2_norm = p2_norm(concatenated_grads);
 
