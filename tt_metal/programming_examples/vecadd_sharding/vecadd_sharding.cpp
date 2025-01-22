@@ -7,13 +7,11 @@
 // then perform vector addition tile by tile. Because of sharding to L1, DRAM is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
-#include "buffers/circular_buffer_types.hpp"
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
-#include "common/core_coord.hpp"
-#include "detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include <cstddef>
 #include <cstdint>
