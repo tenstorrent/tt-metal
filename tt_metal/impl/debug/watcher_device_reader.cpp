@@ -484,6 +484,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device, core, noc, san);
             error_msg += " (mixing virtual and physical coordinates in Mcast).";
             break;
+        case DebugSanitizeNocAddrMailbox:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
