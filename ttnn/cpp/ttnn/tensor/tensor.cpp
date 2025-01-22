@@ -180,10 +180,6 @@ Tensor::Tensor(
                 dtype, PageConfig(layout, tile), memory_config, logical_shape, padded_shape)));
 }
 
-Tensor::Tensor(
-    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), shape.logical_shape(), shape.padded_shape(), dtype, layout, tile) {}
-
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec) { init(std::move(storage), std::move(tensor_spec)); }
 
 void Tensor::init(Storage storage, TensorSpec tensor_spec) {
@@ -338,7 +334,7 @@ Tensor::~Tensor() {
 
 Tensor::Tensor(
     Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
-    Tensor(std::move(storage), ttnn::Shape(shape.view()), dtype, layout, tile) {}
+    Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) {
     ZoneScopedN("TensorDeallocate");
