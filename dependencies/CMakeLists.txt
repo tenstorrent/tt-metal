@@ -25,6 +25,8 @@ CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
     GIT_TAG 0.8.0
+    PATCHES
+        yaml-cpp.patch
     OPTIONS
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
@@ -84,19 +86,27 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
 # range-v3 : https://github.com/ericniebler/range-v3
 ############################################################################################################################
 
-CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
+CPMAddPackage(
+    NAME range-v3
+    GITHUB_REPOSITORY ericniebler/range-v3
+    GIT_TAG 0.12.0
+    PATCHES
+        range-v3.patch
+    OPTIONS
+        "CMAKE_BUILD_TYPE Release"
+)
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84)
+CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.9.1)
+CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3)
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
