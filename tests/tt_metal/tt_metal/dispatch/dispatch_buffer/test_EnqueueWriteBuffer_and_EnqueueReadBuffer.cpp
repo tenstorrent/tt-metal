@@ -1035,7 +1035,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) 
                                                         vector<uint32_t> result;
                                                         EnqueueReadSubBuffer(
                                                             device->command_queue(), *buffer, result, region, true);
-                                                        ASSERT_EQ(src, result);
+                                                        EXPECT_EQ(src, result);
                                                     }
                                                 }
                                                 tensor2d_shape_width += page_shape_width_div_factor;
