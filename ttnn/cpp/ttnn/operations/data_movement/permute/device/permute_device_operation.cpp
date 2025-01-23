@@ -23,14 +23,17 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
     } else {
         // If the input tensor is not row-major, we need to use the tiled kernels
         uint32_t rank = tensor_args.input_tensor.get_logical_shape().rank();
+        // When the tiled dimensions are not moved, we use this kernel
         if ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
             (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
             return MultiCoreTileInvariant{};
-        } else if (dims[rank - 1] == rank - 1) {
+        } else if (dims[rank - 1] == rank - 1 || dims[rank - 1] == rank - 2) {  // When only one of the tiled dimensions
+                                                                                // is moved
             return MultiCoreTileRowInvariant{};
+        } else {
+            return MultiCoreTiledGeneric{};  // When both the tiled dimensions are moved
         }
     }
-    return MultiCoreBlockedGeneric{};
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(
@@ -41,11 +44,6 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
         attributes.dims.size() == tensor_args.input_tensor.get_logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
     TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
-    TT_FATAL(
-        tensor_args.input_tensor.get_layout() == Layout::ROW_MAJOR ||
-            (tensor_args.input_tensor.get_layout() == Layout::TILE &&
-             ((dims[rank - 1] == rank - 1) || (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))),
-        "Permute operation only supports row-major layout");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(

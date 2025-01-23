@@ -31,6 +31,7 @@ struct PermuteDeviceOperation {
 
     using tensor_return_value_t = Tensor;
 
+    // Implementation for a row major tensor where the row dimension is not moved in the permutation
     struct MultiCoreRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
@@ -52,6 +53,7 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
+    // Implementation for a row major tensor where the row dimension is moved in the permutation
     struct MultiCoreBlockedGeneric {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
@@ -98,13 +100,15 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Implemention for when the height dimension (rank - 2) is swapped with another dimension (dims = {..., rank - 2,
+    // Implemention for when only one of the height dimension (rank - 2) and the width dimension is swapped with another
+    // dimension (dims = {..., rank - 2,
     // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -121,8 +125,35 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t =
-        std::variant<MultiCoreRowInvariant, MultiCoreBlockedGeneric, MultiCoreTileInvariant, MultiCoreTileRowInvariant>;
+    // Implementation for when both the height and width dimension is swapped around in the permutation
+    struct MultiCoreTiledGeneric {
+        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id;
+            CoreRangeSet core_range;
+        };
+        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+        static cached_program_t create(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+
+        static void override_runtime_arguments(
+            cached_program_t& cached_program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<
+        MultiCoreRowInvariant,
+        MultiCoreBlockedGeneric,
+        MultiCoreTileInvariant,
+        MultiCoreTileRowInvariant,
+        MultiCoreTiledGeneric>;
 
     // Mandatory methods
 
