@@ -142,7 +142,7 @@ void MAIN {
         //     DPRINT<<"out_subblock_num_tiles: "<<out_subblock_num_tiles<<ENDL();
         //     DPRINT<<"tilize_in0: "<<(uint32_t)tilize_in0<<ENDL();
         //     DPRINT<<"untilize_out: "<<(uint32_t)untilize_out<<ENDL();
-        DPRINT << "out_cb_id: " << out_cb_id << ENDL();
+        //     DPRINT<<"out_cb_id: "<<out_cb_id<<ENDL();
         //     DPRINT<<"output_rows_h: "<<output_rows_h<<ENDL();
         //     DPRINT<<"is_non_tile_height: "<<(uint32_t)is_non_tile_height<<ENDL();
         // #ifdef WIDTH_SHARDED
@@ -150,7 +150,7 @@ void MAIN {
         // #endif
         //     DPRINT<<"out_block_num_tiles: "<<out_block_num_tiles<<ENDL();
         //     DPRINT<<"out_block_w: "<<out_block_w<<ENDL();
-        DPRINT << "spill: " << (uint32_t)spill << ENDL();
+        //     DPRINT<<"spill: "<<(uint8_t)spill<<ENDL();
         DPRINT << "untilize_mode_out_cb_id: " << untilize_mode_out_cb_id << ENDL();)
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
@@ -178,7 +178,11 @@ void MAIN {
            const bool use_partials_for_out = (partials_cb_read_ptr == get_local_cb_interface(out_cb_id).fifo_rd_ptr);)
     PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;
          const bool use_partials_for_out = (partials_cb_write_ptr == get_local_cb_interface(out_cb_id).fifo_wr_ptr);)
-    DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
+    DPRINT_UNPACK(
+        DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n"; if (use_partials_for_out) {
+            DPRINT << "Using Partials for Out\n";
+        } else { DPRINT << "Not Using Partials for Out\n"; })
+
     DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
 
     DPRINT_UNPACK(DPRINT << "MM Out CB Read Ptr: " << mm_out_cb_id << " "
@@ -201,12 +205,14 @@ void MAIN {
             // for each output block we start we relu disabled so that intermediate results are not relu'd
             PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #endif
-            if (untilize_out == false) {
-                UNPACK(partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr);
-                PACK(partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
-                DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
-                DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
-            }
+            UNPACK(
+                if (use_partials_for_out) partials_cb_read_ptr =
+                    get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr);
+            PACK(
+                if (use_partials_for_out) partials_cb_write_ptr =
+                    get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
+            DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
+            DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
