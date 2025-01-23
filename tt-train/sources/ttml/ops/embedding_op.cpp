@@ -18,7 +18,7 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     weight_tensor = ttnn::untilize(weight_tensor);
 
     auto embeddings = ttnn::embedding(tensor->get_value(), weight_tensor, /* pad_token */ std::nullopt, Layout::TILE);
-    auto embeddings_shape = embeddings.get_shape();
+    auto embeddings_shape = embeddings.get_logical_shape();
     auto batch_size = embeddings_shape[0];
     auto sentence_size = embeddings_shape[1];
     auto embedding_dim = embeddings_shape[2];
@@ -27,9 +27,9 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
 
     autograd::GradFunction grad = [tensor, weight, out]() {
         auto out_grad = out->get_grad();
-        auto tensor_shape = tensor->get_value().get_shape();
+        auto tensor_shape = tensor->get_value().get_logical_shape();
         out_grad = ttnn::reshape(
-            out_grad, core::create_shape({1, 1, tensor_shape[0] * tensor_shape[-1], out_grad.get_shape()[-1]}));
+            out_grad, core::create_shape({1, 1, tensor_shape[0] * tensor_shape[-1], out_grad.get_logical_shape()[-1]}));
         auto weight_grad = ttnn::embedding_bw(tensor->get_value(), weight->get_value(), out_grad);
         weight->add_grad(weight_grad);
     };
