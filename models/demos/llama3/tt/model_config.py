@@ -877,6 +877,10 @@ class TtModelArgs:
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
+        if self.num_devices_dp > 1:
+            # data parallel assumes model fits single chip.
+            assert self.num_devices_tp == 1, "Hybrid mode not supported"
+            return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
         elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
