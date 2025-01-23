@@ -101,21 +101,18 @@ Tensor create_typed_tt_tensor_from_py_data(
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     // Use template type for generic function - TODO find better way, maybe decltype or variants w/ array or map?
-    auto data_ptr = reinterpret_cast<T*>(py_data_ptr);
+    auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
 
     std::size_t num_elements = tensor_spec.logical_shape().volume();
 
-    // never enable_borrow for bfloat8 and bfloat4 since they're tt specific types
     if (enable_borrow and
         !(tensor_spec.data_type == DataType::BFLOAT8_B || tensor_spec.data_type == DataType::BFLOAT4_B)) {
         auto storage = BorrowedStorage(
             borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
         return Tensor(std::move(storage), tensor_spec);
     } else {
-        std::size_t num_elements = tensor_spec.logical_shape().volume();
         auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
-        // Abstract away handling by calling from_vector which calls from_span which handles bfloats
         return Tensor::from_vector(
             std::move(logical_data),
             tensor_spec,
@@ -167,7 +164,6 @@ Tensor create_tt_tensor_from_py_data(
         }
     }
 
-    // remove default case in switch
     TT_THROW("Unsupported DataType: {}", data_type);
 }
 
