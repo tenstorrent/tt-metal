@@ -121,7 +121,9 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
         this->worker_grid_size.str());
 
     CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::VIRTUAL : CoordSystem::PHYSICAL;
-    return (tt_xy_pair)translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
+    tt::umd::CoreCoord physical_coord =
+        translate_coord_to({logical_coord, CoreType::WORKER, CoordSystem::LOGICAL}, target_system);
+    return {physical_coord.x, physical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
@@ -204,9 +206,9 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
 // UMD expects virtual NOC coordinates for worker cores
 tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
     CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
-    tt_xy_pair virtual_coord =
-        (tt_xy_pair)translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, target_system);
-    return tt_cxy_pair(physical_cxy.chip, virtual_coord);
+    tt::umd::CoreCoord virtual_coord =
+        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, target_system);
+    return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
 }
 
 void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
@@ -261,8 +263,8 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         }
         int physical_y_coord = *virtual_y_coord_it;
         virtual_y_coord_it++;
-        tt_xy_pair virtual_coord = (tt_xy_pair)translate_coord_to(
-            {0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::VIRTUAL);
+        tt::umd::CoreCoord virtual_coord =
+            translate_coord_to({0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::VIRTUAL);
         virtual_routing_to_physical_routing_y.insert({virtual_coord.y, physical_y_coord});
     }
 
