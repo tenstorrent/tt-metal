@@ -172,12 +172,12 @@ void JitBuildEnv::init(
                       "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk_" + this->arch_name_ +
+                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ +
                       "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
                       "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
                       "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
                       "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
