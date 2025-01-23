@@ -70,7 +70,7 @@ def main():
         "--format",
         type=str,
         choices=["msgpack", "csv"],
-        default="msgpack",
+        default="csv",
         help="Output format for tokenized data (default: msgpack).",
     )
     args = parser.parse_args()
@@ -81,14 +81,19 @@ def main():
 
     # Tokenize the text data
     print(f"Tokenizing data using tokenizer {args.tokenizer_file}...")
-    tokenized_data = tokenize_text_data(args.tokenizer_file, text_data)
+    splits_num = 128
+    tokenized_data = []
+    for i in range(splits_num):
+        text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
+        tokenized_data_split = tokenize_text_data(args.tokenizer_file, text_data_split)
+        tokenized_data.extend(tokenized_data_split)
 
     # Save tokenized data in the specified format
     if args.format == "msgpack":
         output_file = f"{args.output_file}.msgpack"
         save_to_msgpack(tokenized_data, output_file)
     elif args.format == "csv":
-        output_file = f"{args.output_file}.csv"
+        output_file = f"{args.output_file}"
         save_to_csv(tokenized_data, output_file)
 
 
