@@ -40,14 +40,7 @@ Tensor create_owned_tensor_from_row_major_data(
     std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
     auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
-
-    Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, result_cpu_spec);
-
-    if (spec.layout() == Layout::TILE) {
-        // TODO: whenever possible, perform tiliziation on device.
-        output = output.to(Layout::TILE);
-    }
+    Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
         output = output.to(device->get_devices(), spec.memory_config());
