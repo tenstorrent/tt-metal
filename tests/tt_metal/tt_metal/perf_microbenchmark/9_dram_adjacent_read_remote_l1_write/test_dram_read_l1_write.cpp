@@ -20,6 +20,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include "get_platform_architecture.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <yaml-cpp/yaml.h>
 

@@ -119,8 +119,8 @@ Cluster::Cluster() {
 }
 
 void Cluster::detect_arch_and_target() {
-
-    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+    this->target_type_ = (llrt::RunTimeOptions::get_instance().get_simulator_enabled()) ? TargetDevice::Simulator
+                                                                                        : TargetDevice::Silicon;
 
     this->arch_ = tt_metal::get_platform_architecture();
 
@@ -267,7 +267,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        auto simulator_directory = std::getenv("TT_METAL_SIMULATOR");
+        auto simulator_directory = llrt::RunTimeOptions::get_instance().get_simulator_path();
         device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
     }
 
