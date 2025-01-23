@@ -8,7 +8,7 @@
 
 function run_one() {
     echo "Running $@"
-    build/test/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer $@
+    build/test/tt_metal/perf_microbenchmark/3_pcie_transfer/test_rw_buffer_${ARCH_NAME} $@
 }
 
 function run_set() {
