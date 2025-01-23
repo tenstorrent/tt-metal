@@ -2120,7 +2120,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
     auto in0_tile = a.get_tensor_spec().tile();
     auto in1_tile = b.get_tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override

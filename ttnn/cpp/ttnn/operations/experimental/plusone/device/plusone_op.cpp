@@ -16,7 +16,7 @@ void PlusOne::validate_with_output_tensors(
     TT_FATAL(input_tensor_a.get_dtype() == DataType::INT32, "Only INT32 is supported for inputs!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
-    auto input_shape = input_tensor_a.get_legacy_shape();
+    auto input_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(input_shape.size() == 1, "must have 1 dimension");
 }
 

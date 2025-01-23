@@ -1230,7 +1230,7 @@ Tensor pad<bfloat4_b>(
 template <typename T>
 Tensor unpad(
     const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
-    const auto input_shape = tensor.get_legacy_shape();
+    const auto input_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape

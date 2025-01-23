@@ -90,7 +90,7 @@ Tensor create_tensor_from_owned_buffer(
 template <typename T>
 Tensor to_weight_special_padding_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_padded_shape();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         uint32_t in1_block_h_datums = in1_block_h * constants::TILE_HEIGHT;
         uint32_t in1_block_w_datums = in1_block_w * constants::TILE_WIDTH;
@@ -127,7 +127,7 @@ Tensor to_weight_special_padding_tile_layout(
 template <typename T>
 Tensor to_weight_tile_layout(
     const Tensor& conv_weight_tensor, uint32_t in1_block_h, uint32_t in1_block_w, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_padded_shape();
     auto compute = [&w_shape, &in1_block_h, &in1_block_w, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         // width padding
@@ -184,7 +184,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 template <typename T>
 Tensor to_weight_tile_layout_block_sharded(
     const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    auto w_shape = conv_weight_tensor.get_legacy_shape();
+    auto w_shape = conv_weight_tensor.get_padded_shape();
     auto compute = [&w_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
         auto weight_matrix_cols = w_shape[0];
         TT_ASSERT(weight_matrix_cols % num_channel_shards == 0);
@@ -252,7 +252,7 @@ Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
 template <typename T>
 Tensor to_bias_tile_layout_block_sharded(
     const Tensor& conv_bias_tensor, uint32_t num_channel_shards, DataType output_dtype) {
-    auto b_shape = conv_bias_tensor.get_legacy_shape();
+    auto b_shape = conv_bias_tensor.get_padded_shape();
     TT_ASSERT(b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == 1);
     auto compute = [&b_shape, &num_channel_shards, &output_dtype](const auto& input_buffer) {
         auto bias_matrix_cols = b_shape[3];
