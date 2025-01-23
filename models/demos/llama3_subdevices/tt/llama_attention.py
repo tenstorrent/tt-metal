@@ -138,7 +138,6 @@ class TtLlamaAttention(LightweightModule):
 
         # Ring stuff
         # 9216, 12288
-        qkv_cat = torch.nn.functional.pad(qkv_cat, (0, (12288 - 10240), 0, (9216 - 8192)), "constant", 0)
 
         # [1, 1, 8192, 10240] -> [2304, 1536]
         self.wqkv = ttnn.as_tensor(
@@ -150,7 +149,7 @@ class TtLlamaAttention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            # cache_file_name=cache_name("wqkv_sharded_2d_padded_pf"),  ## TODO: Fix caching
+            cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
 
         if self.model_config["USE_PREFETCHER"]:
@@ -159,7 +158,6 @@ class TtLlamaAttention(LightweightModule):
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
         pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
-        pt_wo = torch.nn.functional.pad(pt_wo, (0, 9216 - 8192, 0, 12288 - 8192), "constant", 0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim // configuration.num_devices, configuration.dim
@@ -178,9 +176,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            # cache_file_name=cache_name("wo_width_sharded_2d_padded_pf")
-            # if (self.use_fused_all_gather_matmul or self.TG)
-            # else cache_name("wo"),
+            cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
+            if (self.use_fused_all_gather_matmul or self.TG)
+            else cache_name("wo"),
         )
         if self.model_config["USE_PREFETCHER"]:
             self.prefetcher_setup.insert_tensor(self.wo)
@@ -258,7 +256,6 @@ class TtLlamaAttention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
-
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
@@ -269,47 +266,17 @@ class TtLlamaAttention(LightweightModule):
             program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer
-            if self.model_config["USE_PREFETCHER"]
-            else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
         )
         ttnn.deallocate(x)
+        print("done matmul")
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
-        xqkv_fused_dram = ttnn.to_memory_config(xqkv_fused_sharded, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(xqkv_fused_sharded)
-
         xqkv_reduced = self.tt_ccl.line_all_reduce(
-            xqkv_fused_dram, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            xqkv_fused_sharded, cluster_axis=1, num_links=3, memory_config=self.model_config["CREATE_HEAD_INPUT_MEMCFG"]
         )
 
-        ttnn.synchronize_devices(self.mesh_device)
-        ttnn.deallocate(xqkv_fused_dram)
-
-        xqkv_torch_reduced = ttnn.to_torch(
-            xqkv_reduced,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device,
-                dims=(3, 0),
-                mesh_shape=(8, 4),
-            ),
-        )[0].unsqueeze(
-            0
-        )  # [1, 1, 32, 12288]
-        xqkv_torch_reduced = xqkv_torch_reduced[..., : 1280 * 8]  # Unpad, TODO: ttnn.slice?
-        # inner -> replicate, outer -> fractured
-        xqkv_fused = ttnn.as_tensor(
-            xqkv_torch_reduced,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        xqkv_fused = ttnn.to_memory_config(xqkv_fused, self.model_config["CREATE_HEAD_INPUT_MEMCFG"])
+        print("done all reduce")
 
         ###
         # Reshape and rotary embeddings
@@ -319,7 +286,7 @@ class TtLlamaAttention(LightweightModule):
             k_heads_pre_rot_1BKD,
             v_heads_1BKD,
         ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_fused,
+            xqkv_reduced,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
@@ -328,7 +295,9 @@ class TtLlamaAttention(LightweightModule):
             slice_size=self.slice_size,
         )
 
-        ttnn.deallocate(xqkv_fused)
+        print("done create qkv heads")
+
+        ttnn.deallocate(xqkv_reduced)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
@@ -336,6 +305,8 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
+
+        print("done rotary embeddings")
 
         ###
         # KV update
@@ -356,6 +327,8 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k_heads_1BKD)
         ttnn.deallocate(v_heads_1BKD)
 
+        print("done update cache")
+
         # NOTE: Varying the batch size will result in slightly different outputs.
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
@@ -375,7 +348,7 @@ class TtLlamaAttention(LightweightModule):
                 memory_config=sdpa_out_mem_cfg,
             )
         else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+            attn_output_1G4D_sharded = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
                 values,
@@ -388,98 +361,54 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
-        attn_output_1G4D = ttnn.to_memory_config(attn_output_1G4D, ttnn.DRAM_MEMORY_CONFIG)
-        attn_output_gathered = self.tt_ccl.line_all_gather(
-            attn_output_1G4D, dim=1, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.synchronize_devices(self.mesh_device)
-        ttnn.deallocate(attn_output_1G4D)
+        print("done attention")
 
-        attn_output_gathered = ttnn.to_memory_config(
-            attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
+        # attn_output_1G4D = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
+        # attn_output_1G4D_sharded.deallocate(True)
+        attn_output_gathered_sharded = self.tt_ccl.line_all_gather(
+            attn_output_1G4D_sharded,
+            dim=1,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1]),
         )
+        # ttnn.deallocate(attn_output_1G4D)
 
-        attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
-            attn_output_gathered,
+        # attn_output_gathered_sharded = ttnn.to_memory_config(
+        #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
+        # )
+        # ttnn.deallocate(attn_output_gathered)
+
+        attn_output_cat_0 = ttnn.experimental.nlp_concat_heads_decode(
+            attn_output_gathered_sharded,
             num_heads=self.n_local_heads,
         )
-        ttnn.deallocate(attn_output_gathered)
+        ttnn.deallocate(attn_output_gathered_sharded)
+        print("done concat heads")
+
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        # Padded matmul on each device [1, 1, 32, 1536] @ [1, 1, 1536, 2304]
-
-        # [1, 1, 32, 8192]
-        attn_output_cat_torch = ttnn.to_torch(
-            attn_output_cat,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device,
-                dims=(3, 0),
-                mesh_shape=(8, 4),
-            ),
-        )[0].unsqueeze(0)
-
-        # [1, 1, 32, 12288]
-        attn_output_cat_torch = torch.nn.functional.pad(attn_output_cat_torch, (0, 12288 - 8192), "constant", 0)
-
-        ttnn.deallocate(attn_output_cat)
-
-        # [1, 1, 32, 1536]
-        attn_output_cat_ttnn = ttnn.as_tensor(
-            attn_output_cat_torch,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
+        attn_output_cat = ttnn.to_memory_config(
+            attn_output_cat_0, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
         )
-
-        # [1, 1, 32, 1536] @ [1, 1, 1536, 2304]
+        attn_output_cat_0.deallocate(True)
         dense_out_ttnn = ttnn.matmul(
-            attn_output_cat_ttnn,
+            attn_output_cat,
             self.wo,
             program_config=self.model_config["WO_DECODE_RING_PROGCFG"],
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            global_cb=self.prefetcher_setup.global_circular_buffer
-            if self.model_config["USE_PREFETCHER"]
-            else None,
+            global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
         )
         # [1, 1, 32, 2304]
-        ttnn.deallocate(attn_output_cat_ttnn)
-
-        dense_out_dram = ttnn.to_memory_config(dense_out_ttnn, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(dense_out_ttnn)
+        ttnn.deallocate(attn_output_cat)
+        print("done matmul")
 
         dense_out_reduced = self.tt_ccl.line_all_reduce(
-            dense_out_dram, cluster_axis=0, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            dense_out_ttnn, cluster_axis=0, num_links=4, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"]
         )
+        ttnn.deallocate(dense_out_ttnn)
 
-        ttnn.synchronize_devices(self.mesh_device)
-        ttnn.deallocate(dense_out_dram)
-
-        dense_out_reduced_torch = ttnn.to_torch(
-            dense_out_reduced,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device,
-                dims=(0, 3),
-                mesh_shape=(8, 4),
-            ),
-        )[0].unsqueeze(
-            0
-        )  # [1, 1, 32, 2304*4]
-        dense_out_reduced_torch = dense_out_reduced_torch[..., : 2048 * 4]  # Unpad, TODO: ttnn.slice?
-
-        dense_out_reduced = ttnn.as_tensor(
-            dense_out_reduced_torch,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=list(self.mesh_device.shape)
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        print("done all reduce")
 
         return dense_out_reduced
 

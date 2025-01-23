@@ -19,6 +19,7 @@ class LMHead(LightweightModule):
         state_dict_prefix,
         weight_cache_path,
         max_columns_per_device=128256 // 4,  # larger values per device lead to OOM or hangs
+        tt_ccl=None,
     ):
         super().__init__()
         self.args = args
@@ -27,6 +28,7 @@ class LMHead(LightweightModule):
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
+        self.tt_ccl = tt_ccl
 
         size_per_device = self.vocab_size // self.num_devices
 
@@ -42,19 +44,12 @@ class LMHead(LightweightModule):
 
         self.output_weights = []
         if args.is_galaxy:
+            num_splits = 1
             cache_file_name = (
                 None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
             )
             padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
             padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
-
-            if args.is_70b:
-                padded_lm_head = torch.nn.functional.pad(
-                    padded_lm_head,
-                    (0, (512 * 8), 0, (12288 - 8192)),  # for 48 cores, we need 16k + 512 per device
-                    "constant",
-                    0,
-                )
 
             if args.is_70b:
                 memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -64,17 +59,19 @@ class LMHead(LightweightModule):
                     if args.dim == 2048
                     else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
                 )
-            self.output_weights.append(  # (2k, 16k) 128* 1024
-                ttnn.as_tensor(
-                    padded_lm_head,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat4_b,
-                    memory_config=memory_config,
-                    # cache_file_name=cache_file_name,
+            for i in range(num_splits):
+                index = i * self.padded_vocab_size // num_splits
+                self.output_weights.append(  # (2k, 16k) 128* 1024
+                    ttnn.as_tensor(
+                        padded_lm_head[..., index : index + self.padded_vocab_size // num_splits],
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=dtype,
+                        memory_config=memory_config,
+                        # cache_file_name=cache_file_name,
+                    )
                 )
-            )
         else:
             for i, split_size in enumerate(split_sizes):
                 cache_file_name = (
@@ -127,7 +124,7 @@ class LMHead(LightweightModule):
             #     )
             # ]
 
-            self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]]
+            self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]] * num_splits
 
             if args.is_70b:
                 self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
@@ -177,11 +174,14 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor):
         # workaround for OOM issue
-        return self.forward_on_host(x)
+        # return self.forward_on_host(x)
+
+        # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
 
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
-            weight_l1 = ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
+            weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
+            print(f"weight_l1: {weight_l1}")
             output = ttnn.linear(
                 x,
                 weight_l1,
@@ -190,41 +190,20 @@ class LMHead(LightweightModule):
                 memory_config=self.output_memory_config,
                 dtype=ttnn.bfloat8_b,
             )
-            # outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
 
-        # # Concatenate the outputs
-        # output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            print(f"output: {output}")
+            outputs.append(output)
+            # outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            # weight_l1.deallocate(True)
+            # output.deallocate(True)
 
-        # output = tt_all_reduce(
-        #     output,
-        #     mesh_device=self.mesh_device,
-        #     cluster_axis=1,
-        #     dim=3 if self.args.is_galaxy else 0,
-        #     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-        #     num_all_gather_links=self.args.num_all_gather_links,
-        #     memory_config=ttnn.L1_MEMORY_CONFIG,
-        #     dtype=self.args.ccl_dtype,
-        #     sharded=False,
-        #     use_composite=True,
-        # )
+        outputs_reduced = []
+        for output in outputs:
+            output_reduced = self.tt_ccl.line_all_reduce(
+                output, cluster_axis=1, num_links=1, memory_config=self.output_memory_config
+            )
+            outputs_reduced.append(output_reduced)
 
-        output_torch = ttnn.to_torch(
-            output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(3, 0), mesh_shape=(8, 4)),
-        )
-        # Remove padding
-        output_torch = output_torch[:, :, :, : self.vocab_size]
+        ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
-        output_torch_reduced = torch.sum(output_torch, dim=0, keepdim=True)
-        output = ttnn.as_tensor(
-            output_torch_reduced,
-            dtype=ttnn.bfloat8_b,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device=self.mesh_device, dims=(3, None), mesh_shape=list(self.mesh_device.shape)
-            ),
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        return output
+        return outputs_reduced

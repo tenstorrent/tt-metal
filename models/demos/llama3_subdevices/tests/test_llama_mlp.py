@@ -45,7 +45,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=True, max_seq_len=128)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, dummy_weights=False, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -87,57 +87,56 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         tt_ccl=tt_ccl,
     )
 
-    prefetcher_setup.tensors.append(prefetcher_setup.get_tensor_addrs())
-
-    torch_input = torch.randn(1, 1, seq_len, 9216)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
-        dtype=ttnn.bfloat8_b,
-        memory_config=(
-            model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
-            if model_args.is_galaxy
-            else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-        )
-        if mode == "decode"
-        else ttnn.DRAM_MEMORY_CONFIG,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
 
     logger.info("Run Llama_MLP_PF")
-    ttnn.dram_prefetcher(
-        prefetcher_setup.tensors,
-        num_layers=1,
-        global_cb=prefetcher_setup.global_circular_buffer,
-    )
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+    for i in range(20):
+        ttnn.dram_prefetcher(
+            prefetcher_setup.get_input_tensors(),
+            num_layers=1,
+            global_cb=prefetcher_setup.global_circular_buffer,
+        )
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
-    logger.info("Run Llama_MLP")
-    tt_output = tt_model(tt_input, mode)
-    logger.info("llama MLP Done")
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 3) if model_args.is_galaxy else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
+            dtype=ttnn.bfloat8_b,
+            memory_config=(
+                model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
+                if model_args.is_galaxy
+                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+            )
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        logger.info("Run Llama_MLP")
+        tt_output = tt_model(tt_input, mode)
 
-    tt_ccl.close()
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        logger.info("llama MLP Done")
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
+        tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-    tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
+        reference_output = reference_model(torch_input[:, :1, :, : model_args.dim])
 
-    reference_output = reference_model(torch_input[:, :1, :, : model_args.dim])
+        pcc_required = 0.99
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
-    pcc_required = 0.99
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
     if passing:
         logger.info("Llama_MLP Passed!")
     else:
         logger.warning("Llama_MLP Failed!")
-
+    tt_ccl.close()
     assert passing, f"Llama_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."

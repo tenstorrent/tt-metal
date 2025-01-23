@@ -293,7 +293,8 @@ const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Ten
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config);
+        input_memory_config,
+        this->semaphore.address());
 }
 
 namespace operations {

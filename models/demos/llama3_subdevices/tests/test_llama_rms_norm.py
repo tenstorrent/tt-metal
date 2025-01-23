@@ -100,33 +100,43 @@ def test_llama_rms_norm_inference(
 
     input = torch.rand(1, 1, 32, model_args.dim)
     reference_output = reference_model(input)
+    for i in range(3):
+        # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+            memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_input_res = ttnn.from_torch(
+            input * 0,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+            memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        tt_output, res = tt_model(tt_input, tt_input_res, mode=mode)
 
-    # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
-    tt_input = ttnn.from_torch(
-        input,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
-        if mode == "decode"
-        else ttnn.DRAM_MEMORY_CONFIG,
-    )
-    mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-    tt_output = tt_model(tt_input, mode=mode)
+        # DistributedNorm outputs are replicated across devices
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
+            ),
+        )[:1, :, :, :]
 
-    # DistributedNorm outputs are replicated across devices
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
-        ),
-    )[:1, :, :, :]
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
-
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(f"PCC: {pcc_message}")
 
     tt_ccl.close()
 

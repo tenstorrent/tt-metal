@@ -19,6 +19,7 @@ from models.demos.llama3_subdevices.tt.llama_common import copy_host_to_device, 
 from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_subdevices.tt.llama_embedding import TtLlamaEmbedding
 from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 
 class TtTransformer(LightweightModule):
@@ -67,6 +68,10 @@ class TtTransformer(LightweightModule):
             n_tensors=5,
             n_layers=self.n_layers,
         )
+        mesh_device.set_sub_device_stall_group(
+            [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
+        )
+        self.tt_ccl = TT_CCL(mesh_device, args.sub_core_grids, self.prefetcher_setup.worker_sub_device_id)
 
         self.layers = [
             TtTransformerBlock(
@@ -76,10 +81,12 @@ class TtTransformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
+                n_layers=self.n_layers,
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 prefetcher_setup=self.prefetcher_setup,
+                tt_ccl=self.tt_ccl,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -98,6 +105,7 @@ class TtTransformer(LightweightModule):
             ),
             args,
             args.is_galaxy,
+            tt_ccl=self.tt_ccl,
         )
 
         self.lm_head = LMHead(
@@ -107,10 +115,9 @@ class TtTransformer(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
+            tt_ccl=self.tt_ccl,
         )
-
-        # Append the tensor containing all the buffer addresses to the prefetched weights
-        self.prefetcher_setup.tensors.append(self.prefetcher_setup.get_tensor_addrs())
+        self.tt_tensors = self.prefetcher_setup.get_input_tensors()
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
@@ -330,22 +337,25 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
-        # Prefetcher
-        if mode == "decode" and self.args.is_galaxy:
-            garbage_tensor = ttnn.dram_prefetcher(
-                self.prefetcher_setup.tensors,
-                num_layers=self.n_layers,
-                global_cb=self.prefetcher_setup.global_circular_buffer,
-            )
-            self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
-
+        print("model start")
         # No-op if callers already provide the right memory config
+
+        garbage_tensor = ttnn.dram_prefetcher(
+            self.tt_tensors,
+            num_layers=self.n_layers,
+            global_cb=self.prefetcher_setup.global_circular_buffer,
+        )
+        print("prefetcher done")
+        self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
+        print("stall group done")
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
+        h = None
         for i, layer in enumerate(self.layers):
-            x = layer(
+            x, h = layer(
                 x,
+                h,
                 current_pos,
                 rot_mats,
                 user_id,
@@ -355,42 +365,23 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
+        ttnn.deallocate(h)
 
         ttnn.deallocate(garbage_tensor)
-
-        if mode == "prefill" and get_last_token == -1:
-            return x
-
-        # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-        if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+        print("decoder done")
 
         # Output norm
-        x = self.norm(x, mode=mode)
-
-        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-            x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        x_norm, res = self.norm(x, res=None, mode=mode)
+        # x.deallocate(True)
+        # res.deallocate(True)
 
         if mode == "decode" and self.args.is_galaxy:
-            x_torch = ttnn.to_torch(
-                x,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=(0, 3),
-                    mesh_shape=(8, 4),
-                ),
-            )  # [8, 1, 32, 2048 * 4]
-            # [8, 1, 32, 3072 * 4]
-            x_torch_padded = torch.nn.functional.pad(x_torch, (0, 12288 - 8192), "constant", 0)
-            x = ttnn.as_tensor(
-                x_torch_padded,
-                dtype=ttnn.bfloat16,
-                device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device=self.mesh_device, dims=(0, 3), mesh_shape=list(self.mesh_device.shape)
-                ),
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self.args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
-            )
+            x = ttnn.to_memory_config(x_norm, self.args.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
+            x_norm.deallocate(True)
+            # for sin_i in rot_mats:
+            #     sin_i.deallocate(True)
 
         return self.lm_head(x)
+
+    def __del__(self):
+        self.tt_ccl.close()

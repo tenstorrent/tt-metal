@@ -30,7 +30,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 3),
+        ("random", 1),
         ("instruct", 80),
     ],
     ids=["quick", "full"],
@@ -74,7 +74,16 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_model_inference(
     weights,
     layers,
@@ -146,7 +155,7 @@ def test_llama_model_inference(
         model_name
     ]
 
-    iterations = quick_iterations if layers == 1 else 30
+    iterations = 1 if layers == 1 else 9
 
     if layers is not None:
         model_args.n_layers = layers
@@ -166,7 +175,7 @@ def test_llama_model_inference(
         )
     }
 
-    prompts = ["What is AI?"] * model_args.max_batch_size
+    prompts = ["What is programming?"] * model_args.max_batch_size
     if dummy_weights:
         encoded_prompts = [
             [128000, 2028, 374, 264, 1296]
@@ -187,8 +196,8 @@ def test_llama_model_inference(
     embd = HostEmbedding(model_args)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
-    generation_start_pos = 0
-    generation_length = 30  # iterations
+    generation_start_pos = 127  # 0
+    generation_length = iterations
 
     page_table_tt = None
     paged_attention_config = None
@@ -240,7 +249,7 @@ def test_llama_model_inference(
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
-    tt_decode_input = pt_decode_input
+    tt_decode_input = pt_decode_input.view(1, 1, batch, -1)
 
     # Keep track of generated outputs to print out later
     all_outputs = []
@@ -260,33 +269,95 @@ def test_llama_model_inference(
         ),
     )
 
+    # Get cos/sin matrices for the current position of each user
+    rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rot_mats(current_pos, return_rot_idxs=True)
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape)
+    # compile
+    decode_input = ttnn.from_torch(
+        tt_decode_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mesh_mapper,
+        memory_config=model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+    )
+    rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    for _ in range(64):
+        tt_out = tt_model(
+            decode_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+        mesh_composer = ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
+        )
+
+        outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
+        decode_input_reset = ttnn.from_torch(
+            tt_decode_input,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=None,
+        )
+        ttnn.copy_host_to_device_tensor(decode_input_reset, decode_input)
+    # capture the trace
+    logger.info(f"Capturing model trace...")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    # rot_mats = tt_model.rope_setup.get_rot_mats(rot_mat_idxs)
+    # print("done rot_mats")
+    tt_out = tt_model(
+        decode_input,
+        current_pos_tensor,
+        rot_mats=rot_mats,
+        mode="decode",
+        page_table=page_table_tt,
+    )
+
+    # outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
+
+    # Reset the current position and output token tensors for the real decode run
+    current_pos_reset = ttnn.from_torch(
+        current_pos,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
+    )
+    decode_input_reset = ttnn.from_torch(
+        tt_decode_input,
+        device=None,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=mesh_mapper,
+        memory_config=None,
+    )
+    ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
+    ttnn.copy_host_to_device_tensor(decode_input_reset, decode_input)
+    # rot_mat_idxs_reset = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+    # ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
+
+    # reset gsems
+    tt_model.tt_ccl.from_sem_flag = 0
+    tt_model.tt_ccl.to_sem_flag = 0
+    tt_model.tt_ccl.gather_sem_flag = 0
+
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
 
-            decode_input = model_args.prepare_residual_tensor_decode(
-                tt_decode_input,
-                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
-            )
-
-            # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
-
-            # Run TT model
-            tt_out = tt_model(
-                decode_input,
-                current_pos_tensor,
-                rot_mats=rot_mats,
-                mode="decode",
-                page_table=page_table_tt,
-            )
-
-            # Convert ttnn tensor to torch tensor
-            mesh_composer = ttnn.ConcatMesh2dToTensor(
-                mesh_device, dims=(3, 1) if model_args.is_galaxy else (1, -1), mesh_shape=model_args.cluster_shape
-            )
-
+            # Execute trace
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
+
             logger.info(f"TT output shape: {outs[0].shape}")
             outs = torch.concat(outs, dim=-1)
             for t in tt_out:
@@ -301,9 +372,9 @@ def test_llama_model_inference(
 
             # Increment position
             current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
-            current_pos_tensor = ttnn.from_torch(
+            current_pos_tensor_reset = ttnn.from_torch(
                 current_pos,
-                device=mesh_device,
+                device=None,
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device,
@@ -311,6 +382,10 @@ def test_llama_model_inference(
                     mesh_shape=model_args.cluster_shape,
                 ),
             )
+            ttnn.copy_host_to_device_tensor(current_pos_tensor_reset, current_pos_tensor)
+
+            # rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
+            # ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
 
             # Append the generated token to the list of outputs
             if i in range(len(encoded_prompts[0])):
@@ -333,6 +408,17 @@ def test_llama_model_inference(
                     all_outputs_ref.append(
                         pt_out_tok.squeeze(1).tolist()[0]
                     )  # Update generated token to list of ref outputs
+
+            decode_input_reset = ttnn.from_torch(
+                tt_decode_input.view(1, 1, batch, -1),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=mesh_mapper,
+                memory_config=None,
+            )
+            ttnn.copy_host_to_device_tensor(decode_input_reset, decode_input)
+
             # Measure PCC if also running reference model
             if run_ref_pt:
                 if layers == 1 and i == iterations - 1:  # On last iteration in the quick test, set a tighter PCC

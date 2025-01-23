@@ -4,6 +4,7 @@
 
 import ttnn
 from loguru import logger
+import torch
 
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
@@ -33,47 +34,63 @@ class TT_CCL:
             assert enable_persistent_fabric
         if teardown_persistent_fabric:
             assert enable_persistent_fabric
-        # create global semaphore handles
-        self.from_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            self.mesh_device, self.sub_device_crs, 0
-        )
-        self.to_remote_semaphore_handles = create_global_semaphore_with_same_address(
-            self.mesh_device, self.sub_device_crs, 0
-        )
-        self.gather_semaphore_handles = create_global_semaphore_with_same_address(
-            self.mesh_device, self.sub_device_crs, 0
-        )
 
-    def line_all_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config):
+        self.num_cbs = 8
+        self.from_remote_semaphore_handles = []
+        self.to_remote_semaphore_handles = []
+        self.gather_semaphore_handles = []
+        # create global semaphore handles
+        for cb in range(self.num_cbs):
+            self.from_remote_semaphore_handles.append(
+                create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+            )
+            self.to_remote_semaphore_handles.append(
+                create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+            )
+            self.gather_semaphore_handles.append(
+                create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
+            )
+
+        self.from_sem_flag = 0
+        self.to_sem_flag = 0
+        self.gather_sem_flag = 0
+
+    def line_all_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config, dim=3):
         output_tensor_mesh = ttnn.experimental.all_reduce_async(
             input_tensor_mesh,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
-            from_remote_multi_device_global_semaphore=self.from_remote_semaphore_handles,
-            to_remote_multi_device_global_semaphore=self.to_remote_semaphore_handles,
-            gather_multi_device_global_semaphore=self.gather_semaphore_handles,
-            math_op=ttnn.ReduceType.Sum,
+            multi_device_global_semaphore=self.gather_semaphore_handles[self.gather_sem_flag],
             num_links=num_links,
             memory_config=memory_config,
             topology=ttnn.Topology.Linear,
             subdevice_id=self.worker_sub_device_id,
         )
+        # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        # self.from_sem_flag = (self.from_sem_flag + 1) % self.num_cbs
+        # self.to_sem_flag = (self.to_sem_flag + 1) % self.num_cbs
+        self.gather_sem_flag = (self.gather_sem_flag + 1) % self.num_cbs
         return output_tensor_mesh
 
-    def line_reduce_scatter(self, tensor, memory_config, dim, cluster_axis, num_links=1, math_op=ttnn.ReduceType.Sum):
+    def line_reduce_scatter(
+        self, input_tensor_mesh, memory_config, dim, cluster_axis, num_links=1, math_op=ttnn.ReduceType.Sum
+    ):
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
-            tensor,
-            dim=dim,
+            input_tensor_mesh,
+            dim,
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
-            from_remote_multi_device_global_semaphore=self.from_remote_semaphore_handles,
-            to_remote_multi_device_global_semaphore=self.to_remote_semaphore_handles,
+            from_remote_multi_device_global_semaphore=self.from_remote_semaphore_handles[self.from_sem_flag],
+            to_remote_multi_device_global_semaphore=self.to_remote_semaphore_handles[self.to_sem_flag],
             math_op=math_op,
             memory_config=memory_config,
             topology=ttnn.Topology.Linear,
             num_links=num_links,
             subdevice_id=self.worker_sub_device_id,
         )
+        self.from_sem_flag = (self.from_sem_flag + 1) % self.num_cbs
+        self.to_sem_flag = (self.to_sem_flag + 1) % self.num_cbs
+        # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
     def line_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1):
@@ -83,12 +100,14 @@ class TT_CCL:
             cluster_axis=cluster_axis,
             mesh_device=self.mesh_device,
             topology=ttnn.Topology.Linear,
-            multi_device_global_semaphore=self.gather_semaphore_handles,
+            multi_device_global_semaphore=self.gather_semaphore_handles[self.gather_sem_flag],
             num_links=num_links,
             memory_config=memory_config,
             subdevice_id=self.worker_sub_device_id,
             enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
+        self.gather_sem_flag = (self.gather_sem_flag + 1) % self.num_cbs
+        # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
     def close(self):
@@ -277,6 +296,7 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, compute_kernel_conf
 
 def tt_sharded_distributed_rmsnorm(
     inp,
+    res,
     epsilon,
     gamma,
     mesh_device,
@@ -288,8 +308,8 @@ def tt_sharded_distributed_rmsnorm(
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
-
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
+    print("tt_stats")
     # All gather stats
     # tt_stats = ttnn.all_gather(
     #     tt_stats,
@@ -302,21 +322,24 @@ def tt_sharded_distributed_rmsnorm(
     # )
     tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_stats)
+    print("mem cfg")
     tt_global_stats = tt_ccl.line_all_gather(
         tt_stats_dram, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    ttnn.synchronize_devices(mesh_device)  # This results into hang when running decoder
+    # ttnn.synchronize_devices(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
     ttnn.deallocate(tt_stats_dram)
+    print("all gather stats", tt_global_stats.shape)
 
     grid_offset = ttnn.CoreCoord(1, 0)
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
+        shape=(32, 128),
         core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
     tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
     ttnn.deallocate(tt_global_stats)
+    print("sharded stats")
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
@@ -327,5 +350,5 @@ def tt_sharded_distributed_rmsnorm(
         stats=tt_global_stats_sharded,
     )
     ttnn.deallocate(tt_global_stats_sharded)
-
-    return tt_out
+    print("rmsnorm post all gather", tt_out.shape)
+    return tt_out, inp

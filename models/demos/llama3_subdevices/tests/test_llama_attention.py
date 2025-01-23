@@ -157,7 +157,6 @@ def test_llama_attention_inference(
         prefetcher_setup=prefetcher_setup,
         tt_ccl=tt_ccl,
     )
-    prefetcher_setup.tensors.append(prefetcher_setup.get_tensor_addrs())
 
     cos, sin = precompute_freqs(
         model_args.head_dim,
@@ -183,7 +182,7 @@ def test_llama_attention_inference(
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, 9216) * 0.05
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
 
         tt_attention_input = pt_attention_input.clone()
 
@@ -197,7 +196,7 @@ def test_llama_attention_inference(
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
-            prefetcher_setup.tensors,
+            prefetcher_setup.get_input_tensors(),
             num_layers=1,
             global_cb=prefetcher_setup.global_circular_buffer,
         )
@@ -220,7 +219,6 @@ def test_llama_attention_inference(
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        pt_attention_input = pt_attention_input[..., : model_args.dim]
         reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

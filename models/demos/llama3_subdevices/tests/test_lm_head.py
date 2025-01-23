@@ -15,6 +15,8 @@ from models.utility_functions import (
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.unit_tests.operations.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -56,6 +58,18 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     reference_model = ColumnParallelLinear(model_args.dim, model_args.vocab_size, bias=False, init_method=lambda x: x)
     reference_model.load_state_dict(partial_state_dict)
 
+    prefetcher_setup = TtLlamaPrefetcherSetup(
+        mesh_device,
+        n_tensors=0,
+        n_layers=model_args.n_layers,
+    )
+
+    mesh_device.set_sub_device_stall_group(
+        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+    )
+
+    tt_ccl = TT_CCL(mesh_device, model_args.sub_core_grids, prefetcher_setup.worker_sub_device_id)
+
     tt_model = LMHead(
         args=model_args,
         mesh_device=mesh_device,
@@ -63,13 +77,13 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        tt_ccl=tt_ccl,
     )
 
-    torch_input_tt = torch.randn(1, 1, seq_len, 12288)
-    torch_input = torch_input_tt[..., : model_args.dim]
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
-        torch_input_tt,
+        torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
@@ -80,13 +94,17 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     )
 
     logger.info("Run Llama_LM_Head")
-    tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
-        ),
-    )
+    tt_outputs = tt_model(tt_input)
+    tt_outputs = [
+        ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
+            ),
+        )
+        for tt_output in tt_outputs
+    ]
+    tt_output_torch = torch.concat(tt_outputs, dim=-1)
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
 
     pcc_required = 0.99
@@ -98,5 +116,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         logger.info("Llama_LM_Head Passed!")
     else:
         logger.warning("Llama_LM_Head Failed!")
+
+    tt_ccl.close()
 
     assert passing, f"Llama_LM_Head output does not meet PCC requirement {pcc_required}: {pcc_message}."

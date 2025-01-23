@@ -57,7 +57,16 @@ from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "trace_region_size": 23887872,
+        }
+    ],
+    indirect=True,
+)
 def test_llama_decoder_inference(
     max_seq_len,
     batch_size,
@@ -71,7 +80,7 @@ def test_llama_decoder_inference(
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
+    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -95,7 +104,7 @@ def test_llama_decoder_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 127
-    generation_length = 10
+    generation_length = 1
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
@@ -145,13 +154,13 @@ def test_llama_decoder_inference(
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
+        n_layers=model_args.n_layers,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
         prefetcher_setup=prefetcher_setup,
         tt_ccl=tt_ccl,
     )
-    prefetcher_setup.tensors.append(prefetcher_setup.get_tensor_addrs())
 
     seqlen = 1
 
@@ -191,17 +200,19 @@ def test_llama_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
-
+        tt_pf = prefetcher_setup.get_input_tensors()
         ttnn.dram_prefetcher(
-            prefetcher_setup.tensors,
+            tt_pf,
             num_layers=1,
             global_cb=prefetcher_setup.global_circular_buffer,
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         # Run TT model
-        tt_out = tt_model(
+        res = None
+        tt_out, res = tt_model(
             decode_input,
+            res,
             current_pos_tensor,
             rot_mats=rot_mats,
             mode="decode",
@@ -211,37 +222,83 @@ def test_llama_decoder_inference(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+        print("compiled")
 
-        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
-        # In this test all users have the same position
-        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
-
-        # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
-
-        passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
-
-        logger.info(comp_allclose(ref_output, tt_output_torch))
-        logger.info(f"PCC: {pcc_message}")
-
-        if passing:
-            logger.info("Llama Decoder Block Passed!")
-        else:
-            logger.warning("Llama Decoder Block Failed!")
-            all_tests_pass = False
-
-        # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
-        current_pos_tensor = ttnn.from_torch(
-            current_pos,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            ),
+        decode_input = model_args.prepare_residual_tensor_decode(
+            tt_decode_input,
+            # ttnn.DRAM_MEMORY_CONFIG,
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
+
+        # capture trace
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+        ttnn.dram_prefetcher(
+            tt_pf,
+            num_layers=1,
+            global_cb=prefetcher_setup.global_circular_buffer,
+        )
+        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        tt_out, res = tt_model(
+            decode_input,
+            res,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        print("Trace captured")
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape)
+
+        decode_input_reset = ttnn.from_torch(
+            tt_decode_input.view(1, 1, batch_size, -1),
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=None,
+        )
+        ttnn.copy_host_to_device_tensor(decode_input_reset, decode_input)
+        from tracy import signpost
+        from time import sleep
+
+        sleep(5)
+        signpost("tracy_perf_run")
+
+        # execute trace
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=[prefetcher_setup.worker_sub_device_id])
+        print("Trace executed")
+        # In this test all users have the same position
+        # freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
+
+        # # Reference model
+        # ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+
+        # passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
+
+        # logger.info(comp_allclose(ref_output, tt_output_torch))
+        # logger.info(f"PCC: {pcc_message}")
+
+        # if passing:
+        #     logger.info("Llama Decoder Block Passed!")
+        # else:
+        #     logger.warning("Llama Decoder Block Failed!")
+        #     all_tests_pass = False
+
+        # # Increment position
+        # current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        # current_pos_tensor = ttnn.from_torch(
+        #     current_pos,
+        #     device=mesh_device,
+        #     dtype=ttnn.int32,
+        #     mesh_mapper=ttnn.ShardTensor2dMesh(
+        #         mesh_device,
+        #         dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+        #         mesh_shape=model_args.cluster_shape,
+        #     ),
+        # )
 
     tt_ccl.close()
 

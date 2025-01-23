@@ -172,7 +172,9 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config);
+        input_memory_config,
+        this->from_remote_sem.address(),
+        this->to_remote_sem.address());
 }
 
 namespace {

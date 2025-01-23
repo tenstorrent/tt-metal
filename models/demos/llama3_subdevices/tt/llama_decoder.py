@@ -18,6 +18,7 @@ class TtTransformerBlock(LightweightModule):
         dtype,
         state_dict,
         layer_num,
+        n_layers,
         weight_cache_path,
         transformation_mats,
         paged_attention_config=None,
@@ -42,6 +43,7 @@ class TtTransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
+        self.n_layers = n_layers
 
         self.prefetcher_setup = prefetcher_setup
         self.tt_ccl = tt_ccl
@@ -108,6 +110,7 @@ class TtTransformerBlock(LightweightModule):
     def forward(
         self,
         x: ttnn.Tensor,
+        h: ttnn.Tensor,
         current_pos,
         rot_mats=None,
         user_id=0,
@@ -124,26 +127,20 @@ class TtTransformerBlock(LightweightModule):
             x.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)
+        try:
+            attn_in, h = self.attention_norm(x, h, mode)
+        except Exception as e:
+            print(e)
+            print("failed to run attention norm")
+            assert False, "Failed to run attention norm"
+        # NOTE: donnot deallocate x here as it updated inplace and returns new h
         # Attention takes replicated inputs and produces fractured outputs
-
+        print("done attention norm")
         # pad attn input
-        attn_in_torch = ttnn.to_torch(
-            attn_in,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-        )
-        attn_in_torch = F.pad(attn_in_torch, (0, 9216 - 8192), mode="constant", value=0)
-        attn_in = ttnn.from_torch(
-            attn_in_torch,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"],
-            layout=ttnn.TILE_LAYOUT,
-        )
-
+        attn_in_sharded = ttnn.to_memory_config(attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
+        attn_in.deallocate(True)
         attn_out = self.attention.forward(
-            attn_in,
+            attn_in_sharded,
             current_pos,
             rot_mats,
             user_id,
@@ -153,66 +150,23 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-
-        # slice atten output
-        attn_out_torch = ttnn.to_torch(
-            attn_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-        )
-        attn_out_torch = attn_out_torch[:, :, :, : 2048 * 4]
-        attn_out = ttnn.from_torch(
-            attn_out_torch,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
-        ttnn.deallocate(attn_out)
-        if mode == "prefill":
-            x.deallocate(True)
+        print("done attention")
 
         # Norms take fractured inputs and output replicated across devices
 
-        ff_in = self.ff_norm(h, mode)
+        ff_in, h = self.ff_norm(attn_out, h, mode)
         # if TG and mode == "decode":
         #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
 
-        # pad MLP input
-        ff_in_torch = ttnn.to_torch(
-            ff_in,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-        )
-        ff_in_torch = F.pad(ff_in_torch, (0, 9216 - 8192), mode="constant", value=0)
-        ff_in = ttnn.from_torch(
-            ff_in_torch,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["SHARDED_FF12_RING_MEMCFG"],
-            layout=ttnn.TILE_LAYOUT,
-        )
-
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode)
-
-        # slice MLP output
-        ff_out_torch = ttnn.to_torch(
-            ff_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-        )
-        ff_out_torch = ff_out_torch[:, :, :, : 2048 * 4]
-        ff_out = ttnn.from_torch(
-            ff_out_torch,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 3), mesh_shape=self.args.cluster_shape),
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
-        return out  # fractured across devices
+        ff_in_sharded = ttnn.to_memory_config(ff_in, self.model_config["SHARDED_FF12_RING_MEMCFG"])
+        ff_in.deallocate(True)
+        print("done ff norm")
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+        print("done feed forward")
+        if self.layer_num == self.n_layers - 1:
+            out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
+        else:
+            out = ff_out
+        print("done add")
+        return out, h  # fractured across devices

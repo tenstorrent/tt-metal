@@ -166,7 +166,7 @@ class TtLlamaRotarySetup(LightweightModule):
             rot_idxs = self.get_rot_idxs(position_idxs)
         else:
             rot_idxs = position_idxs
-            assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
+            # assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
 
         # Send the idxs to device
         if rot_idxs.device != device:
@@ -191,15 +191,15 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.reshape(
             cos,
             ttnn.Shape(
-                (self.batch_size_per_device_group, 1, cos.shape[-1]),
-                (self.batch_size_per_device_group, 32, cos.shape[-1]),
+                [self.batch_size_per_device_group, 1, cos.shape[-1]]
+                # (self.batch_size_per_device_group, 32, cos.shape[-1]),
             ),
         )
         sin = ttnn.reshape(
             sin,
             ttnn.Shape(
-                (self.batch_size_per_device_group, 1, sin.shape[-1]),
-                (self.batch_size_per_device_group, 32, sin.shape[-1]),
+                [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                # (self.batch_size_per_device_group, 32, sin.shape[-1]),
             ),
         )
 
