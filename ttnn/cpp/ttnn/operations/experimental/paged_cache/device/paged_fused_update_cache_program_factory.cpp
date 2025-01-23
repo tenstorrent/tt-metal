@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_fused_update_cache_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -194,30 +194,30 @@ operation::ProgramWithCallbacks paged_fused_update_cache_multi_core(
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        batch_size = page_table_tensor.get_legacy_shape()[0];
-        block_size = cache_tensor1.get_legacy_shape()[2];
+        batch_size = page_table_tensor.get_padded_shape()[0];
+        block_size = cache_tensor1.get_padded_shape()[2];
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
-        page_table_stick_size = page_table_tensor.get_legacy_shape()[-1] * page_table_tensor.element_size();
+        max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
+        page_table_stick_size = page_table_tensor.get_padded_shape()[-1] * page_table_tensor.element_size();
 
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.get_dtype());
 
         page_table_is_dram = page_table_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     }
 
-    uint32_t Wt = cache_tensor1.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t St = cache_tensor1.get_legacy_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.get_legacy_shape()[-1] * sizeof(float)
-                                       : cache_tensor1.get_legacy_shape()[-1] * 2;  // 2 bytes for bfloat16
+    uint32_t Wt = cache_tensor1.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t St = cache_tensor1.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor1.get_padded_shape()[-1] * sizeof(float)
+                                       : cache_tensor1.get_padded_shape()[-1] * 2;  // 2 bytes for bfloat16
     uint32_t cache_total_num_tiles = cache_tensor1.volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         share_cache ? 0
                     : cache_total_num_tiles /
-                          cache_tensor1.get_legacy_shape()[0];  // if share cache, we can set cache batch num tiles to 0
+                          cache_tensor1.get_padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
                                                                 // so batch offset would be 0 in future calculations
     uint32_t num_tiles = input_tensor1.volume() / TILE_HW;
-    uint32_t B = input_tensor1.get_legacy_shape()[1];
-    uint32_t num_heads = cache_tensor1.get_legacy_shape()[1];
+    uint32_t B = input_tensor1.get_padded_shape()[1];
+    uint32_t num_heads = cache_tensor1.get_padded_shape()[1];
 
     log_debug("cache_cb_data_format: {}", cache_cb_data_format);
     log_debug("input_cb_data_format: {}", input_cb_data_format);

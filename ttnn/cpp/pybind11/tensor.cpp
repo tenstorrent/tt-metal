@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include "cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
 
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -18,7 +18,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 
@@ -93,6 +93,10 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
 
     py::class_<tt::tt_metal::LegacyShape>(m_tensor, "Shape", R"doc(
         Class defining tensor shape
+    )doc");
+
+    py::class_<ttnn::TensorSpec>(m_tensor, "TensorSpec", R"doc(
+        Class defining the specification of Tensor
     )doc");
 
     tt_serializable_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
@@ -198,6 +202,12 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def("without_padding", [](const tt::tt_metal::LegacyShape& self) -> tt::tt_metal::LegacyShape { return self.without_padding(); });
 
     py::implicitly_convertible<std::vector<uint32_t>, LegacyShape>();
+
+    auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
+    pyTensorSpec
+        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig

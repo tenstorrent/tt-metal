@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -18,8 +18,8 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_multi_core_h(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math) {
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto ashape = a.get_padded_shape();
+    const auto bshape = b.get_padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -198,8 +198,8 @@ operation::ProgramWithCallbacks bcast_multi_core_h(
 
             auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-            const auto ashape = input_tensors.at(0).get_legacy_shape();
-            const auto bshape = input_tensors.at(1).get_legacy_shape();
+            const auto ashape = input_tensors.at(0).get_padded_shape();
+            const auto bshape = input_tensors.at(1).get_padded_shape();
             uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
             uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
             uint32_t H = ashape[-2];

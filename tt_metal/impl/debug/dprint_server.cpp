@@ -16,16 +16,16 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
-#include "llrt/llrt.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <llrt.hpp>
+#include <logger.hpp>
 
 #include "dprint_server.hpp"
 #include "debug_helpers.hpp"
-#include "llrt/rtoptions.hpp"
-#include "common/bfloat8.hpp"
+#include <rtoptions.hpp>
+#include <bfloat8.hpp>
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 using std::cout;
 using std::endl;
@@ -60,8 +60,9 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (hart_id) {
-            case DPRINT_RISCV_INDEX_ER:
-                return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER1:
+                return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
@@ -89,7 +90,7 @@ static void AssertSize(uint8_t sz, uint8_t expected_sz) {
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
-    int overflow(int c) { return c; }
+    int overflow(int c) override { return c; }
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
@@ -844,20 +845,6 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     // compute the buffer address for the requested hart
     uint32_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
     chip_id_t chip_id = device->id();
-
-    // Device is incrementing wpos
-    // Host is reading wpos and incrementing local rpos up to wpos
-    // Device is filling the buffer and in the end waits on host to write rpos
-
-    // TODO(AP) - compare 8-bytes transfer and full buffer transfer latency
-    // First probe only 8 bytes to see if there's anything to read
-    constexpr int eightbytes = 8;
-    auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, eightbytes);
-    uint32_t wpos = from_dev[0], rpos = from_dev[1];
-    uint32_t counter = 0;
-    uint32_t sigval = 0;
-    char val = 0;
-
     HartKey hart_key{chip_id, logical_core, hart_id};
 
     if (!risc_to_prev_type_[hart_key]) {
@@ -910,9 +897,14 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     }
     raise_wait_lock_.unlock();
 
+    // Device is incrementing wpos
+    // Host is reading wpos and incrementing local rpos up to wpos
+    // Device is filling the buffer and in the end waits on host to write rpos
+    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, phys_core, base_addr, DPRINT_BUFFER_SIZE);
+    DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+    uint32_t rpos = l->aux.rpos;
+    uint32_t wpos = l->aux.wpos;
     if (rpos < wpos) {
-        // Now read the entire buffer
-        from_dev = tt::llrt::read_hex_vec_from_core(chip_id, phys_core, base_addr, DPRINT_BUFFER_SIZE);
         // at this point rpos,wpos can be stale but not reset to 0 by the producer
         // it's ok for the consumer to be behind the latest wpos+rpos from producer
         // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
@@ -920,9 +912,9 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         // The producer only updates rpos in case of buffer overflow.
         // Then it waits for rpos to first catch up to wpos (rpos update by the consumer) before proceeding
 
-        DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         constexpr uint32_t bufsize = sizeof(DebugPrintMemLayout::data);
         // parse the input codes
+        uint32_t sigval = 0;
         while (rpos < wpos) {
             DPrintTypeID code = static_cast<DPrintTypeID>(l->data[rpos++]);
             TT_ASSERT(rpos <= bufsize);
@@ -975,12 +967,13 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     TransferToAndFlushOutputStream(hart_key, intermediate_stream);
                     AssertSize(sz, 1);
                     break;
-                case DPrintSETW:
-                    val = CAST_U8P(ptr)[0];
+                case DPrintSETW: {
+                    char val = CAST_U8P(ptr)[0];
                     *intermediate_stream << setw(val);
                     most_recent_setw = val;
                     AssertSize(sz, 1);
                     break;
+                }
                 case DPrintSETPRECISION:
                     *intermediate_stream << std::setprecision(*ptr);
                     AssertSize(sz, 1);

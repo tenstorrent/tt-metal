@@ -4,10 +4,10 @@
 #include <algorithm>
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::detail {
@@ -30,7 +30,7 @@ operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
     auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
 
-    const auto& input_shape = input.get_legacy_shape();
+    const auto& input_shape = input.get_padded_shape();
     const uint32_t W = input_shape[0];
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;

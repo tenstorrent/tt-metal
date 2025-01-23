@@ -5,11 +5,11 @@
 #include "rotary_embedding_device_operation.hpp"
 #include "rotary_embedding_program_factory.hpp"
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 
@@ -30,26 +30,26 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL((input.get_layout() == Layout::TILE), "Inputs to rotary embedding must be tilized");
     }
 
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
-    uint32_t seq_len = input_tensor.get_legacy_shape()[-2];
-    uint32_t B = input_tensor.get_legacy_shape()[0];
-    uint32_t X = input_tensor.get_legacy_shape()[-1];
+    TT_FATAL(input_tensor.get_padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    uint32_t seq_len = input_tensor.get_padded_shape()[-2];
+    uint32_t B = input_tensor.get_padded_shape()[0];
+    uint32_t X = input_tensor.get_padded_shape()[-1];
     TT_FATAL(cos.get_dtype() == sin.get_dtype(), "Cos and Sin dtypes must match");
-    TT_FATAL(cos.get_legacy_shape() == sin.get_legacy_shape(), "Cos and Sin dims must match");
+    TT_FATAL(cos.get_padded_shape() == sin.get_padded_shape(), "Cos and Sin dims must match");
     TT_FATAL(
-        cos.get_legacy_shape()[0] == 1 && cos.get_legacy_shape()[1] == 1 && cos.get_legacy_shape()[-1] == X,
+        cos.get_padded_shape()[0] == 1 && cos.get_padded_shape()[1] == 1 && cos.get_padded_shape()[-1] == X,
         "Cos dims must match input dims");
     if (this->token_idx.has_value()) {
-        TT_FATAL(cos.get_legacy_shape()[-2] >= token_idx, "Cos dims must match input dims");
+        TT_FATAL(cos.get_padded_shape()[-2] >= token_idx, "Cos dims must match input dims");
     } else {
-        TT_FATAL(cos.get_legacy_shape()[-2] >= seq_len, "Cos dims must match input dims");
+        TT_FATAL(cos.get_padded_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
     if (input_tensor.is_sharded()) {
         TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
+        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
         // Require even work division for now
         TT_FATAL(
-            (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) %
+            (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) %
                     input_tensor.shard_spec().value().shape[0] ==
                 0,
             "Error");
@@ -76,7 +76,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
         if (input_tensor.is_sharded()) {
             shard_spec = input_tensor.shard_spec().value();
         } else {
-            uint32_t num_blocks = input_tensor.volume() / input_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
+            uint32_t num_blocks = input_tensor.volume() / input_tensor.get_padded_shape()[-1] / TILE_HEIGHT;
             auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
             uint32_t num_grid_cores = core_grid.x * core_grid.y;
             uint32_t num_cores = 0;
@@ -88,7 +88,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
             }
             uint32_t Ht = div_up(num_blocks, num_cores);
             shard_spec.grid = num_cores_to_corerangeset(num_cores, core_grid, true);
-            shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.get_legacy_shape()[-1]};
+            shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.get_padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;
         }
         auto mem_config = this->output_mem_config;

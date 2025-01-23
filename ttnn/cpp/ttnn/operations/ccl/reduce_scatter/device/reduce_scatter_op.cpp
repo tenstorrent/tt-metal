@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 #include <cstdint>
 
@@ -51,11 +51,11 @@ ReduceScatter create_reduce_scatter_struct(
 void ReduceScatter::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }

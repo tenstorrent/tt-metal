@@ -7,9 +7,9 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 
-#include "common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn {
 namespace operations {
@@ -337,7 +337,7 @@ void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape
 }
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);

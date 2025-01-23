@@ -7,10 +7,10 @@
 #include <random>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using std::vector;

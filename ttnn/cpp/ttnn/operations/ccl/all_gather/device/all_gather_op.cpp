@@ -5,13 +5,13 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 using namespace tt::tt_metal::experimental;
 
@@ -94,7 +94,7 @@ AllGatherConfig::AllGatherConfig(
         // See issue #6448
         int outer_dims_size = 1;
         for (std::size_t i = 0; i < dim; i++) {
-            outer_dims_size *= input_tensor.get_legacy_shape()[i];
+            outer_dims_size *= input_tensor.get_padded_shape()[i];
         }
         if (outer_dims_size > 1) {
             this->enable_bidirectional = false;

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/experimental/hal.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -29,7 +29,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         unary_reader_kernel_id,
         core,
         {src0_buffer->address(),
-         a.get_legacy_shape()[3] / tt::constants::TILE_WIDTH,
+         a.get_padded_shape()[3] / tt::constants::TILE_WIDTH,
          (uint32_t)output_shape[0],
          (uint32_t)output_shape[1],
          (uint32_t)output_shape[2] / tt::constants::TILE_HEIGHT,
@@ -120,8 +120,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     bool split_work_by_old_sticks) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t old_stick_size = input_shape[3] * input_tensor.element_size();
     uint32_t new_stick_size = output_shape[3] * output_tensor.element_size();
@@ -214,16 +214,16 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
 
     tt::tt_metal::IDevice* device = a.device();
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    uint32_t num_old_sticks = a.get_legacy_shape()[0] * a.get_legacy_shape()[1] * a.get_legacy_shape()[2];
+    uint32_t num_old_sticks = a.get_padded_shape()[0] * a.get_padded_shape()[1] * a.get_padded_shape()[2];
     uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-    uint32_t old_stick_size = a.get_legacy_shape()[3] * a.element_size();
+    uint32_t old_stick_size = a.get_padded_shape()[3] * a.element_size();
     uint32_t new_stick_size = output_shape[3] * output.element_size();
 
     TT_FATAL(
@@ -333,10 +333,10 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
         auto output_shape = dst_tensor.shape();
 
         uint32_t num_old_sticks =
-            src_tensor.get_legacy_shape()[0] * src_tensor.get_legacy_shape()[1] * src_tensor.get_legacy_shape()[2];
+            src_tensor.get_padded_shape()[0] * src_tensor.get_padded_shape()[1] * src_tensor.get_padded_shape()[2];
         uint32_t num_new_sticks = output_shape[0] * output_shape[1] * output_shape[2];
 
-        uint32_t old_stick_size = src_tensor.get_legacy_shape()[3] * src_tensor.element_size();
+        uint32_t old_stick_size = src_tensor.get_padded_shape()[3] * src_tensor.element_size();
         uint32_t new_stick_size = output_shape[3] * dst_tensor.element_size();
 
         bool split_work_by_old_sticks = old_stick_size > new_stick_size;

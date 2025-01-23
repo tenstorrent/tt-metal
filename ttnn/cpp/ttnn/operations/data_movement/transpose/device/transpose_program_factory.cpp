@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_log.h"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/tt_log.h>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -35,8 +35,8 @@ void override_runtime_args_mc_cn(
     uint32_t num_tiles_per_core_group_2) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
@@ -224,8 +224,8 @@ void override_runtime_args_mc_hc(
     uint32_t num_tiles_per_core_group_2) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t HW = H * W;
@@ -324,8 +324,8 @@ void override_runtime_args_mc_hc_rm(
     uint32_t num_w_sticks_per_core_group_2) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -566,12 +566,11 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
                     static_cast<uint32_t>(pad_value.value()) | (static_cast<uint32_t>(pad_value.value()) << 16);
             } else {
                 padding_val_packed = std::bit_cast<uint32_t>(pad_value.value());
-                ;
             }
         }
     }
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t)needs_padding};
+        (uint32_t)src_is_dram, num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -626,7 +625,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
 operation::ProgramWithCallbacks transpose_hc_multi_core(
     const Tensor& a, Tensor& output, const std::optional<float>& pad_value) {
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     if (a.get_layout() == Layout::TILE && !a.is_sharded()) {
         return transpose_hc_multi_core_tiled_interleaved(a, output, pad_value);
     }
@@ -661,7 +660,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, row_major ? NCH : num_tensor_tiles);
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -853,8 +852,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -926,8 +925,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -1168,7 +1167,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
@@ -1197,7 +1196,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     tt::log_debug("all_cores: {}", all_cores);
     tt::log_debug("num_cores: {}", num_cores);
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
@@ -1317,8 +1316,8 @@ void override_runtime_args_wh(
     uint32_t num_tiles_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_tiles_per_core_group_2) {
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
     uint32_t HW = H * W;
@@ -1796,7 +1795,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
@@ -1988,7 +1987,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
@@ -2055,7 +2054,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::log_debug("all_cores: {}", all_cores);
     tt::log_debug("num_cores: {}", num_cores);
 
-    tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     // sharded cb
     uint32_t src0_cb_index = tt::CBIndex::c_0;

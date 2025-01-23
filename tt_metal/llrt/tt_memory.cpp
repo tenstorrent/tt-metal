@@ -9,7 +9,7 @@
 #include <limits>
 
 #include "tt_elffile.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 
 namespace ll_api {
 

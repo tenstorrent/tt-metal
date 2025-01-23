@@ -23,10 +23,12 @@ if(NOT TARGET Metalium::Metal)
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/wormhole/wormhole_b0_defines"
         "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/"
+        "$ENV{TT_METAL_HOME}/tt_metal/api/"
         "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
         "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
         "$ENV{TT_METAL_HOME}/tt_metal/include"
         # TTNN
+        "$ENV{TT_METAL_HOME}/ttnn"
         "$ENV{TT_METAL_HOME}/ttnn/cpp"
         "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
         "${reflect_SOURCE_DIR}"

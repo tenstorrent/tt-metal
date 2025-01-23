@@ -5,19 +5,19 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/math.hpp>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/tilize/tilize.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/concat.hpp"
+#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "cpp/ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "cpp/ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+#include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
 
 #include <ranges>
 #include <utility>
@@ -114,10 +114,11 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     auto untilized_tensor = ttnn::untilize(input_tensor);
                     // untilized, so now we have a padded rm tensor. we slice to
                     // remove the padding.
-                    std::vector<uint32_t> begins_vec(input_tensor.get_shape().rank(), 0);
+                    const auto& input_shape = input_tensor.get_logical_shape();
+                    std::vector<uint32_t> begins_vec(input_shape.rank(), 0);
                     tt::stl::Span<const uint32_t> begins = begins_vec;
-                    tt::stl::Span<const uint32_t> ends = input_tensor.get_logical_shape().view();
-                    std::vector<uint32_t> steps_vec(input_tensor.get_shape().rank(), 1);
+                    tt::stl::Span<const uint32_t> ends = input_shape.view();
+                    std::vector<uint32_t> steps_vec(input_shape.rank(), 1);
                     tt::stl::Span<const uint32_t> steps = steps_vec;
 
                     // we now perform a padding-oblivious slice to remove the
@@ -126,15 +127,17 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // padding-oblivious entry point is uplifted to the slice
                     // op.
                     untilized_tensor = operation::run(
-                        SliceDeviceOperation{begins, ends, steps, output_memory_config},
+                        SliceDeviceOperation{
+                            ttnn::SimpleShape(begins),
+                            ttnn::SimpleShape(ends),
+                            ttnn::SimpleShape(steps),
+                            output_memory_config},
                         {untilized_tensor},
                         {},
                         {std::nullopt},
                         queue_id)[0];
 
-                    untilized_tensor = ttnn::reshape(
-                        untilized_tensor,
-                        ttnn::Shape{input_tensor.get_logical_shape().view(), input_tensor.get_logical_shape().view()});
+                    untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.get_logical_shape());
                     return untilized_tensor;
                 });
             return std::make_tuple(itensors, dim, groups);
@@ -187,8 +190,9 @@ MassagedConcat build_prepost_transpose_concat(
                 [dim1, dim2](const ttnn::Tensor& input_tensor) -> ttnn::Tensor {
                     return ttnn::transpose(input_tensor, dim1, dim2);
                 });
-            auto norm_dim1 = tensors.front().get_shape().get_normalized_index(dim1);
-            auto norm_dim2 = tensors.front().get_shape().get_normalized_index(dim2);
+            const auto& first_shape = tensors.front().get_logical_shape();
+            auto norm_dim1 = first_shape.get_normalized_index(dim1);
+            auto norm_dim2 = first_shape.get_normalized_index(dim2);
             int swapped_dim;
             if (dim == norm_dim1) {
                 swapped_dim = norm_dim2;
@@ -233,7 +237,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
     };
 
     auto predicate = [dim_aligned](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
-        auto last_dim = tensors.front().get_shape().rank() - 1;
+        auto last_dim = tensors.front().get_logical_shape().rank() - 1;
         if (dim == last_dim) {
             bool res = !dim_aligned(tensors, dim);
             concat_db_print(res, "[DEBUG] alignment fixedup required");
@@ -273,9 +277,9 @@ ttnn::Tensor ConcatOperation::invoke(
     // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
 
     const ttnn::Tensor& first_tensor = input_tensors.front();
-    const int rank = first_tensor.get_shape().rank();
+    const int rank = first_tensor.get_logical_shape().rank();
 
-    dim = first_tensor.get_legacy_shape().get_normalized_index(dim);
+    dim = first_tensor.get_padded_shape().get_normalized_index(dim);
 
     TT_FATAL(
         dim >= 0 and dim < rank,
@@ -285,8 +289,8 @@ ttnn::Tensor ConcatOperation::invoke(
 
     const bool shapes_match =
         std::all_of(input_tensors.begin(), input_tensors.end(), [first_tensor, dim](const ttnn::Tensor& t) {
-            const auto& ft_shape = first_tensor.get_shape();
-            const auto& t_shape = t.get_shape();
+            const auto& ft_shape = first_tensor.get_logical_shape();
+            const auto& t_shape = t.get_logical_shape();
 
             const bool ranks_match = ft_shape.rank() == t_shape.rank();
             bool non_concat_dims_match = true;

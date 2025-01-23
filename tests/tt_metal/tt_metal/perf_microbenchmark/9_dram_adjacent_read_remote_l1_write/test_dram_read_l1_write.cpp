@@ -12,15 +12,15 @@
 #include <vector>
 #include <ranges>
 
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
-#include "common/bfloat16.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include <yaml-cpp/yaml.h>
 
 using namespace tt;

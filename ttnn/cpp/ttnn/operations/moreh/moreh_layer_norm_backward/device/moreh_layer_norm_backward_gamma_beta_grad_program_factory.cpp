@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -52,8 +52,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    const auto& output_grad_shape = output_grad.get_shape().value;
-    const auto& output_grad_shape_without_padding = output_grad_shape.without_padding();
+    const auto& output_grad_shape = output_grad.get_padded_shape();
+    const auto& output_grad_shape_without_padding = output_grad_shape.get_logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;

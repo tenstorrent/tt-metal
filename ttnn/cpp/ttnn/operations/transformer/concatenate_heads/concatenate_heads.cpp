@@ -4,7 +4,7 @@
 
 #include "concatenate_heads.hpp"
 
-#include "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
+#include "cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/nlp_concat_heads_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -13,9 +13,9 @@ namespace ttnn::operations::transformer {
 struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NLPConcatHeadsDeviceOperation {
     void validate(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);
-        const auto head_size = input_tensor.get_shape()[-1];
-        const auto padded_head_size = input_tensor.get_legacy_shape()[-1];
-        const auto input_logical_shape = input_tensor.get_logical_shape();
+        const auto& input_logical_shape = input_tensor.get_logical_shape();
+        const auto head_size = input_logical_shape[-1];
+        const auto padded_head_size = input_tensor.get_padded_shape()[-1];
 
         TT_FATAL(input_logical_shape.rank() == 4, "Input tensor must have rank 4. Shape: {}", input_logical_shape);
 
@@ -52,7 +52,7 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         if (this->output_mem_config.is_sharded()) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();
             uint32_t num_cores = shard_spec.num_cores();
-            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_legacy_shape()[-2];
+            uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.get_padded_shape()[-2];
             shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
             auto mem_config = this->output_mem_config;
             mem_config.shard_spec = shard_spec;

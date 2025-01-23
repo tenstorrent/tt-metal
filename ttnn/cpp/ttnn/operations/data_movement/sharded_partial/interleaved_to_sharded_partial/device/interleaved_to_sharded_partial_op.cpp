@@ -4,9 +4,9 @@
 
 #include "interleaved_to_sharded_partial_op.hpp"
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
 
 using namespace tt::tt_metal;
 
@@ -23,7 +23,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
         num_slices);
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Currently, only tile layout is supported for partial I->S");
     TT_FATAL(
-        (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % num_slices == 0,
+        (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
@@ -45,7 +45,7 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
 std::vector<ttnn::TensorSpec> InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    tt::tt_metal::LegacyShape shape = input_tensor.get_legacy_shape();
+    auto shape = input_tensor.get_padded_shape();
 
     uint32_t total_height = input_tensor.volume() / shape[-1];
     uint32_t new_height = total_height / this->num_slices;
@@ -57,14 +57,7 @@ std::vector<ttnn::TensorSpec> InterleavedToShardedPartialDeviceOperation::comput
     auto mem_config = this->output_mem_config;
     mem_config.shard_spec = this->shard_spec;
 
-    return {TensorSpec(
-        shape.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            output_dtype,
-            PageConfig(input_tensor.get_layout()),
-            mem_config,
-            shape.logical_shape(),
-            shape.padded_shape()))};
+    return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), mem_config))};
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedPartialDeviceOperation::create_program(

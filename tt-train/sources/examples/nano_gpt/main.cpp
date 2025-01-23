@@ -11,6 +11,8 @@
 #include <wandbcpp.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/clip_grad_norm.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -53,56 +55,196 @@ uint32_t sample(std::span<const float> log_softmax) {
     return distribution(ttml::autograd::ctx().get_generator());
 }
 
+inline void apply_repetition_penalty(
+    std::vector<float> &logits, const std::vector<uint32_t> &history, float repetition_penalty) {
+    if (repetition_penalty <= 1.0F) {
+        return;  // no penalty
+    }
+    for (auto token_id : history) {
+        float &val = logits[token_id];
+        if (val > 0.0F) {
+            val /= repetition_penalty;
+        } else {
+            val *= repetition_penalty;
+        }
+    }
+}
+
+inline void top_k_filter(std::vector<float> &logits, int top_k) {
+    if (top_k <= 0 || static_cast<size_t>(top_k) >= logits.size()) {
+        return;
+    }
+    std::vector<float> copy = logits;
+    std::nth_element(copy.begin(), copy.end() - top_k, copy.end());
+    float cutoff = *(copy.end() - top_k);
+
+    for (auto &val : logits) {
+        if (val < cutoff) {
+            val = -std::numeric_limits<float>::infinity();
+        }
+    }
+}
+
+inline void top_p_filter(std::vector<float> &logits, float top_p) {
+    if (top_p <= 0.0F || top_p >= 1.0F) {
+        return;  // no filtering
+    }
+
+    std::vector<float> probs(logits.size());
+    for (size_t i = 0; i < logits.size(); i++) {
+        probs[i] = std::exp(logits[i]);
+    }
+    float sum = 0.0F;
+    for (auto x : probs) {
+        sum += x;
+    }
+    // argsort
+    std::vector<size_t> indices(logits.size());
+    for (size_t i = 0; i < indices.size(); ++i) {
+        indices[i] = i;
+    }
+    std::sort(indices.begin(), indices.end(), [&](size_t a, size_t b) {
+        return probs[a] > probs[b];  // descending by prob
+    });
+    // smallest set of tokens whose sum >= top_p
+    float cum_prob = 0.0F;
+    size_t cutoff_idx = 0;
+    for (size_t rank = 0; rank < indices.size(); ++rank) {
+        auto idx = indices[rank];
+        cum_prob += probs[idx] / sum;
+        if (cum_prob > top_p) {
+            cutoff_idx = rank;
+            break;
+        }
+    }
+    for (size_t rank = cutoff_idx + 1; rank < indices.size(); ++rank) {
+        auto idx = indices[rank];
+        logits[idx] = -std::numeric_limits<float>::infinity();
+    }
+}
+
+inline uint32_t sample_with_strategy(
+    std::span<float> logits_span,
+    const std::vector<uint32_t> &history,
+    float temperature,
+    float repetition_penalty,
+    int top_k,
+    float top_p) {
+    std::vector<float> logits(logits_span.begin(), logits_span.end());
+    size_t vocab_size = logits.size();
+
+    apply_repetition_penalty(logits, history, repetition_penalty);
+
+    if (temperature > 0.0F && std::fabs(temperature - 1.0F) > 1e-6f) {
+        for (auto &val : logits) {
+            val /= temperature;
+        }
+    }
+    auto max_it = std::max_element(logits.begin(), logits.end());
+    float max_val = (max_it != logits.end()) ? *max_it : 0.0F;
+    for (auto &val : logits) {
+        val -= max_val;
+    }
+
+    // 4) top-k filter
+    top_k_filter(logits, top_k);
+
+    // 5) top-p (nucleus) filter
+    top_p_filter(logits, top_p);
+
+    // 6) Convert to probabilities + sample
+    //    Recompute stable exponent after filtering
+    float sum_exp = 0.0F;
+    for (auto val : logits) {
+        if (val > -std::numeric_limits<float>::infinity()) {
+            sum_exp += std::exp(val);
+        }
+    }
+
+    auto &rng = ttml::autograd::ctx().get_generator();
+    std::uniform_real_distribution<float> dist(0.0F, 1.0F);
+
+    float r = dist(rng);
+    float cum = 0.0F;
+    for (size_t i = 0; i < vocab_size; ++i) {
+        if (logits[i] == -std::numeric_limits<float>::infinity()) {
+            continue;
+        }
+        float p = std::exp(logits[i]) / sum_exp;
+        cum += p;
+        if (r <= cum) {
+            return static_cast<uint32_t>(i);
+        }
+    }
+    // Fallback
+    return static_cast<uint32_t>(vocab_size - 1);
+}
+
 template <typename Model, typename Tokenizer>
 void generate(
     const std::shared_ptr<Model> &model,
     const Tokenizer &tokenizer,
     uint32_t max_sequence_length,
     uint32_t num_heads,
-    uint32_t tokens_to_generate = 1024U) {
-    model->eval();
+    uint32_t tokens_to_generate = 1024U,
+    // Additional sampling params:
+    float temperature = 1.0F,
+    float repetition_penalty = 1.0F,
+    int top_k = -1,
+    float top_p = 1.0F) {
+    model->eval();  // set model to eval mode if needed
 
     std::string prompt;
     fmt::print("Enter a prompt: ");
     std::getline(std::cin, prompt);
-
     if (prompt.empty()) {
         prompt = "\n";
     }
 
-    auto *device = &ttml::autograd::ctx().get_device();
-
+    // Encode the prompt
     auto prompt_tokens = tokenizer.encode(prompt);
 
+    // In case you need a pad token
     auto pad_token_id = 0U;
 
-    auto vocab_size = tokenizer.get_vocab_size();
+    auto vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
 
+    // Build mask (causal) for attention
     std::vector<float> mask;
     mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length * num_heads));
-    for (int head = 0; head < num_heads; ++head) {
-        for (int i = 0; i < max_sequence_length; ++i) {
-            for (int j = 0; j < max_sequence_length; ++j) {
+    for (uint32_t head = 0; head < num_heads; ++head) {
+        for (uint32_t i = 0; i < max_sequence_length; ++i) {
+            for (uint32_t j = 0; j < max_sequence_length; ++j) {
                 mask.push_back(i >= j ? 1.0F : 0.0F);
             }
         }
     }
+    auto *device = &ttml::autograd::ctx().get_device();
     auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
         mask, ttml::core::create_shape({1, num_heads, max_sequence_length, max_sequence_length}), device));
 
+    // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
+
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
     fmt::print("{}", prompt);
+
+    // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
+        // Possibly truncate the prompt if it exceeds max_sequence_length
         uint32_t start_idx = 0;
         if (prompt_tokens.size() > max_sequence_length) {
-            start_idx = prompt_tokens.size() - max_sequence_length;
+            start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
+        }
+
+        // Fill padded array
+        for (uint32_t i = 0; i < max_sequence_length; ++i) {
+            prompt_tokens_padded[i] = pad_token_id;
         }
         for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
             prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
-
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
             prompt_tokens_padded,
@@ -110,22 +252,65 @@ void generate(
             device,
             Layout::ROW_MAJOR));
 
+        // Forward pass
+        // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
         auto output = (*model)(prompt_tensor, mask_tensor);
+
+        // Convert last position's logits to a std::vector
         auto output_vector = ttml::core::to_vector(output->get_value());
 
-        uint32_t predicted_token_id = prompt_tokens.size() - 1U;
-        if (prompt_tokens.size() > max_sequence_length) {
-            predicted_token_id = prompt_tokens_padded_size - 1U;
-        }
-        auto logits_ptr = output_vector.data() + predicted_token_id * vocab_size;
-        auto token_id = sample(std::span<float>(logits_ptr, vocab_size));
-        prompt_tokens.push_back(token_id);
-        fmt::print("{}", tokenizer.decode({token_id}));
+        // The index of the last token in the "effective" input
+        // (Your indexing may vary depending on how your model outputs are shaped)
+        uint32_t predicted_token_idx =
+            (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
+
+        // Extract the logits for the last token
+        // (Assuming output is flattened so that token dimension is first,
+        //  then you'd do: offset = predicted_token_idx * vocab_size)
+        size_t offset = static_cast<size_t>(predicted_token_idx) * vocab_size;
+        auto logits_ptr = output_vector.data() + offset;
+
+        // Now we do advanced sampling from these logits
+        uint32_t next_token_id = sample_with_strategy(
+            std::span<float>(logits_ptr, vocab_size),
+            prompt_tokens,  // entire history for repetition penalty
+            temperature,
+            repetition_penalty,
+            top_k,
+            top_p);
+
+        // Append the new token
+        prompt_tokens.push_back(next_token_id);
+
+        // Decode and print
+        fmt::print("{}", tokenizer.decode({next_token_id}));
+
+        // Reset the autograd graph if needed
         ttml::autograd::ctx().reset_graph();
     }
-    fmt::print("\n*******************\n");
 
-    model->train();
+    fmt::print("\n*******************\n");
+    model->train();  // return model to train mode if needed
+}
+
+struct EvalConfig {
+    float repetition_penalty = 1.0F;
+    float temperature = 1.0F;
+    int top_k = -1;
+    float top_p = 1.0F;
+};
+
+EvalConfig parse_eval_config(const YAML::Node &yaml_config) {
+    EvalConfig config;
+    if (!yaml_config["eval_config"]) {
+        return config;
+    }
+    auto eval_config = yaml_config["eval_config"];
+    config.repetition_penalty = eval_config["repetition_penalty"].as<float>(config.repetition_penalty);
+    config.temperature = eval_config["temperature"].as<float>(config.temperature);
+    config.top_k = eval_config["top_k"].as<int>(config.top_k);
+    config.top_p = eval_config["top_p"].as<float>(config.top_p);
+    return config;
 }
 
 struct TrainingConfig {
@@ -146,7 +331,8 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-
+    bool use_clip_grad_norm = false;
+    float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -169,6 +355,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+    config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
+    config.clip_grad_norm_max_norm =
+        training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
@@ -208,6 +397,8 @@ int main(int argc, char **argv) {
 
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
+    EvalConfig eval_config = parse_eval_config(yaml_config);
+
     if (enable_wandb) {
         wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
         wandbcpp::update_config({
@@ -231,6 +422,8 @@ int main(int argc, char **argv) {
                  ? "trainable"
                  : "fixed"},
             {"scheduler_type", config.scheduler_type},
+            {"using_clip_grad_norm", config.use_clip_grad_norm},
+            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
         });
     }
 
@@ -392,7 +585,16 @@ int main(int argc, char **argv) {
     if (is_eval) {
         fmt::print("\nEvaluation started\n");
         for (;;) {
-            generate(model, *tokenizer, config.transformer_config.max_sequence_length, num_heads);
+            generate(
+                model,
+                *tokenizer,
+                config.transformer_config.max_sequence_length,
+                num_heads,
+                sequence_length,
+                eval_config.temperature,
+                eval_config.repetition_penalty,
+                eval_config.top_k,
+                eval_config.top_p);
         }
         fmt::print("\nEvaluation finished\n");
         return 0;
@@ -432,6 +634,13 @@ int main(int argc, char **argv) {
 
             auto samples = features->get_value().get_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
+
+            // synchronize gradients for multi-device case, no-op if single device
+            auto parameters = model->parameters();
+            ttml::core::distributed::synchronize_parameters(parameters);
+            if (config.use_clip_grad_norm) {
+                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+            }
 
             if (gradient_accumulator_helper.should_step()) {
                 optimizer->step();

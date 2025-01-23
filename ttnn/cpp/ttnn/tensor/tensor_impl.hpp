@@ -6,18 +6,18 @@
 #include <cstdint>
 #include <optional>
 
-#include "common/bfloat4.hpp"
-#include "common/bfloat8.hpp"
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_stl/concepts.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/device_impl.hpp>
 
 namespace tt {
 
@@ -96,9 +96,9 @@ static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& 
 
 }  // namespace detail
 
-template <typename T, template <typename> typename BufferType>
+template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
-    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     if (shape.width() * shape.height() == 0) {
         return std::vector<T>();
     }
@@ -126,9 +126,9 @@ inline std::vector<T> convert_layout_row_major_to_tile(
         transpose_of_faces);
 }
 
-template <typename T, template <typename> typename BufferType>
+template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout_tile_to_row_major(
-    const Size& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
+    const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
@@ -158,7 +158,7 @@ inline std::vector<T> convert_layout_tile_to_row_major(
 //     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
 //   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
 template <typename T>
-std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const TensorSpec& tensor_spec);
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec);
 
 // Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
 // - Physical data: Flat container of physical data corresponding to tensor spec
@@ -168,7 +168,7 @@ std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const Tens
 //   * To get logical data, perform the exact inverse process of encode_tensor_data
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
-std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const TensorSpec& tensor_spec);
+std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                      Validators
@@ -253,7 +253,10 @@ enum class TensorPrintProfile {
 extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 template <typename T>
-std::string to_string(const Tensor& tensor, std::optional<DataType> original_dtype = std::nullopt);
+std::string to_string(
+    const Tensor& tensor,
+    std::optional<DataType> original_dtype = std::nullopt,
+    std::optional<Layout> original_layout = std::nullopt);
 
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);

@@ -4,8 +4,8 @@
 
 #include "split_op.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include "split_program_factory.hpp"
 using namespace tt::constants;
@@ -27,21 +27,21 @@ void SplitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) co
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Split does not currently support sharding");
 
-    TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
+    TT_FATAL(input_tensor.get_padded_shape()[0] == 1, "shape[0] must be 1 (batch 1 only)");
     TT_FATAL(
-        input_tensor.get_legacy_shape()[this->dim] % this->num_splits == 0,
+        input_tensor.get_padded_shape()[this->dim] % this->num_splits == 0,
         "Dim being split must be evenly divisible by number of splits");
     TT_FATAL(
-        this->dim <= input_tensor.get_legacy_shape().rank() && this->dim >= 0,
+        this->dim <= input_tensor.get_padded_shape().rank() && this->dim >= 0,
         "Dim being split must be from 0 to rank - 1");
-    TT_FATAL(input_tensor.get_legacy_shape().rank() == 4, "Tensor needs to be rank 4");
+    TT_FATAL(input_tensor.get_padded_shape().rank() == 4, "Tensor needs to be rank 4");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Tensor needs to be in TILE Layout");
 }
 
 std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto input_shape_array = input_tensor.get_legacy_shape().to_array_4D();
+    auto input_shape_array = input_tensor.get_padded_shape().to_array_4D();
     auto output_shape_array = input_shape_array;
     output_shape_array[this->dim] /= this->num_splits;
     TensorSpec spec(

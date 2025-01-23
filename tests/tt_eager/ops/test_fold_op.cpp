@@ -9,13 +9,13 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
 
-void run_fold(IDevice* device, tt::tt_metal::LegacyShape shape) {
+void run_fold(IDevice* device, const ttnn::SimpleShape& shape) {
     Tensor input_tensor = ttnn::random::random(shape).to(Layout::ROW_MAJOR).to(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
@@ -28,7 +28,7 @@ int main(int argc, char** argv) {
     int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-    run_fold(device, {1, 2, 2, 2});
+    run_fold(device, SimpleShape({1, 2, 2, 2}));
     bool pass = CloseDevice(device);
 
     if (pass) {

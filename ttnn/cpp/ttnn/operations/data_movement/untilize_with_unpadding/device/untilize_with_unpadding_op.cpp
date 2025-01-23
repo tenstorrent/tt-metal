@@ -26,7 +26,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
                 input_tensor_a.volume() /
-                        (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                        (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -37,13 +37,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
+                TT_FATAL(input_tensor_a.get_padded_shape()[i] == output_shape[i], "Error");
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(
                     this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
+                    input_tensor_a.get_padded_shape()[-1] == output_shape[-1] ||
                         (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                          input_tensor_a.shard_spec().value().grid.num_cores()),
                     "Error");
@@ -51,11 +51,11 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
                     input_tensor_a.volume() /
-                            (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                            (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] - output_shape[-1] <
+                    input_tensor_a.get_padded_shape()[-1] - output_shape[-1] <
                         input_tensor_a.shard_spec().value().shape[1],
                     "Error");
             }
@@ -87,7 +87,10 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
         std::array<uint32_t, 2> shard_shape;
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_shape = {tt::div_up(fused_height, num_cores), output_shape[-1]};
+            const auto tile = input_tensor_a.get_tensor_spec().tile();
+            uint32_t tile_height = tile.get_height();
+            uint32_t shard_idx0 = tt::round_up(tt::div_up(fused_height, num_cores), tile_height);
+            shard_shape = {shard_idx0, output_shape[-1]};
         } else {
             shard_shape = {fused_height, shard_spec.shape[1]};
         }

@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "group_attn_matmul_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::Buffer* src1_buffer = b.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-        const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+        const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
         tt::tt_metal::IDevice* device = a.device();
 

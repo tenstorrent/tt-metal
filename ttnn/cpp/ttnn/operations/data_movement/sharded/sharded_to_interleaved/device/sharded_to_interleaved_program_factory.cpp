@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -45,24 +45,24 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = output.get_padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        num_units_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
+        num_units_height = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width - (round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
     } else {
-        num_units = (output.volume() / output.get_legacy_shape()[-1] / shard_spec.shape[0]) *
-                    (input.get_legacy_shape()[-1] / shard_spec.shape[1]);
+        num_units = (output.volume() / output.get_padded_shape()[-1] / shard_spec.shape[0]) *
+                    (input.get_padded_shape()[-1] / shard_spec.shape[1]);
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = output.get_legacy_shape()[-1] * output.element_size();
+        num_units_per_row = output.get_padded_shape()[-1] * output.element_size();
         num_units_offset = 1;
-        num_units_height = input.volume() / input.get_legacy_shape()[-1];
+        num_units_height = input.volume() / input.get_padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =

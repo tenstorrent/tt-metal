@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "attn_matmul_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -31,8 +31,8 @@ void AttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_tensor
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
     TT_FATAL((bshape[1] == 1), "Number of kv_heads must be 1!");  // TODO: May need to uplift to support falcon-40B
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
@@ -74,8 +74,8 @@ std::vector<ttnn::TensorSpec> AttnMatmulDeviceOperation::compute_output_specs(
     // output: [q_len, q_heads, batch, kv_len]
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
 
     uint32_t N = bshape[3];
     if (this->transpose_hw.value_or(false)) {

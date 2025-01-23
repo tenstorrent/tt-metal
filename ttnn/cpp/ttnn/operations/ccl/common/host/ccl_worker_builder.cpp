@@ -6,17 +6,17 @@
 #include <iterator>
 
 #include "hostdevcommon/kernel_structs.h"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
-#include "tt_metal/host_api.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "tt_metal/tt_stl/overloaded.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include <tt-metalium/overloaded.hpp>
 
 #include <optional>
 #include <variant>
@@ -1419,12 +1419,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.get_legacy_shape()[0],
-        input_tensor.get_legacy_shape()[1],
-        input_tensor.get_legacy_shape()[2],
-        input_tensor.get_legacy_shape()[3]};
+        input_tensor.get_padded_shape()[0],
+        input_tensor.get_padded_shape()[1],
+        input_tensor.get_padded_shape()[2],
+        input_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -1496,12 +1496,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(output_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.get_legacy_shape()[0],
-        output_tensor.get_legacy_shape()[1],
-        output_tensor.get_legacy_shape()[2],
-        output_tensor.get_legacy_shape()[3]};
+        output_tensor.get_padded_shape()[0],
+        output_tensor.get_padded_shape()[1],
+        output_tensor.get_padded_shape()[2],
+        output_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),

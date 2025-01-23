@@ -27,7 +27,7 @@
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -37,7 +37,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit(in_cb_id);
+    tilize_uninit(in_cb_id, out_cb_id);
 }  // tilize_in()
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, bool is_non_tile_height>
@@ -438,7 +438,7 @@ void MAIN {
                 reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
 #endif
                 pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
-                copy_tile_to_dst_init_short();
+                copy_tile_to_dst_init_short(matmul_partials_cb);
                 uint32_t curr_tile_output_rows_h = 0;
                 uint32_t TILE_SIZE = is_non_tile_height ? 32 : out_block_w;
                 TILE_SIZE = TILE_SIZE * out_subblock_h;

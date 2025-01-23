@@ -9,9 +9,9 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
@@ -22,8 +22,8 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    const auto& input_shape = a.get_legacy_shape();
-    const auto& output_shape = output.get_legacy_shape();
+    const auto& input_shape = a.get_padded_shape();
+    const auto& output_shape = output.get_padded_shape();
 
     tt::tt_metal::Program program{};
 
@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {
@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
@@ -279,7 +279,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
      */
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
@@ -336,14 +336,30 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
         uint32_t nblocks_per_core = 0;
 
+        BlockRep ref_el = assignment[0];
+        uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
         for (const auto& el : assignment) {
             nblocks_per_core += el.block_count();
             row_start_id += el.data_row_count();
-            writer_rt_args.push_back(el.n_data);
-            writer_rt_args.push_back(el.n_mixed);
-            writer_rt_args.push_back(el.n_pads);
-            writer_rt_args.push_back(el.times);
+            if (compare_assignments(ref_el, el)) {
+                count_repeated++;
+            } else {
+                // push back information for previious elements
+                writer_rt_args.push_back(ref_el.n_data);
+                writer_rt_args.push_back(ref_el.n_mixed);
+                writer_rt_args.push_back(ref_el.n_pads);
+                writer_rt_args.push_back(ref_el.times);
+                writer_rt_args.push_back(count_repeated);
+                // Set up assignment for this element
+                ref_el = el;
+                count_repeated = 1;
+            }
         }
+        writer_rt_args.push_back(ref_el.n_data);
+        writer_rt_args.push_back(ref_el.n_mixed);
+        writer_rt_args.push_back(ref_el.n_pads);
+        writer_rt_args.push_back(ref_el.times);
+        writer_rt_args.push_back(count_repeated);
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
 
@@ -392,7 +408,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
     // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.get_legacy_shape()[-1] == 16 && output.get_legacy_shape()[-2] % TILE_HEIGHT == 0;
+    bool unpad_tensor_w_16 = output.get_padded_shape()[-1] == 16 && output.get_padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -418,26 +434,26 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t ncores = all_cores.num_cores();
     uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t batch = a.volume() / (a.get_legacy_shape()[-2] * a.get_legacy_shape()[-1]);
+    uint32_t batch = a.volume() / (a.get_padded_shape()[-2] * a.get_padded_shape()[-1]);
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
     block_row_size = out_shard_spec.shape[1] * output.element_size();         // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.get_legacy_shape()[-1] * output.element_size();  // output row size bytes
+    output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
     last_block_row_size_unpadded =
         block_row_size -
-        (tt::round_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - output.get_legacy_shape()[-1]) *
+        (tt::round_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
             output.element_size();
-    uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
+    uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = tt::div_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - 1;
+        last_idx = tt::div_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - 1;
     } else if (a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
-            tt::div_up(output.get_legacy_shape()[-1], out_shard_spec.shape[1]) - 1,
+            tt::div_up(output.get_padded_shape()[-1], out_shard_spec.shape[1]) - 1,
             tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
     }
     if (!row_major) {
@@ -523,7 +539,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         // Use copy compute kernel just for a potential data type conversion.
         compute_kernel = "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
-    } else if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    } else if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     } else {

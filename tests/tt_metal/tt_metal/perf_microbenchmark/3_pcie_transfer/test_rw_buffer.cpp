@@ -8,10 +8,13 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include "device_pool.hpp"
+#include "logger.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 using namespace tt;
@@ -39,6 +42,7 @@ int main(int argc, char** argv) {
     bool bypass_check = false;
     bool skip_read = false;
     bool skip_write = false;
+    bool device_is_mmio = false;  // MMIO devices should have higher perf
     std::vector<double> h2d_bandwidth;
     std::vector<double> d2h_bandwidth;
     int32_t buffer_type = 0;
@@ -88,7 +92,18 @@ int main(int argc, char** argv) {
             page_size);
 
         // Device setup
+        if (device_id >= tt::Cluster::instance().number_of_devices()) {
+            log_info(LogTest, "Skip! Device id {} is not applicable on this system", device_id);
+            return 1;
+        }
+
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        device_is_mmio = device->is_mmio_capable();
+
+        if (!device->using_fast_dispatch()) {
+            log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
+            return 1;
+        }
 
         // Application setup
         auto buffer = tt_metal::Buffer::create(
@@ -149,11 +164,15 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Best write: {} GB/s", best_write_bw);
         }
         if (!skip_read) {
-            log_info(LogTest, "Best write: {} GB/s", best_read_bw);
+            log_info(LogTest, "Best read: {} GB/s", best_read_bw);
         }
 
         // Validation & teardown
-        pass &= (src_vec == result_vec);
+        // Data check is only valid if both read and write are enabled
+        if (!skip_read && !skip_write && !(src_vec == result_vec)) {
+            log_error("Read data mismatch");
+            pass = false;
+        }
         pass &= tt_metal::CloseDevice(device);
     } catch (const std::exception& e) {
         pass = false;
@@ -165,26 +184,39 @@ int main(int argc, char** argv) {
     auto avg_h2d_bandwidth = calculate_average(h2d_bandwidth);
     auto avg_d2h_bandwidth = calculate_average(d2h_bandwidth);
     if (pass && bypass_check == false) {
-        // goal is 70% of PCI-e Gen3 x16 for grayskull
         // TODO: check the theoritical peak of wormhole
-        double target_bandwidth = 16.0 * 0.7;
+        static constexpr double k_PcieMax = 16.0;  // GB/s
+        double target_read_bandwidth;
+        double target_write_bandwidth;
 
-        if (avg_h2d_bandwidth < target_bandwidth) {
+        if (device_is_mmio) {
+            // MMIO
+            target_read_bandwidth = k_PcieMax * 0.5;    // 50%
+            target_write_bandwidth = k_PcieMax * 0.75;  // 80%
+        } else {
+            // Remote
+            target_read_bandwidth = k_PcieMax * 0.15;   // 15%
+            target_write_bandwidth = k_PcieMax * 0.35;  // 35%
+        }
+
+        if (!skip_write && avg_h2d_bandwidth < target_write_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The host-to-device bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
                 avg_h2d_bandwidth,
-                target_bandwidth);
-        } else if (avg_d2h_bandwidth < target_bandwidth) {
+                target_write_bandwidth);
+        }
+
+        if (!skip_read && avg_d2h_bandwidth < target_read_bandwidth) {
             pass = false;
             log_error(
                 LogTest,
                 "The device-to-host bandwidth does not meet the criteria. "
                 "Current: {:.3f}GB/s, goal: {:.3f}GB/s",
                 avg_d2h_bandwidth,
-                target_bandwidth);
+                target_read_bandwidth);
         }
     }
 

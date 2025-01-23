@@ -11,7 +11,8 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
@@ -34,7 +35,7 @@ inline bool use_multicore_device_tilize(
             ? tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
             : input_single_tile_size;
 
-    uint32_t num_tiles_in_row = input.get_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_in_row = input.get_logical_shape()[-1] / tt::constants::TILE_WIDTH;
     uint32_t max_l1_size =
         input.device()->l1_size_per_core() / 2 - input.device()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
@@ -105,7 +106,7 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> new_padded_shape(2, 1);
             new_padded_shape[1] = tensor.get_padded_shape()[-1];
             new_padded_shape[0] = tensor.get_padded_shape()[-2];
-            tensor = tensor.reshape(tensor.get_logical_shape(), SimpleShape(new_padded_shape));
+            tensor = ttnn::experimental::view(tensor, tensor.get_logical_shape(), SimpleShape(new_padded_shape));
         }
     }
 
@@ -202,7 +203,7 @@ Tensor to_layout_impl(
             tensor =
                 tensor.pad(ttnn::SimpleShape(padded_output_shape), ttnn::SimpleShape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
-            return tensor.reshape(output_shape, padded_output_shape);
+            return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

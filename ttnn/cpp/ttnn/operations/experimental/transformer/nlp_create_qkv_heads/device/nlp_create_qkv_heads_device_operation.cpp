@@ -4,7 +4,7 @@
 
 #include "nlp_create_qkv_heads_device_operation.hpp"
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -13,7 +13,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input_tensor_q;
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(
@@ -32,7 +32,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
     if (input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Error");
         TT_FATAL(
             operation_attributes.output_mem_config.is_sharded() &&
@@ -75,7 +75,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 
     if (tensor_args.input_tensor_kv.has_value()) {
         const auto& input_tensor_kv = tensor_args.input_tensor_kv.value();
-        const auto input_shape_kv = input_tensor_kv.get_legacy_shape();
+        const auto input_shape_kv = input_tensor_kv.get_padded_shape();
 
         TT_FATAL(input_tensor_kv.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
         TT_FATAL(input_tensor_kv.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -90,7 +90,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(input_tensor.is_sharded(), "Error");
             TT_FATAL(
                 input_tensor_kv.shard_spec().value().shape[0] ==
-                    input_tensor_kv.volume() / input_tensor_kv.get_legacy_shape()[-1],
+                    input_tensor_kv.volume() / input_tensor_kv.get_padded_shape()[-1],
                 "Error");
             TT_FATAL(input_tensor_kv.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
             TT_FATAL(input_tensor_kv.shard_spec().value().shape[1] == 2 * operation_attributes.head_dim, "Error");

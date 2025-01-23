@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer {
 void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -41,7 +41,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
             "Current input memory layout is {}. It must be width sharded",
             QKV_memcfg.memory_layout);
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
@@ -90,9 +90,9 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
     const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
-    auto batch = input_tensor.get_shape()[2];
+    auto batch = input_shape[2];
     auto head_dim = this->head_dim;
 
     const SimpleShape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});

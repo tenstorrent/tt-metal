@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "convert_to_chw.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::experimental::cnn::detail {
 

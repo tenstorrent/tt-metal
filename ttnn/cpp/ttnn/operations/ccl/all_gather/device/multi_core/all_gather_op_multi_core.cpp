@@ -4,19 +4,19 @@
 ///
 #include <algorithm>
 
-#include "tt_metal/common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.get_legacy_shape().rank() - 1 == dim;
+    bool width = input_tensor.get_padded_shape().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     std::map<string, string> worker_defines;

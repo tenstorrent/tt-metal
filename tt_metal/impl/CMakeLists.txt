@@ -1,9 +1,11 @@
 set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
@@ -20,6 +22,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/data_collection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
@@ -48,11 +52,14 @@ target_link_libraries(
     impl
     PUBLIC
         common
-        Metalium::Metal::LLRT
         Tracy::TracyClient
     PRIVATE
         Boost::smart_ptr
         range-v3::range-v3
+        Metalium::Metal::Common
+        Taskflow::Taskflow
+        TT::Metalium::HostDevCommon
+        Metalium::Metal::Hardware
 )
 
 target_include_directories(

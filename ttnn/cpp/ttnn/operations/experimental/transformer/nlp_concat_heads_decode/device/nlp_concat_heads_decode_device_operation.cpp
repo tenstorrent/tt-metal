@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::transformer {
 // NLP ConcatHeads op for decode
 void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     // input tensor and shape
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -31,8 +31,8 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
     TT_FATAL(input_tensor.is_sharded(), "Error");
     TT_FATAL(input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(shard_spec.shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
-    TT_FATAL(shard_spec.shape[0] == input_tensor.get_legacy_shape()[-2], "Error");
+    TT_FATAL(shard_spec.shape[1] == input_tensor.get_padded_shape()[-1], "Error");
+    TT_FATAL(shard_spec.shape[0] == input_tensor.get_padded_shape()[-2], "Error");
     auto num_cores = shard_spec.grid.num_cores();
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     if (this->on_subcoregrids) {

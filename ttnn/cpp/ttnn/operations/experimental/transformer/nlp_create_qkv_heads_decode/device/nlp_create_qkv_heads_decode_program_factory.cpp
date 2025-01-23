@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -58,7 +58,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleav
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_interleav
     auto q_shard_spec = output[0].shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-    auto in_shape = input_tensor.get_legacy_shape();
+    auto in_shape = input_tensor.get_padded_shape();
     auto in_num_tiles = in_shape[-2] * in_shape[-1] / TILE_HW;
 
     uint32_t q_output_cb_index = CBIndex::c_16;
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
@@ -473,7 +473,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 

@@ -9,12 +9,12 @@
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
 using namespace tt::constants;
@@ -118,7 +118,7 @@ static Tensor create_config_tensor(
      */
     const uint32_t config_buffer_entry_size = 2;
     uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
-    Shape config_shape({config_vector.size() / elems_per_core, elems_per_core});
+    ttnn::SimpleShape config_shape({config_vector.size() / elems_per_core, elems_per_core});
     auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
     return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
@@ -134,15 +134,15 @@ operation::ProgramWithCallbacks upsample_multi_core(
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
 
-    uint32_t input_stick_nbytes = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.get_padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.volume() / output.get_legacy_shape()[-1];
-    uint32_t input_nsticks = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t output_nsticks = output.volume() / output.get_padded_shape()[-1];
+    uint32_t input_nsticks = input.volume() / input.get_padded_shape()[-1];
 
-    uint32_t in_w = input.get_legacy_shape()[2];
-    uint32_t out_w = output.get_legacy_shape()[2];
+    uint32_t in_w = input.get_padded_shape()[2];
+    uint32_t out_w = output.get_padded_shape()[2];
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -224,8 +224,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         config_tensor = create_config_tensor(
             device,
             shard_spec,
-            input.legacy_shape()[0],
-            input.legacy_shape()[1],
+            input.get_padded_shape()[0],
+            input.get_padded_shape()[1],
             in_w,
             scale_factor_h,
             scale_factor_w,
@@ -235,17 +235,16 @@ operation::ProgramWithCallbacks upsample_multi_core(
     } else {
         TT_THROW("Unsupported sharding layout");
     }
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_shape()[-1]});
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
     auto config_tensor_shard_orientation = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
-    MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1_SMALL, config_shard_spec};
+    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to(device, memory_config);
-    tt::tt_metal::detail::AddConfigBuffer(program, config_tensor_device.device_buffer());
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
-    Buffer* config_buffer = config_tensor_device.buffer();
+    auto config_buffer = config_tensor_device.device_buffer();
     auto config_buffer_page_size = config_buffer->page_size();
     uint32_t config_cb_id = CBIndex::c_6;
     auto config_cb_config = CircularBufferConfig(config_buffer_page_size, {{config_cb_id, config_df}})
@@ -311,7 +310,8 @@ operation::ProgramWithCallbacks upsample_multi_core(
         TT_THROW("Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb](
+    // Capture config_buffer to cache this with the program
+    auto override_runtime_args_callback = [writer_kernel, cb_src0, out_cb, config_cb, config_buffer](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,

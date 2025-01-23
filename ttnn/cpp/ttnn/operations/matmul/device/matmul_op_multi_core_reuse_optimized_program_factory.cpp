@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -491,8 +491,8 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_(
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = a.get_legacy_shape();
-    const auto& bshape = b.get_legacy_shape();
+    const auto& ashape = a.get_padded_shape();
+    const auto& bshape = b.get_padded_shape();
     auto in0_tile_shape = a.get_tensor_spec().tile().get_tile_shape();
     auto in1_tile_shape = b.get_tensor_spec().tile().get_tile_shape();
 

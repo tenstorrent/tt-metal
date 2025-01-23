@@ -81,7 +81,7 @@ autograd::TensorPtr composite_layernorm(
     auto tensor_shape = tensor->get_value().get_shape();
 
     auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
-    auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+    auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().get_dtype());
     ttnn::moreh_mean(
         tensor->get_value(),
         3,  // last dimension
@@ -139,7 +139,7 @@ autograd::TensorPtr composite_layernorm(
         // dnorm.mean(-1, keepdim=True)
         auto dnorm_shape = dtensor_normalized.get_shape();
         auto shape = core::create_shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
-        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().get_dtype());
         ttnn::moreh_mean(
             dtensor_normalized,
             /* dim */ 3,

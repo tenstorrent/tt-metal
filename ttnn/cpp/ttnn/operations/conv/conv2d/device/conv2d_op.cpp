@@ -6,13 +6,13 @@
 #include <cstdint>
 #include <utility>
 #include "conv2d_op.hpp"
-#include "common/math.hpp"
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/constants.hpp>
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
@@ -26,7 +26,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
-    const tt::tt_metal::LegacyShape& conv_activation_shape,
+    const ttnn::SimpleShape& conv_activation_shape,
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles) {
@@ -103,16 +103,15 @@ Tensor optimized_conv_new(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
             const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
-            auto padded_a_shape =
-                ttnn::Shape(std::array<uint32_t, 4>{ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+            auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
-                .pad_shape = padded_a_shape.value, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
+                .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
             FormatParams input_b_format_params = {
-                .pad_shape = b.get_legacy_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
+                .pad_shape = b.get_padded_shape(), .pad_value = 0.0, .target_layout = Layout::TILE};
             FormatParams input_bias_format_params = {};
             if (bias.has_value()) {
                 input_bias_format_params = {
-                    .pad_shape = bias.value().get_legacy_shape(), .pad_value = 0, .target_layout = Layout::TILE};
+                    .pad_shape = bias.value().get_padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
             }
             auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
             auto arch = is_tensor_on_device_or_multidevice(a)
@@ -169,7 +168,7 @@ void OptimizedConvNew::validate(
             optimized_conv_op_utils::div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
         auto [act_matrix_shape, act_matrix_shape_unpadded] =
             optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-                input_tensor_a.get_legacy_shape(),
+                input_tensor_a.get_padded_shape(),
                 sliding_window_config,
                 parallelization_config.num_cores_nhw,
                 out_block_h_ntiles);
@@ -299,7 +298,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const auto weights_dtype = input_tensor_b.dtype();
     const auto output_dtype = output_tensor.dtype();
 
-    const auto weights_shape = input_tensor_b.get_legacy_shape();
+    const auto weights_shape = input_tensor_b.get_padded_shape();
 
     auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a,

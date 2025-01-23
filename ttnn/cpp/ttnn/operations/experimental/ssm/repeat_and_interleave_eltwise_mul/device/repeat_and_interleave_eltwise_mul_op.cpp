@@ -5,7 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul_op.hpp"
 
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -52,8 +52,8 @@ void RepeatAndInterleaveEltwiseMul::validate(const std::vector<Tensor>& input_te
         this->dtype == tt::tt_metal::DataType::BFLOAT16 || this->dtype == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format for output!");
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
     TT_FATAL((ashape[0] == 1 and ashape[1] == 1), "Batch not supported for input a!");
     TT_FATAL((bshape[0] == 1 and bshape[1] == 1), "Batch not supported for input b!");
     TT_FATAL((ashape[2] % TILE_HEIGHT == 0), "Num of users must be multiple of 32 for input a!");

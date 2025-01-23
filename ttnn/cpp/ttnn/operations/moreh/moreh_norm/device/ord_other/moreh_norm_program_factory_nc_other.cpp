@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include "cpp/ttnn/operations/moreh/moreh_norm/device/moreh_norm_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_norm {
@@ -24,7 +24,7 @@ MorehNormOperation::ProgramFactoryNCOther::cached_program_t MorehNormOperation::
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
     const auto input_rank = static_cast<decltype(dim)>(input_shape.rank());
 
     const auto H = input_shape[-2];

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "common/core_coord.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 
 #include <vector>
 #include <string>

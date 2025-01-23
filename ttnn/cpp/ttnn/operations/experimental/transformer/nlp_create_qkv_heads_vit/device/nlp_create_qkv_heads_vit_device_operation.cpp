@@ -4,7 +4,7 @@
 
 #include "nlp_create_qkv_heads_vit_device_operation.hpp"
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer {
 // Hard-coded for Vit
 void NlpCreateHeadsVitDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -25,9 +25,7 @@ void NlpCreateHeadsVitDeviceOperation::validate(const std::vector<Tensor>& input
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
-    TT_FATAL(
-        (input_shape == tt::tt_metal::LegacyShape({input_shape[0], 1, input_shape[2], 2304})),
-        "Unsupported input shape");
+    TT_FATAL((input_shape == ttnn::SimpleShape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported input shape");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 

@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
-#include "sub_device/sub_device_types.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/global_semaphore.hpp"
 
 #include <ranges>
 #include <algorithm>
@@ -81,11 +81,11 @@ ReduceScatterAsync create_reduce_scatter_struct(
 void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }

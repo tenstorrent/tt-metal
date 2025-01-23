@@ -7,9 +7,9 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "reshard_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -26,7 +26,7 @@ void ReshardDeviceOperation::validate_with_output_tensors(
     bool has_output_tensor = output_tensors.size() == 1 && output_tensors[0].has_value();
     if (has_output_tensor) {
         const auto& output_tensor = output_tensors[0].value();
-        TT_FATAL(input_tensor.get_shape() == output_tensor.get_shape(), "Error");
+        TT_FATAL(input_tensor.get_logical_shape() == output_tensor.get_logical_shape(), "Error");
         TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Error");
         TT_FATAL(input_tensor.get_layout() == output_tensor.get_layout(), "Error");
     }

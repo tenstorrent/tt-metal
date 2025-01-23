@@ -5,7 +5,7 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "untilize_with_halo_v2_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -33,7 +33,7 @@ void UntilizeWithHaloV2::validate(const std::vector<Tensor>& input_tensors) cons
 
 std::vector<ttnn::TensorSpec> UntilizeWithHaloV2::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
     auto output_shape = input_shape;
 
     uint32_t nbatch = input_shape[0];
@@ -68,14 +68,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithHaloV2::compute_output_specs(const std
     auto out_mem_config = out_mem_config_;
     out_mem_config.shard_spec->shape[0] = tt::div_up(output_shape[0] * output_shape[2], ncores_nhw_);
     out_mem_config.shard_spec->shape[1] = input_tensor.memory_config().shard_spec->shape[1];
-    return {TensorSpec(
-        output_shape.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            output_dtype,
-            PageConfig(Layout::ROW_MAJOR),
-            out_mem_config,
-            output_shape.logical_shape(),
-            output_shape.padded_shape()))};
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
 }
 
 operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
@@ -99,7 +92,8 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         remote_config,
         remote_read_,
         transpose_mcast_,
-        output_tensor)};
+        output_tensor,
+        /*capture_buffers=*/false)};
 }
 
 }  // namespace ttnn::operations::data_movement

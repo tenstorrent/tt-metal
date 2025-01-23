@@ -47,6 +47,7 @@ on:
           - eltwise.unary.sin.sin
           - eltwise.unary.sin.sin_pytorch2
           - eltwise.unary.sin.sin_forge
+          - eltwise.unary.sin.sin_sharded
           - eltwise.unary.tril.tril_pytorch2
           - eltwise.unary.clamp.clamp
           - eltwise.unary.clamp.clamp_forge
@@ -74,8 +75,11 @@ on:
           - eltwise.unary.clone.clone
           - eltwise.unary.elu.elu
           - eltwise.unary.elu.elu_pytorch2
+          - eltwise.unary.elu.elu_sharded
           - eltwise.unary.erfc.erfc
           - eltwise.unary.erfc.erfc_sharded
+          - eltwise.unary.eqz.eqz
+          - eltwise.unary.eqz.eqz_sharded
           - eltwise.unary.exp.exp
           - eltwise.unary.exp.exp_sharded
           - eltwise.unary.exp.exp_forge
@@ -133,11 +137,15 @@ on:
           - eltwise.unary.neg.neg_pytorch2
           - eltwise.unary.neg.neg_forge
           - eltwise.unary.erf.erf
+          - eltwise.unary.erf.erf_sharded
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.erfinv.erfinv_sharded
           - eltwise.unary.i0.i0
+          - eltwise.unary.reciprocal.reciprocal
+          - eltwise.unary.reciprocal.reciprocal_sharded
           - eltwise.unary.silu.silu
           - eltwise.unary.silu.silu_pytorch2
+          - eltwise.unary.silu.silu_llama
           - eltwise.unary.glu.glu
           - eltwise.unary.geglu.geglu
           - eltwise.unary.swiglu.swiglu
@@ -183,27 +191,38 @@ on:
           - eltwise.unary.selu.selu
           - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
-          - eltwise.unary_backward.fill_zero_bw
-          - eltwise.unary_backward.log_sigmoid_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw
+          - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
+          - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
           - eltwise.unary_backward.logit_bw
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
           - eltwise.unary_backward.hardshrink_bw
           - eltwise.unary_backward.softshrink_bw
           - eltwise.unary_backward.acos_bw.acos_bw
+          - eltwise.unary_backward.acos_bw.acos_bw_sharded
           - eltwise.unary_backward.acosh_bw.acosh_bw
+          - eltwise.unary_backward.acosh_bw.acosh_bw_sharded
           - eltwise.unary_backward.atan_bw.atan_bw
+          - eltwise.unary_backward.atan_bw.atan_bw_sharded
           - eltwise.unary_backward.cos_bw.cos_bw
+          - eltwise.unary_backward.cos_bw.cos_bw_sharded
           - eltwise.unary_backward.frac_bw.frac_bw
+          - eltwise.unary_backward.frac_bw.frac_bw_sharded
           - eltwise.unary_backward.i0_bw.i0_bw
+          - eltwise.unary_backward.i0_bw.i0_bw_sharded
           - eltwise.unary_backward.rad2deg_bw.rad2deg_bw
+          - eltwise.unary_backward.rad2deg_bw.rad2deg_bw_sharded
           - eltwise.unary_backward.relu_bw.relu_bw
           - eltwise.unary_backward.relu_bw.relu_bw_sharded
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
           - eltwise.unary_backward.tan_bw.tan_bw
+          - eltwise.unary_backward.tan_bw.tan_bw_sharded
           - eltwise.unary_backward.trunc_bw.trunc_bw
+          - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_backward.clamp_bw.clamp_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.mul_bw.mul_bw
@@ -226,9 +245,12 @@ on:
           - eltwise.unary_backward.tanh_bw.tanh_bw
           - eltwise.unary_backward.sqrt_bw.sqrt_bw
           - eltwise.unary_backward.add_bw.add_bw
+          - eltwise.unary_backward.add_bw.add_bw_sharded
           - eltwise.unary_backward.assign_bw.assign_bw
           - eltwise.unary_backward.fill_bw.fill_bw
+          - eltwise.unary_backward.fill_bw.fill_bw_sharded
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
+          - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
@@ -251,6 +273,8 @@ on:
           - eltwise.binary_complex.add_bw.add_bw
           - eltwise.binary_complex.sub_bw.sub_bw
           - eltwise.binary_complex.mul_bw.mul_bw
+          - eltwise.unary.digamma.digamma
+          - eltwise.unary.digamma.digamma_sharded
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.lgamma.lgamma_sharded
           - eltwise.unary.logit.logit
@@ -274,16 +298,19 @@ on:
           - eltwise.binary.add.add_set2_pytorch2
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
+          - eltwise.binary.add.add_llama
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
           - eltwise.unary.lez.lez
+          - eltwise.unary.lez.lez_sharded
           - eltwise.unary.nez.nez
           - eltwise.unary.prelu.prelu
           - eltwise.unary.prelu.prelu_sharded
           - eltwise.unary.hardswish.hardswish_pytorch2
           - eltwise.unary.hardtanh.hardtanh_pytorch2
           - eltwise.unary.leaky_relu.leaky_relu
+          - eltwise.unary.leaky_relu.leaky_relu_sharded
           - eltwise.unary.reglu.reglu
           - eltwise.unary.round.round_sharded
           - eltwise.unary_complex.polar.polar
@@ -298,6 +325,8 @@ on:
           - eltwise.binary.multiply.mul_tensor_pytorch2
           - eltwise.binary.multiply.multiply_scalar_pytorch2
           - eltwise.binary.multiply.multiply_forge
+          - eltwise.binary.multiply.multiply_llama
+          - eltwise.binary.multiply.mul_no_act_llama
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
@@ -395,7 +424,9 @@ on:
           - fused.layer_norm_traces
           - reduction.backward.prod_bw.prod_bw
           - reduction.topk.topk
+          - reduction.topk.topk_output
           - reduction.argmax.argmax
+          - reduction.argmax.argmax_output
           - reduction.prod
           - reduction.sum
           - reduction.var.var
@@ -494,8 +525,6 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: wormhole_b0
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |
@@ -554,8 +583,6 @@ jobs:
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ matrix.test-group.arch }}
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: |

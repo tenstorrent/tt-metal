@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -17,18 +17,18 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE, "Error");
 
-    for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
-        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+    for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
+        TT_FATAL(this->output_tensor_start[i] < input_tensor_a.get_padded_shape()[i], "Error");
+        TT_FATAL(this->output_tensor_end[i] < input_tensor_a.get_padded_shape()[i], "Error");
 
         // Check if start shape is <= end shape
         TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
     }
 
     SimpleShape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
-    auto num_dims = input_tensor_a.get_legacy_shape().rank();
+    auto num_dims = input_tensor_a.get_padded_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
-    const auto input_shape = input_tensor_a.get_legacy_shape();
+    const auto input_shape = input_tensor_a.get_padded_shape();
     auto dim0 = input_shape[0];
     auto dim1 = input_shape[1];
     auto fused_batch_heads = dim0 * dim1;

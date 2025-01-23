@@ -32,6 +32,7 @@ show_help() {
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
+    echo "  --toolchain-path                 Set path to CMake toolchain file."
 }
 
 clean() {
@@ -61,11 +62,44 @@ build_all="OFF"
 cxx_compiler_path=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
+toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:,ttnn-shared-sub-libs
+LONGOPTIONS="
+help
+build-all
+export-compile-commands
+enable-ccache
+enable-time-trace
+enable-asan
+enable-msan
+enable-tsan
+enable-ubsan
+build-type:
+enable-profiler
+install-prefix:
+build-tests
+build-ttnn-tests
+build-metal-tests
+build-umd-tests
+build-programming-examples
+build-tt-train
+build-static-libs
+disable-unity-builds
+release
+development
+debug
+clean
+cxx-compiler-path:
+c-compiler-path:
+ttnn-shared-sub-libs
+toolchain-path:
+"
+
+# Flatten LONGOPTIONS into a comma-separated string for getopt
+LONGOPTIONS=$(echo "$LONGOPTIONS" | tr '\n' ',' | sed 's/,$//')
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -125,6 +159,8 @@ while true; do
             cxx_compiler_path="$2";shift;;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
+        --toolchain-path)
+            toolchain_path="$2";shift;;
         --release)
             build_type="Release";;
         --development)
@@ -240,7 +276,6 @@ fi
 if [ "$build_tests" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
 if [ "$build_metal_tests" = "ON" ]; then
@@ -251,7 +286,7 @@ if [ "$build_ttnn_tests" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
 fi
 
-if [ "$build_tt_umd_tests" = "ON" ]; then
+if [ "$build_umd_tests" = "ON" ]; then
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
@@ -276,9 +311,15 @@ fi
 if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+fi
+
+# toolchain and cxx_compiler settings would conflict with eachother
+# only use toolchain if not setting cxx compiler directly
+if [ "$cxx_compiler_path" == "" ]; then
+    echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
+    cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
 
 # Create and link the build directory

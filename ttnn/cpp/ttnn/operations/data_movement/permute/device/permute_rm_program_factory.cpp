@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 using namespace tt::tt_metal::experimental;
 
@@ -132,7 +132,10 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .core_range = all_cores},
+    };
 }
 
 void PermuteDeviceOperation::MultiCoreRowInvariant::override_runtime_arguments(

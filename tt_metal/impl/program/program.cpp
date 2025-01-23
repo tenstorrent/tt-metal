@@ -5,28 +5,30 @@
 #include <range/v3/view/filter.hpp>
 #include <range/v3/view/transform.hpp>
 
-#include "buffers/circular_buffer_types.hpp"
+#include <circular_buffer_types.hpp>
 #include "common/executor.hpp"
-#include "tools/profiler/profiler.hpp"
+#include <profiler.hpp>
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/detail/persistent_kernel_cache.hpp"
-#include "tt_metal/detail/reports/compilation_reporter.hpp"
-#include "tt_metal/detail/reports/memory_reporter.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/semaphore.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/dispatch/device_command.hpp"
+#include <persistent_kernel_cache.hpp>
+#include <compilation_reporter.hpp>
+#include <memory_reporter.hpp>
+#include <tt_metal.hpp>
+#include <graph_tracking.hpp>
+#include <host_api.hpp>
+#include <allocator.hpp>
+#include <circular_buffer.hpp>
+#include <semaphore.hpp>
+#include <dprint_server.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
+#include <hardware_command_queue.hpp>
+#include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/llrt/llrt.hpp"
+#include <llrt.hpp>
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
+#include <tt_align.hpp>
 
 namespace tt::tt_metal {
 
@@ -170,7 +172,9 @@ class Program_ {
     bool finalized_;
     bool cached_;
 
-    std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>> sub_device_ids_;
+    // TODO: Should map based on the hash of the configured sub-devices
+    // This way we can cache it agnostic of the device
+    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
     struct CircularBufferAllocator {
         CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
@@ -223,8 +227,6 @@ class Program_ {
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
-    std::vector<std::shared_ptr<Buffer>> config_buffers_;
-
     std::vector<ProgramConfig> program_configs_;
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
@@ -247,9 +249,6 @@ class Program_ {
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
-    friend void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
-    void add_config_buffer(const std::shared_ptr<Buffer>& config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
@@ -291,10 +290,6 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHand
 // Checks that circular buffers do not grow into L1 buffer space
 void ValidateCircularBufferRegion(const Program &program, const IDevice* device) {
     program.pimpl_->validate_circular_buffer_region(device);
-}
-
-void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer) {
-    program.pimpl_->add_config_buffer(std::move(config_buffer));
 }
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
@@ -802,7 +797,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = align(computed_addr, device->get_allocator_alignment());
+        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -889,8 +884,6 @@ void detail::Program_::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     pimpl_->add_semaphore(crs, semaphore_id, init_value, core_type);
 }
-
-void detail::Program_::add_config_buffer(const std::shared_ptr<Buffer>& config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
@@ -1096,7 +1089,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
-                        align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
+                        tt::align(binaries_data.size(), HostMemDeviceCommand::PROGRAM_PAGE_SIZE / sizeof(uint32_t)), 0);
                     transfer_info_index++;
                 });
             }
@@ -1196,14 +1189,18 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
     // We need to calculate the sub_device_id when we haven't compiled the program yet, or this is the first time we
     // are getting the sub_device_ids after compilation
     auto sub_device_manager_id = device->get_active_sub_device_manager_id();
-    auto sub_device_ids = this->sub_device_ids_.find(sub_device_manager_id);
-    if (this->compiled_.empty() || sub_device_ids == this->sub_device_ids_.end()) {
+    auto& sub_device_ids_map = this->sub_device_ids_[device->id()];
+    auto sub_device_ids = sub_device_ids_map.find(sub_device_manager_id);
+    if (this->compiled_.empty() || sub_device_ids == sub_device_ids_map.end()) {
         if (!this->compiled_.empty()) {
-            TT_FATAL(this->sub_device_ids_.empty(), "Multiple sub device managers are not currently supported for a single program");
+            TT_FATAL(
+                sub_device_ids_map.empty(),
+                "Multiple sub device managers are not currently supported for a single program");
         }
         if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr || sub_device_manager_id == device->get_default_sub_device_manager_id()) {
             // No sub device manager, nothing to validate
-            auto [sub_device_ids, _] = this->sub_device_ids_.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
+            auto [sub_device_ids, _] =
+                sub_device_ids_map.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>{SubDeviceId{0}});
             return sub_device_ids->second;
         } else {
             std::unordered_set<SubDeviceId> used_sub_device_ids;
@@ -1232,7 +1229,9 @@ const std::vector<SubDeviceId> &detail::Program_::determine_sub_device_ids(const
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
-            auto [sub_device_ids, _] = this->sub_device_ids_.insert_or_assign(sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
+            auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
+                sub_device_manager_id,
+                std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
             return sub_device_ids->second;
         }
     }
@@ -1286,7 +1285,7 @@ void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
     // Clear the determined sub_device_ids when we compile the program for the first time
     // This way, determine_sub_device_ids is forced to recalculate with the finalized information on the used cores
     if (compiled_.empty()) {
-        this->sub_device_ids_.erase(device->get_active_sub_device_manager_id());
+        this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
     TT_FATAL(

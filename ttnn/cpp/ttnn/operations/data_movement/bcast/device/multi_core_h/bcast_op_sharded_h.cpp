@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include "cpp/ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -17,8 +17,8 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_sharded_h(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math /*, BcastOpDim bcast_dim*/) {
-    const auto ashape = a.get_legacy_shape();
-    const auto bshape = b.get_legacy_shape();
+    const auto ashape = a.get_padded_shape();
+    const auto bshape = b.get_padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2],
              W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2],
@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
             .set_globally_allocated_address(*output.buffer());
     auto out_cb = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t num_input_tiles = (b.get_legacy_shape()[-1] * output.element_size() + TILE_HW - 1) / TILE_HW;
+    uint32_t num_input_tiles = (b.get_padded_shape()[-1] * output.element_size() + TILE_HW - 1) / TILE_HW;
     uint32_t src1_cb_index = CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
@@ -202,9 +202,9 @@ operation::ProgramWithCallbacks bcast_sharded_h(
         auto all_cores = shard_spec.grid;
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht = 0;
-        const auto ashape = input_tensors.at(0).get_legacy_shape();
+        const auto ashape = input_tensors.at(0).get_padded_shape();
         uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
-        uint32_t bN = input_tensors.at(1).get_legacy_shape()[0];
+        uint32_t bN = input_tensors.at(1).get_padded_shape()[0];
         uint32_t NC = N * C;
         if (a.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             Wt = shard_spec.shape[1] / TILE_WIDTH;

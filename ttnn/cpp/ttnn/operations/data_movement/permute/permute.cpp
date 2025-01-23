@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,14 +8,14 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -30,29 +30,16 @@ ttnn::Tensor permute_impl(
     const ttnn::SmallVector<uint32_t>& dims,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    using ttnn::operations::experimental::auto_format::AutoFormat;
-
     // Get the device
     IDevice* device = a.device();
-    uint32_t rank = a.get_shape().rank();
+    uint32_t rank = a.get_logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt);
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
     };
 
     if (rank > 4) {
-        if (a.get_layout() == Layout::TILE && ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2)) ||
-            (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1)) {
-            return prim_permute(a);
-        }
-        auto input = a.get_layout() == Layout::TILE
-                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr)
-                         : a;
-        TT_FATAL(
-            !(pad_value.has_value() && pad_value.value() != 0.0f),
-            "Non-zero padding is not supported for permute on tensors with rank > 4.");
-        input = prim_permute(input);
-        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+        return prim_permute(a);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
@@ -81,57 +68,33 @@ ttnn::Tensor permute_impl(
         return ttnn::transpose(input, 0, 1, output_mem_config, std::nullopt);
     };
 
-    if (N == 0 && C == 1 && H == 2 && W == 3) {
-        output = formatted_input_tensor;
-    } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-        output = transpose_wh(formatted_input_tensor);
-    } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-        output = transpose_hc(formatted_input_tensor);
-    } else if (N == 0 && C == 2 && H == 3 && W == 1) {
-        output = transpose_wh(transpose_hc(formatted_input_tensor));
-    } else if (N == 0 && C == 3 && H == 1 && W == 2) {
-        output = transpose_hc(transpose_wh(formatted_input_tensor));
-    } else if (N == 0 && C == 3 && H == 2 && W == 1) {
-        output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
-    } else if (N == 1 && C == 0 && H == 2 && W == 3) {
-        output = transpose_cn(formatted_input_tensor);
-    } else if (N == 1 && C == 0 && H == 3 && W == 2) {
-        output = prim_permute(formatted_input_tensor);
-    } else if (N == 1 && C == 2 && H == 0 && W == 3) {
-        output = transpose_hc(transpose_cn(formatted_input_tensor));
-    } else if (N == 1 && C == 2 && H == 3 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_cn(formatted_input_tensor)));
-    } else if (N == 1 && C == 3 && H == 0 && W == 2) {
-        output = transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor)));
-    } else if (N == 1 && C == 3 && H == 2 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor))));
-    } else if (N == 2 && C == 0 && H == 1 && W == 3) {
-        output = transpose_cn(transpose_hc(formatted_input_tensor));
-    } else if (N == 2 && C == 0 && H == 3 && W == 1) {
-        output = transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)));
-    } else if (N == 2 && C == 1 && H == 0 && W == 3) {
-        output = transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor)));
-    } else if (N == 2 && C == 1 && H == 3 && W == 0) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor))));
-    } else if (N == 2 && C == 3 && H == 0 && W == 1) {
-        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor))));
-    } else if (N == 2 && C == 3 && H == 1 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)))));
-    } else if (N == 3 && C == 0 && H == 1 && W == 2) {
-        output = transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)));
-    } else if (N == 3 && C == 0 && H == 2 && W == 1) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))));
-    } else if (N == 3 && C == 1 && H == 0 && W == 2) {
-        output = transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor))));
-    } else if (N == 3 && C == 1 && H == 2 && W == 0) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor)))));
-    } else if (N == 3 && C == 2 && H == 0 && W == 1) {
-        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)))));
-    } else if (N == 3 && C == 2 && H == 1 && W == 0) {
-        output =
-            transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))))));
+    // Keep limited sharding support with recursive calls
+    if (a.is_sharded()) {
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 3 && W == 1) {
+            output = transpose_wh(transpose_hc(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 1 && W == 2) {
+            output = transpose_hc(transpose_wh(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 2 && W == 1) {
+            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        }
     } else {
-        TT_ASSERT(false, "Illegal permute args");
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 1 && C == 0 && H == 2 && W == 3) {
+            output = transpose_cn(formatted_input_tensor);
+        } else {
+            output = prim_permute(formatted_input_tensor);
+        }
     }
     // Convert tensor back to original dtype if typecast was performed
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;

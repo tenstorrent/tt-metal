@@ -69,7 +69,8 @@ extern uint32_t tt_l1_ptr* sem_l1_base[];
 #define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
 
 static_assert(NUM_NOCS == 2);
-// "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data. (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
+// "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data.
+// (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
 static_assert((NUM_DRAM_BANKS + NUM_L1_BANKS) <= 256);
 
 namespace interleaved_addr_gen {
@@ -1264,7 +1265,6 @@ struct InterleavedPow2AddrGenFast {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
         }
-
     }
 };
 
@@ -1696,9 +1696,8 @@ inline void noc_async_write_multicast_exclude_region(
  */
 void noc_async_read_barrier(uint8_t noc = noc_index) {
     WAYPOINT("NRBW");
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_reads_flushed(noc));
+    while (!ncrisc_noc_reads_flushed(noc));
+    invalidate_l1_cache();
     WAYPOINT("NRBD");
 }
 
@@ -1992,16 +1991,15 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
 #ifndef ARCH_GRAYSKULL
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
+    while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid));
 #endif
+    invalidate_l1_cache();
     WAYPOINT("NBTD");
 }
 
-template<bool DRAM>
-FORCE_INLINE
-uint64_t get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
+template <bool DRAM>
+FORCE_INLINE uint64_t
+get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
     // Use addrgen tables to convert bank_ids to physical NOC coordinates
     uint64_t noc_addr = 0;
     if constexpr (DRAM) {

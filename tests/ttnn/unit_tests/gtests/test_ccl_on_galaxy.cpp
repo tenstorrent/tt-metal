@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
@@ -184,8 +184,8 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
             // Readback data and verify correctness.
             for (auto& tensor : output_tensors) {
                 ASSERT_EQ(
-                    tensor.get_shape(),
-                    ttnn::Shape(LegacyShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
+                    tensor.get_logical_shape(),
+                    SimpleShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())}));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -294,7 +294,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         }
         // Readback data and verify correctness.
         for (auto& tensor : output_tensors) {
-            ASSERT_EQ(tensor.get_shape(), ttnn::Shape(LegacyShape({1, 2, 256, 256})));
+            ASSERT_EQ(tensor.get_logical_shape(), SimpleShape({1, 2, 256, 256}));
             ttnn::read_buffer(0, tensor, {readback_data});
             for (int j = 0; j < 512 * 256; j++) {
                 ASSERT_EQ(readback_data[j].to_float(), ring_devices.size());
