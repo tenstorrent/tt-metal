@@ -110,6 +110,31 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
 operation::ProgramWithCallbacks AllGatherAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+
+    auto input_tensor_shape = input_tensors[0].get_padded_shape();
+    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
+    auto input_tensor_page_layout = input_tensors[0].layout();
+
+    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
+        tt::log_info(
+            tt::LogOp,
+            "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is called");
+        return all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+            input_tensors[0],
+            this->forward_device,
+            this->backward_device,
+            output_tensors[0],
+            this->dim,
+            this->num_links,
+            this->ring_size,
+            this->ring_index,
+            this->topology,
+            this->semaphore,
+            this->enable_persistent_fabric_mode);
+    }
+
     return all_gather_async_multi_core_with_workers(
         input_tensors[0],
         this->forward_device,

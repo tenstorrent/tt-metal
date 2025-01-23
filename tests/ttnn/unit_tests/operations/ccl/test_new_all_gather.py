@@ -306,6 +306,7 @@ def run_all_gather_impl(
     "num_devices, num_links, output_shape, dim, layout",
     [
         (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
     ],
@@ -314,6 +315,7 @@ def run_all_gather_impl(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
