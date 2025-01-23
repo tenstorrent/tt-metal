@@ -233,6 +233,7 @@ def test_to_layout_sharded(dtype, device, use_program_cache):
     assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("batch_size", [9, 32])
 @pytest.mark.parametrize("sentence_size", [32, 256])
 def test_int_untilize(device, batch_size, sentence_size):
