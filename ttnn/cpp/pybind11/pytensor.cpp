@@ -22,6 +22,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -92,6 +93,8 @@ Tensor create_typed_tt_tensor_from_py_data(
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
     const bool force_disable_borrow) {
+    auto layout = tensor_spec.layout();
+
     const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
     const bool requires_tilization = layout != Layout::ROW_MAJOR;
     const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
@@ -103,10 +106,10 @@ Tensor create_typed_tt_tensor_from_py_data(
     // Use template type for generic function - TODO find better way, maybe decltype or variants w/ array or map?
     auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
 
+    auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
 
-    if (enable_borrow and
-        !(tensor_spec.data_type == DataType::BFLOAT8_B || tensor_spec.data_type == DataType::BFLOAT4_B)) {
+    if (enable_borrow and !(data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B)) {
         auto storage = BorrowedStorage(
             borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
         return Tensor(std::move(storage), tensor_spec);
@@ -161,6 +164,9 @@ Tensor create_tt_tensor_from_py_data(
         case DataType::BFLOAT4_B: {
             return create_typed_tt_tensor_from_py_data<bfloat16>(
                 py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
+        }
+        case DataType::INVALID: {
+            TT_THROW("Unsupported DataType: {}", data_type);
         }
     }
 
