@@ -68,16 +68,33 @@ ttnn::Tensor permute_impl(
         return ttnn::transpose(input, 0, 1, output_mem_config, std::nullopt);
     };
 
-    if (N == 0 && C == 1 && H == 2 && W == 3) {
-        output = formatted_input_tensor;
-    } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-        output = transpose_wh(formatted_input_tensor);
-    } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-        output = transpose_hc(formatted_input_tensor);
-    } else if (N == 1 && C == 0 && H == 2 && W == 3) {
-        output = transpose_cn(formatted_input_tensor);
+    // Keep limited sharding support with recursive calls
+    if (a.is_sharded()) {
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 3 && W == 1) {
+            output = transpose_wh(transpose_hc(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 1 && W == 2) {
+            output = transpose_hc(transpose_wh(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 2 && W == 1) {
+            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        }
     } else {
-        output = prim_permute(formatted_input_tensor);
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 1 && C == 0 && H == 2 && W == 3) {
+            output = transpose_cn(formatted_input_tensor);
+        } else {
+            output = prim_permute(formatted_input_tensor);
+        }
     }
     // Convert tensor back to original dtype if typecast was performed
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
