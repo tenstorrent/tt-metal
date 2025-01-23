@@ -24,7 +24,9 @@
 // SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
 // SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-SliceRange srt = SliceRange{.h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+SliceRange row_range = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+SliceRange col_range = SliceRange{.h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+SliceRange sq_range = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
@@ -123,34 +125,33 @@ void MAIN {
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? matmul_partials_cb : out_cb_id;
 
-// DPRINT_MATH(
-//     DPRINT<<"in0_block_w: "<<in0_block_w<<ENDL();
-//     DPRINT<<"in0_num_subblocks: "<<in0_num_subblocks<<ENDL();
-//     DPRINT<<"in0_block_num_tiles: "<<in0_block_num_tiles<<ENDL();
-//     DPRINT<<"in0_subblock_num_tiles: "<<in0_subblock_num_tiles<<ENDL();
-//     DPRINT<<"in0_subblock_h: "<<in0_subblock_h<<ENDL();
-//     DPRINT<<"in1_num_subblocks: "<<in1_num_subblocks<<ENDL();
-//     DPRINT<<"in1_block_num_tiles: "<<in1_block_num_tiles<<ENDL();
-//     DPRINT<<"in1_block_w: "<<in1_block_w<<ENDL();
-//     DPRINT<<"in0_num_blocks_h: "<<in0_num_blocks_h<<ENDL();
-//     DPRINT<<"in0_num_blocks_w: "<<in0_num_blocks_w<<ENDL();
-//     DPRINT<<"in1_num_blocks_w: "<<in1_num_blocks_w<<ENDL();
-//     DPRINT<<"out_subblock_h: "<<out_subblock_h<<ENDL();
-//     DPRINT<<"out_subblock_w: "<<out_subblock_w<<ENDL();
-//     DPRINT<<"out_subblock_num_tiles: "<<out_subblock_num_tiles<<ENDL();
-//     DPRINT<<"tilize_in0: "<<(uint32_t)tilize_in0<<ENDL();
-//     DPRINT<<"untilize_out: "<<(uint32_t)untilize_out<<ENDL();
-//     DPRINT<<"out_cb_id: "<<out_cb_id<<ENDL();
-//     DPRINT<<"output_rows_h: "<<output_rows_h<<ENDL();
-//     DPRINT<<"is_non_tile_height: "<<(uint32_t)is_non_tile_height<<ENDL();
-// #ifdef WIDTH_SHARDED
-//     DPRINT<<"in0_nblocks_w_tilize: "<<in0_nblocks_w_tilize<<ENDL();
-// #endif
-//     DPRINT<<"out_block_num_tiles: "<<out_block_num_tiles<<ENDL();
-//     DPRINT<<"out_block_w: "<<out_block_w<<ENDL();
-//     DPRINT<<"spill: "<<(uint8_t)spill<<ENDL();
-//     DPRINT<<"untilize_mode_out_cb_id: "<<untilize_mode_out_cb_id<<ENDL();
-// )
+    DPRINT_MATH(
+        //     DPRINT<<"in0_block_w: "<<in0_block_w<<ENDL();
+        //     DPRINT<<"in0_num_subblocks: "<<in0_num_subblocks<<ENDL();
+        //     DPRINT<<"in0_block_num_tiles: "<<in0_block_num_tiles<<ENDL();
+        //     DPRINT<<"in0_subblock_num_tiles: "<<in0_subblock_num_tiles<<ENDL();
+        //     DPRINT<<"in0_subblock_h: "<<in0_subblock_h<<ENDL();
+        //     DPRINT<<"in1_num_subblocks: "<<in1_num_subblocks<<ENDL();
+        //     DPRINT<<"in1_block_num_tiles: "<<in1_block_num_tiles<<ENDL();
+        //     DPRINT<<"in1_block_w: "<<in1_block_w<<ENDL();
+        //     DPRINT<<"in0_num_blocks_h: "<<in0_num_blocks_h<<ENDL();
+        //     DPRINT<<"in0_num_blocks_w: "<<in0_num_blocks_w<<ENDL();
+        //     DPRINT<<"in1_num_blocks_w: "<<in1_num_blocks_w<<ENDL();
+        //     DPRINT<<"out_subblock_h: "<<out_subblock_h<<ENDL();
+        //     DPRINT<<"out_subblock_w: "<<out_subblock_w<<ENDL();
+        //     DPRINT<<"out_subblock_num_tiles: "<<out_subblock_num_tiles<<ENDL();
+        //     DPRINT<<"tilize_in0: "<<(uint32_t)tilize_in0<<ENDL();
+        //     DPRINT<<"untilize_out: "<<(uint32_t)untilize_out<<ENDL();
+        //     DPRINT<<"out_cb_id: "<<out_cb_id<<ENDL();
+        //     DPRINT<<"output_rows_h: "<<output_rows_h<<ENDL();
+        //     DPRINT<<"is_non_tile_height: "<<(uint32_t)is_non_tile_height<<ENDL();
+        // #ifdef WIDTH_SHARDED
+        //     DPRINT<<"in0_nblocks_w_tilize: "<<in0_nblocks_w_tilize<<ENDL();
+        // #endif
+        //     DPRINT<<"out_block_num_tiles: "<<out_block_num_tiles<<ENDL();
+        //     DPRINT<<"out_block_w: "<<out_block_w<<ENDL();
+        //     DPRINT<<"spill: "<<(uint8_t)spill<<ENDL();
+        DPRINT << "untilize_mode_out_cb_id: " << untilize_mode_out_cb_id << ENDL();)
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
@@ -178,6 +179,8 @@ void MAIN {
     DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
     DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
 
+    DPRINT_UNPACK(DPRINT << "MM Out CB Read Ptr: " << mm_out_cb_id << " "
+                         << get_local_cb_interface(mm_out_cb_id).fifo_rd_ptr << "\n";)
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -196,7 +199,12 @@ void MAIN {
             // for each output block we start we relu disabled so that intermediate results are not relu'd
             PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 #endif
-
+            if (untilize_out == false) {
+                UNPACK(uint32_t partials_cb_read_ptr = get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr);
+                PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
+                DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
+                DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
+            }
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
@@ -354,13 +362,18 @@ void MAIN {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                DPRINT_UNPACK(DPRINT << "Matmul Partials CB Read Ptr: "
-                                     << get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr << "\n";)
-                DPRINT_PACK(DPRINT << "Matmul Partials CB Write Ptr: "
-                                   << get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr << "\n";)
+                if (curr_matmul_out_cb == matmul_partials_cb && untilize_out) {
+                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+                }
+                // DPRINT_UNPACK(
+                // { DPRINT << "Curr Matmul Out  " << TileSlice(curr_matmul_out_cb, 0, col_range, true, true) << ENDL();
+                // });
+                DPRINT_UNPACK(DPRINT << " Curr out CB: " << curr_matmul_out_cb << ENDL();)
+                DPRINT_UNPACK(DPRINT << "Matmul Out CB Read Ptr: "
+                                     << get_local_cb_interface(curr_matmul_out_cb).fifo_rd_ptr << "\n";)
+                DPRINT_PACK(DPRINT << "Matmul Out CB Write Ptr: "
+                                   << get_local_cb_interface(curr_matmul_out_cb).fifo_wr_ptr << "\n";)
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                 if (in0_block_w_i < in0_num_blocks_w - 1) {
@@ -412,6 +425,9 @@ void MAIN {
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }  // for in0_num_blocks_w
+            if constexpr (matmul_partials_cb == mm_out_cb_id && untilize_out == false) {
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+            }
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
             // if last block we pack the final result with relu enabled
@@ -465,10 +481,14 @@ void MAIN {
                 PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
             }
 #endif
+            DPRINT_UNPACK(DPRINT << " Curr out CB: " << curr_matmul_out_cb << ENDL();)
+            DPRINT_UNPACK(DPRINT << "Matmul Partials CB Read Ptr: "
+                                 << get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr << "\n";)
+            DPRINT_PACK(DPRINT << "Matmul Partials CB Write Ptr: "
+                               << get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr << "\n";)
             DPRINT_UNPACK(DPRINT << "Untilize In CB Read Ptr: "
                                  << get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr << "\n";)
-            DPRINT_UNPACK(
-                { DPRINT << "Untilize Input  " << TileSlice(matmul_partials_cb, 0, srt, true, true) << ENDL(); });
+
             if constexpr (untilize_out) {
 #if defined PACKER_L1_ACC and not defined FUSE_BIAS
                 pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
