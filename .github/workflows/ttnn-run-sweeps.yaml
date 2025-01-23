@@ -357,6 +357,7 @@ on:
           - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.remainder.remainder_unary
           - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.remainder.remainder_shape
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.scatter.scatter_forge
