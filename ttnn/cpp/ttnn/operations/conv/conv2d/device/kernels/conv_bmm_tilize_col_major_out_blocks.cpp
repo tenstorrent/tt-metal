@@ -354,10 +354,9 @@ void MAIN {
                     }  // for in1_num_subblocks
                     in0_index_subblock_offset += in0_subblock_num_tiles;
                 }
-                if constexpr (untilize_out) {
-                    UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-                    PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
-                }
+
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
                 DPRINT_UNPACK(DPRINT << "Matmul Partials CB Read Ptr: "
                                      << get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr << "\n";)
                 DPRINT_PACK(DPRINT << "Matmul Partials CB Write Ptr: "
@@ -413,9 +412,6 @@ void MAIN {
                 cb_pop_front(mm_in0_cb_id, in0_block_num_tiles);
                 cb_pop_front(in1_cb_id, in1_block_num_tiles);
             }  // for in0_num_blocks_w
-            if constexpr (matmul_partials_cb == mm_out_cb_id && untilize_out == false) {
-                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
-            }
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
             // if last block we pack the final result with relu enabled
@@ -464,6 +460,10 @@ void MAIN {
                     in1_index_subblock_offset += out_subblock_w;
                 }  // for in1_num_subblocks
             }  // in0_num_subblocks
+            if (untilize_out) {
+                UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
+                PACK(get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr = partials_cb_write_ptr);
+            }
 #endif
             DPRINT_UNPACK(DPRINT << "Untilize In CB Read Ptr: "
                                  << get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr << "\n";)
@@ -510,7 +510,6 @@ void MAIN {
                 }
             }
         }  // for in0_num_blocks_h
-
 #ifdef FUSE_BIAS
         bias_block_offset += in1_block_w;
 #endif
