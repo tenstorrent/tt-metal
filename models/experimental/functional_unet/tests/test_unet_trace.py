@@ -20,13 +20,13 @@ from models.experimental.functional_unet.tests.common import (
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
+    UNetPerformanceStatistics,
 )
 
 from models.utility_functions import skip_for_grayskull, divup
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 68864, "trace_region_size": 444416}], indirect=True)
 @pytest.mark.parametrize(
     "batch, groups, iterations",
@@ -107,7 +107,6 @@ def test_unet_trace(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
 )
@@ -221,7 +220,6 @@ def buffer_address(tensor):
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
@@ -344,7 +342,6 @@ def test_unet_trace_2cq_multi_device(
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
 )
@@ -395,6 +392,7 @@ def test_unet_trace_2cq_same_io(
     ttnn.record_event(1, read_event)
 
     logger.info(f"Compiling model with warmup run")
+    start = time.time()
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
 
     ttnn.record_event(1, write_event)
@@ -414,6 +412,7 @@ def test_unet_trace_2cq_same_io(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
     )
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
+    inference_and_compile_time = time.time() - start
     logger.info(f"Done compile run")
 
     logger.info(f"Capturing trace")
@@ -468,7 +467,8 @@ def test_unet_trace_2cq_same_io(
     outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
     ttnn.synchronize_device(device)
     end = time.time()
-    logger.info(f"Average model time={1000.0 * (end-start) / iterations : .2f} ms")
+    inference_time = (end - start) / iterations
+    logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
     logger.info(f"Average model performance={iterations * groups * batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
@@ -476,9 +476,10 @@ def test_unet_trace_2cq_same_io(
     verify_with_pcc(torch_output_tensor, ttnn.to_torch(outputs[-1]).reshape(B, C, H, W), pcc=UNET_FULL_MODEL_PCC)
     ttnn.release_trace(device, tid)
 
+    return UNetPerformanceStatistics(groups, batch, 1, inference_and_compile_time, inference_time)
+
 
 @skip_for_grayskull("UNet not currently supported on GS")
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("enable_async_mode", (True, False), indirect=True)
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
@@ -551,6 +552,7 @@ def test_unet_trace_2cq_same_io_multi_device(
     ttnn.record_event(1, read_event)
 
     logger.info(f"Compiling model with warmup run")
+    start = time.time()
     ttnn.copy_host_to_device_tensor(ttnn_input, input_tensor, cq_id=1)
 
     ttnn.record_event(1, write_event)
@@ -570,6 +572,7 @@ def test_unet_trace_2cq_same_io_multi_device(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, output_dram_shard_spec
     )
     dram_output_tensor = ttnn.reshard(output_tensor, output_dram_memory_config)
+    inference_and_compile_time = time.time() - start
     logger.info(f"Done compile run")
 
     logger.info(f"Capturing trace")
@@ -628,7 +631,9 @@ def test_unet_trace_2cq_same_io_multi_device(
     outputs.append(dram_output_tensor.cpu(blocking=False, cq_id=1))
     ttnn.synchronize_devices(mesh_device)
     end = time.time()
-    logger.info(f"Average model time={1000.0 * (end-start) / iterations : .2f} ms")
+
+    inference_time = (end - start) / iterations
+    logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
     logger.info(f"Average model performance={iterations * groups * total_batch / (end-start) : .2f} fps")
 
     logger.info(f"Running sanity check against reference model output")
@@ -639,3 +644,5 @@ def test_unet_trace_2cq_same_io_multi_device(
         pcc=UNET_FULL_MODEL_PCC,
     )
     ttnn.release_trace(mesh_device, tid)
+
+    return UNetPerformanceStatistics(groups, batch, num_devices, inference_and_compile_time, inference_time)
