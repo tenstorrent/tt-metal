@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
-    MemoryConfig memory_config{input.memory_config().memory_layout, BufferType::L1_SMALL, config_shard_spec};
+    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
     auto config_tensor_device = config_tensor.to(device, memory_config);
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
