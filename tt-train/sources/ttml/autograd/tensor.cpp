@@ -109,6 +109,16 @@ void Tensor::set_value(const tt::tt_metal::Tensor& value) {
 }
 
 void Tensor::set_grad(const tt::tt_metal::Tensor& grad) {
+    if (core::is_tensor_initialized(grad)) {
+        auto grad_shape = grad.get_shape();
+        auto value_shape = m_value.get_tensor().get_shape();
+        if (grad_shape != value_shape) {
+            throw std::logic_error(fmt::format(
+                "Shapes of gradients are not equal. Expected: {}, got: {}",
+                m_value.get_tensor().get_shape(),
+                grad.get_shape()));
+        }
+    }
     m_grad = grad;
 }
 

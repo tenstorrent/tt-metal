@@ -98,7 +98,11 @@ autograd::TensorPtr nll_loss(
             /* ignore_index */ -100,
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+<<<<<<< HEAD
         grad = ttnn::reshape(grad, prediction->get_value().get_logical_shape());
+=======
+        grad = ttnn::reshape(grad, prediction->get_value().get_shape());
+>>>>>>> origin/main
         prediction->add_grad(grad);
     };
     auto links = autograd::get_links(prediction);
