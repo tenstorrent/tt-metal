@@ -24,9 +24,9 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryOpType>& lhs_activations,
-               const ttnn::SmallVector<unary::UnaryOpType>& rhs_activations,
-               const ttnn::SmallVector<unary::UnaryOpType>& post_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
                const uint8_t& queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -45,9 +45,9 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
-            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
-            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("queue_id") = 0},
 
         // tensor and tensor
@@ -58,9 +58,9 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryOpType>& lhs_activations,
-               const ttnn::SmallVector<unary::UnaryOpType>& rhs_activations,
-               const ttnn::SmallVector<unary::UnaryOpType>& post_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
+               const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
                uint8_t queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -79,9 +79,9 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
-            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
-            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
+            py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("queue_id") = 0});
 }
 
