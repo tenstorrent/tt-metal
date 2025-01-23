@@ -244,7 +244,9 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                 auto mem_config = this->output_mem_config;
                 mem_config.shard_spec = input_tensor.shard_spec().value();
                 return {TensorSpec(
-                    output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config))};
+                    output_shape,
+                    TensorLayout(
+                        this->dtype.value_or(input_tensor.get_dtype()), PageConfig(Layout::TILE), mem_config))};
             } else {
                 return {TensorSpec(
                     output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};

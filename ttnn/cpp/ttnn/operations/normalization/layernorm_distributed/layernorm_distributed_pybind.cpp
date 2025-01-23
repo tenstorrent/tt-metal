@@ -44,7 +44,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("bias") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("program_config") = std::nullopt});
+            py::arg("program_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt});
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {
