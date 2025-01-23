@@ -10,6 +10,14 @@
 #include <fmt/format.h>
 #include <magic_enum/magic_enum.hpp>
 
+namespace ttnn::operations::binary_ng {
+
+struct Lowercase {
+    std::string_view view;
+};
+
+}  // namespace ttnn::operations::binary_ng
+
 template <>
 struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<std::string_view> {
     auto format(const ttnn::operations::binary_ng::Lowercase& value, fmt::format_context& ctx) const {
@@ -282,21 +290,19 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::UnaryOpType> activations,
+    tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand) {
-    auto prepend_separator = false;
-    std::string process = "";
-
-    for (auto& a : activations) {
-        if (prepend_separator) {
-            process += ';';
-        }
-        prepend_separator = true;
-        process += fmt::format("PROCESS_ACTIVATION({}, i)", magic_enum::enum_name(a));
-        unary::utils::update_macro_defines(a, defines);
-    }
-
-    defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = process;
+    defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
+        activations.begin(),
+        activations.end(),
+        std::string{},
+        [&](std::string&& process, const unary::UnaryWithParam& a) {
+            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i");
+            process += op_init;
+            process += op_func;
+            unary::utils::update_macro_defines(a.op_type, defines);
+            return std::move(process);
+        });
 }
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }

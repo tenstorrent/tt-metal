@@ -71,11 +71,7 @@ struct OpConfig {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::UnaryOpType> activations,
+    tt::stl::Span<const unary::UnaryWithParam> activations,
     std::string_view operand);
-
-struct Lowercase {
-    std::string_view view;
-};
 
 }  // namespace ttnn::operations::binary_ng
