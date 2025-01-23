@@ -30,9 +30,8 @@ void MorehMatmulOperation::validate_inputs(
 
     // check matrix dims
 
-    const auto& input_shape = input.get_shape().value.without_padding();
-    const auto& other_shape = other.get_shape().value.without_padding();
-    const auto& input_wo_shape = input_shape.without_padding();
+    const auto& input_shape = input.get_shape().const value auto& other_shape =
+        other.get_shape().const value auto& input_wo_shape = input_shape.without_padding();
     const auto& other_wo_shape = other_shape.without_padding();
     uint32_t input_m = (transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
     uint32_t input_k = (transpose_input) ? (input_wo_shape[-2]) : (input_wo_shape[-1]);

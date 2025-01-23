@@ -170,7 +170,6 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
                 output_size_vec.push_back(input_shape[input_dim]);
             }
         }
-        // How to handle this? ->
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(

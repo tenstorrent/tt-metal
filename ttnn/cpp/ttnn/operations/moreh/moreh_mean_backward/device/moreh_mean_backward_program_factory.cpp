@@ -31,10 +31,10 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::Legacy
 tt::tt_metal::LegacyShape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
-        return output_grad.get_padded_shape();
+        return output_grad.get_shape().value;
     }
 
-    auto shape = input_grad.get_padded_shape();
+    auto shape = input_grad.get_shape();
     auto rank = shape.rank();
     // Replace? ->
     auto padding = shape.value.padding();
