@@ -57,7 +57,7 @@ def test_llama_conv2d_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    num_devices = model_args.num_devices
+    num_devices = model_args.num_devices_tp
 
     ##### Create input tensor for the all gather #####
     B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)

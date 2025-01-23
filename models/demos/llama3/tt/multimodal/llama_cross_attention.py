@@ -32,7 +32,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
 
         self.dim = dim
         self.head_dim = head_dim
@@ -40,8 +40,8 @@ class TtLlamaCrossAttention(LightweightModule):
         self.n_kv_heads = n_kv_heads
         self.norm_eps = norm_eps
 
-        self.n_local_heads = self.n_heads // configuration.num_devices
-        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices
+        self.n_local_heads = self.n_heads // configuration.num_devices_tp
+        self.n_local_kv_heads = self.n_kv_heads // configuration.num_devices_tp
 
         self.dtype = dtype
 

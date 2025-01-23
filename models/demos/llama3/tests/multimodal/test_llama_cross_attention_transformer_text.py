@@ -148,7 +148,7 @@ def test_llama_cross_attention_transformer_text_inference(
         xattn_mask = xattn_mask.unsqueeze(1)
         xattn_mask = xattn_mask * -1e9
 
-        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices, -1, -1)
+        xattn_mask_expand = xattn_mask.expand(-1, n_heads // model_args.num_devices_tp, -1, -1)
 
         full_text_mask = torch.bernoulli(
             torch.full(
@@ -160,7 +160,7 @@ def test_llama_cross_attention_transformer_text_inference(
             )
         )
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
-        full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+        full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices_tp, -1, head_dim)
 
         full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
 
@@ -259,7 +259,7 @@ def test_llama_cross_attention_transformer_text_inference(
             rot_mats, _ = get_single_rot_mat(
                 model_args.head_dim,
                 mesh_device,
-                model_args.num_devices,
+                model_args.num_devices_tp,
                 start_pos=cur_pos - 1,
             )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
@@ -277,11 +277,11 @@ def test_llama_cross_attention_transformer_text_inference(
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
                 shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, vision_seq_len],
+                    [1, batch, n_heads // model_args.num_devices_tp, vision_seq_len],
                     [1, batch, 32, vision_seq_len],
                 ),
             )
-            full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
+            full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices_tp, -1, head_dim)
             full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.permute(2, 0, 1, 3).contiguous()
             tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                 full_text_mask_expand_1NSH,
@@ -294,7 +294,7 @@ def test_llama_cross_attention_transformer_text_inference(
             tt_full_text_mask_expand_1NSH = ttnn.reshape(
                 tt_full_text_mask_expand_1NSH,
                 shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, head_dim],
+                    [1, batch, n_heads // model_args.num_devices_tp, head_dim],
                     [1, batch, 32, head_dim],
                 ),
             )

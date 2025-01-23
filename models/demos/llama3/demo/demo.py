@@ -399,7 +399,7 @@ def run_llama3_demo(
             ttnn.deallocate(tt_out)
 
         # Synchronize devices to ensure the profile captures the correct timing of all devices
-        for i in range(model_args.num_devices):
+        for i in range(model_args.num_devices_tp):
             ttnn.synchronize_device(mesh_device.get_devices()[i])
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -480,7 +480,7 @@ def run_llama3_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-        if tt_model.args.num_devices > 1:
+        if tt_model.args.num_devices_tp > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
                     tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
@@ -524,7 +524,7 @@ def run_llama3_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-        if tt_model.args.num_devices > 1:
+        if tt_model.args.num_devices_tp > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
                     tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
@@ -550,13 +550,15 @@ def run_llama3_demo(
         current_pos_reset = ttnn.from_torch(
             current_pos,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                mesh_shape=model_args.cluster_shape,
-            )
-            if tt_model.args.num_devices > 1
-            else None,
+            mesh_mapper=(
+                ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    mesh_shape=model_args.cluster_shape,
+                )
+                if tt_model.args.num_devices_tp > 1
+                else None
+            ),
         )
         tt_out_tok_reset = ttnn.from_torch(
             torch.nn.functional.pad(
@@ -564,7 +566,7 @@ def run_llama3_demo(
             ),
             # torch.nn.functional.pad(pt_out_batched.unsqueeze(0).unsqueeze(0).unsqueeze(0), (0, 30), "constant", 0),
             dtype=ttnn.uint32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices > 1 else None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if tt_model.args.num_devices_tp > 1 else None,
         )
 
         # Reset the current position and output token tensors for the real decode run

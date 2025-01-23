@@ -25,8 +25,8 @@ class TtQwenMLP(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
-        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices_tp)
+        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices_tp, args.dim)
 
         name_dict = {
             "w1": "gate_proj",

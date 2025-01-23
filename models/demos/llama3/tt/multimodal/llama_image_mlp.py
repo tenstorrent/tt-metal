@@ -35,14 +35,16 @@ class TtLlamaImageFeedForward(LightweightModule):
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f".{name}.{suffix}")
 
         as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
-            torch_weight(name, suffix)
-            if suffix == "weight"
-            else torch_bias(name, suffix),  # Grab only the wX part of the name
+            (
+                torch_weight(name, suffix) if suffix == "weight" else torch_bias(name, suffix)
+            ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
-            if dim is not None
-            else ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=(
+                ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+                if dim is not None
+                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name, suffix),
@@ -100,7 +102,7 @@ class TtLlamaImageFeedForward(LightweightModule):
         c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
 
         # All reduce
-        if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
+        if self.args.num_devices_tp > 1:  # replace with reduce_scatter and all_gather
             w2_out_gathered = ttnn.all_gather(c_proj_out, dim=1, num_links=1, topology=ttnn.Topology.Linear)
             pre_bias_output = ttnn.experimental.fast_reduce_nc(
                 w2_out_gathered, dims=[1], output=None, compute_kernel_config=None

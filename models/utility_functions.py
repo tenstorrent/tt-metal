@@ -1021,3 +1021,50 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+def skip_for_batch_parallism(batch_size: int, data_parallel: int) -> Union[bool, str]:
+    if batch_size % data_parallel != 0:
+        return (
+            True,
+            f"Skipping test: batch size {batch_size} is not divisible by data parallelism factor {data_parallel}.",
+        )
+
+    if batch_size > data_parallel * 32:
+        return (
+            True,
+            f"Skipping test: batch size {batch_size} exceeds the maximum supported size for data parallelism factor {data_parallel} (max {data_parallel * 32}).",
+        )
+
+    return (False, "")
+
+
+def skip_for_parallelism(num_devices: int, data_parallel: int, tensor_parallel: int) -> Union[bool, str]:
+    """
+    Determines whether to skip a test based on parallelism configurations.
+
+    Args:
+        num_devices (int): Number of available devices.
+        data_parallel (int): Degree of data parallelism.
+        tensor_parallel (int): Degree of tensor parallelism.
+
+    Returns:
+        tuple[bool, str]: (skip_test, reason)
+    """
+    if (tensor_parallel > 1) and (data_parallel > 1):
+        return (
+            True,
+            f"Skipping test: Hybrid parallelism is not supported. tensor_parallel = {tensor_parallel}, data_parallel = {data_parallel}.",
+        )
+    elif (tensor_parallel > 1) and (tensor_parallel != num_devices):
+        return (
+            True,
+            f"Skipping test: Tensor parallelism ({tensor_parallel}) does not match the number of devices ({num_devices}).",
+        )
+    elif (data_parallel > 1) and (data_parallel != num_devices):
+        return (
+            True,
+            f"Skipping test: Data parallelism ({data_parallel}) does not match the number of devices ({num_devices}).",
+        )
+
+    return (False, "")

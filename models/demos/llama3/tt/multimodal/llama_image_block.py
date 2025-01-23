@@ -31,7 +31,7 @@ class TtLlamaImageTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.num_devices = configuration.num_devices
+        self.num_devices = configuration.num_devices_tp
         self.hidden_size = configuration.vision_dim
         self.gated = gated
 

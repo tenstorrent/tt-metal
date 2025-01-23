@@ -304,7 +304,7 @@ def test_tt_model_acc(
             page_table=page_table_tt,
         )
 
-        if tt_model.args.num_devices > 1:
+        if tt_model.args.num_devices_tp > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
                     tt_out,
