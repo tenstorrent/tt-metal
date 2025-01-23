@@ -21,7 +21,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
 #ifdef DECODE_MODE
     ACQ();
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
     pack_tile(0, out_cb);
     REL();
@@ -112,7 +112,7 @@ void MAIN {
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 ACQ();
-                mul_tiles_bcast_scalar_init_short();
+                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 pack_tile(0, rotated_in_interm_cb);
                 REL();
