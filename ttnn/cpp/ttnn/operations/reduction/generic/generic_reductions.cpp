@@ -50,6 +50,12 @@ ttnn::SmallVector<int> generate_reduce_dim(
     return dim;
 }
 
+float get_pad_value(ReduceType reduce_type) {
+    return reduce_type == ReduceType::Max
+               ? -std::numeric_limits<float>::infinity()
+               : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
+}
+
 template <ReduceType reduce_type>
 static Tensor reduce_impl(
     const Tensor& input_tensor_arg,
@@ -58,8 +64,7 @@ static Tensor reduce_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
-    bool reshape,
-    bool fill = true) {
+    bool reshape) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     auto input_shape = input_tensor_arg.get_logical_shape();
     auto rank = input_shape.size();
@@ -80,6 +85,7 @@ static Tensor reduce_impl(
     auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_arg);
 
     Tensor output_tensor;
+    float pad_value = get_pad_value(reduce_type);
     bool single_reduce_op = (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
@@ -93,7 +99,7 @@ static Tensor reduce_impl(
                     int adjusted_dim = offset + i_dim;
                     int reduce_dim = adjusted_dim;
                     if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, 2, memory_config);
+                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config, pad_value);
                         reduce_dim = 2;
                     }
                     if (use_reduce_type) {
@@ -116,7 +122,7 @@ static Tensor reduce_impl(
                             /*reshape=*/false);
                     }
                     if (transpose) {
-                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config);
+                        output_tensor = ttnn::transpose(output_tensor, adjusted_dim, -2, memory_config, pad_value);
                     }
                 }
             }
@@ -150,11 +156,6 @@ static Tensor reduce_impl(
         for (int axis : dim) {
             reduced_volume *= input_shape[axis];
         }
-        float pad_value = reduce_type == ReduceType::Max
-                              ? -std::numeric_limits<float>::infinity()
-                              : (reduce_type == ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);
-        bool is_tiled = input_tensor.get_layout() == TILE_LAYOUT;
-        input_tensor = fill && is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor, pad_value) : input_tensor;
 
         if constexpr (reduce_type == ReduceType::Sum) {
             output_tensor = tt::tt_metal::reduce(
@@ -247,11 +248,13 @@ Tensor Reduce<reduce_type>::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
+    float pad_value = get_pad_value(reduce_type);
+    bool is_tiled = input_tensor_arg.get_layout() == TILE_LAYOUT;
+    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
-        return std_var_impl<reduce_type>(input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config);
+        return std_var_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config);
     }
-    return reduce_impl<reduce_type>(
-        input_tensor_arg, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
+    return reduce_impl<reduce_type>(input_tensor, dim, keepdim, memory_config_arg, compute_kernel_config, scalar, true);
 }
 
 Tensor pool_sum(
@@ -267,8 +270,7 @@ Tensor pool_sum(
         memory_config_arg,
         compute_kernel_config,
         scalar,
-        /*reshape=*/true,
-        /*fill=*/false);
+        /*reshape=*/true);
 }
 
 template class Reduce<ReduceType::Sum>;
