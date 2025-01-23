@@ -95,8 +95,8 @@ TEST_F(AutogradTest, BroadCastBatchTest) {
     res->backward();
     auto t1_back = ttml::core::to_vector(t1->get_grad());
     auto batch_shape = ttml::core::create_shape({4, 1, 1, 4});
-    auto new_shape = res->get_value().get_shape();
-    auto back_shape = t1->get_grad().get_shape();
+    auto new_shape = res->get_value().get_logical_shape();
+    auto back_shape = t1->get_grad().get_logical_shape();
 
     for (size_t i = 0; i < 4; i++) {
         EXPECT_EQ(new_shape[i], batch_shape[i]);

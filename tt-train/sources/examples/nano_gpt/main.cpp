@@ -538,8 +538,8 @@ int main(int argc, char **argv) {
 
                 auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
                     data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-                auto targets_tensor = ttml::autograd::create_tensor(
-                    ttml::core::from_vector<int32_t, DataType::INT32>(targets, {batch_size * sequence_length}, device));
+                auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
+                    targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
@@ -632,7 +632,7 @@ int main(int argc, char **argv) {
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
-            auto samples = features->get_value().get_shape()[0];
+            auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
 
             // synchronize gradients for multi-device case, no-op if single device

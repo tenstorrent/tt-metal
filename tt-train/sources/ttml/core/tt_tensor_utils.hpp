@@ -18,18 +18,21 @@ tt::tt_metal::Tensor zeros_like(const tt::tt_metal::Tensor& tensor);
 tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor);
 
 tt::tt_metal::Tensor empty(
-    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config);
+    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config);
 tt::tt_metal::Tensor full(
-    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
+    const ttnn::SimpleShape& shape,
+    float value,
+    ttnn::distributed::MeshDevice* device,
+    DataType dtype = DataType::BFLOAT16);
 tt::tt_metal::Tensor zeros(
-    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
+    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
 tt::tt_metal::Tensor ones(
-    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
+    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
 
 template <class VectorType = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_vector(
     const std::vector<VectorType>& buffer,
-    const ttnn::Shape& shape,
+    const ttnn::SimpleShape& shape,
     ttnn::distributed::MeshDevice* device,
     Layout layout = Layout::TILE);
 
@@ -44,7 +47,7 @@ template <class T = float>
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
 
-[[nodiscard]] ttnn::Shape create_shape(const std::array<uint32_t, 4>& args);
+[[nodiscard]] ttnn::SimpleShape create_shape(const std::array<uint32_t, 4>& args);
 
 template <class T = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(
@@ -57,7 +60,7 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
-    const auto& shape = tensor.get_shape().logical_shape();
+    const auto& shape = tensor.get_logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(std::move(vec), shape_vec);
