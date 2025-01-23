@@ -21,9 +21,9 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 
     static Tensor invoke(
         const Tensor& input_tensor_a,
@@ -31,9 +31,9 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 
     static Tensor invoke(
         uint8_t queue_id,
@@ -42,9 +42,9 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 
     static Tensor invoke(
         const Tensor& input_tensor_a,
@@ -52,9 +52,9 @@ struct BinaryNg {
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::UnaryOpType> lhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> rhs_activations = {},
-        tt::stl::Span<const unary::UnaryOpType> post_activations = {});
+        tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
+        tt::stl::Span<const unary::UnaryWithParam> post_activations = {});
 };
 
 template <BinaryOpType binary_op_type>

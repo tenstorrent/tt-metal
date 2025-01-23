@@ -154,8 +154,7 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
     a_pt, a_tt = rand_bf16_gen(a_shape, device)
     b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
 
-    cq_id = 0
-    out_tt = ttnn_op(a_tt, b_tt, queue_id=cq_id, lhs_activations=lhs, rhs_activations=rhs, post_activations=post)
+    out_tt = ttnn_op(a_tt, b_tt, lhs_activations=lhs, rhs_activations=rhs, post_activations=post)
 
     for golden_activation in golden_lhs:
         a_pt = golden_activation(a_pt).bfloat16()
@@ -177,6 +176,57 @@ def test_binary_scalar_ops(a_shape, b_shape, ttnn_fn, activations, device):
         return compare_pcc(tt, pt, 0.98) if (ttnn_fn, activations) in imprecise_cases else compare_pcc(tt, pt)
 
     assert compare([out_tt], [out_pt])
+
+
+activation_with_param_fns = {
+    "ADD_UNARY_SFPU": torch.add,
+    "SUB_UNARY_SFPU": torch.sub,
+    "MUL_UNARY_SFPU": torch.mul,
+    "DIV_UNARY_SFPU": torch.div,
+    "POWER": torch.pow,
+}
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
+    ),
+)
+@pytest.mark.parametrize("ttnn_fn", ("add", "sub", "mul", "div"))
+@pytest.mark.parametrize(
+    "post_activations",
+    (
+        (),
+        (("ADD_UNARY_SFPU", 7),),
+        (("SUB_UNARY_SFPU", 6),),
+        (("MUL_UNARY_SFPU", 5),),
+        (("DIV_UNARY_SFPU", 4),),
+        (("POWER", 3),),
+    ),
+)
+def test_binary_scalar_ops_with_unary_param(a_shape, b_shape, ttnn_fn, post_activations, device):
+    torch.manual_seed(0)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    post = [(getattr(ttnn.UnaryOpType, op), param) for op, param in post_activations]
+    golden_post = ((lambda x: activation_with_param_fns[op](x, param)) for op, param in post_activations)
+    # make 0 exclusive for rhs of div
+    min, max = (1, 0) if ttnn_fn == "div" else (0, 1)
+
+    a_pt, a_tt = rand_bf16_gen(a_shape, device)
+    b_pt, b_tt = rand_bf16_gen(b_shape, device, min=min, max=max)
+
+    out_tt = ttnn_op(a_tt, b_tt, post_activations=post)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    out_pt = golden_fn(a_pt, b_pt).bfloat16()
+
+    for golden_activation in golden_post:
+        out_pt = golden_activation(out_pt).bfloat16()
+
+    assert compare_pcc([out_tt], [out_pt])
 
 
 @pytest.mark.parametrize(
