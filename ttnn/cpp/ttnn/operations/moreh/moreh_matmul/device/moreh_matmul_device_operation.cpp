@@ -32,7 +32,8 @@ void MorehMatmulOperation::validate_inputs(
 
     const auto& input_shape = input.get_shape().value.without_padding();
     const auto& other_shape = other.get_shape().value.without_padding();
-    const auto& input_wo_shape = input.get_logical_shape() const auto& other_wo_shape = other.get_logical_shape();
+    const auto& input_wo_shape = input.get_logical_shape();
+    const auto& other_wo_shape = other.get_logical_shape();
     uint32_t input_m = (transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
     uint32_t input_k = (transpose_input) ? (input_wo_shape[-2]) : (input_wo_shape[-1]);
     uint32_t other_k = (transpose_other) ? (other_wo_shape[-1]) : (other_wo_shape[-2]);
