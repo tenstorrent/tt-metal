@@ -156,8 +156,7 @@ jobs:
       - name: Create archive with submodules
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
-          output-files: |
-            tt-metalium.tar.gz
+          output-files: tt-metalium.tar.gz
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
