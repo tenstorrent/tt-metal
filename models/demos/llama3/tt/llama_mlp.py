@@ -46,16 +46,18 @@ class TtLlamaMLP(LightweightModule):
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
-        if args.is_galaxy:
-            w1_dim = (-1, -2)
-            w2_dim = (-2, -1)
-        elif args.num_devices_dp > 1:
-            # replicate weights if dp mode, shard if tp mode. todo: hybrid
+        if args.num_devices_dp > 1:
+            assert args.num_devices_tp == 1, "Hybrid parallelism not supported"
             w1_dim = (None, None)
             w2_dim = (None, None)
-        else:
-            w1_dim = (-2, -1)
-            w2_dim = (-1, -2)
+        else:  # tensor parallel
+            assert args.num_devices_dp == 1, "Hybrid parallelism not supported"
+            if args.is_galaxy:
+                w1_dim = (-1, -2)
+                w2_dim = (-2, -1)
+            else:
+                w1_dim = (-2, -1)
+                w2_dim = (-1, -2)
 
         self.w1 = as_sharded_tensor(
             "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
@@ -207,40 +209,38 @@ class TtLlamaMLP(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
-        # if mode == "decode" and not TG:
-        #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
 
-        # if False:
         if self.args.num_devices_dp > 1:
-            w2_out_reduced = w2_out  # no reductions in data_parallel mode; todo: hybrid
-
-            if seq_len >= 1024:
-                # If needed reshape output back to [batch, 1, seq_len, :]
-                w2_out_reduced = ttnn.reshape(w2_out_reduced, [batch_size, 1, seq_len, -1])
+            assert self.args.num_devices_tp == 1, "Hybrid parallelism not supported"
+            # In Data Parallel we want to skip all reduce
+            w2_out_cluster_axis = 1
         else:
-            w2_out_reduced = tt_all_reduce(
-                w2_out,
-                self.mesh_device,
-                cluster_axis=0,
-                dim=0 if (TG and self.dim < 8192) else 3,
-                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                num_all_gather_links=self.args.num_all_gather_links,
-                sharded=(mode == "decode"),
-                memory_config=(
-                    (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
-                    if mode == "decode"
-                    else ttnn.DRAM_MEMORY_CONFIG
-                ),
-                dtype=self.args.ccl_dtype,
-                use_composite=True if self.dim == 8192 else False,
-            )
+            assert self.args.num_devices_dp == 1, "Hybrid parallelism not supported"
+            w2_out_cluster_axis = 0
 
-            # Ensure dim 0 and 1 are 1
-            original_shape = w2_out_reduced.shape
-            w2_out_reduced = ttnn.reshape(
-                w2_out_reduced,
-                (batch_size, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1]),
-            )
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            self.mesh_device,
+            cluster_axis=w2_out_cluster_axis,
+            dim=0 if (TG and self.dim < 8192) else 3,
+            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_all_gather_links=self.args.num_all_gather_links,
+            sharded=(mode == "decode"),
+            memory_config=(
+                (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+            dtype=self.args.ccl_dtype,
+            use_composite=True if self.dim == 8192 else False,
+        )
+
+        # Ensure dim 0 and 1 are 1
+        original_shape = w2_out_reduced.shape
+        w2_out_reduced = ttnn.reshape(
+            w2_out_reduced,
+            (batch_size, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1]),
+        )
 
         if mode == "decode":
             w2_out_reduced = ttnn.to_memory_config(

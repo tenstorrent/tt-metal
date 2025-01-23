@@ -92,10 +92,11 @@ class TtModelArgs:
         max_seq_len=1024 * 128,
         optimizations=LlamaOptimizations.accuracy,
     ):
-        # if tensor_parallel not explicitly set, use all devices
         self.total_num_devices = mesh_device.get_num_devices() if mesh_device else 0
-        self.num_devices_tp = tensor_parallel if tensor_parallel != None else self.total_num_devices
+        # if tensor parallel not specified, default to total number of devices
+        self.num_devices_tp = tensor_parallel if tensor_parallel is not None else self.total_num_devices
         self.num_devices_dp = data_parallel
+
         assert (self.num_devices_tp == 1) or (
             self.num_devices_dp == 1
         ), f"Hybrid mode not supported. TP({self.num_devices_tp}) and DP({self.num_devices_dp}) cannot be both greater than 1"
@@ -103,19 +104,22 @@ class TtModelArgs:
             self.num_devices_tp * self.num_devices_dp == self.total_num_devices
         ), f"Target TP({self.num_devices_tp}) x DP({self.num_devices_dp}) is not equal to total available devices {self.total_num_devices}"
 
-        # check batch size and data parallel compatiblity
+        # check batch size and data parallel compatibility
         assert (
             max_batch_size % data_parallel == 0
         ), f"Batch size ({max_batch_size}) must be multiple of data parallel chips({data_parallel})"
 
         self.mesh_device = mesh_device
 
-        # if data parallel, reshape mesh device to have first dimension as data parallel
+        # if tensor parallel, small devices are opened as (1, TP), and galaxy as (TP_R, TP_C)
+        # if data parallel, reshape open mesh device to have first dimension as data parallel (DP,1)
         if self.num_devices_dp > 1:
             mesh_device.reshape(ttnn.MeshShape(self.num_devices_dp, self.num_devices_tp))
 
         self.cluster_shape = list(mesh_device.shape)  # this is entire cluster, TBD if this needs to be done differently
-        self.is_galaxy = self.num_devices_tp == 32
+        self.is_galaxy = (
+            self.num_devices_tp == 32
+        )  # all galaxy specific configurations are for galaxy TP, thus disabling them for now
 
         self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[
             self.num_devices_tp
@@ -380,17 +384,17 @@ class TtModelArgs:
                 m=min(seq_len, 1024),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+                grid_size=(
+                    (8, min(min(seq_len, 1024) // 32, 4)) if self.is_galaxy else ((8, 8) if seq_len >= 1024 else (8, 4))
+                ),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+                grid_size=(
+                    (8, min(min(seq_len, 1024) // 32, 4)) if self.is_galaxy else ((8, 8) if seq_len >= 1024 else (8, 4))
+                ),
             )
 
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(

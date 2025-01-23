@@ -100,12 +100,15 @@ def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cach
     torch_input = torch.randn(model_args.per_chip_batch_dim, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
 
-    if model_args.is_galaxy:
-        input_shard_dims = (None, 3)
-    elif data_parallel > 1:  # if data parallel, use dim 1 to shard input
+    if data_parallel > 1:  # if data parallel, use dim 1 to shard input
+        assert tensor_parallel == 1, "Hybrid parallelism not supported"
         input_shard_dims = (0, None)
-    else:
-        input_shard_dims = (None, None)
+    else:  # tensor parallel
+        assert data_parallel == 1, "Hybrid parallelism not supported"
+        if model_args.is_galaxy:
+            input_shard_dims = (None, 3)
+        else:
+            input_shard_dims = (None, None)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -130,8 +133,10 @@ def test_llama_mlp_inference(seq_len, batch_dp_tp, mesh_device, use_program_cach
     tt_output = tt_model(tt_input, mode)
 
     if data_parallel > 1:
+        assert tensor_parallel == 1, "Hybrid parallelism not supported"
         output_shard_dims = (0, 3)  # second parameter is not relevant for data parallel
-    else:
+    else:  # tensor parallel
+        assert data_parallel == 1, "Hybrid parallelism not supported"
         output_shard_dims = (1, 3)
 
     tt_output_torch = ttnn.to_torch(
