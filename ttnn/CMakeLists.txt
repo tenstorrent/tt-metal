@@ -771,9 +771,10 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/unary_backward/gelu_backward/device/gelu_backward_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/device/bcast_to_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/bcast_to/bcast_to_pybind.cpp
 )
 
 set(TTNN_SRC)
@@ -823,6 +824,7 @@ set(TTNN_SUBLIBRARIES
     ttnn/operations/experimental/ssm
     ttnn/operations/experimental/transformer
     ttnn/operations/experimental/dropout
+    ttnn/operations/experimental/bcast_to
     ttnn/operations/experimental/reshape
     ttnn/operations/experimental/unary_backward
     ttnn/operations/full_like
