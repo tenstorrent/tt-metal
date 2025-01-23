@@ -61,7 +61,7 @@ inline void eltwise_mul_and_add_block_v2(
         cb_pop_front(in0_cb_id, 1);
         cb_pop_front(in1_cb_id, 1);
         if (idx == 0) {
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(eltwise_mul_partials_cb_cb_id);
             ACQ();
             cb_wait_front(eltwise_mul_partials_cb_cb_id, 1);
             cb_reserve_back(out_cb_id, 1);
@@ -82,7 +82,7 @@ inline void eltwise_mul_and_add_block_v2(
             cb_pop_front(eltwise_mul_partials_cb_cb_id, 1);
             cb_pop_front(out_cb_id, 1);
 
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(temp_sum_cb);
             ACQ();
             cb_wait_front(temp_sum_cb, 1);
             cb_reserve_back(out_cb_id, 1);

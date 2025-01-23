@@ -31,7 +31,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     const uint32_t tiles_per_group =
         elements_per_group / TILE_WIDTH;  // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(
         input_shape[3] % elements_per_group == 0,

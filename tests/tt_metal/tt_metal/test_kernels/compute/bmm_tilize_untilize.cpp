@@ -59,7 +59,7 @@ inline void reblock_and_untilize(
         int block_offset = 0;
 
         // Reblock
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(interm_cb_id);
         cb_reserve_back(reblock_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -201,7 +201,7 @@ void MAIN {
                             // bcast add data from bias_cb_id
                             cb_wait_front(bias_cb_id, bias_ntiles_w);
                             cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                            add_bcast_rows_init_short();
+                            add_bcast_rows_init_short(out_for_bias_cb_id, bias_cb_id);
                             // reconfig packer df for out
                             // pack_reconfig_data_format(out_cb_id);
                             acquire_dst();

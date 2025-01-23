@@ -29,9 +29,9 @@ using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
 Tensor HaloTensorCreation(const Tensor& input) {
-    int batch_size = input.get_legacy_shape()[0];
-    int input_height = input.get_legacy_shape()[1];
-    int input_width = input.get_legacy_shape()[2];
+    int batch_size = input.get_padded_shape()[0];
+    int input_height = input.get_padded_shape()[1];
+    int input_width = input.get_padded_shape()[2];
     int num_cores_nhw = input.shard_spec().value().num_cores();
     int num_cores_c = 1;
 
@@ -49,10 +49,9 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .snap_to_tile = false,
         .is_bilinear = true};
 
-    input_tensor = ttnn::reshape(
-        input_tensor,
-        SimpleShape(std::array<uint32_t, 4>{
-            1, 1, input.get_shape()[0] * input.get_shape()[1] * input.get_shape()[2], input.get_shape()[3]}));
+    const auto& input_shape = input.get_logical_shape();
+    SimpleShape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(
         DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, 0, input_tensor.memory_config(), false);
@@ -69,23 +68,23 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     Program program = CreateProgram();
     IDevice* device = input.device();
 
-    auto input_shape = input.get_legacy_shape();
-    auto output_shape = output.get_legacy_shape();
+    auto input_shape = input.get_padded_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
-    uint32_t input_stick_nbytes = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.get_padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.volume() / output.get_legacy_shape()[-1];
-    uint32_t input_nsticks = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t output_nsticks = output.volume() / output.get_padded_shape()[-1];
+    uint32_t input_nsticks = input.volume() / input.get_padded_shape()[-1];
 
-    uint32_t in_w = input.get_legacy_shape()[2];
-    uint32_t out_w = output.get_legacy_shape()[2];
+    uint32_t in_w = input.get_padded_shape()[2];
+    uint32_t out_w = output.get_padded_shape()[2];
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);

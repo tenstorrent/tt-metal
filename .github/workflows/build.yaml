@@ -11,20 +11,17 @@ jobs:
       fail-fast: false
       matrix:
         build: [
-          {type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          {type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          #{type: Debug, cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release,  cxx_compiler: clang++-17, c_compiler: clang-17, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: Debug, cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          #{type: RelWithDebInfo,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release,  cxx_compiler: g++-12, c_compiler: gcc-12, runs-on: ["build", "in-service"], os: ubuntu-22.04},
+          {type: Debug, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
+          {type: RelWithDebInfo, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
+          {type: Release, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
+          {type: Release, toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
+          {type: Release, toolchain: cmake/x86_64-linux-gcc-12-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
         ]
     env:
       # So we can get all the makefile output we want
       VERBOSE: 1
     runs-on: ${{ matrix.build.runs-on }}
-    name: ${{ matrix.build.type }} ${{ matrix.build.cxx_compiler }} any ${{ matrix.build.os }}
+    name: ${{ matrix.build.type }} ${{ matrix.build.toolchain }} any ${{ matrix.build.os }}
     steps:
       - name: Verify ccache availability
         shell: bash
@@ -70,7 +67,7 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            build_command="./build_metal.sh --build-type ${{ matrix.build.type }} --cxx-compiler-path ${{ matrix.build.cxx_compiler }} --c-compiler-path ${{ matrix.build.c_compiler }} --build-tests --build-programming-examples --disable-unity-builds --enable-ccache"
+            build_command="./build_metal.sh --build-type ${{ matrix.build.type }} --toolchain-path ${{ matrix.build.toolchain }} --build-tests --build-programming-examples --disable-unity-builds --enable-ccache"
             nice -n 19 $build_command
 
             ccache --show-stats
