@@ -13,7 +13,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include "tracehost/types_from_flatbuffer.hpp"
+#include "flatbuffer/base_types_from_flatbuffer.hpp"
+#include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {

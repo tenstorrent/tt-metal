@@ -51,9 +51,11 @@ set(IMPL_SRC
 include(flatbuffers)
 
 set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/binary.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/tracehost/command.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/tracehost/types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/binary.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/command.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
 )
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE})

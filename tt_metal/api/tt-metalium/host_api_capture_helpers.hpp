@@ -9,7 +9,9 @@
 #include "command_generated.h"
 #include <tt-metalium/logger.hpp>
 #include "span.hpp"
-#include "tracehost/types_to_flatbuffer.hpp"
+#include "flatbuffer/base_types_to_flatbuffer.hpp"
+#include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
 //////////////////////////////////////////////////////////////
 // TRACE GUARD & TRACE MACRO                                //

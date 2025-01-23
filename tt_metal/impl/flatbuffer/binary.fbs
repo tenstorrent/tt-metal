@@ -1,4 +1,4 @@
-include "tracehost/command.fbs";
+include "flatbuffer/command.fbs";
 
 namespace tt.tt_metal.flatbuffer;
 
