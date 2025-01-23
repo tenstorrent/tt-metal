@@ -156,7 +156,7 @@ void MAIN {
          */
         reconfig_data_format(cb_inp, cb_stats_reduced);
         pack_reconfig_data_format(cb_x_minus_mean);
-        sub_bcast_cols_init_short();
+        sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, blk);
             cb_reserve_back(cb_x_minus_mean, blk);
@@ -202,7 +202,7 @@ void MAIN {
 
         reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
         pack_reconfig_data_format(cb_x_normed);
-        mul_bcast_cols_init_short();
+        mul_bcast_cols_init_short(cb_norm_x_input, cb_recip_sqrt_var);
         cb_wait_front(cb_recip_sqrt_var, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_norm_x_input, blk);
@@ -224,7 +224,7 @@ void MAIN {
         reconfig_data_format(cb_x_normed, cb_gamma);
         pack_reconfig_data_format(cb_times_gamma_out);
         cb_wait_front(cb_gamma, Wt);
-        mul_bcast_rows_init_short();
+        mul_bcast_rows_init_short(cb_x_normed, cb_gamma);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x_normed, blk);
             cb_reserve_back(cb_times_gamma_out, blk);
@@ -245,7 +245,7 @@ void MAIN {
             reconfig_data_format(cb_times_gamma_out, cb_beta);
             pack_reconfig_data_format(cb_out);
             cb_wait_front(cb_beta, Wt);
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_times_gamma_out, blk);
                 cb_reserve_back(cb_out, blk);

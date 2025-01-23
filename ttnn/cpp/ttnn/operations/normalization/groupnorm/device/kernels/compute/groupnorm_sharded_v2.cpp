@@ -237,7 +237,7 @@ void MAIN {
             }
 
             // x - E[x]
-            sub_tiles_bcast_scalar_init_short();
+            sub_tiles_bcast_scalar_init_short(cb_x, cb_ex_global);
             cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_ex_global, 1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -379,7 +379,7 @@ void MAIN {
 
             // (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
-            mul_tiles_bcast_scalar_init_short();
+            mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
             cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_ex2pe, 1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -496,7 +496,7 @@ void MAIN {
 
     if constexpr (do_gamma) {
         index_h_offset = 0;
-        mul_bcast_rows_init_short();
+        mul_bcast_rows_init_short(cb_out, cb_gamma);
         cb_reserve_back(cb_outgamma, per_core_MN);
         cb_wait_front(cb_gamma, per_core_N);
         for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -518,7 +518,7 @@ void MAIN {
 
     if constexpr (do_beta) {
         index_h_offset = 0;
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(cb_inbeta, cb_beta);
         cb_reserve_back(cb_outbeta, per_core_MN);
         cb_wait_front(cb_beta, per_core_N);
         for (uint32_t i = 0; i < per_core_M; ++i) {

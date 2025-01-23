@@ -60,7 +60,7 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             ACQ();
-            mul_tiles_bcast_scalar_init_short();
+            mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
             cb_wait_front(cb_in0, ndst);
             cb_reserve_back(cb_scale_mask, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
@@ -78,7 +78,7 @@ void MAIN {
                 cb_wait_front(cb_fused_attn, wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
             }
             cb_wait_front(cb_scale_mask, ndst);
-            add_bcast_rows_init_short();
+            add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
                 add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
@@ -143,7 +143,7 @@ void MAIN {
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a umulative wait for Wt tiles in cb_exps
-        mul_bcast_cols_init_short();
+        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
             cb_reserve_back(tt::CBIndex::c_16, ndst);

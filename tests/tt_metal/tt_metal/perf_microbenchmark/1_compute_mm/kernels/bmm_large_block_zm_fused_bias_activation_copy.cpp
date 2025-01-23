@@ -302,7 +302,7 @@ void MAIN {
 #endif
 
         reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
