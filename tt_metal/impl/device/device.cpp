@@ -749,6 +749,8 @@ void Device::initialize_and_launch_firmware() {
 
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
+    core_info->worker_grid_size_x = this->logical_grid_size().x;  // Grid size as virtual coords see it (workers only)
+    core_info->worker_grid_size_y = this->logical_grid_size().y;
 
     // Download to worker cores
     log_debug("Initializing firmware");
