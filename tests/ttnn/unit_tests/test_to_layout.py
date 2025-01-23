@@ -231,3 +231,16 @@ def test_to_layout_sharded(dtype, device, use_program_cache):
     output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
 
     assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("batch_size", [9, 32])
+@pytest.mark.parametrize("sentence_size", [32, 256])
+def test_int_untilize(device, batch_size, sentence_size):
+    torch_input_tensor = torch.randint(0, 10, (batch_size, sentence_size), dtype=torch.int16)
+    ttnn_input = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT)
+
+    output_tt = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
+    output_torch = ttnn.to_torch(output_tt)
+
+    assert_with_pcc(torch_input_tensor, output_torch)
