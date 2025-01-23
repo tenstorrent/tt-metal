@@ -74,6 +74,34 @@ CPMAddPackage(
 
 CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0 OPTIONS "TF_BUILD_TESTS OFF")
 
-include(${PROJECT_SOURCE_DIR}/cmake/fetch_msgpack.cmake)
-
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
+
+CPMAddPackage(
+    NAME msgpack
+    GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
+    GIT_TAG cpp-6.1.0
+    PATCHES
+        msgpack.patch
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "MSGPACK_BUILD_EXAMPLES OFF"
+        "MSGPACK_BUILD_TESTS OFF"
+        "MSGPACK_BUILD_DOCS OFF"
+        "MSGPACK_ENABLE_CXX ON"
+        "MSGPACK_USE_BOOST OFF"
+        "MSGPACK_BUILD_HEADER_ONLY ON"
+        "MSGPACK_ENABLE_SHARED OFF"
+        "MSGPACK_ENABLE_STATIC OFF"
+        "MSGPACK_CXX20 ON"
+        "MSGPACK_NO_BOOST ON"
+)
+
+CPMAddPackage(
+    NAME tokenizers-cpp
+    GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
+    GIT_TAG 5de6f656c06da557d4f0fb1ca611b16d6e9ff11d
+    PATCHES
+        tokenizers-cpp.patch
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
