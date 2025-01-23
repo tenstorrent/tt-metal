@@ -30,8 +30,7 @@ class Down5:
             "down5.conv2",
             [1, 10, 10, 1024],
             (1, 1, 0, 0),
-            width_sharding=False,
-            height_sharding=False,
+            width_sharding=True,
             deallocate=False,
         )
         self.conv3 = Conv(device, torch_model, "down5.conv3", [1, 10, 10, 1024], (1, 1, 0, 0))
@@ -43,7 +42,7 @@ class Down5:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             deallocate=False,
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res1_conv2 = Conv(
             device,
@@ -51,7 +50,7 @@ class Down5:
             "down5.resblock.module_list.0.1",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res2_conv1 = Conv(
             device,
@@ -60,7 +59,7 @@ class Down5:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             deallocate=False,
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res2_conv2 = Conv(
             device,
@@ -68,7 +67,7 @@ class Down5:
             "down5.resblock.module_list.1.1",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res3_conv1 = Conv(
             device,
@@ -77,7 +76,7 @@ class Down5:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             deallocate=False,
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res3_conv2 = Conv(
             device,
@@ -85,7 +84,7 @@ class Down5:
             "down5.resblock.module_list.2.1",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res4_conv1 = Conv(
             device,
@@ -94,7 +93,7 @@ class Down5:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             deallocate=False,
-            height_sharding=False,
+            width_sharding=True,
         )
         self.res4_conv2 = Conv(
             device,
@@ -102,7 +101,7 @@ class Down5:
             "down5.resblock.module_list.3.1",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
 
         self.conv4 = Conv(
@@ -112,7 +111,7 @@ class Down5:
             [1, 10, 10, 512],
             (1, 1, 0, 0),
             deallocate=False,
-            height_sharding=False,
+            width_sharding=True,
         )
 
         self.conv5 = Conv(

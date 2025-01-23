@@ -68,14 +68,11 @@ class Conv:
 
         if width_sharding:
             self.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-            self.input_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         else:
             self.shard_layout = (
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
             )
-            self.input_memory_config = (
-                ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG if height_sharding else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
-            )
+
         self.deallocate = deallocate
         self.activation = activation
         conv_config = ttnn.Conv2dConfig(
@@ -111,6 +108,11 @@ class Conv:
             "device": device,
             "conv_config": conv_config,
         }
+        self.input_memory_config = (
+            ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+            if height_sharding and not width_sharding
+            else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        )
 
         if not ttnn.is_tensor_storage_on_device(self.weights):
             self.weights = ttnn.prepare_conv_weights(
@@ -151,4 +153,5 @@ class Conv:
             return_output_dim=False,
             return_weights_and_bias=False,
         )
+        print(ttnn.get_memory_config(output_tensor))
         return output_tensor

@@ -109,7 +109,7 @@ class TtHead:
             "head.conv13",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv14 = Conv(
             device,
@@ -125,7 +125,7 @@ class TtHead:
             "head.conv15",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv16 = Conv(
             device,
@@ -141,7 +141,7 @@ class TtHead:
             "head.conv17",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv18 = Conv(
             device,
@@ -150,6 +150,7 @@ class TtHead:
             [1, 10, 10, 1024],
             (1, 1, 0, 0),
             fused_op=False,
+            height_sharding=False,
         )
 
     def __call__(self, input_tensor):

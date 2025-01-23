@@ -568,11 +568,10 @@ static OptimizedConvBlockConfig get_opt_block_config(
 
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
 
-    ParallelConfig parallel_config;
     if (input_memory_config.is_sharded()) {
         conv_config.shard_layout = input_memory_config.memory_layout;
     }
-    parallel_config = determine_parallel_config(
+    ParallelConfig parallel_config = determine_parallel_config(
         conv_config.shard_layout.value(),
         batch_size,
         in_channels,
@@ -905,12 +904,11 @@ ttnn::Tensor prepare_conv_bias(
 
     const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
 
-    ParallelConfig parallel_config;
     if (input_memory_config.is_sharded()) {
         conv_config.shard_layout = input_memory_config.memory_layout;
     }
     bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
-    parallel_config = determine_parallel_config(
+    ParallelConfig parallel_config = determine_parallel_config(
         conv_config.shard_layout.value(),
         batch_size,
         in_channels,

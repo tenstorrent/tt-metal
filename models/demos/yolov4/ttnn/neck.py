@@ -30,7 +30,7 @@ class TtNeck:
             "neek.conv2",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv3 = Conv(
             device,
@@ -56,7 +56,7 @@ class TtNeck:
             "neek.conv5",
             [1, 10, 10, 512],
             (1, 1, 1, 1),
-            height_sharding=False,
+            width_sharding=True,
         )
         self.conv6 = Conv(
             device,
@@ -72,7 +72,7 @@ class TtNeck:
             "neek.conv7",
             [1, 10, 10, 512],
             (1, 1, 0, 0),
-            height_sharding=False,
+            width_sharding=True,
             deallocate=False,
         )
         self.conv7_2 = Conv(
