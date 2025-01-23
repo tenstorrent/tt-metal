@@ -14,7 +14,7 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
     // but we are using TILE layout. The printed format WILL NOT be correct. But good enough for a demo
 
     // Get the shape of the tensor
-    auto shape = tensor.shape();
+    auto shape = tensor.get_shape();
     // compyte the size of the tensor
     size_t size = 1;
     for (size_t i = 0; i < shape.size(); i++) size *= shape[i];

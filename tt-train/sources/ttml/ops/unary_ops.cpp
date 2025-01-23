@@ -122,7 +122,7 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
 }
 
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim) {
-    if (new_batch_dim == 1 || tensor->get_value().shape()[0] == new_batch_dim) {
+    if (new_batch_dim == 1 || tensor->get_value().get_shape()[0] == new_batch_dim) {
         return tensor;
     }
     auto out = ttml::autograd::create_tensor();
