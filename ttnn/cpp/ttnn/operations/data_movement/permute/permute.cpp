@@ -39,18 +39,7 @@ ttnn::Tensor permute_impl(
     };
 
     if (rank > 4) {
-        if (a.get_layout() == Layout::TILE &&
-            ((dims[rank - 1] == rank - 1) || (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1))) {
-            return prim_permute(a);
-        }
-        auto input = a.get_layout() == Layout::TILE
-                         ? ttnn::to_layout(a, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr)
-                         : a;
-        TT_FATAL(
-            !(pad_value.has_value() && pad_value.value() != 0.0f),
-            "Non-zero padding is not supported for permute on tensors with rank > 4.");
-        input = prim_permute(input);
-        return ttnn::to_layout(input, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+        return prim_permute(a);
     }
 
     TT_FATAL(dims.size() == 4, "Only 4D tensor are supported for permute.");
@@ -79,57 +68,33 @@ ttnn::Tensor permute_impl(
         return ttnn::transpose(input, 0, 1, output_mem_config, std::nullopt);
     };
 
-    if (N == 0 && C == 1 && H == 2 && W == 3) {
-        output = formatted_input_tensor;
-    } else if (N == 0 && C == 1 && H == 3 && W == 2) {
-        output = transpose_wh(formatted_input_tensor);
-    } else if (N == 0 && C == 2 && H == 1 && W == 3) {
-        output = transpose_hc(formatted_input_tensor);
-    } else if (N == 0 && C == 2 && H == 3 && W == 1) {
-        output = transpose_wh(transpose_hc(formatted_input_tensor));
-    } else if (N == 0 && C == 3 && H == 1 && W == 2) {
-        output = transpose_hc(transpose_wh(formatted_input_tensor));
-    } else if (N == 0 && C == 3 && H == 2 && W == 1) {
-        output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
-    } else if (N == 1 && C == 0 && H == 2 && W == 3) {
-        output = transpose_cn(formatted_input_tensor);
-    } else if (N == 1 && C == 0 && H == 3 && W == 2) {
-        output = prim_permute(formatted_input_tensor);
-    } else if (N == 1 && C == 2 && H == 0 && W == 3) {
-        output = prim_permute(formatted_input_tensor);
-    } else if (N == 1 && C == 2 && H == 3 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_cn(formatted_input_tensor)));
-    } else if (N == 1 && C == 3 && H == 0 && W == 2) {
-        output = transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor)));
-    } else if (N == 1 && C == 3 && H == 2 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(formatted_input_tensor))));
-    } else if (N == 2 && C == 0 && H == 1 && W == 3) {
-        output = prim_permute(formatted_input_tensor);
-    } else if (N == 2 && C == 0 && H == 3 && W == 1) {
-        output = transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)));
-    } else if (N == 2 && C == 1 && H == 0 && W == 3) {
-        output = prim_permute(formatted_input_tensor);
-    } else if (N == 2 && C == 1 && H == 3 && W == 0) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(formatted_input_tensor))));
-    } else if (N == 2 && C == 3 && H == 0 && W == 1) {
-        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor))));
-    } else if (N == 2 && C == 3 && H == 1 && W == 0) {
-        output = transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(formatted_input_tensor)))));
-    } else if (N == 3 && C == 0 && H == 1 && W == 2) {
-        output = transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)));
-    } else if (N == 3 && C == 0 && H == 2 && W == 1) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))));
-    } else if (N == 3 && C == 1 && H == 0 && W == 2) {
-        output = transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor))));
-    } else if (N == 3 && C == 1 && H == 2 && W == 0) {
-        output = transpose_wh(transpose_cn(transpose_hc(transpose_cn(transpose_wh(formatted_input_tensor)))));
-    } else if (N == 3 && C == 2 && H == 0 && W == 1) {
-        output = transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor)))));
-    } else if (N == 3 && C == 2 && H == 1 && W == 0) {
-        output =
-            transpose_wh(transpose_hc(transpose_wh(transpose_cn(transpose_hc(transpose_wh(formatted_input_tensor))))));
+    // Keep limited sharding support with recursive calls
+    if (a.is_sharded()) {
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 3 && W == 1) {
+            output = transpose_wh(transpose_hc(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 1 && W == 2) {
+            output = transpose_hc(transpose_wh(formatted_input_tensor));
+        } else if (N == 0 && C == 3 && H == 2 && W == 1) {
+            output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        }
     } else {
-        TT_ASSERT(false, "Illegal permute args");
+        if (N == 0 && C == 1 && H == 2 && W == 3) {
+            output = formatted_input_tensor;
+        } else if (N == 0 && C == 1 && H == 3 && W == 2) {
+            output = transpose_wh(formatted_input_tensor);
+        } else if (N == 0 && C == 2 && H == 1 && W == 3) {
+            output = transpose_hc(formatted_input_tensor);
+        } else if (N == 1 && C == 0 && H == 2 && W == 3) {
+            output = transpose_cn(formatted_input_tensor);
+        } else {
+            output = prim_permute(formatted_input_tensor);
+        }
     }
     // Convert tensor back to original dtype if typecast was performed
     output = typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
