@@ -18,8 +18,8 @@ void EmbeddingBackward::validate(const std::vector<Tensor> &input_tensors) const
 
     const auto &index_tensor = input_tensors.at(0);
     const auto &grad_tensor = input_tensors.at(1);
-    const auto &index_tensor_shape = index_tensor.get_legacy_shape();
-    const auto &grad_tensor_shape = grad_tensor.get_legacy_shape();
+    const auto &index_tensor_shape = index_tensor.get_padded_shape();
+    const auto &grad_tensor_shape = grad_tensor.get_padded_shape();
 
     TT_FATAL(
         index_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,

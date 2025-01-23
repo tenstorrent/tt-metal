@@ -32,8 +32,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
     TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");

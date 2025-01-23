@@ -77,10 +77,10 @@ ttnn::Tensor ReshapeOperation::invoke(
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR &&
-        (input_tensor.get_legacy_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+        (input_tensor.get_padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
-         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_legacy_shape()[-1] % TILE_WIDTH != 0 ||
-         (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
+         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_padded_shape()[-1] % TILE_WIDTH != 0 ||
+         (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % TILE_HEIGHT != 0)) {
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion(

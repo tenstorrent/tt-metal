@@ -12,7 +12,7 @@ namespace operations::data_movement {
 
 void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto input_tensor_a_shape = input_tensor_a.get_legacy_shape();
+    auto input_tensor_a_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(
         input_tensor_a_shape[0] == 1 and input_tensor_a_shape[1] == 1 and input_tensor_a_shape[2] == 1,
         "Input should be 1D");

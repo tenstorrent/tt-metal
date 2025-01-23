@@ -36,8 +36,8 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_padded_shape(), false, false, true, true);
-        auto out_shape = input_a.get_legacy_shape();
-        out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
+        auto out_shape = input_a.get_padded_shape();
+        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -52,8 +52,8 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_padded_shape(), false, false, true, true);
-        auto out_shape = temp.get_legacy_shape();
-        out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
+        auto out_shape = temp.get_padded_shape();
+        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);

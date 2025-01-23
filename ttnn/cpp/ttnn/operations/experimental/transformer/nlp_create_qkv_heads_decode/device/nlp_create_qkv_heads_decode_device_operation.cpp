@@ -41,7 +41,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
             "Current input memory layout is {}. It must be width sharded",
             QKV_memcfg.memory_layout);
         TT_FATAL(
-            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_legacy_shape()[-1],
+            input_tensor.shard_spec().value().shape[0] == input_tensor.volume() / input_tensor.get_padded_shape()[-1],
             "Shard shape must be correct");
         TT_FATAL(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,

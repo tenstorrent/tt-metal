@@ -903,7 +903,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_dram_sharded_optimized_(
     bool skip_compute,
     bool skip_in0_mcast,
     bool skip_write_back) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
     auto in0_tile = a.get_tensor_spec().tile();
     auto in1_tile = b.get_tensor_spec().tile();
     auto in0_tile_shape = in0_tile.get_tile_shape();

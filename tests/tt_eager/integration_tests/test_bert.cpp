@@ -32,7 +32,7 @@ Tensor encoder(
     const Parameters& parameters,
     std::size_t encoder_index,
     const std::uint32_t head_size) {
-    auto batch_size = hidden_states.get_legacy_shape()[0];
+    auto batch_size = hidden_states.get_padded_shape()[0];
 
     auto fused_qkv_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = {12, batch_size},

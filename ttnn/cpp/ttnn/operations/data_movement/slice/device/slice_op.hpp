@@ -15,9 +15,9 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const Shape& slice_start);
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_start);
 
 struct SliceDeviceOperation {
-    const tt::tt_metal::LegacyShape slice_start;
-    const tt::tt_metal::LegacyShape slice_end;
-    const tt::tt_metal::LegacyShape step;
+    const ttnn::SimpleShape slice_start;
+    const ttnn::SimpleShape slice_end;
+    const ttnn::SimpleShape step;
     const tt::tt_metal::MemoryConfig output_mem_config;
 
     void validate_with_output_tensors(

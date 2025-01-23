@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
 
     Program program{};
     tt::tt_metal::IDevice* device = input_tensor.device();

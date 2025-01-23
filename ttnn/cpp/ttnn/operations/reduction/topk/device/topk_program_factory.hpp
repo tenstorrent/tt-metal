@@ -34,7 +34,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
     uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
     // for streaming in input
@@ -227,7 +227,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
     auto device = input_tensor.device();
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size] = cores_utilized(
         input_shape[dim],

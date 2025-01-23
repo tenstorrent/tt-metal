@@ -97,7 +97,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_padded_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {

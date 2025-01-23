@@ -43,8 +43,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto reader_indices_buffer = reader_indices.device_buffer();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
-    const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
+    const auto output_shape = output.get_padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());

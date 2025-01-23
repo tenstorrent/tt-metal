@@ -72,7 +72,7 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
     std::optional<Tensor> optional_output_tensor) {
     TT_FATAL(num_tokens > 0, "Number of tokens must be at least 1!");
     TT_FATAL(
-        num_tokens <= input_tensor_b.get_legacy_shape()[2],
+        num_tokens <= input_tensor_b.get_padded_shape()[2],
         "Number of tokens must be smaller or equal to the max cache length (B.shape[2])!");
     const uint32_t num_tokens_rounded_up_to_32 = ((num_tokens - 1) / 32 + 1) * 32;
     auto arch = input_tensor_a.storage_type() == StorageType::DEVICE

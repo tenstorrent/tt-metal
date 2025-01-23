@@ -36,7 +36,7 @@ Tensor ArgmaxOperation::invoke(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input = input_tensors.at(0);
-            auto input_shape = input.get_legacy_shape();
+            auto input_shape = input.get_padded_shape();
             TT_FATAL(input_shape.rank() == 4, "supported for rank-4 tensors at this time");
 
             Tensor input_a = create_mask(input, output_memory_config);

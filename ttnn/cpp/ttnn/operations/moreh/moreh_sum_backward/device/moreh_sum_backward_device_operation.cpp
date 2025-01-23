@@ -26,10 +26,10 @@ void MorehSumBackwardOperation::validate_inputs(
     }
 
     check_tensor(input, "moreh_sum_backward", "input");
-    const auto& input_shape = input.value().get_legacy_shape();
-    auto input_shape_wo_padding = input_shape.without_padding();
+    const auto& input_shape = input.value().get_padded_shape();
+    auto input_shape_wo_padding = input.value().get_logical_shape();
     auto input_rank = input_shape.rank();
-    auto output_grad_shape_wo_padding = output_grad.get_legacy_shape().without_padding();
+    auto output_grad_shape_wo_padding = output_grad.get_logical_shape();
 
     // validate output_grad shape
     if (keepdim) {
@@ -76,7 +76,7 @@ void MorehSumBackwardOperation::validate_inputs(
 
     // validate input_grad shape
     if (input_grad.has_value()) {
-        const auto& input_grad_shape = input_grad.value().get_legacy_shape();
+        const auto& input_grad_shape = input_grad.value().get_padded_shape();
         TT_FATAL(input_shape == input_grad_shape, "both shape between input and input_grad should be the same");
     }
 }

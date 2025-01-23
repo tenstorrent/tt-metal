@@ -188,7 +188,7 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
@@ -196,7 +196,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        compute_volume(input_shape));
+        input_shape.volume());
 
     return hash;
 }

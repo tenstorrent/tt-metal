@@ -377,7 +377,7 @@ int main() {
             {config.batch_size,
              config.input_hw.first + 2 * config.pad_hw.first,
              config.input_hw.second + 2 * config.pad_hw.second});
-        tt::tt_metal::LegacyShape output_tensor_shape = config.get_output_shape().value;
+        auto output_tensor_shape = config.get_output_shape().value;
         ttnn::SimpleShape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 
         Tensor input_padded_tensor =

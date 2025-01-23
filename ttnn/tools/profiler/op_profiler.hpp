@@ -225,7 +225,7 @@ static inline json get_tensor_json(const Tensor& tensor) {
         ret["storage_type"] = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
     }
 
-    auto tensor_shape = tensor.get_legacy_shape();
+    auto tensor_shape = tensor.get_padded_shape();
     ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
     ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
     ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;

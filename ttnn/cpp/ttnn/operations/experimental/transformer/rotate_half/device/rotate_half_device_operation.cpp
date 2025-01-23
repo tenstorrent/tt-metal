@@ -18,7 +18,7 @@ void RotateHalf::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to rotate half need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to rotate half need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.get_layout() == Layout::TILE), "Inputs to rotate half must be tilized");
-    TT_FATAL(input_tensor.get_legacy_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
+    TT_FATAL(input_tensor.get_padded_shape()[-1] % (TILE_WIDTH * 2) == 0, "Input X dim must be divisible into tiles");
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "RotateHalf does not currently support sharding");

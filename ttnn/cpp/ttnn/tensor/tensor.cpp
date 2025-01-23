@@ -570,11 +570,6 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-tt::tt_metal::LegacyShape Tensor::get_legacy_shape() const {
-    wait_for_tensor_metadata_populated();
-    return legacy_shape();
-}
-
 ttnn::Shape Tensor::get_shape() const {
     wait_for_tensor_metadata_populated();
     return shape();
@@ -603,7 +598,10 @@ const ttnn::SimpleShape& Tensor::get_padded_shape() const {
     return padded_shape();
 }
 
-tt::tt_metal::Padding Tensor::get_padding() const { return get_legacy_shape().padding(); }
+tt::tt_metal::Padding Tensor::get_padding() const {
+    wait_for_tensor_metadata_populated();
+    return tensor_attributes->tensor_spec.shape().value.padding();
+}
 
 const Storage& Tensor::get_storage() const {
     this->wait_for_tensor_data_populated();

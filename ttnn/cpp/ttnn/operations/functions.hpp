@@ -616,7 +616,7 @@ static bool nearly_equal(::bfloat16 a, ::bfloat16 b, Args... args) {
 
 template <typename DataType, typename... Args>
 static bool allclose(const Tensor& tensor_a, const Tensor& tensor_b, Args... args) {
-    if (tensor_a.get_legacy_shape() != tensor_b.get_legacy_shape()) {
+    if (tensor_a.get_padded_shape() != tensor_b.get_padded_shape()) {
         return false;
     }
 

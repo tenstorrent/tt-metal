@@ -42,15 +42,15 @@ void Softmax::validate(
             TT_FATAL(input_tensor.device() == mask.device(), "Error");
             if (mask.is_sharded()) {  // sharded mask
                 TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
-                TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape(), "Error");
+                TT_FATAL(mask.get_padded_shape() == input_tensor.get_padded_shape(), "Error");
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
-                    tt::tt_metal::LegacyShape expected_shape = {
-                        mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
-                    TT_FATAL(mask.get_legacy_shape() == expected_shape, "Error");
+                    ttnn::SimpleShape expected_shape(
+                        {mask.get_padded_shape()[0], 1, input_tensor.get_padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
+                    TT_FATAL(mask.get_padded_shape() == expected_shape, "Error");
                 }
-                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.get_legacy_shape()[i] == 1, "Error");
+                for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.get_padded_shape()[i] == 1, "Error");
                 }
             }
 
@@ -58,10 +58,10 @@ void Softmax::validate(
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
-                        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0], "Error");
+                        TT_FATAL(input_tensor.get_padded_shape()[0] == mask.get_padded_shape()[0], "Error");
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                        const auto shape = input_tensor.get_legacy_shape();
+                        const auto shape = input_tensor.get_padded_shape();
                         uint32_t M = input_tensor.volume() / shape[-1];
                         uint32_t K = shape[-1];
 
@@ -135,7 +135,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1]
+    // bool causal_mask = mask.has_value() ? mask.value().get_padded_shape()[-2] == mask.value().get_padded_shape()[-1]
     // : false;
     bool causal_mask = this->is_causal_mask;
 
@@ -299,13 +299,13 @@ Tensor scale_mask_softmax(
                 .target_layout = Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
-                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1], "Error");
-                TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0], "Error");
+                TT_FATAL(input_tensor.get_padded_shape()[-1] == mask.value().get_padded_shape()[-1], "Error");
+                TT_FATAL(input_tensor.get_padded_shape()[0] == mask.value().get_padded_shape()[0], "Error");
                 TT_FATAL(
-                    mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT,
+                    mask.value().get_padded_shape()[-2] == 1 or mask.value().get_padded_shape()[-2] == TILE_HEIGHT,
                     "Error");
-                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.value().get_legacy_shape()[i] == 1, "Error");
+                for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.value().get_padded_shape()[i] == 1, "Error");
                 }
                 ttnn::SimpleShape mask_pad_shape =
                     ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(

@@ -189,9 +189,9 @@ ttnn::Tensor SliceOperation::invoke(
 
         auto res = operation::run(
                        SliceDeviceOperation{
-                           tt::tt_metal::LegacyShape(modified_begins),
-                           tt::tt_metal::LegacyShape(padded_ends),
-                           tt::tt_metal::LegacyShape(modified_step),
+                           ttnn::SimpleShape(modified_begins),
+                           ttnn::SimpleShape(padded_ends),
+                           ttnn::SimpleShape(modified_step),
                            memory_config},
                        {input},
                        {},
@@ -312,7 +312,8 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         }
 
         input = operation::run(
-            SliceDeviceOperation{begins, padded_ends, step, memory_config},
+            SliceDeviceOperation{
+                ttnn::SimpleShape(begins), ttnn::SimpleShape(padded_ends), ttnn::SimpleShape(step), memory_config},
             {input},
             {},
             {optional_output_tensor},

@@ -26,7 +26,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
-    const tt::tt_metal::LegacyShape& conv_activation_shape,
+    const ttnn::SimpleShape& conv_activation_shape,
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles) {
@@ -168,7 +168,7 @@ void OptimizedConvNew::validate(
             optimized_conv_op_utils::div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
         auto [act_matrix_shape, act_matrix_shape_unpadded] =
             optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-                input_tensor_a.get_legacy_shape(),
+                input_tensor_a.get_padded_shape(),
                 sliding_window_config,
                 parallelization_config.num_cores_nhw,
                 out_block_h_ntiles);
@@ -298,7 +298,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const auto weights_dtype = input_tensor_b.dtype();
     const auto output_dtype = output_tensor.dtype();
 
-    const auto weights_shape = input_tensor_b.get_legacy_shape();
+    const auto weights_shape = input_tensor_b.get_padded_shape();
 
     auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
         input_tensor_a,

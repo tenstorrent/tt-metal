@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::Buffer* src1_buffer = b.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-        const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+        const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
         tt::tt_metal::IDevice* device = a.device();
 
