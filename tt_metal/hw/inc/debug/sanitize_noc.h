@@ -111,11 +111,18 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
         }
     }
     if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space.
+        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space. Use worker grid size instead of noc
+        // size because virtual coords are continuous.
         if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
-            x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X + core_info->noc_size_x - 1) &&
+            x <= NOC_0_X(
+                     noc_id,
+                     core_info->noc_size_x,
+                     (uint32_t)VIRTUAL_TENSIX_START_X + core_info->worker_grid_size_x - 1) &&
             y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
-            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->noc_size_y - 1)) {
+            y <= NOC_0_Y(
+                     noc_id,
+                     core_info->noc_size_y,
+                     (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->worker_grid_size_y - 1)) {
             is_virtual_coord = true;
             return AddressableCoreType::TENSIX;
         }
