@@ -36,6 +36,7 @@
 #include "ttnn/operations/experimental/ccl/ccl_experimental_pybind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
+#include "ttnn/operations/experimental/bcast_to/bcast_to_pybind.hpp"
 
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 
@@ -85,6 +86,8 @@ void py_module(py::module& module) {
     auto m_experimental_ccl =
         module.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
+
+    broadcast_to::detail::py_bind_module(module);
 }
 
 }  // namespace ttnn::operations::experimental
