@@ -28,7 +28,7 @@ std::span<const uint8_t> to_bytes(T& value) {
 }
 
 template <>
-std::span<const uint8_t> to_bytes(SimpleShape& value) {
+std::span<const uint8_t> to_bytes(ttnn::SimpleShape& value) {
     auto ptr = reinterpret_cast<const uint8_t*>(value.view().data());
     return std::span<const uint8_t>(ptr, sizeof(value[0]) * value.rank());
 }
