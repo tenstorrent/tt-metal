@@ -589,6 +589,36 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestWrapCompletionQOnInsufficientSpa
     }
 }
 
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBuffer) {
+    const uint32_t page_size = 256;
+    const uint32_t buffer_size = 64 * page_size;
+    const BufferRegion region(256, 512);
+    for (IDevice* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        CoreCoord start(0, 0);
+        CoreCoord end(5, 0);
+        CoreRange cores(start, end);
+        ShardSpecBuffer shard_spec = ShardSpecBuffer(
+            CoreRangeSet(cores),
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {8, 8});
+        auto buffer = Buffer::create(
+            device, buffer_size, page_size, BufferType::DRAM, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+
+        local_test_functions::clear_buffer(device->command_queue(), *buffer);
+
+        auto src = local_test_functions::generate_arange_vector(region.size);
+        EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
+
+        vector<uint32_t> result;
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
+
+        EXPECT_EQ(src, result);
+    }
+}
+
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteSubBuffer) {
     const uint32_t page_size = 256;
     const uint32_t buffer_size = 64 * page_size;
@@ -931,143 +961,111 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
 
 namespace l1_tests {
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestReadWritesShardedSubBuffer) {
-    for (IDevice* device : devices_) {
-        for (const std::array<uint32_t, 2> cores :
-             {std::array<uint32_t, 2>{1, 1}, std::array<uint32_t, 2>{2, 3}, std::array<uint32_t, 2>{5, 5}}) {
-            for (const std::array<uint32_t, 2> num_pages : {
-                     std::array<uint32_t, 2>{1, 1},
-                     std::array<uint32_t, 2>{1, 2},
-                     std::array<uint32_t, 2>{2, 3},
-                 }) {
-                for (const std::array<uint32_t, 2> page_shape : {
-                         std::array<uint32_t, 2>{1, 65536},
-                         std::array<uint32_t, 2>{1, 65540},
-                         std::array<uint32_t, 2>{1, 65568},
-                         std::array<uint32_t, 2>{1, 65520},
-                         std::array<uint32_t, 2>{1, 132896},
-                         std::array<uint32_t, 2>{256, 256},
-                         std::array<uint32_t, 2>{336, 272},
-                     }) {
-                    for (const TensorMemoryLayout shard_strategy :
-                         {TensorMemoryLayout::HEIGHT_SHARDED,
-                          TensorMemoryLayout::WIDTH_SHARDED,
-                          TensorMemoryLayout::BLOCK_SHARDED}) {
-                        for (const uint32_t num_iterations : {
-                                 1,
-                             }) {
-                            BufferStressTestConfigSharded config(num_pages, cores);
-                            config.seed = 0;
-                            config.num_iterations = num_iterations;
-                            config.mem_config = shard_strategy;
-                            config.page_shape = page_shape;
-                            tt::log_info(
-                                tt::LogTest,
-                                "Device: {} cores: [{},{}] num_pages: [{},{}] page_shape: [{},{}], shard_strategy: {}, "
-                                "num_iterations: {}",
-                                device->id(),
-                                cores[0],
-                                cores[1],
-                                num_pages[0],
-                                num_pages[1],
-                                page_shape[0],
-                                page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
-                                num_iterations);
-                            local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
-                                device, device->command_queue(), config, BufferType::L1, true);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) {
+    const uint32_t max_buffer_size = 192;
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBuffer) {
-    const uint32_t max_buffer_size = 2048;
-
-    uint32_t buffer_size = 16;
-    uint32_t page_size = 4;
-    uint32_t region_offset = 0;
-    uint32_t region_size = sizeof(uint32_t);
     for (IDevice* device : devices_) {
-        while (buffer_size < max_buffer_size) {
-            while (page_size < buffer_size) {
+        tt::log_info("Running on Device {}", device->id());
+        uint32_t buffer_size = 0;
+        while (buffer_size <= max_buffer_size) {
+            uint32_t page_size = 4;
+            while (page_size <= buffer_size) {
+                uint32_t region_offset = 0;
                 while (buffer_size % page_size == 0 && region_offset < buffer_size) {
-                    while (region_offset + region_size < buffer_size) {
+                    uint32_t region_size = page_size;
+                    while (region_offset + region_size <= buffer_size) {
                         CoreCoord start(0, 0);
-                        CoreCoord end(5, 5);
-                        CoreRange cores(start, end);
-                        const uint32_t num_pages = buffer_size / page_size;
-                        const uint32_t num_shards = cores.size();
-                        const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
-                        uint32_t page_shape_height_div_factor = 1;
-                        while (page_shape_height_div_factor <= num_pages_per_shard) {
-                            uint32_t page_shape_width_div_factor = 1;
-                            while (page_shape_width_div_factor <= num_pages_per_shard) {
-                                if (page_shape_width_div_factor * page_shape_height_div_factor == num_pages_per_shard) {
-                                    uint32_t tensor2d_shape_height = page_shape_height_div_factor;
-                                    while (tensor2d_shape_height <= num_pages) {
-                                        uint32_t tensor2d_shape_width = page_shape_width_div_factor;
-                                        while (tensor2d_shape_width <= num_pages) {
-                                            if (tensor2d_shape_height * tensor2d_shape_width == num_pages) {
-                                                for (TensorMemoryLayout layout :
-                                                     {TensorMemoryLayout::HEIGHT_SHARDED,
-                                                      TensorMemoryLayout::BLOCK_SHARDED,
-                                                      TensorMemoryLayout::WIDTH_SHARDED}) {
-                                                    ShardSpecBuffer shard_spec = ShardSpecBuffer(
-                                                        CoreRangeSet(cores),
-                                                        {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                                                        ShardOrientation::ROW_MAJOR,
-                                                        {tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
-                                                         tt::constants::TILE_WIDTH / page_shape_width_div_factor},
-                                                        {tensor2d_shape_height, tensor2d_shape_width});
-                                                    auto buffer = Buffer::create(
-                                                        device,
-                                                        buffer_size,
-                                                        page_size,
-                                                        BufferType::L1,
-                                                        layout,
-                                                        shard_spec);
-                                                    local_test_functions::clear_buffer(
-                                                        device->command_queue(), *buffer);
-                                                    const BufferRegion region(region_offset, region_size);
-                                                    vector<uint32_t> src =
-                                                        local_test_functions::generate_arange_vector(region_size);
-                                                    EnqueueWriteSubBuffer(
-                                                        device->command_queue(), *buffer, src, region, false);
-                                                    vector<uint32_t> result;
-                                                    EnqueueReadSubBuffer(
-                                                        device->command_queue(), *buffer, result, region, true);
-                                                    EXPECT_EQ(src, result);
+                        for (uint32_t end_core_idx = 3; end_core_idx <= 4; end_core_idx++) {
+                            CoreCoord end(end_core_idx, end_core_idx);
+                            CoreRange cores(start, end);
+                            const uint32_t num_pages = buffer_size / page_size;
+                            const uint32_t num_shards = cores.size();
+                            const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
+                            uint32_t page_shape_height_div_factor = 1;
+                            while (page_shape_height_div_factor <= num_pages_per_shard) {
+                                uint32_t page_shape_width_div_factor = 1;
+                                while (page_shape_width_div_factor <= num_pages_per_shard) {
+                                    if (page_shape_width_div_factor * page_shape_height_div_factor ==
+                                        num_pages_per_shard) {
+                                        uint32_t tensor2d_shape_height = page_shape_height_div_factor;
+                                        while (tensor2d_shape_height <= num_pages) {
+                                            uint32_t tensor2d_shape_width = page_shape_width_div_factor;
+                                            while (tensor2d_shape_width <= num_pages) {
+                                                if (tensor2d_shape_height * tensor2d_shape_width == num_pages) {
+                                                    for (TensorMemoryLayout layout :
+                                                         {TensorMemoryLayout::HEIGHT_SHARDED,
+                                                          TensorMemoryLayout::BLOCK_SHARDED,
+                                                          TensorMemoryLayout::WIDTH_SHARDED}) {
+                                                        tt::log_info(
+                                                            tt::LogTest,
+                                                            "Device: {} buffer_size: {} page_size: {}"
+                                                            " region_offset: {} region_size: {} page_shape: [{}, {}]"
+                                                            " tensor2d_shape: [{}, {}] layout: {} cores: {}",
+                                                            device->id(),
+                                                            buffer_size,
+                                                            page_size,
+                                                            region_offset,
+                                                            region_size,
+                                                            tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
+                                                            tt::constants::TILE_WIDTH / page_shape_width_div_factor,
+                                                            tensor2d_shape_height,
+                                                            tensor2d_shape_width,
+                                                            magic_enum::enum_name(layout).data(),
+                                                            cores.str());
+                                                        ShardSpecBuffer shard_spec = ShardSpecBuffer(
+                                                            CoreRangeSet(cores),
+                                                            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                                                            ShardOrientation::ROW_MAJOR,
+                                                            {tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
+                                                             tt::constants::TILE_WIDTH / page_shape_width_div_factor},
+                                                            {tensor2d_shape_height, tensor2d_shape_width});
+                                                        auto buffer = Buffer::create(
+                                                            device,
+                                                            buffer_size,
+                                                            page_size,
+                                                            BufferType::L1,
+                                                            layout,
+                                                            shard_spec);
+                                                        local_test_functions::clear_buffer(
+                                                            device->command_queue(), *buffer);
+                                                        const BufferRegion region(region_offset, region_size);
+                                                        vector<uint32_t> src =
+                                                            local_test_functions::generate_arange_vector(region_size);
+                                                        EnqueueWriteSubBuffer(
+                                                            device->command_queue(), *buffer, src, region, false);
+                                                        vector<uint32_t> result;
+                                                        EnqueueReadSubBuffer(
+                                                            device->command_queue(), *buffer, result, region, true);
+                                                        ASSERT_EQ(src, result);
+                                                    }
                                                 }
+                                                tensor2d_shape_width += page_shape_width_div_factor;
                                             }
-                                            tensor2d_shape_width += page_shape_width_div_factor;
+                                            tensor2d_shape_height += page_shape_height_div_factor;
                                         }
-                                        tensor2d_shape_height += page_shape_height_div_factor;
                                     }
+                                    page_shape_width_div_factor += 1;
                                 }
-                                page_shape_width_div_factor += 1;
+                                page_shape_height_div_factor += 1;
                             }
-                            page_shape_height_div_factor += 1;
                         }
-                        region_size += page_size;
+                        region_size += 2 * page_size;
                     }
                     region_offset += page_size;
                 }
                 page_size += sizeof(uint32_t);
             }
-            buffer_size += sizeof(uint32_t);
+            buffer_size += 2 * sizeof(uint32_t);
         }
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShardedSubBuffer) {
-    const uint32_t buffer_size = 1024;
-    const uint32_t buffer_region_size = 256;
+TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShardedSubBufferForL1) {
     const uint32_t page_size = 64;
+    const uint32_t buffer_size = 16 * page_size;
+    const uint32_t buffer_region_size = 4 * page_size;
     for (IDevice* device : devices_) {
+        tt::log_info("Running on Device {}", device->id());
         CoreCoord start_coord = {0, 0};
         CoreCoord end_coord = {5, 5};
         CoreRange cores(start_coord, end_coord);
@@ -1076,12 +1074,11 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShar
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {(uint32_t)cores.size(), 1});
+            {16, 1});
         auto buffer = Buffer::create(
             device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::WIDTH_SHARDED, shard_spec);
 
-        vector<uint32_t> zeroes(buffer_size / sizeof(uint32_t), 0);
-        EnqueueWriteBuffer(device->command_queue(), *buffer, zeroes, true);
+        local_test_functions::clear_buffer(device->command_queue(), *buffer);
 
         vector<uint32_t> ones(buffer_region_size / sizeof(uint32_t), 1);
         BufferRegion region(0, buffer_region_size);
@@ -1114,23 +1111,78 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingWritesShar
     }
 }
 
-TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferMultiplePagesPerShard) {
-    const uint32_t buffer_region_size = 256;
-    vector<uint32_t> zeroes(128, 0);
+TEST_F(CommandQueueSingleCardBufferFixture, TestMultipleNonOverlappingReadsShardedSubBufferForL1) {
+    const uint32_t page_size = 64;
+    const uint32_t buffer_size = 16 * page_size;
+    const uint32_t buffer_region_size = buffer_size / 4;
+    for (IDevice* device : devices_) {
+        tt::log_info("Running on Device {}", device->id());
+        CoreCoord start_coord = {0, 0};
+        CoreCoord end_coord = {5, 5};
+        CoreRange cores(start_coord, end_coord);
+        ShardSpecBuffer shard_spec = ShardSpecBuffer(
+            CoreRangeSet(cores),
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {8, 2});
+        auto buffer = Buffer::create(
+            device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+
+        vector<uint32_t> expected = local_test_functions::generate_arange_vector(buffer_size);
+        EnqueueWriteBuffer(device->command_queue(), *buffer, expected, true);
+
+        vector<uint32_t> first_read;
+        BufferRegion region(0, buffer_region_size);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, first_read, region, false);
+
+        vector<uint32_t> second_read;
+        region = BufferRegion(buffer_region_size, buffer_region_size);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, second_read, region, false);
+
+        vector<uint32_t> third_read;
+        region = BufferRegion(buffer_region_size * 2, buffer_region_size);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, third_read, region, false);
+
+        vector<uint32_t> fourth_read;
+        region = BufferRegion(buffer_region_size * 3, buffer_region_size);
+        EnqueueReadSubBuffer(device->command_queue(), *buffer, fourth_read, region, false);
+
+        Finish(device->command_queue());
+
+        vector<uint32_t> result;
+        result.reserve(buffer_size / sizeof(uint32_t));
+
+        result.insert(result.end(), first_read.begin(), first_read.end());
+        result.insert(result.end(), second_read.begin(), second_read.end());
+        result.insert(result.end(), third_read.begin(), third_read.end());
+        result.insert(result.end(), fourth_read.begin(), fourth_read.end());
+
+        EXPECT_EQ(expected, result);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferMultiplePagesPerShardForL1) {
+    const uint32_t page_size = 64;
+    const uint32_t buffer_size = page_size * 16;
+    const uint32_t buffer_region_offset = page_size * 3;
+    const uint32_t buffer_region_size = page_size * 7;
     vector<uint32_t> src = local_test_functions::generate_arange_vector(buffer_region_size);
     for (IDevice* device : devices_) {
+        tt::log_info("Running on Device {}", device->id());
         CoreCoord start_coord = {0, 0};
         CoreCoord end_coord = {3, 3};
         CoreRange cores(start_coord, end_coord);
         ShardSpecBuffer shard_spec = ShardSpecBuffer(
             CoreRangeSet(cores),
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT / 2, tt::constants::TILE_WIDTH / 2},
-            {4, 2});  // (1, 16), (4, 4), (8, 2), (2, 8)
-        auto buffer = Buffer::create(device, 64 * 8, 64, BufferType::L1, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
-        EnqueueWriteBuffer(device->command_queue(), *buffer, zeroes, true);
-        const BufferRegion region(192, buffer_region_size);
+            ShardOrientation::COL_MAJOR,
+            {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
+            {8, 2});
+        auto buffer = Buffer::create(
+            device, buffer_size, page_size, BufferType::L1, TensorMemoryLayout::BLOCK_SHARDED, shard_spec);
+        local_test_functions::clear_buffer(device->command_queue(), *buffer);
+        const BufferRegion region(buffer_region_offset, buffer_region_size);
         EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
         vector<uint32_t> result;
         EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);

@@ -755,7 +755,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
                 dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
             bank_base_address +=
                 (dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page] *
-                 buffer.page_size());
+                 buffer.aligned_page_size());
         }
     } else {
         host_page = dispatch_params.src_page_index;
@@ -772,7 +772,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
                 ((core_id + 1) * dispatch_params.max_pages_per_shard) - dispatch_params.initial_pages_skipped;
             const uint32_t curr_page_idx_in_shard = dispatch_params.max_pages_per_shard - remaining_pages_in_shard;
             pages_per_txn = std::min(pages_per_txn, remaining_pages_in_shard);
-            bank_base_address += curr_page_idx_in_shard * buffer.page_size();
+            bank_base_address += curr_page_idx_in_shard * buffer.aligned_page_size();
         }
     }
 
