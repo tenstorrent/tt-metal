@@ -24,9 +24,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
     bool typecast_b = needs_typecast_to_bfloat16(input_tensor_b);
     Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor_a) : input_tensor_a;
@@ -52,9 +52,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     return invoke(
         DefaultQueueId,
         input_tensor_a,
@@ -75,9 +75,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
     Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor_a) : input_tensor_a;
 
@@ -101,9 +101,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     return invoke(
         DefaultQueueId,
         input_tensor_a,
@@ -127,9 +127,9 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
         input_tensor_a.get_dtype() == DataType::INT32 && input_tensor_b.get_dtype() == DataType::INT32,
         "Bitwise ops require input tensors to be of INT32 datatype ");
 
-    tt::stl::Span<const unary::UnaryOpType> lhs_activations = {};
-    tt::stl::Span<const unary::UnaryOpType> rhs_activations = {};
-    tt::stl::Span<const unary::UnaryOpType> post_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> post_activations = {};
 
     return ttnn::prim::binary_ng(
         queue_id,
@@ -164,9 +164,9 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
     TT_FATAL(
         input_tensor_a.get_dtype() == DataType::INT32, "Bitwise ops require input tensor to be of INT32 datatype ");
 
-    tt::stl::Span<const unary::UnaryOpType> lhs_activations = {};
-    tt::stl::Span<const unary::UnaryOpType> rhs_activations = {};
-    tt::stl::Span<const unary::UnaryOpType> post_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {};
+    tt::stl::Span<const unary::UnaryWithParam> post_activations = {};
 
     return ttnn::prim::binary_ng(
         queue_id,
