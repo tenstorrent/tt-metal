@@ -280,7 +280,7 @@ private:
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
     CoreType core_type_from_physical_core(const CoreCoord &physical_core) const;
-    CoreCoord virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const;
+    CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
     uint32_t build_key_ = 0;
