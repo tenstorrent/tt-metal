@@ -102,7 +102,7 @@ test_sweep_args = [
     "input_shape, dtype, dlayout, Y, X, sharding_strategy, shard_orientation, hw_as_shard_shape",
     (test_sweep_args),
 )
-def test_binary_fmod(
+def test_binary_fmod_sharded(
     input_shape, dtype, dlayout, Y, X, sharding_strategy, shard_orientation, hw_as_shard_shape, device
 ):
     run_binary_tests(
