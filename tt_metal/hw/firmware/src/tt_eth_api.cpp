@@ -13,7 +13,7 @@ uint32_t eth_txq_reg_read(uint32_t qnum, uint32_t offset) {
 }
 
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
-    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy(q_num)) {
     }
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
@@ -22,7 +22,7 @@ void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_
 }
 
 void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
-    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy(q_num)) {
     }
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);

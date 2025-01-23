@@ -819,7 +819,7 @@ void Device::initialize_and_launch_firmware() {
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         if (init_aerisc) {
-            // std::cout << "Loading fw on active eth core " << eth_core.str() << std::endl;
+            std::cout << "Loading fw on active eth core " << eth_core.str() << std::endl;
             this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
             if (this->arch() == ARCH::BLACKHOLE) {
                 bh_active_eth_cores.insert(phys_eth_core);
@@ -832,6 +832,7 @@ void Device::initialize_and_launch_firmware() {
 
     for (const auto &eth_core : this->get_inactive_ethernet_cores()) {
         CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+        std::cout << "Loading fw on idle eth core " << eth_core.str() << std::endl;
         tt::llrt::write_hex_vec_to_core(
             this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
         this->initialize_firmware(HalProgrammableCoreType::IDLE_ETH, phys_eth_core, &launch_msg, &go_msg);

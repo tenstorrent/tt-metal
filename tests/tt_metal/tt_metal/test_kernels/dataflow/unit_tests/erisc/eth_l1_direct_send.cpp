@@ -12,6 +12,7 @@ void kernel_main() {
     constexpr uint32_t num_bytes_per_send = get_compile_time_arg_val(0);
     constexpr uint32_t num_bytes_per_send_word_size = get_compile_time_arg_val(1);
 
+    erisc_info->unused_arg0 = 0xABCDABCD;
     eth_send_bytes(
         local_eth_l1_src_addr, remote_eth_l1_dst_addr, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size);
     erisc_info->unused_arg0 = 0xFACEFEED;

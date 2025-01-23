@@ -87,7 +87,9 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     std::cout << "Active erisc unreserved " << mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)]
               << " bank to noc scratch "
-              << mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] << std::endl;
+              << mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)]
+              << " eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE "
+              << eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE << std::endl;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses - 1);
     std::vector<HalJitBuildConfig> processor_types(1);
