@@ -47,12 +47,12 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 50;
     uint32_t l1_buffer_size = single_tile_size * num_tiles;
-    uint32_t l1_buffer_addr = 400 * 1024;
+    uint32_t l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
     // For ethernet core, need to have smaller buffer at a different address
     if (is_eth_core) {
         l1_buffer_size = 1024;
-        l1_buffer_addr = 200 * 1024;
+        l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     }
 
     tt_metal::InterleavedBufferConfig l1_config{
@@ -103,8 +103,8 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     // depending on the flags passed in.
     switch(feature) {
         case SanitizeAddress:
-            output_buf_noc_xy.x = 16;
-            output_buf_noc_xy.y = 16;
+            output_buf_noc_xy.x = 26;
+            output_buf_noc_xy.y = 18;
             break;
         case SanitizeAlignmentL1Write:
             output_l1_buffer_addr++;  // This is illegal because reading DRAM->L1 needs DRAM alignment
