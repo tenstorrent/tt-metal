@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18..3.30)
+cmake_minimum_required(VERSION 3.18...3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -179,7 +179,6 @@ target_link_libraries(
     metal_common_libs
     INTERFACE
         dl
-        z
         pthread
         atomic
         hwloc
