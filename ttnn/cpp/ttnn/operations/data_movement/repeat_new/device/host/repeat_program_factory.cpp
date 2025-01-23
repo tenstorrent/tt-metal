@@ -1,25 +1,23 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #include <math.h>
+#include <optional>
+#include <variant>
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-
-#include <optional>
-#include <variant>
-
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::data_movement::repeat {
 
@@ -32,7 +30,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const uint32_t data_size = input.element_size();
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -131,13 +129,14 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     // get datum size
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     const uint32_t data_size = input.element_size();
-    tt::tt_metal::Device* device = input.device();
+    tt::tt_metal::IDevice* device = input.device();
     // Multi device pre-computation
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+
     ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
     tt::log_debug("row major reshape");
@@ -180,7 +179,6 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
         page_is_pow_2,
         page_pow_2,
         number_of_lower_pages,
-        number_of_higher_pages,
         number_of_rep_dim_pages};
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -191,10 +189,15 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t done = 0;
     // Determine runtime argumens
     bool divide_on_higher = number_of_higher_pages > number_of_lower_pages;
-    uint32_t responsibility = divide_on_higher ? ((number_of_higher_pages - 1) / number_of_higher_pages) + 1
-                                               : ((number_of_lower_pages - 1) / number_of_lower_pages) + 1;
+
+    uint32_t responsibility_chunk =
+        (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) / num_cores_total;
+    uint32_t responsibility_mod = (divide_on_higher ? number_of_higher_pages : number_of_lower_pages) % num_cores_total;
+    uint32_t core_count = 0;
     for (int core_x = 0; core_x < num_cores_x; core_x++) {
         for (int core_y = 0; core_y < num_cores_y; core_y++) {
+            uint32_t responsibility =
+                core_count++ < responsibility_mod ? responsibility_chunk + 1 : responsibility_chunk;
             CoreCoord core = {core_x, core_y};
             if (done == 1) {
                 const std::vector<uint32_t> reader_runtime_args = {0, 0, 0, 0, 0, 0, 0, 1};
@@ -235,7 +238,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
                     num_repeats,
                     0};
                 read_start_page = end_of_read;
-                done = (end_of_read == number_of_higher_pages) ? 1 : 0;
+                done = (end_of_read == number_of_lower_pages) ? 1 : 0;
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
             }
         }
