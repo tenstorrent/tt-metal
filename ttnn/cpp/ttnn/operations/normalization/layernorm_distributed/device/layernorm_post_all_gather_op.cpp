@@ -100,7 +100,7 @@ std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::
     auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
         input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), memory_config))};
+        TensorLayout(this->dtype.value_or(input_tensor.get_dtype()), PageConfig(Layout::TILE), memory_config))};
 }
 
 operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(
