@@ -404,8 +404,8 @@ on:
           - eltwise.ternary.where.where_pytorch2
           - eltwise.ternary.where.where_forge
           - eltwise.ternary_backward.addcmul_bw
-          - eltwise.ternary_backward.lerp_bw.lerp_bw
           - eltwise.ternary_backward.addcdiv_bw
+          - eltwise.ternary_backward.lerp_bw.lerp_bw
           - embedding.embedding
           - embedding_bw.embedding_bw
           - fused.softmax_traces
