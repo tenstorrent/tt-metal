@@ -15,10 +15,8 @@ from itertools import product
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3])),
-        torch.Size([4, 4, 32, 32]),
-        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3]) if not (n == 3 and c == 3)),
-        torch.Size([4, 4, 23, 23]),
+        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
         *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2], [1, 2, 3])),
         torch.Size([3, 1, 64, 120]),
         torch.Size([3, 2, 64, 120]),
