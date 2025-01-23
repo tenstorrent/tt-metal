@@ -127,7 +127,11 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // padding-oblivious entry point is uplifted to the slice
                     // op.
                     untilized_tensor = operation::run(
-                        SliceDeviceOperation{begins, ends, steps, output_memory_config},
+                        SliceDeviceOperation{
+                            ttnn::SimpleShape(begins),
+                            ttnn::SimpleShape(ends),
+                            ttnn::SimpleShape(steps),
+                            output_memory_config},
                         {untilized_tensor},
                         {},
                         {std::nullopt},
@@ -275,7 +279,7 @@ ttnn::Tensor ConcatOperation::invoke(
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.get_logical_shape().rank();
 
-    dim = first_tensor.get_legacy_shape().get_normalized_index(dim);
+    dim = first_tensor.get_padded_shape().get_normalized_index(dim);
 
     TT_FATAL(
         dim >= 0 and dim < rank,

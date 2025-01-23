@@ -79,7 +79,7 @@ Tensor AutoFormat::format_input_tensor(
     }
 
     Tensor formatted_input = input;
-    auto shape = formatted_input.get_legacy_shape();
+    auto shape = formatted_input.get_padded_shape();
 
     // TODO: Profile if it is faster to put host tensor to device and then pad/convert if possible
     // Device side conversions

@@ -27,8 +27,9 @@ namespace ttnn::operations::experimental::transformer {
             input_tensor.is_sharded() ? (input_tensor.shard_spec().value().grid.ranges().size() > 1) : false;
 
         // Infer head_dim
-        TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
-        uint32_t head_dim = input_tensor.get_legacy_shape()[3] / (num_heads + 2 * num_kv_heads_val);
+        TT_FATAL(
+            input_tensor.get_padded_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
+        uint32_t head_dim = input_tensor.get_padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
         auto optional_outputs = std::vector<std::optional<Tensor>>{};
         if (optional_output_tensors.has_value()) {
             optional_outputs = {optional_output_tensors.value().begin(), optional_output_tensors.value().end()};

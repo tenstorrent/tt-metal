@@ -587,8 +587,8 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto &input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_legacy_shape()[0], input_tensor.get_legacy_shape()[1],input_tensor.get_legacy_shape()[2],input_tensor.get_legacy_shape()[3]};
+    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
+    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_padded_shape()[0], input_tensor.get_padded_shape()[1],input_tensor.get_padded_shape()[2],input_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
