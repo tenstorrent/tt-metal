@@ -598,8 +598,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
 
     uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(
-            std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::SimpleShape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         output_parallel_config,
         round_up_size);
     auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
@@ -722,16 +721,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
-    TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
-
-    auto target_shape = ttnn::Shape(
-        std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels},
-        std::array<std::array<uint32_t, 2>, 4>{
-            std::array<uint32_t, 2>{0, 0},
-            std::array<uint32_t, 2>{0, 0},
-            std::array<uint32_t, 2>{0, weight_matrix_height_padding},
-            std::array<uint32_t, 2>{0, out_channel_padding}});
+    auto target_shape = ttnn::SimpleShape({1, 1, weight_matrix_height, out_channels});
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
 
     if (parameters_on_device) {
