@@ -32,14 +32,16 @@ void kernel_main() {
     // cb_id_in0 and cb_id_in1 is each 1 page of size:
     // 128 + page size in bytes
     constexpr uint32_t LOWER_DIMS = get_compile_time_arg_val(6);
-    constexpr uint32_t HIGHER_DIMS = get_compile_time_arg_val(7);
-    constexpr uint32_t REP_DIM = get_compile_time_arg_val(8);
+    constexpr uint32_t REP_DIM = get_compile_time_arg_val(7);
+
+    constexpr uint32_t LOWER_DIMS_TIMES_REP_DIM = LOWER_DIMS * REP_DIM;
 
     // Since we need to operate on a grid of cores but sometimes pages don't split properly, if nop then don't use this
     // core
     if (nop == 1) {
         return;
     }
+
 #if page_is_pow_2
     // TODO: add CCL sharded native support
     const InterleavedPow2AddrGen<tensor_is_dram> s = {
@@ -53,6 +55,8 @@ void kernel_main() {
 
     // alignments pre-calculations
     constexpr uint64_t r_mask_to_use = tensor_is_dram ? MASK_64 : MASK_16;
+    constexpr uint64_t r_offset_to_use = tensor_is_dram ? OFFSET_64 : OFFSET_16;
+
     constexpr uint32_t r_alignment_requirement = tensor_is_dram ? 64 : 16;
     const uint32_t w_alignment_requirement = 16;
     const uint64_t w_mask_to_use = MASK_16;
@@ -68,31 +72,29 @@ void kernel_main() {
     alignment_buffer = (alignment_buffer & w_mask_to_use) + w_alignment_requirement;  // alligned for writes
     input_buffer = (input_buffer & r_mask_to_use) + r_alignment_requirement;          // alligned for reads
     // The jump for the upper dims
-    constexpr uint32_t higher_jump = LOWER_DIMS * REP_DIM;
     uint64_t src_noc_addr = 0;
     uint32_t data_location = 0;
     // lower dimensions stride
-    uint32_t l_offset = lower_dim_start;
-    // target dimension stride
-    uint32_t r_offset = 0;
-    // upper dimension stride in read and in write. Note in write we need to consider the repetitions of the r dimension
-    uint32_t u_r_offset = higher_dim_start * higher_jump;
-    uint32_t u_w_offset = higher_dim_start * higher_jump * repetitions;
-    for (int l = lower_dim_start; l < lower_dim_end; l++) {
-        for (int r = 0; r < REP_DIM; r++) {
-            uint32_t combined_offset = l_offset + r_offset;
-            for (int h = higher_dim_start; h < higher_dim_end; h++) {
-                // Perform the read
-                src_noc_addr = s.get_noc_addr(combined_offset + u_r_offset, 0);
-                data_location = input_buffer + (src_noc_addr & offset_to_use);  // Guaranteed aligned to src_noc_addr
+
+    for (uint32_t h = higher_dim_start; h < higher_dim_end; h++) {
+        uint32_t h_offset = h * LOWER_DIMS_TIMES_REP_DIM;
+        uint32_t h_offset_rep = h_offset * repetitions;
+        for (uint32_t r = 0; r < REP_DIM; r++) {
+            uint32_t r_offset = r * LOWER_DIMS;
+            for (uint32_t l = lower_dim_start; l < lower_dim_end; l++) {
+                // !TODO make offset computation more efficient
+                uint32_t read_offset = h_offset + r_offset + l;
+                src_noc_addr = s.get_noc_addr(read_offset, 0);
+                data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
                 tt::data_movement::common::enhanced_noc_async_read<original_page_size_bytes, false>(
                     src_noc_addr, data_location, original_page_size_bytes);
-                combined_offset += u_w_offset;  // offset of the higher dims
                 noc_async_read_barrier();
-                for (int n = 0; n < repetitions; n++) {
+
+                for (uint32_t n = 0; n < repetitions; n++) {
                     // Perform the writes
-                    const uint64_t dst_noc_addr = d.get_noc_addr(combined_offset, 0);
-                    combined_offset += higher_jump;
+                    // !TODO make offset computation more efficient
+                    uint32_t write_offset = h_offset_rep + n * LOWER_DIMS_TIMES_REP_DIM + r_offset + l;
+                    const uint64_t dst_noc_addr = d.get_noc_addr(write_offset, 0);
                     if ((data_location & w_offset_to_use) != (dst_noc_addr & w_offset_to_use)) {
                         // Can't directly copy
                         const uint32_t target_align_buffer =
@@ -110,17 +112,9 @@ void kernel_main() {
                     tt::data_movement::common::enhanced_noc_async_write<original_page_size_bytes, false>(
                         data_location, dst_noc_addr, original_page_size_bytes);
                 }
-                // Go to the next upper dim offset
-                u_r_offset += higher_jump;
-                u_w_offset += (higher_jump * repetitions);
-                // We invoked all the writes, now we let them complete
                 noc_async_write_barrier();
             }
-            // Go to the next repetition dim value
-            r_offset += LOWER_DIMS;
         }
-        // Go to the next page
-        l_offset++;
     }
     return;
 }
