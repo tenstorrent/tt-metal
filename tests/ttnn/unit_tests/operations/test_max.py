@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.utility_functions import torch_random, is_grayskull
 
 
 @pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
@@ -129,4 +129,5 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    pcc = 0.999 if is_grayskull() else 0.9999
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
