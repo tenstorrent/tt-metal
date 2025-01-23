@@ -373,6 +373,7 @@ on:
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
+          - eltwise.binary.floor_divide.floor_divide
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp

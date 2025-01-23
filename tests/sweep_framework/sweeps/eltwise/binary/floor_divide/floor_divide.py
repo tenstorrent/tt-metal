@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "fdv": {
         "input_shape": [[1, 1, 32, 32], [1, 1, 320, 384], [1, 3, 320, 384]],
         "input_a_dtype": [ttnn.bfloat16],
         "input_b_dtype": [ttnn.bfloat16],
@@ -81,7 +81,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden_function = ttnn.get_golden_function(ttnn.floor_div)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
@@ -101,7 +101,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.floor_div(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
