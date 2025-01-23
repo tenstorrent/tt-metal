@@ -20,3 +20,7 @@ Welcome to the Model Bring-Up and Testing Landing Page!
 ## Model Optimization
 
 - **Model Optimization** - [Advanced Performance Optimization for Models](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md)
+
+## Current Issues
+
+- **Models Issues Board** - [TT-Metal Global Dashboards - Models](https://github.com/orgs/tenstorrent/projects/107/views/12?layout=board)
