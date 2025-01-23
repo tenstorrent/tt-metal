@@ -3,10 +3,56 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_descriptor.hpp"
+#include "rtoptions.hpp"
 
 #include "yaml-cpp/yaml.h"
 
 namespace tt {
+
+inline std::string get_core_descriptor_file(
+    const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
+    string core_desc_dir;
+    if (getenv("TT_METAL_HOME")) {
+        core_desc_dir = getenv("TT_METAL_HOME");
+    } else {
+        core_desc_dir = "./";
+    }
+    if (core_desc_dir.back() != '/') {
+        core_desc_dir += "/";
+    }
+    core_desc_dir += "tt_metal/core_descriptors/";
+
+    bool targeting_sim = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+    if (targeting_sim) {
+        switch (arch) {
+            case tt::ARCH::Invalid:
+                throw std::runtime_error(
+                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_versim_1x1_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
+            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+        };
+    } else {
+        switch (arch) {
+            case tt::ARCH::Invalid:
+                throw std::runtime_error(
+                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+            case tt::ARCH::GRAYSKULL: return core_desc_dir + "grayskull_120_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0:
+                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
+                                            ? "wormhole_b0_80_arch_eth_dispatch.yaml"
+                                            : "wormhole_b0_80_arch.yaml");
+            case tt::ARCH::BLACKHOLE:
+                return core_desc_dir + (dispatch_core_config.get_core_type() == CoreType::ETH
+                                            ? "blackhole_140_arch_eth_dispatch.yaml"
+                                            : "blackhole_140_arch.yaml");
+            case tt::ARCH::QUASAR: TT_THROW("No core descriptor for Quasar"); break;
+        };
+    }
+    return "";
+}
 
 const core_descriptor_t& get_core_descriptor_config(
     chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
@@ -126,7 +172,9 @@ const core_descriptor_t& get_core_descriptor_config(
         }
         dispatch_cores.push_back(coord);
     }
-    TT_ASSERT(dispatch_cores.size() || std::getenv("TT_METAL_SIMULATOR"), "Dispatch cores size must be positive");
+    TT_ASSERT(
+        dispatch_cores.size() || llrt::RunTimeOptions::get_instance().get_simulator_enabled(),
+        "Dispatch cores size must be positive");
 
     std::vector<CoreCoord> logical_compute_cores;
     logical_compute_cores.reserve(compute_cores.size());

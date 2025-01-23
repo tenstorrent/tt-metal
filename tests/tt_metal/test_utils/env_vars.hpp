@@ -41,8 +41,8 @@ inline std::string get_env_arch_name() {
 
 inline std::string get_umd_arch_name() {
 
-    if(std::getenv("TT_METAL_SIMULATOR")) {
-        tt_SimulationDeviceInit init(std::getenv("TT_METAL_SIMULATOR"));
+    if(llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
+        tt_SimulationDeviceInit init(llrt::RunTimeOptions::get_instance().get_simulator_path());
         return tt::arch_to_str(init.get_arch_name());
     }
 
