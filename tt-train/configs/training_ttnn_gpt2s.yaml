@@ -15,13 +15,15 @@ training_config:
   data_path: "data/train_ttnn/tokens.dat"
   scheduler_type: "warmup_linear"
   tokenizer_type: bpe
+  weight_tying: enabled
+  using_clip_grad_norm: true
 
   transformer_config:
     weight_tying: enabled
     runner_type: memory_efficient
     num_heads: 12
     embedding_dim: 768
-    dropout_prob: 0.2
+    dropout_prob: 0.1
     num_blocks: 12
     vocab_size: 224
     max_sequence_length: 1024

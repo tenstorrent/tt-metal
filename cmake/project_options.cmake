@@ -5,7 +5,7 @@
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
-option(ENABLE_LIBCXX "Enable using libc++" ON)
+option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
 option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)

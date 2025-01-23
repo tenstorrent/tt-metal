@@ -104,7 +104,7 @@ jobs:
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
-        cmakeVersion: "~3.16.0"
+        cmakeVersion: "~3.18.0"
     - name: Check CMake version
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version
@@ -129,78 +129,5 @@ jobs:
       # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
       run: |
         echo "Checking compatibility with $(cmake --version)"
-        cmake -B build .
-  clang-tidy:
-    runs-on: ubuntu-latest
-    container: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:latest
-    permissions:
-      pull-requests: write
-      # OPTIONAL: auto-closing conversations requires the `contents` permission
-      contents: write
-    if: github.event_name == 'pull_request'  # Only run this job on pull request events
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
-        fetch-depth: 0
-        submodules: "recursive"
-    - name: Set safe directory for Git
-      run: git config --global --add safe.directory $GITHUB_WORKSPACE
-    - name: Fetch base branch
-      run: |
-        git remote add upstream "https://github.com/${{ github.event.pull_request.base.repo.full_name }}"
-        git fetch --no-tags upstream "${{ github.event.pull_request.base.ref }}"
-    - name: Install clang-tidy
-      run: |
-        sudo apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang-tidy-17 python3.11 python3.11-venv python3.11-dev
-        sudo ln -s $(which clang-tidy-17) /usr/local/bin/clang-tidy
-    - name: Prepare compile_commands.json
-      run: |
-        ARCH_NAME=grayskull cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DTT_METAL_BUILD_TESTS=ON -DTTNN_BUILD_TESTS=ON -DTT_UMD_BUILD_TESTS=ON -DTT_UNITY_BUILDS=OFF
-    - name: 'Install jq'
-      uses: dcarbone/install-jq-action@v2
-    - name: Create results directory
-      run: |
-        mkdir clang-tidy-result
-    - name: Analyze
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        # Find all touched files present in compile_commands.json
-        # This is not as simple as filtering non-code files, as some code (eg: Kernels) are C++ code that
-        # is not built at this level, and thus clang-tidy will be unable to process them.
-        PREFIX=$(pwd)
-        jq --arg prefix "$PREFIX/" -r '.[].file | sub("^" + $prefix; "")' build/compile_commands.json > relative_files_in_build.txt
-        git diff --name-only "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")..." > changed_files.txt
-        grep -F -f relative_files_in_build.txt changed_files.txt > common_files.txt || true
-
-        # Exit if there are no modified files known to CMake
-        [[ -s common_files.txt ]] || {
-          echo "No files to analyze"
-          exit 0
-        }
-
-        # Analyze the relevant diffs of the relevant files
-        git diff "$(git merge-base HEAD "upstream/${{ github.event.pull_request.base.ref }}")" -- $(cat common_files.txt) > filtered_changes.diff
-        clang-tidy-diff-17.py -p1 -path build  -export-fixes clang-tidy-result/fixes.yml -j$(nproc) < filtered_changes.diff
-      timeout-minutes: 5
-      continue-on-error: true
-    - name: Run clang-tidy-pr-comments action
-      uses: platisd/clang-tidy-pr-comments@1b7395ce6f5a4186acabbba24cdd1e846f001aa8
-      with:
-        # The GitHub token (or a personal access token)
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        # The path to the clang-tidy fixes generated above
-        clang_tidy_fixes: clang-tidy-result/fixes.yml
-        # Optionally set to true if you want the Action to request
-        # changes in case warnings are found
-        request_changes: false
-        # Optionally set the number of comments per review
-        # to avoid GitHub API timeouts for heavily loaded
-        # pull requests
-        suggestions_per_comment: 10
-      continue-on-error: true
-    - name: Final step to signal success
-      run: echo "The job passes even if 3rd party action fails."
+        # FIXME: Why is HAVE_STD_REGEX needed? Clean up when we solve it.
+        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .

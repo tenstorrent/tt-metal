@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
-#include <tt-metalium/dataflow_api.h>
+#include "dataflow_api.h"
 #include "dataflow_api.h"
 
 void kernel_main() {

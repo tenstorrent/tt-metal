@@ -19,6 +19,8 @@
 #include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
+#include "command_queue.hpp"
+#include "hardware_command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
@@ -232,7 +234,6 @@ public:
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
-    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId> &get_sub_device_ids() const override;
     const std::vector<SubDeviceId> &get_sub_device_stall_group() const override;
@@ -241,8 +242,8 @@ public:
     uint32_t num_sub_devices() const override;
 
     // TODO #15944: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    std::optional<SubDeviceId> get_fabric_sub_device_id() const override;
+    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     uint32_t get_completion_queue_reader_core() const override { return completion_queue_reader_core_; }
 

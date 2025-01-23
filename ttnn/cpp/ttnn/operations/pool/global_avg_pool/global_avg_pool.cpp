@@ -16,13 +16,8 @@ Tensor pool_2d(const Tensor& input, const MemoryConfig& memory_config, const std
     switch (pool) {
         case PoolType::AVG: {
             uint32_t height_without_padding = input.get_logical_shape()[-2];
-            return ttnn::sum(
-                input,
-                int(input_shape.rank() - 2),
-                true,
-                memory_config,
-                std::nullopt,
-                1 / float(height_without_padding));
+            return ttnn::operations::reduction::pool_sum(
+                input, int(input_shape.rank() - 2), memory_config, std::nullopt, 1 / float(height_without_padding));
         }
         default: TT_THROW("Undefined pool type");
     }

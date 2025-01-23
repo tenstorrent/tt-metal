@@ -209,7 +209,6 @@ public:
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
-    LaunchMessageRingBufferState& get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
@@ -217,8 +216,8 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    std::optional<SubDeviceId> get_fabric_sub_device_id() const override;
+    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     uint32_t get_completion_queue_reader_core() const override;
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override;
@@ -244,7 +243,7 @@ public:
     // Reshaping Rules:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. Line-to-Line Reshaping (when either dimension is 1):
-    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1
+    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
     // 3. Grid-to-Grid Reshaping:
     //    - Only possible if the devices can form a connected physical mesh in the new shape
     //    - Must maintain physical connectivity between adjacent devices

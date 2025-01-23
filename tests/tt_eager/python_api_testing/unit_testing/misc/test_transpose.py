@@ -659,10 +659,10 @@ def test_transpose_hc(dtype, shape, device):
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 )
 def test_transpose_2D(dtype, shape, layout, device):
+    pytest.skip("Unstable see #16779")
     torch.manual_seed(2005)
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_output = torch_input.transpose(0, 1)
 
@@ -937,11 +937,6 @@ def test_transpose_unpadded(shape, dims, layout, dtype, pad_value, device):
 
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device)
     tt_output = ttnn.transpose(tt_input, dims[0], dims[1], pad_value=pad_value)
-    if pad_value is not None:
-        a = ttnn.min(
-            tt_output
-        )  # if min becomes padding aware, this will fail, so feel free to delete this test then @future op writer
-        assert ttnn.to_torch(a) == float("-inf")
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.9999)
 

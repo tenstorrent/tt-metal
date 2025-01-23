@@ -95,7 +95,7 @@ class BlackholeSingleCardFixture : public DeviceSingleCardFixture {
 protected:
     void SetUp() override {
         this->validate_dispatch_mode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_env_arch_name());
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         if (this->arch_ != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP();
         }

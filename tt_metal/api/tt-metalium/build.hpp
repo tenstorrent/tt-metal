@@ -8,7 +8,6 @@
 #include <future>
 
 #include "tt_backend_api_types.hpp"
-#include "executor.hpp"
 #include "utils.hpp"
 #include "core_coord.hpp"
 #include "data_format.hpp"
@@ -31,6 +30,10 @@ struct JitBuiltStateConfig {
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
+    // Set `is_cooperative` when Metal FW/Kernel code is loaded on risc with some base FW running.
+    // In this case Metal FW will need to facilitate context switching to base FW (e.g. code running on WH active
+    // eriscs)
+    bool is_cooperative = false;
 };
 
 // The build environment
@@ -178,9 +181,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_set(const JitBuildStateSet& builds, const JitBuildSettings* settings);
 void jit_build_subset(const JitBuildStateSubset& builds, const JitBuildSettings* settings);
 
-inline void launch_build_step(const std::function<void()> build_func, std::vector<std::shared_future<void>>& events) {
-    events.emplace_back(detail::async(build_func));
-}
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 
 inline void sync_build_step(std::vector<std::shared_future<void>>& events) {
     for (auto& f : events) {

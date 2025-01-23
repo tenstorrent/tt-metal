@@ -72,6 +72,8 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
+
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_msgpack.cmake)
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)

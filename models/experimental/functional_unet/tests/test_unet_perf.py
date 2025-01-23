@@ -7,8 +7,6 @@ import pytest
 
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
 from models.experimental.functional_unet.tt.model_preprocessing import (
     create_unet_input_tensors,
     create_unet_model_parameters,
@@ -16,7 +14,7 @@ from models.experimental.functional_unet.tt.model_preprocessing import (
 from models.experimental.functional_unet.tt import unet_shallow_torch
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import (
-    check_pcc_conv,
+    verify_with_pcc,
     is_n300_with_eth_dispatch_cores,
     is_t3k_with_eth_dispatch_cores,
     UNET_FULL_MODEL_PCC,
@@ -34,7 +32,7 @@ from models.utility_functions import (
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 2, 1040.0),),
+    ((1, 2, 1065.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_model.py::test_unet_model[device_params0-{groups}-{batch}]"
@@ -129,8 +127,8 @@ def test_unet_perf_e2e(
 
     logger.info(f"Running sanity check against reference model output")
     B, C, H, W = torch_output_tensor.shape
-    ttnn_tensor = ttnn.to_torch(output_tensor).reshape(B, H, W, -1)[:, :, :, :C].permute(0, 3, 1, 2)
-    assert_with_pcc(torch_output_tensor, ttnn_tensor, UNET_FULL_MODEL_PCC)
+    ttnn_output_tensor = ttnn.to_torch(output_tensor).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)
 
 
 @skip_for_grayskull("UNet not currently supported on GS")
@@ -222,4 +220,6 @@ def test_unet_data_parallel_perf_e2e(
     )
 
     logger.info(f"Running sanity check against reference model output")
-    check_pcc_conv(torch_output_tensor, output_tensor, mesh_composer=output_mesh_composer, pcc=UNET_FULL_MODEL_PCC)
+    B, C, H, W = torch_output_tensor.shape
+    ttnn_output_tensor = ttnn.to_torch(output_tensor, mesh_composer=output_mesh_composer).reshape(B, C, H, W)
+    verify_with_pcc(torch_output_tensor, ttnn_output_tensor, UNET_FULL_MODEL_PCC)

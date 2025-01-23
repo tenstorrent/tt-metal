@@ -54,10 +54,10 @@
 | Model                                                                       | Batch | Hardware                                                 | fps     | Target fps | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [ResNet-50 (224x224)](./models/demos/grayskull/resnet50)                    | 20    | [e150](https://tenstorrent.com/hardware/grayskull)       | 5,100   | 10,000     |             |
-| [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,670   | 7,000      |             |
-| [ResNet-50 (224x224) (DP=2)](./models/demos/wormhole/resnet50)              | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 8,200   | 14,000     |             |
-| [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 32,250  | 56,000     |             |
-| [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 95,900  | 224,000    |             |
+| [ResNet-50 (224x224)](./models/demos/wormhole/resnet50)                     | 16    | [n150](https://tenstorrent.com/hardware/wormhole)        | 4,700   | 7,000      |             |
+| [ResNet-50 (224x224) (DP=2)](./models/demos/wormhole/resnet50)              | 32    | [n300](https://tenstorrent.com/hardware/wormhole)        | 9,200   | 14,000     |             |
+| [ResNet-50 (224x224) (DP=8)](./models/demos/t3000/resnet50)                 | 128   | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 35,800  | 56,000     |             |
+| [ResNet-50 (224x224) (DP=32)](./models/demos/tg/resnet50)                   | 512   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 96,800  | 224,000    |             |
 | [ResNet-50 (224x224) (DP=64)](./models/demos/tgg/resnet50)                  | 1024  | [Two Galaxies](https://tenstorrent.com/hardware/galaxy)  | 145,000 | 448,000    |             |
 | [ViT (224x224)](./models/demos/grayskull/vit)                               | 9     | [e150](https://tenstorrent.com/hardware/grayskull)       | 1,360   | 2,000      |             |
 | [ViT (224x224)](./models/demos/wormhole/vit)                                | 8     | [n150](https://tenstorrent.com/hardware/wormhole)        | 912     | 1,600      |             |
@@ -120,6 +120,7 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metalium/lates
 - [Saturating DRAM Bandwidth](./tech_reports/Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md) (updated Sept 6th, 2024)
 - [Flash Attention on Wormhole](./tech_reports/FlashAttention/FlashAttention.md) (updated Sept 6th, 2024)
 - [CNNs on TT Architectures](./tech_reports/CNNs/ttcnn.md) (updated Sept 6th, 2024)
+- [CNN Bring-up & Optimization in TT-NN](./tech_reports/CNNs/cnn_optimizations.md.md) (updated Jan 22nd, 2025)
 - [Ethernet and Multichip Basics](./tech_reports/EthernetMultichip/BasicEthernetGuide.md) (Updated Sept 20th, 2024)
 - [Collective Communication Library (CCL)](./tech_reports/EthernetMultichip/CclDeveloperGuide.md) (Updated Sept 20th, 2024)
 - [Blackhole Bring-Up Programming Guide](./tech_reports/Blackhole/BlackholeBringUpProgrammingGuide.md) (Updated Dec 18th, 2024)
