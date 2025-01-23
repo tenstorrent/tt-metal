@@ -18,12 +18,16 @@ namespace ttnn::operations::data_movement {
 namespace detail {
 
 static Tensor manual_insertion(
-    const Tensor& input_tensor, const ttnn::Shape& shape, IDevice* device, const MemoryConfig& output_mem_config) {
+    const Tensor& input_tensor,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape,
+    IDevice* device,
+    const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(
-        shape.logical_shape().volume() == input_tensor.get_logical_volume(),
+        logical_shape.volume() == input_tensor.get_logical_volume(),
         "Required shape volume ({}) must match old shape volume ({})",
-        shape.logical_shape().volume(),
+        logical_shape.volume(),
         input_tensor.get_logical_volume());
     auto device_buffer = input_tensor.device_buffer();
     uint32_t size_in_bytes = device_buffer->size();
@@ -38,7 +42,13 @@ static Tensor manual_insertion(
     }
     auto owned_buffer = owned_buffer::create<uint16_t>(std::move(data_vec));
     auto output =
-        Tensor(OwnedStorage{owned_buffer}, shape, DataType::BFLOAT16, Layout::ROW_MAJOR).to(Layout::ROW_MAJOR);
+        Tensor(
+            OwnedStorage{owned_buffer},
+            TensorSpec(
+                logical_shape,
+                TensorLayout::fromPaddedShape(
+                    DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
+            .to(Layout::ROW_MAJOR);
     if (device != nullptr) {
         output = output.to(device, output_mem_config);
     }
@@ -67,14 +77,18 @@ ttnn::Tensor ReshapeOperation::invoke(
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR &&
-        (input_tensor.get_legacy_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+        (input_tensor.get_padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
-         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_legacy_shape()[-1] % TILE_WIDTH != 0 ||
-         (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
+         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_padded_shape()[-1] % TILE_WIDTH != 0 ||
+         (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % TILE_HEIGHT != 0)) {
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion(
-            (tt::tt_metal::Tensor)input_tensor, output_shape, input_tensor.device(), output_mem_config);
+            (tt::tt_metal::Tensor)input_tensor,
+            output_shape.logical_shape(),
+            output_shape.padded_shape(),
+            input_tensor.device(),
+            output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
     return operation::run(ReshapeDeviceOperation{output_shape, output_mem_config}, {input_tensor}).at(0);

@@ -674,7 +674,8 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_l = ttnn::index_tril<::bfloat16>(
-        input_a.get_legacy_shape(),
+        input_a.get_logical_shape(),
+        input_a.get_padded_shape(),
         diag,
         DataType::BFLOAT16,
         Layout::TILE,
@@ -686,7 +687,8 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_u = ttnn::index_triu<::bfloat16>(
-        input_a.get_legacy_shape(),
+        input_a.get_logical_shape(),
+        input_a.get_padded_shape(),
         diag,
         DataType::BFLOAT16,
         Layout::TILE,
@@ -870,7 +872,7 @@ Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
 Tensor _make_global_from_hw_impl(
     const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+    TT_FATAL(y.get_padded_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
     Tensor y_hw = ttnn::reshape_on_device(
@@ -878,19 +880,19 @@ Tensor _make_global_from_hw_impl(
         ttnn::SimpleShape{
             1,
             1,
-            y.get_legacy_shape()[2],
-            y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]});
+            y.get_padded_shape()[2],
+            y.get_padded_shape()[3] * y.get_padded_shape()[1] * y.get_padded_shape()[0]});
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
-    TT_FATAL(y_hw.get_legacy_shape() == z_0.get_legacy_shape(), "shape match");
+    TT_FATAL(y_hw.get_padded_shape() == z_0.get_padded_shape(), "shape match");
     y_hw.deallocate();
 
     // reformat
     Tensor z_1 = ttnn::reshape_on_device(
         z_0,
         ttnn::SimpleShape{
-            y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]});
+            y.get_padded_shape()[0], y.get_padded_shape()[1], y.get_padded_shape()[2], y.get_padded_shape()[3]});
     z_0.deallocate();
 
     return z_1;

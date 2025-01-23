@@ -68,10 +68,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
     void reset_sub_device_stall_group();
 
-    // TODO #15944: Temporary until migration to actual fabric is complete
-    void set_fabric_sub_device_id(SubDeviceId sub_device_id);
-    std::optional<SubDeviceId> fabric_sub_device_id() const;
-
 private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;

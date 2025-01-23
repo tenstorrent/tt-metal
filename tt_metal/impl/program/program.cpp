@@ -227,8 +227,6 @@ class Program_ {
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
-    std::vector<std::shared_ptr<Buffer>> config_buffers_;
-
     std::vector<ProgramConfig> program_configs_;
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
@@ -251,9 +249,6 @@ class Program_ {
     std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
-    friend void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
-    void add_config_buffer(const std::shared_ptr<Buffer>& config_buffer);
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
@@ -295,10 +290,6 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHand
 // Checks that circular buffers do not grow into L1 buffer space
 void ValidateCircularBufferRegion(const Program &program, const IDevice* device) {
     program.pimpl_->validate_circular_buffer_region(device);
-}
-
-void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer) {
-    program.pimpl_->add_config_buffer(std::move(config_buffer));
 }
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
@@ -893,8 +884,6 @@ void detail::Program_::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     pimpl_->add_semaphore(crs, semaphore_id, init_value, core_type);
 }
-
-void detail::Program_::add_config_buffer(const std::shared_ptr<Buffer>& config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;

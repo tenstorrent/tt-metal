@@ -50,7 +50,7 @@ Tensor host_function(const Tensor& input_tensor) {
 
     return Tensor(
         OwnedStorage{output_buffer},
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_logical_shape(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());
 }

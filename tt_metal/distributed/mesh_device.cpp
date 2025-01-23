@@ -612,10 +612,6 @@ uint32_t MeshDevice::num_sub_devices() const {
     TT_THROW("num_sub_devices() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->num_sub_devices();
 }
-std::optional<SubDeviceId> MeshDevice::get_fabric_sub_device_id() const {
-    TT_THROW("get_fabric_sub_device_id() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_fabric_sub_device_id();
-}
 uint32_t MeshDevice::get_completion_queue_reader_core() const {
     TT_THROW("get_completion_queue_reader_core() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_completion_queue_reader_core();
