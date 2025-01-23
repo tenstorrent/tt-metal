@@ -102,24 +102,6 @@ InterleavedBufferWriteDispatchParams initialize_interleaved_buf_dispatch_params(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {
-    if (buffer.is_valid_partial_region(region)) {
-        TT_FATAL(
-            region.offset % buffer.page_size() == 0,
-            "Offset {} must be divisible by the buffer page size {}.",
-            region.offset,
-            buffer.page_size());
-        TT_FATAL(
-            region.size % buffer.page_size() == 0,
-            "Size {} must be divisible by the buffer page size {}.",
-            region.size,
-            buffer.page_size());
-        TT_FATAL(
-            (region.size + region.offset) <= buffer.size(),
-            "(Size + offset) {} must be <= the buffer size {}.",
-            region.size + region.offset,
-            buffer.size());
-    }
-
     InterleavedBufferWriteDispatchParams dispatch_params;
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
     uint32_t num_pages = region.size / buffer.page_size();
@@ -525,15 +507,7 @@ void write_sharded_buffer_to_core(
     }
 }
 
-// Main API to write buffer data
-void write_to_device_buffer(
-    const void* src,
-    Buffer& buffer,
-    const BufferRegion& region,
-    uint32_t cq_id,
-    tt::stl::Span<const uint32_t> expected_num_workers_completed,
-    CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void validate_buffer_region_conditions(const Buffer& buffer, const BufferRegion& region) {
     if (buffer.is_valid_partial_region(region)) {
         TT_FATAL(
             region.offset % buffer.page_size() == 0,
@@ -551,6 +525,18 @@ void write_to_device_buffer(
             region.size + region.offset,
             buffer.size());
     }
+}
+
+// Main API to write buffer data
+void write_to_device_buffer(
+    const void* src,
+    Buffer& buffer,
+    const BufferRegion& region,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    CoreType dispatch_core_type,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    validate_buffer_region_conditions(buffer, region);
 
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     const BufferDispatchConstants buf_dispatch_constants =
@@ -589,6 +575,8 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {
+    validate_buffer_region_conditions(buffer, region);
+
     // Note that the src_page_index is the device page idx, not the host page idx
     // Since we read core by core we are reading the device pages sequentially
     ShardedBufferReadDispatchParams dispatch_params;
@@ -613,23 +601,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     const BufferRegion& region) {
-    if (buffer.is_valid_partial_region(region)) {
-        TT_FATAL(
-            region.offset % buffer.page_size() == 0,
-            "Offset {} must be a multiple of the buffer page size {}.",
-            region.offset,
-            buffer.page_size());
-        TT_FATAL(
-            region.size % buffer.page_size() == 0,
-            "Size {} must be a multiple of the buffer page size {}.",
-            region.size,
-            buffer.page_size());
-        TT_FATAL(
-            (region.size + region.offset) <= buffer.size(),
-            "(Size + offset) {} must be <= the buffer size {}.",
-            region.size + region.offset,
-            buffer.size());
-    }
+    validate_buffer_region_conditions(buffer, region);
 
     BufferReadDispatchParams dispatch_params;
     dispatch_params.pages_per_txn = region.size / buffer.page_size();
