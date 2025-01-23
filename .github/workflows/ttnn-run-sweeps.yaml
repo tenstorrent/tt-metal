@@ -40,6 +40,7 @@ on:
           - eltwise.unary.leaky_relu.leaky_relu_pytorch2
           - eltwise.unary.abs.abs
           - eltwise.unary.abs.abs_sharded
+          - eltwise.unary.abs.abs_output
           - eltwise.unary.abs.abs_forge
           - eltwise.unary.cos.cos
           - eltwise.unary.cos.cos_pytorch2
@@ -180,6 +181,7 @@ on:
           - eltwise.unary.acosh.acosh_sharded
           - eltwise.unary.acos.acos
           - eltwise.unary.acos.acos_sharded
+          - eltwise.unary.acos.acos_output
           - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_min.relu_min_sharded
