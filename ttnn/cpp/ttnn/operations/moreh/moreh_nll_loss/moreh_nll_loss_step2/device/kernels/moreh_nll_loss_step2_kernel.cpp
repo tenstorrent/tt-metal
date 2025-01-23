@@ -121,7 +121,7 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
         reconfig_data_format(cb_tmp1, cb_divisor_recip);
 #endif
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short(cb_tmp1, cb_divisor_recip);
         mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
         tile_regs_commit();
 
