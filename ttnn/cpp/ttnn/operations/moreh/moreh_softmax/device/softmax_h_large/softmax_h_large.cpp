@@ -125,7 +125,6 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         }
 
         float scaler = 1.0f;
-        // TODO(JB): Why is input unidentified?
         uint32_t mask_h = input.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
