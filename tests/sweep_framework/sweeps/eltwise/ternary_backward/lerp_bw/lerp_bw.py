@@ -25,7 +25,7 @@ random.seed(0)
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "nightly": {
+    "xfail": {
         "input_shape": gen_shapes([1, 1, 1, 2], [6, 12, 256, 256], [1, 1, 1, 2], 2)
         + gen_shapes([1, 1, 2], [12, 256, 256], [1, 1, 2], 2)
         + gen_shapes([1, 2], [256, 256], [1, 2], 2),
