@@ -28,7 +28,7 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     }
     return Tensor(
         OwnedStorage{output_buffer},
-        input_tensor_a.get_legacy_shape(),
+        input_tensor_a.get_logical_shape(),
         input_tensor_a.get_dtype(),
         input_tensor_a.get_layout());
 }

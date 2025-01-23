@@ -628,7 +628,7 @@ Tensor construct_on_host_config_tensor(
     // we need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
-    Shape config_shape = Shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
+    ttnn::SimpleShape config_shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
     if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -641,7 +641,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::SimpleShape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
@@ -671,7 +671,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = Shape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::SimpleShape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else {
         TT_ASSERT(false, "Unsupported shard scheme");

@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            Shape(std::array<uint32_t, 4>{1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
@@ -474,7 +474,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            Shape(std::array<uint32_t, 4>{1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});

@@ -1,15 +1,3 @@
-function(FIND_AND_SET_CLANG17)
-    find_program(CLANGPP_17 clang++-17)
-    find_program(CLANG_17 clang-17)
-
-    if(NOT CLANGPP_17 OR NOT CLANG_17)
-        message(FATAL_ERROR "Clang-17 not found. Make sure you have clang-17 and clang++-17 installed and in your PATH")
-    endif()
-
-    set(CMAKE_CXX_COMPILER "${CLANGPP_17}" PARENT_SCOPE)
-    set(CMAKE_C_COMPILER "${CLANG_17}" PARENT_SCOPE)
-endfunction()
-
 function(CHECK_COMPILERS)
     message(STATUS "Checking compilers")
 
@@ -34,6 +22,6 @@ function(CHECK_COMPILERS)
             message(WARNING "Only GCC-12 is tested right now")
         endif()
     else()
-        message(FATAL_ERROR "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID} ! Only Clang and GCC are supported")
+        message(WARNING "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID} ! Only Clang and GCC are supported")
     endif()
 endfunction()
