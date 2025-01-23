@@ -33,8 +33,12 @@ jobs:
         LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
         PYTHON_ENV_DIR: ${{ github.workspace }}/python_env
       volumes:
+        - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf
+      options: --device /dev/tenstorrent
     steps:
+      - name: Set safe directory for Git
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
