@@ -42,7 +42,8 @@ ttnn::Tensor convert_tile_to_rm(
     // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
         !(((shape[-1] % tile_first_dim != 0) || (shape[-2] % tile_second_dim != 0) ||
-           (tensor.get_shape()[-1] % tile_first_dim != 0) || (tensor.get_shape()[-2] % tile_second_dim != 0)) &&
+           (tensor.get_logical_shape()[-1] % tile_first_dim != 0) ||
+           (tensor.get_logical_shape()[-2] % tile_second_dim != 0)) &&
           (tensor.get_dtype() == DataType::BFLOAT8_B)),
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.get_dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
@@ -69,7 +70,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
 {
     //This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto layout = tensor.get_layout();
-    const auto tensor_shape = tensor.get_shape();
+    const auto& tensor_shape = tensor.get_logical_shape();
     TT_FATAL((tensor_shape.rank() != 0), "Can't do reshape from rank 0 tensor");
     if(layout == ttnn::ROW_MAJOR_LAYOUT)
     {
@@ -81,19 +82,12 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         }
         //Call reshape with the equivalent data 2D Row Major input tensor
         return fix_shape_and_perform_reshape_on_2D_RM(
-            PerformView
-            (
-                tensor,
-                ttnn::Shape{second_dim,tensor_shape[-1]},
-                tile_first_dim,
-                tile_second_dim
-            ),
+            PerformView(tensor, SimpleShape({second_dim, tensor_shape[-1]}), tile_first_dim, tile_second_dim),
             shape,
             tile_first_dim,
             tile_second_dim,
             memory_config,
-            queue_id
-        );
+            queue_id);
     }
     else if (layout == ttnn::Layout::TILE)
     {
@@ -107,20 +101,14 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         const uint32_t second_dim = tensor_shape.rank() > 1 ? tensor_shape[-2] : 1;
         //Call reshape with the equivalent data 3D Tile input tensor
         return fix_shape_and_perform_reshape_on_3D_TILE(
-            PerformView
-            (
-                tensor,
-                ttnn::Shape{third_dim,second_dim,tensor_shape[-1]},
-                tile_first_dim,
-                tile_second_dim
-            )
-            ,shape,
+            PerformView(
+                tensor, SimpleShape({third_dim, second_dim, tensor_shape[-1]}), tile_first_dim, tile_second_dim),
+            shape,
             tile_first_dim,
             tile_second_dim,
             memory_config,
             queue_id,
-            pad_value
-        );
+            pad_value);
     }
     TT_FATAL(false, "Layout is neither tile nor row major");
 
