@@ -42,7 +42,9 @@ Tensor create_owned_tensor_from_row_major_data(
         spec.logical_shape(),
         TensorLayout(spec.data_type(), PageConfig(Layout::ROW_MAJOR, spec.tile()), MemoryConfig{}));
 
-    Tensor output(OwnedStorage{owned_buffer::create(std::move(data))}, result_cpu_spec);
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
+
+    Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, result_cpu_spec);
 
     if (spec.layout() == Layout::TILE) {
         // TODO: whenever possible, perform tiliziation on device.
