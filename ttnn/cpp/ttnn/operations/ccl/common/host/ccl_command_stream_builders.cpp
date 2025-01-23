@@ -105,13 +105,10 @@ Shape4D<uint32_t> from_tensor_shape(ttnn::Shape const& shape) {
     return shape4d;
 }
 
-static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& shape) {
-    auto logical_shape = shape.logical_shape();
-    logical_shape[-2] /= tt::constants::TILE_HEIGHT;
-    logical_shape[-1] /= tt::constants::TILE_WIDTH;
-    TT_FATAL(logical_shape.size() == 4, "Expected 4D shape but got {}", logical_shape.size());
+static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const SimpleShape& shape) {
+    TT_FATAL(shape.rank() == 4, "Expected 4D shape but got {}", shape.rank());
     ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
-        logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
+        shape[0], shape[1], shape[-2] / tt::constants::TILE_HEIGHT, shape[-1] / tt::constants::TILE_WIDTH};
     return shape_in_tiles;
 }
 
@@ -146,7 +143,7 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
     TT_FATAL(num_slices > 0, "Number of slices must be greater than 0");
     std::vector<ttnn::ccl::v2::TensorSlice> tensor_slices;
 
-    auto const input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_shape());
+    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_logical_shape());
     tensor_slices.reserve(num_slices);
 
     // split the input tensor, by shape, into pieces

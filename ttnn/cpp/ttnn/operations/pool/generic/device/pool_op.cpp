@@ -123,7 +123,7 @@ tt::stl::hash::hash_t Pool2D::compute_program_hash(
 operation::OpPerformanceModel Pool2D::create_op_performance_model(
     const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
     const auto& input = inputs.input_tensor_;
-    const auto& input_shape = input.get_shape();
+    const auto& input_shape = input.get_logical_shape();
     auto sliding_window_config = op_attr.sliding_window_config_;
     uint32_t batch_size = sliding_window_config.batch_size;
     uint32_t activation_h = sliding_window_config.input_hw.first;

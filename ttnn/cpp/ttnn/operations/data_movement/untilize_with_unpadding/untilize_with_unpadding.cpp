@@ -39,12 +39,14 @@ using MassagedUntilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>
 using MassagedUntilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<SimpleShape>();
 
     return MassagedUntilizeVal(MassagedUntilizeValParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
-            *original_shape = input_tensor.get_shape();
+            *original_shape = input_tensor.get_logical_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
@@ -67,9 +69,10 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 
     std::vector<uint32_t> output_end_vector;
     tt::tt_metal::LegacyShape output_end = tt::tt_metal::LegacyShape{};
-    if (input_tensor.get_shape().rank() > 4) {
-        for (auto index = 0; index < input_tensor.get_shape().rank(); ++index) {
-            output_end_vector.push_back(input_tensor.get_shape()[index] - 1);
+    const auto input_shape = input_tensor.get_logical_shape();
+    if (input_shape.rank() > 4) {
+        for (auto index = 0; index < input_shape.rank(); ++index) {
+            output_end_vector.push_back(input_shape[index] - 1);
         }
         output_end = squeeze_vector_shape(LegacyShape(output_end_vector));
     } else {

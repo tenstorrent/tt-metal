@@ -235,7 +235,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
     } else {
         TT_THROW("Unsupported sharding layout");
     }
-    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_shape()[-1]});
+    auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.get_logical_shape()[-1]});
     auto config_tensor_shard_orientation = input.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED
                                                ? ShardOrientation::COL_MAJOR
                                                : shard_spec.orientation;

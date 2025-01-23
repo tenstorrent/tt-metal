@@ -92,7 +92,7 @@ Tensor ArgmaxOperation::invoke(
                 } else if ((dim == (input_shape.rank() - 3)) || (dim == (input_shape.rank() - 4))) {
                     bool is_channel = (dim == (input_shape.rank() - 3));
                     Tensor max_val = ttnn::max(input_a, (int)dim, true, output_memory_config);
-                    int repeat = input.get_shape()[dim];
+                    int repeat = input.get_logical_shape()[dim];
                     std::vector<Tensor> combined_tensors;
                     for (int cid = 0; cid < repeat; cid++) {
                         combined_tensors.emplace_back(max_val);
@@ -100,7 +100,7 @@ Tensor ArgmaxOperation::invoke(
                     max_val.deallocate();
                     Tensor concat_out = ttnn::concat(combined_tensors, dim, output_memory_config);
                     // Needed till `max` stops autoformatting output
-                    concat_out = ttnn::reshape(concat_out, input_a.get_shape());
+                    concat_out = ttnn::reshape(concat_out, input_a.get_logical_shape());
                     Tensor cmp_results = ttnn::eq(input_a, concat_out, std::nullopt, output_memory_config);
                     concat_out.deallocate();
                     Tensor tindex = ttnn::index_channel<::bfloat16>(

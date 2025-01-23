@@ -32,7 +32,7 @@ ttnn::Tensor permute_impl(
     const std::optional<float>& pad_value) {
     // Get the device
     IDevice* device = a.device();
-    uint32_t rank = a.get_shape().rank();
+    uint32_t rank = a.get_logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);

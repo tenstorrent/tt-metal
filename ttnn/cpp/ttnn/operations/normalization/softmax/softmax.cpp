@@ -18,7 +18,7 @@ ttnn::Tensor ExecuteSoftmax::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
     auto rank = input_shape.size();
     auto dim = dim_arg;
     if (dim < 0) {
@@ -66,7 +66,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmax::invoke(
     const bool is_causal_mask,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_mask_softmax(
@@ -85,7 +85,7 @@ ttnn::Tensor ExecuteSoftmaxInPlace::invoke(
     const SoftmaxProgramConfig& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax_in_place(
@@ -101,7 +101,7 @@ ttnn::Tensor ExecuteScaleMaskSoftmaxInPlace::invoke(
     const bool is_causal_mask,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_mask_softmax_in_place(
@@ -116,7 +116,7 @@ ttnn::Tensor ExecuteScaleCausalMaskHWSoftmaxInPlace::invoke(
     const SoftmaxProgramConfig& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const bool numeric_stable) {
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
 
     auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::scale_causal_mask_hw_dims_softmax_in_place(

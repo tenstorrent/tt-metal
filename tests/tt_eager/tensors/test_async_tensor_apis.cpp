@@ -106,7 +106,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 128})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), SimpleShape({1, 1, 32, 128}));
 }
 
 TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
@@ -130,7 +130,7 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
-        EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024})));
+        EXPECT_EQ(output_tensor_device.get_logical_shape(), SimpleShape({1, 1, 1024, 1024}));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
 
         Tensor output_tensor_host = output_tensor_device_2.cpu();
@@ -346,7 +346,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, tensor_stop / 32})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), SimpleShape({1, 1, 32, tensor_stop / 32}));
 }
 }  // namespace
 }  // namespace tt::tt_metal
