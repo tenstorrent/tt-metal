@@ -95,7 +95,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
     const auto& input_tensor = tensor_args.input;
     const auto index_dims = operation_attributes.index_dims;
     const auto& index_tensors = tensor_args.index_tensors;
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_shape();
     auto output_shape = input_shape;
     auto layout = input_tensor.get_layout();
 
@@ -170,7 +170,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
                 output_size_vec.push_back(input_shape[input_dim]);
             }
         }
-        // How to handle this? ->
+        // TODO(JB): How to handle this seemingly returning logical shape?
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(

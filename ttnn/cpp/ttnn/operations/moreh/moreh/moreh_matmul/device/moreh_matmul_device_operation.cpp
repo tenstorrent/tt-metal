@@ -29,9 +29,9 @@ void MorehMatmulOperation::validate_inputs(
     check_tensor(bias, "moreh_matmul", "bias", {DataType::BFLOAT16});
 
     // check matrix dims
-
-    const auto& input_shape = input.get_shape().const value auto& other_shape =
-        other.get_shape().const value auto& input_wo_shape = input_shape.without_padding();
+    const auto& input_shape = input.get_shape().value.without_padding();
+    const auto& other_shape = other.get_shape().value.without_padding();
+    const auto& input_wo_shape = input_shape.without_padding();
     const auto& other_wo_shape = other_shape.without_padding();
     uint32_t input_m = (transpose_input) ? (input_wo_shape[-1]) : (input_wo_shape[-2]);
     uint32_t input_k = (transpose_input) ? (input_wo_shape[-2]) : (input_wo_shape[-1]);
@@ -119,13 +119,12 @@ MorehMatmulOperation::program_factory_t MorehMatmulOperation::select_program_fac
 
 MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_shape = tensor_args.input.get_padded_shape();
-    const auto& other_shape = tensor_args.other.get_padded_shape();
+    const auto& input_shape = tensor_args.input.get_shape().value;
+    const auto& other_shape = tensor_args.other.get_shape().value;
     bool transpose_input = operation_attributes.transpose_input;
     bool transpose_other = operation_attributes.transpose_other;
-
-    const auto& input_shape_wo_padding = tensor_args.input.get_logical_shape();
-    const auto& other_shape_wo_padding = tensor_args.other.get_logical_shape();
+    const auto& input_shape_wo_padding = input_shape.without_padding();
+    const auto& other_shape_wo_padding = other_shape.without_padding();
 
     auto h = (transpose_input) ? (input_shape[-1]) : (input_shape[-2]);
     auto w = (transpose_other) ? (other_shape[-2]) : (other_shape[-1]);

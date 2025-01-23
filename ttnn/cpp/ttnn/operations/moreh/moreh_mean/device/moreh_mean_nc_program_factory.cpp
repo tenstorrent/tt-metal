@@ -43,7 +43,7 @@ MorehMeanOperation::MorehMeanNCFactory::cached_program_t MorehMeanOperation::Mor
     const auto Ht = input_shape[-2] / constants::TILE_HEIGHT;
     const auto Wt = input_shape[-1] / constants::TILE_WIDTH;
     const auto HtWt = Ht * Wt;
-    const auto num_reduce_input_tile = input_shape.value[dim];
+    const auto num_reduce_input_tile = input_shape[dim];
 
     const auto rank = input_shape.rank();
     auto input_tile_stride = HtWt;

@@ -52,8 +52,8 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    const auto& output_grad_shape = output_grad.get_padded_shape();
-    const auto& output_grad_shape_without_padding = output_grad.get_logical_shape();
+    const auto& output_grad_shape = output_grad.get_shape().value;
+    const auto& output_grad_shape_without_padding = output_grad_shape.without_padding();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
