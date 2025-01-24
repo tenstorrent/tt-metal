@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -1731,7 +1732,25 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
-    uint32_t num_blocks = K / in0_block_w;
+    /* Core setup */
+    constexpr bool row_major = true;
+    CoreRangeSet all_cores = a.shard_spec().value().grid;
+    std::vector<CoreRange> ring_list = all_cores.ranges();
+    std::vector<CoreRange> hop_list = hop_cores.ranges();
+    ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
+
+    CoreRangeSet ring_cores = CoreRangeSet(ring_list);
+    const uint32_t num_cores = all_cores.num_cores();
+    const uint32_t ring_size = num_cores;
+
+    uint32_t num_hop_cores = hop_cores.num_cores();
+    bool use_hop_cores = num_hop_cores > 0;
+
+    /* Inner dim padding */
+    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
+    in0_block_w = Kt_pad / num_cores;
+
+    uint32_t num_blocks = Kt_pad / in0_block_w;
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -1747,20 +1766,6 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
-
-    /* Core setup */
-    constexpr bool row_major = true;
-    CoreRangeSet all_cores = a.shard_spec().value().grid;
-    std::vector<CoreRange> ring_list = all_cores.ranges();
-    std::vector<CoreRange> hop_list = hop_cores.ranges();
-    ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
-
-    CoreRangeSet ring_cores = CoreRangeSet(ring_list);
-    const uint32_t num_cores = all_cores.num_cores();
-    const uint32_t ring_size = num_cores;
-
-    uint32_t num_hop_cores = hop_cores.num_cores();
-    bool use_hop_cores = num_hop_cores > 0;
 
     /* in0 */
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
@@ -1784,6 +1789,13 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t out_CB_tiles = out_block_tiles;  // No double buffer
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
+
+    uint32_t K_ = K;
+    std::vector<uint32_t> unpadded_in0_shard_widths_in_tiles(num_cores, 0);
+    for (uint32_t i = 0; i < num_cores && K_ > 0; ++i) {
+        unpadded_in0_shard_widths_in_tiles[i] = std::min(K_, in0_shard_width_in_tiles);
+        K_ -= unpadded_in0_shard_widths_in_tiles[i];
+    }
 
     /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, ring_cores, INVALID);
@@ -2019,12 +2031,19 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             (std::uint32_t)false,  // is_hop_core
             (std::uint32_t)false,  // end_of_hop
         };
+
+        mm_in0_args.insert(
+            mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             i,  // ring_idx
         };
+        mm_kernel_compute_args.insert(
+            mm_kernel_compute_args.end(),
+            unpadded_in0_shard_widths_in_tiles.begin(),
+            unpadded_in0_shard_widths_in_tiles.end());
 
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }
@@ -2185,6 +2204,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
     uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
@@ -2194,20 +2214,10 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
-        num_blocks_total <= num_cores_x * num_cores_y,
+        num_blocks_total <= num_cores,
         "Number of blocks exceeds number of cores: {} blocks > {} cores",
         num_blocks_total,
-        num_cores_x * num_cores_y);
-
-    if (gather_in0) {
-        TT_FATAL(
-            num_blocks_total == num_cores_x * num_cores_y,
-            "Number of blocks must equal number of cores for gather_in0 mode: {} blocks != {} cores",
-            num_blocks_total,
-            num_cores_x * num_cores_y);
-
-        TT_FATAL(!untilize_out, "Untilize out is not suported wit gather_in0 mode");
-    }
+        num_cores);
 
     if (!gather_in0) {
         TT_FATAL(hop_cores.empty(), "Hop cores are not supported for any mode besides gather_in0.");
