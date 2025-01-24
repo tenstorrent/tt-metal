@@ -25,24 +25,15 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
 
     TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
-    if (input_shape.rank() == 1) {
+    for (auto i = 0; i < input_shape.rank(); i++) {
         TT_FATAL(
-            input_shape[0] <= this->output_padded_shape[1],
-            "Output tensor shape {} must be greater than or equal to input shape {} , but is smaller "
-            "in dimension 0",
+            input_shape[i] <= this->output_padded_shape[i],
+            "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
+            "smaller "
+            "in dimension {}",
             this->output_padded_shape,
-            input_shape);
-    } else {
-        for (auto i = 0; i < input_shape.rank(); i++) {
-            TT_FATAL(
-                input_shape[i] <= this->output_padded_shape[i],
-                "Output tensor shape {} must be greater than or equal to input shape {} in each dimension, but is "
-                "smaller "
-                "in dimension {}",
-                this->output_padded_shape,
-                input_shape,
-                i);
-        }
+            input_shape,
+            i);
     }
 
     uint32_t num_rows = this->output_padded_shape[-1];
