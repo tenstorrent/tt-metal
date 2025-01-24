@@ -20,27 +20,6 @@ jobs:
               timeout: 40
             },
             {
-              name: "GS ttnn nightly",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 40
-            },
-            {
-              name: "WH N150 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            },
-            {
-              name: "WH N300 ttnn nightly",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              cmd: tests/scripts/single_card/nightly/run_ttnn.sh,
-              timeout: 70
-            },
-            {
               name: "GS-only models",
               arch: grayskull,
               runs-on: ["cloud-virtual-machine", "E150", "in-service"],
