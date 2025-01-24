@@ -257,7 +257,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
