@@ -773,11 +773,15 @@ private:
     void add_prefetch_relay_inline(
         bool flush, uint32_t lengthB, DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER) {
         if (!flush) {
+            uint32_t dispatch_page_size = 1
+                                          << (dispatcher_type == DispatcherSelect::DISPATCH_MASTER
+                                                  ? dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE
+                                                  : dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
             TT_ASSERT(
-                lengthB <= (1 << dispatcher_type == DispatcherSelect::DISPATCH_MASTER
-                                ? dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE
-                                : dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE),
-                "Data to relay for inline no flush must fit within one page");
+                lengthB <= dispatch_page_size,
+                "Data to relay for inline no flush {} must fit within one dispatch page {}",
+                lengthB,
+                dispatch_page_size);
         }
         auto initialize_relay_write = [&](CQPrefetchCmd* relay_write) {
             relay_write->base.cmd_id = flush ? CQ_PREFETCH_CMD_RELAY_INLINE : CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH;
