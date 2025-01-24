@@ -117,12 +117,10 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     reader_kernel_config.compile_args = {
         ring_index,                                       // my_chip_id
-        static_cast<uint32_t>(input_tensor_layout),       // tensor0_layout
         static_cast<uint32_t>(input_tensor_buffer_type),  // buffer0_type
-        static_cast<uint32_t>(input_tensor_page_layout),  // tensor0_page_layout
         src0_cb_index,                                    // cb0_id
-        input_tensor_num_pages,                           // num_pages_read_total per chip
-        num_links,                                        // num_workers
+        num_pages_per_packet,                             // packet_size_in_pages
+        op_config.get_page_size(),                        // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
     for (const auto& arg : reader_kernel_config.compile_args) {
@@ -141,12 +139,10 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
         ring_index,                                        // my_chip_id
         reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
         num_packet_headers_storable,                       // num_packet_headers_storable
-        static_cast<uint32_t>(output_tensor_layout),       // tensor0_layout
         static_cast<uint32_t>(output_tensor_buffer_type),  // buffer0_type
-        static_cast<uint32_t>(output_tensor_page_layout),  // tensor0_page_layout
         src0_cb_index,                                     // cb0_id
-        input_tensor_num_pages,                            // num_pages_read_total per chip
-        num_links,                                         // num_workers
+        num_pages_per_packet,                              // packet_size_in_pages
+        op_config.get_page_size(),                         // tensor0_page_size
         num_targets_forward,                               // num_targets_forward_direction
         num_targets_backward,                              // num_targets_backward_direction
     };
@@ -164,7 +160,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
                                 // semaphore
-    for (std::size_t link = 0; link < num_links; link++) {
+    for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
         if (link == 0) {
             // drain sync core is the first worker core
@@ -182,10 +178,14 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
                       device, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD));
 
         // Set reader runtime args
+        uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
+        uint32_t remainder = input_tensor_num_pages % num_links;
+        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
+        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // tensor_address0
-            num_pages_per_packet,              // packet_size_in_pages
-            op_config.get_page_size(),         // tensor0_page_size
+            input_tile_id_start,               // tile_id_start
+            input_tile_id_end,                 // tile_id_end
         };
         log_trace(tt::LogOp, "Reader Runtime Args:");
         for (const auto& arg : reader_rt_args) {
@@ -197,10 +197,12 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
+        uint32_t output_tile_id_start = ring_index * input_tensor_num_pages + input_tile_id_start;
+        uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
-            num_pages_per_packet,               // packet_size_in_pages
-            op_config.get_page_size(),          // tensor0_page_size
+            output_tile_id_start,               // tile_id_start
+            output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
             reset_global_semaphore,             // reset_global_semaphore
             semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
