@@ -6,4 +6,8 @@ namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value);
 
+operation::ProgramWithCallbacks fill_pad_sharded(const Tensor& input_tensor, float fill_value);
+
+operation::ProgramWithCallbacks fill_pad(const Tensor& input_tensor, float fill_value);
+
 }  // namespace ttnn::operations::data_movement::detail
