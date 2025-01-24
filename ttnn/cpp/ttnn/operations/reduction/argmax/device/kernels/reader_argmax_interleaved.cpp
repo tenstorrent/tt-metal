@@ -44,6 +44,8 @@ void kernel_main() {
         for (uint32_t k = 0; k < C; k++) {
             for (uint32_t j = 0; j < H; j++) {
                 for (uint32_t l = 0; l < W; l++) {
+                    noc_async_read_page(i * C * H * W + k * H * W + j * W + l, s0, cb_addr);
+                    noc_async_read_barrier();
                     uint32_t max_index = 0;
                     uint16_t max_val = stick[0];
                     uint32_t index_counter = 0;
@@ -65,10 +67,11 @@ void kernel_main() {
         for (uint32_t b = 0; b < B; b++) {
             for (uint32_t j = 0; j < H; j++) {
                 for (uint32_t l = 0; l < W; l++) {
+                    noc_async_read_page(b * C * H * W + 0 * H * W + j * W + l, s0, cb_addr);
+                    noc_async_read_barrier();
                     uint32_t max_index = 0;
-                    uint16_t max_val = stick[b * C * H * W + 0 * H * W + j * W + l];
                     uint32_t index_counter = 0;
-
+                    max_val = stick[0];
                     for (uint32_t c = 0; c < C; c++) {
                         uint16_t val = stick[b * C * H * W + c * H * W + j * W + l];
 
@@ -86,10 +89,11 @@ void kernel_main() {
         for (uint32_t b = 0; b < B; b++) {
             for (uint32_t c = 0; c < C; c++) {
                 for (uint32_t l = 0; l < W; l++) {
+                    noc_async_read_page(b * C * H * W + c * H * W + 0 * W + l, s0, cb_addr);
+                    noc_async_read_barrier();
                     uint32_t max_index = 0;
-                    uint16_t max_val = stick[b * C * H * W + c * H * W + 0 * W + l];
                     uint32_t index_counter = 0;
-
+                    max_val = stick[0];
                     for (uint32_t h = 0; h < H; h++) {
                         uint16_t val = stick[b * C * H * W + c * H * W + h * W + l];
 
