@@ -38,8 +38,18 @@ namespace tt {
 namespace tt_metal {
 
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
-    id_(device_id), worker_thread_core_(worker_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_core, device_id) {
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal,
+    uint32_t worker_core,
+    uint32_t completion_queue_reader_core) :
+    id_(device_id),
+    worker_thread_core_(worker_core),
+    completion_queue_reader_core_(completion_queue_reader_core),
+    work_executor_(std::make_unique<WorkExecutor>(worker_core, device_id)) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
@@ -1031,7 +1041,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
         return true;
 
     // Mark initialized before compiling and sending dispatch kernels to device because compilation expects device to be initialized
-    this->work_executor_.initialize();
+    this->work_executor_->initialize();
     this->initialized_ = true;
 
     return true;
@@ -1042,7 +1052,7 @@ void Device::push_work(std::function<void()> work, bool blocking) {
         log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
         return;
     }
-    this->work_executor_.push_work(std::move(work), blocking);
+    this->work_executor_->push_work(std::move(work), blocking);
 }
 
 bool Device::close() {
@@ -1058,7 +1068,7 @@ bool Device::close() {
         hw_command_queue->terminate();
     }
 
-    this->work_executor_.reset();
+    this->work_executor_->reset();
     tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);
@@ -1529,21 +1539,17 @@ CommandQueue &Device::command_queue(size_t cq_id) {
     return *sw_command_queues_[cq_id];
 }
 
-bool Device::can_use_passthrough_scheduling() const {
-    return this->work_executor_.use_passthrough();
-}
+bool Device::can_use_passthrough_scheduling() const { return this->work_executor_->use_passthrough(); }
 
 void Device::synchronize() {
     if (not this->initialized_) {
         log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
         return;
     }
-    this->work_executor_.synchronize();
+    this->work_executor_->synchronize();
 }
 
-void Device::set_worker_mode(const WorkExecutorMode& mode) {
-    this->work_executor_.set_worker_mode(mode);
-}
+void Device::set_worker_mode(const WorkExecutorMode& mode) { this->work_executor_->set_worker_mode(mode); }
 
 void Device::enable_async(bool enable) {
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
@@ -1553,7 +1559,8 @@ void Device::enable_async(bool enable) {
     // This is required for checking if a call is made from an application thread or a worker thread.
     // See InWorkerThread().
     if (enable) {
-        tt::DevicePool::instance().register_worker_thread_for_device(this, this->work_executor_.get_worker_thread_id());
+        tt::DevicePool::instance().register_worker_thread_for_device(
+            this, this->work_executor_->get_worker_thread_id());
     } else {
         tt::DevicePool::instance().unregister_worker_thread_for_device(this);
     }

@@ -523,14 +523,6 @@ WorkExecutorMode MeshDevice::get_worker_mode() {
     TT_THROW("get_worker_mode() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_worker_mode();
 }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    TT_THROW("set_worker_queue_mode() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->set_worker_queue_mode(mode);
-}
-WorkerQueueMode MeshDevice::get_worker_queue_mode() {
-    TT_THROW("get_worker_queue_mode() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_worker_queue_mode();
-}
 bool MeshDevice::is_worker_queue_empty() const {
     TT_THROW("is_worker_queue_empty() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_worker_queue_empty();
