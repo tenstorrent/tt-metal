@@ -187,7 +187,7 @@ autograd::TensorPtr matmul(
     auto out = autograd::create_tensor();
     out->set_value(ttnn_matmul(a->get_value(), b->get_value(), transpose_a, transpose_b));
 
-    autograd::GradFunction grad = [a, b, out]() {
+    autograd::GradFunction grad = [a, b, out, transpose_a, transpose_b]() {
         // For loss function L and matmul C = AB:
         // dL/dA = dL/dC * B^T
         // dL/dB = A^T * dL/dC
@@ -196,13 +196,13 @@ autograd::TensorPtr matmul(
         auto grad_a = ttnn_matmul(
             out->get_grad(),
             b->get_value(),
-            /* transpose_a */ false,
-            /* transpose_b */ true);
+            /* transpose_a */ transpose_a,
+            /* transpose_b */ !transpose_b);
         auto grad_b = ttnn_matmul(
             a->get_value(),
             out->get_grad(),
-            /* transpose_a */ true,
-            /* transpose_b */ false);
+            /* transpose_a */ !transpose_a,
+            /* transpose_b */ transpose_b);
 
         a->add_grad(grad_a);
         b->add_grad(grad_b);
