@@ -26,7 +26,7 @@ struct ExecuteTopK {
     static std::vector<Tensor> invoke(
         uint8_t queue_id,
         const Tensor& input_tensor,
-        const uint16_t k,
+        const int32_t k,
         const int8_t dim,
         const bool largest,
         const bool sorted,
@@ -35,7 +35,7 @@ struct ExecuteTopK {
 
     static auto invoke(
         const Tensor& input_tensor,
-        const uint16_t k,
+        const int32_t k,
         const int8_t dim,
         const bool largest,
         const bool sorted,

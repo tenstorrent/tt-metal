@@ -63,9 +63,9 @@ void MAIN {
             copy_tile(input_cb_index, wt, 0);
             // pack value tiles into cb_intermed2
             pack_tile(0, input_transposed_cb_index);
-            cb_push_back(input_transposed_cb_index, 1);
             release_dst();
         }
+        cb_push_back(input_transposed_cb_index, Wt);
         cb_wait_front(input_transposed_cb_index, Wt);
         cb_pop_front(input_cb_index, Wt);
 
@@ -96,11 +96,11 @@ void MAIN {
             cb_wait_front(index_transposed_cb_index, Wt);
 
             uint32_t i = 0;
-            uint32_t dist = (1 << m_iter) * tiles_per_seq;
+            uint32_t dist = ((1 << m_iter) * K) >> 5;
             uint32_t left_tile_id = 0;
             while (i < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    left_tile_id = i * (1 << m_iter) * tiles_per_seq + t;
+                    left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
                     uint32_t right_tile_id = left_tile_id + dist;
                     if (left_tile_id == right_tile_id) {
                         right_tile_id = left_tile_id + 1;
@@ -164,7 +164,7 @@ void MAIN {
 
             while (idx < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    uint32_t left_ind = idx * (1 << (m_iter + 1)) * tiles_per_seq + t;
+                    uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
                     if (left_ind >= Wt) {
                         break;
                     }

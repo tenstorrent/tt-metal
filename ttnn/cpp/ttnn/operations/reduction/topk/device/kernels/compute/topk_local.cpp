@@ -42,6 +42,7 @@ void MAIN {
     constexpr uint32_t index_dest_end = 3;
     constexpr uint32_t tiles_per_seq = std::max(K / 32, (uint32_t)1);
 
+    // we support K only up to 64
     int end_phase = (K <= 64) ? logk - 1 : 5;
     // init pack, compute and unpack
 
@@ -107,11 +108,11 @@ void MAIN {
             cb_wait_front(index_transposed_cb_index, Wt);
 
             uint32_t i = 0;
-            uint32_t dist = (1 << m_iter) * tiles_per_seq;
+            uint32_t dist = ((1 << m_iter) * K) >> 5;
             uint32_t left_tile_id = 0;
             while (i < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    left_tile_id = i * (1 << m_iter) * tiles_per_seq + t;
+                    left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
                     uint32_t right_tile_id = left_tile_id + dist;
                     if (left_tile_id == right_tile_id) {
                         right_tile_id = left_tile_id + 1;
@@ -159,7 +160,6 @@ void MAIN {
 
             cb_push_back(input_transposed_cb_index, Wt);
             cb_push_back(index_transposed_cb_index, Wt);
-            // print_all_tiles(input_transposed_cb_index, 0);
 
             // we have decreased our search space by half
             num_k_sequences = num_k_sequences >> 1;
@@ -175,7 +175,7 @@ void MAIN {
 
             while (idx < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    uint32_t left_ind = idx * (1 << (m_iter + 1)) * tiles_per_seq + t;
+                    uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
                     if (left_ind >= Wt) {
                         break;
                     }

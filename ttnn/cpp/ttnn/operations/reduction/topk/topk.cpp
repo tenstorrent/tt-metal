@@ -3,13 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "topk.hpp"
+#include <cstdint>
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::reduction {
 
-uint16_t get_nearest_power_of_2(uint16_t k) {
-    uint16_t nearest_power_of_2 = 1;
+int32_t get_nearest_power_of_2(int32_t k) {
+    // LLK only support k = 4, 8, 16, 32, 64
+    if (k == 4 || k == 8 || k == 16 || k == 32 || k == 64) {
+        return k;
+    }
+    if (k <= 2) {
+        return 4;
+    }
+    int32_t nearest_power_of_2 = 1;
     while (nearest_power_of_2 < k) {
         nearest_power_of_2 *= 2;
     }
@@ -25,6 +33,20 @@ inline Tensor transform_to_4d_tensor(const Tensor& input_tensor, const bool is_r
     return is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor) : data_movement::squeeze_from_ND_to_4D(input_tensor);
 }
 
+inline Tensor perform_padding(const Tensor& input_tensor, const bool largest) {
+    auto input_shape = input_tensor.get_padded_shape();
+    auto last_dim = input_shape[-1];
+    auto new_last_dim = tt::round_up(last_dim, tt::constants::TILE_WIDTH);
+    if (last_dim == new_last_dim) {
+        return input_tensor;
+    }
+    return ttnn::pad(
+        input_tensor,
+        tt::tt_metal::Array4D({input_shape[0], input_shape[1], input_shape[2], new_last_dim}),
+        tt::tt_metal::Array4D({0, 0, 0, 0}),
+        largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
+}
+
 // one stop for all transformations needed after executing top-k
 // do we need seperate function for each case? revisit this later
 std::vector<Tensor> post_topk_transform_tensor(
@@ -32,8 +54,8 @@ std::vector<Tensor> post_topk_transform_tensor(
     std::vector<Tensor>& result,
     const int8_t dim,
     const bool is_dim_last_idx,
-    const uint16_t k,
-    const uint16_t adjusted_k,
+    const int32_t k,
+    const int32_t adjusted_k,
     const MemoryConfig& input_memory_config) {
     TT_ASSERT(result[0].get_shape().rank() == 4, "Output shape rank must be 4");
     TT_ASSERT(result[1].get_shape().rank() == 4, "Output shape rank must be 4");
@@ -74,7 +96,7 @@ std::vector<Tensor> post_topk_transform_tensor(
 std::vector<Tensor> ExecuteTopK::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
-    const uint16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
@@ -87,15 +109,17 @@ std::vector<Tensor> ExecuteTopK::invoke(
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     // K may not be power of 2
-    uint16_t adjusted_k = get_nearest_power_of_2(k);
+    int32_t adjusted_k = get_nearest_power_of_2(k);
     // if dim is not last dimension, transpose it
     Tensor transposed_tensor = perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // if input is not 4d, convert it to 4d
     Tensor transformed_tensor = transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
+    // add padding if needed
+    Tensor padded_tensor = perform_padding(transformed_tensor, largest);
 
     auto output_tensor_vec = operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config},
-        {transformed_tensor},
+        {padded_tensor},
         {},
         optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value())
                                             : std::vector<std::optional<Tensor>>{},
@@ -107,7 +131,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
 auto ExecuteTopK::invoke(
     const Tensor& input_tensor,
-    const uint16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,

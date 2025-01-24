@@ -26,7 +26,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(7);
     constexpr uint32_t K = get_compile_time_arg_val(8);
     constexpr uint32_t logk = get_compile_time_arg_val(9);
-    constexpr uint32_t logWt = get_compile_time_arg_val(10);
+    constexpr uint32_t logNk = get_compile_time_arg_val(10);
     constexpr uint32_t largest = get_compile_time_arg_val(11);
     constexpr uint32_t sorted = get_compile_time_arg_val(12);
 
@@ -96,18 +96,18 @@ void MAIN {
 
         // iterative divide and conquer on pairs of tiles (bitonic topk merge and rebuild)
         // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
-        // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
+        // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logNk iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
-        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+        for (uint32_t m_iter = 0; m_iter < logNk; ++m_iter) {
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
 
             uint32_t i = 0;
-            uint32_t dist = (1 << m_iter) * tiles_per_seq;
+            uint32_t dist = ((1 << m_iter) * K) >> 5;
             uint32_t left_tile_id = 0;
             while (i < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    left_tile_id = i * (1 << m_iter) * tiles_per_seq + t;
+                    left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
                     uint32_t right_tile_id = left_tile_id + dist;
                     if (left_tile_id == right_tile_id) {
                         right_tile_id = left_tile_id + 1;
@@ -155,7 +155,6 @@ void MAIN {
 
             cb_push_back(input_transposed_cb_index, Wt);
             cb_push_back(index_transposed_cb_index, Wt);
-            // print_all_tiles(input_transposed_cb_index, 0);
 
             // we have decreased our search space by half
             num_k_sequences = num_k_sequences >> 1;
@@ -171,7 +170,7 @@ void MAIN {
 
             while (idx < num_k_sequences) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
-                    uint32_t left_ind = idx * (1 << (m_iter + 1)) * tiles_per_seq + t;
+                    uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
                     if (left_ind >= Wt) {
                         break;
                     }

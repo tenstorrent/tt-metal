@@ -12,7 +12,7 @@ namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
-    const uint16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         Wt,
         k,
         (std::uint32_t)std::log2(k),
-        (std::uint32_t)std::log2(Wt),
+        (std::uint32_t)std::log2(input_shape[3] / k),
         (std::uint32_t)largest,
         (std::uint32_t)sorted,
     };
@@ -183,7 +183,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t min_dim,
     uint16_t max_dim,
     CoreCoord grid,
-    uint16_t k,
+    int32_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
@@ -199,8 +199,13 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
             (split_size / tt::constants::TILE_WIDTH) *
             (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
                                                   // as a matching set of indices, is processed by a core
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local) < l1_size && num_cores > 1) {
-            return {num_cores + 1, split_size, rem, num_cores * k};
+        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local * num_cores) < (l1_size * num_cores) &&
+            num_cores > 1) {
+            return {
+                num_cores + 1,
+                split_size,
+                rem,
+                num_cores * std::max(static_cast<uint32_t>(k), static_cast<uint32_t>(tt::constants::TILE_WIDTH))};
         }
     }
     return {max_cores + 1, width, 0, width * k};
@@ -212,7 +217,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
-    const uint16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
