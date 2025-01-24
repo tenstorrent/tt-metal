@@ -26,7 +26,8 @@ class SubDeviceManagerTracker {
 public:
     // TODO: Potentially move the global allocator creation into here instead of from the device
     // This creates the SubDeviceManagerTracker with a default SubDeviceManager that has the entire grid as a sub-device
-    SubDeviceManagerTracker(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
+    SubDeviceManagerTracker(
+        IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
 
     SubDeviceManagerTracker(const SubDeviceManagerTracker& other) = delete;
     SubDeviceManagerTracker& operator=(const SubDeviceManagerTracker& other) = delete;
@@ -57,6 +58,9 @@ public:
     // Currently only used by program's determine_sub_device_ids algorithm to avoid running the search algorithm in the
     // default case to not affect performance
     SubDeviceManagerId get_default_sub_device_manager_id() const;
+
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) const;
 
 private:
     void reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager);
