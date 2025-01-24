@@ -61,7 +61,7 @@ jobs:
         # rely on the artifact that was already compiled. We point it to where the repo is.
         run: echo "TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}" >> $GITHUB_ENV
       - name: Build Python package distribution
-        run: python -m build
+        run: python3 -m build
       - name: Upload distribution as artifact
         uses: actions/upload-artifact@v4
         with:
