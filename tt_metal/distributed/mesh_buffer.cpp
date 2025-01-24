@@ -54,6 +54,20 @@ void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevic
 
 }  // namespace
 
+uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
+    return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
+}
+
+std::pair<bool, bool> ShardedBufferConfig::replicated_dims() const {
+    return {shard_shape.height() == 0, shard_shape.width() == 0};
+}
+
+Shape2D ShardedBufferConfig::physical_shard_shape() const {
+    const auto [shard_height, shard_width] = shard_shape;
+    const auto [global_height, global_width] = global_buffer_shape;
+    return Shape2D(shard_height == 0 ? global_height : shard_height, shard_width == 0 ? global_width : shard_width);
+}
+
 std::shared_ptr<MeshBuffer> MeshBuffer::create(
     const MeshBufferConfig& mesh_buffer_config,
     const DeviceLocalBufferConfig& device_local_config,
@@ -126,7 +140,7 @@ void MeshBuffer::allocate() {
     }
 }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const Coordinate& device_coord) {
+std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const Coordinate& device_coord) const {
     TT_FATAL(
         device_coord.row < mesh_device_->num_rows() and device_coord.col < mesh_device_->num_cols(),
         "Logical coordinates must be within the bounds of the mesh: {}, {}, mesh shape: {}, {}",

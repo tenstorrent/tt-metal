@@ -45,7 +45,7 @@ private:
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program);
 
     std::unordered_map<std::size_t, ProgramBinaryStatus> program_binary_status_;
-    std::unordered_set<std::shared_ptr<Buffer>> kernel_bin_buffers_;
+    std::shared_ptr<MeshBuffer> kernel_bin_buf_;
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
