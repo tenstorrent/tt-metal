@@ -28,7 +28,7 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const auto& input_shape_padded = input.get_padded_shape();
     auto rank = input_shape_padded.rank();
 
-    auto N = input_shape[0];
+    auto N = input_shape_padded[0];
 
     // copy 32 Btyes per core
     uint32_t units_to_divide = N / tt::constants::TILE_HEIGHT;

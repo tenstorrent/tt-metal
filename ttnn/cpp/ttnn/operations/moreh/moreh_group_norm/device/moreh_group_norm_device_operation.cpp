@@ -52,17 +52,11 @@ void MorehGroupNormOperation::validate_tensors(
 
     // mean (1, 1, N, num_groups)
     if (mean.has_value()) {
-        TT_FATAL(
-            //"mean_shape[-1] must match num_groups.");
-            mean.value().get_padded_shape()[-1] == num_groups,
-            "mean_shape[-1] must match num_groups.");
+        TT_FATAL(mean.value().get_padded_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
     }
     // rstd (1, 1, N, num_groups)
     if (rstd.has_value()) {
-        TT_FATAL(
-            //"rstd_shape[-1] must match num_groups.");
-            rstd.value().get_padded_shape()[-1] == num_groups,
-            "rstd_shape[-1] must match num_groups.");
+        TT_FATAL(rstd.value().get_padded_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
     }
 }
 

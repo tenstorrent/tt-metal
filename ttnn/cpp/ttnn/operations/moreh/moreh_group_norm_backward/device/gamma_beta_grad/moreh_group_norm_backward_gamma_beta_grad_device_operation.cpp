@@ -33,7 +33,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     check_tensor(beta_grad, "moreh_group_norm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_logical_shape()[1];
+    auto C = output_grad.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
     C = input.get_logical_shape()[1];

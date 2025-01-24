@@ -18,24 +18,23 @@ void MorehCumsumDeviceOperation::validate_inputs(
         return;
     }
 
-    const auto input_shape = input.get_logical_shape();
-    const auto output_shape = output->get_logical_shape();
+    const auto input_shape_padded = input.get_padded_shape();
+    const auto output_shape_padded = output->get_padded_shape();
 
-    // Unnecessary? ->
-    //const auto input_shape_wo_padding = input.get_logical_shape();
-    //const auto output_shape_wo_padding = input.get_logical_shape();
-    for (int i = 0; i < input_shape.rank(); ++i) {
+    const auto input_shape = input.get_logical_shape();
+    const auto output_shape = input.get_logical_shape();
+    for (int i = 0; i < input_shape_padded.rank(); ++i) {
         TT_FATAL(
             input_shape[i] == output_shape[i],
             "Input shape must match output shape. Received input_shape = {} and output_shape = {}.",
             input_shape[i],
             output_shape[i]);
-        //TT_FATAL(
-        //    input_shape_wo_padding[i] == output_shape_wo_padding[i],
-        //    "Input and output shapes (excluding padding) must be equal. Received input_shape_wo_padding = {} and "
-        //    "output_shape_wo_padding = {}.",
-        //    input_shape_wo_padding[i],
-        //    output_shape_wo_padding[i]);
+        TT_FATAL(
+            input_shape_wo_padding[i] == output_shape_wo_padding[i],
+            "Input and output shapes (excluding padding) must be equal. Received input_shape_wo_padding = {} and "
+            "output_shape_wo_padding = {}.",
+            input_shape_wo_padding[i],
+            output_shape_wo_padding[i]);
     }
 }
 

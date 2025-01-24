@@ -61,7 +61,6 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     Tensor input_5d = input;
     input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
-    auto input_5d_shape = input_5d_shape.logical_shape();
 
     IndexInfo index_info[5] = {0};
 
@@ -72,7 +71,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
         index_info[dim].is_dram = is_dram(index_tensors[i]);
-        index_info[dim].unit_size = index.get_logical_shape()[-1] * index.element_size();
+        index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
     }
 
     const uint32_t& index_size = index_tensors.front().get_logical_shape()[-1];

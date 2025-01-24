@@ -77,8 +77,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
     }
 
-    auto input_5d_shape = input_5d_shape.value.without_padding();
-    auto output_5d_shape = output_5d_shape.value.without_padding();
+    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
+    auto output_5d_shape_without_padding = output_5d_shape.value.without_padding();
 
     auto index_layout = index_tensors.front().get_layout();
     bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);
@@ -186,9 +186,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             writer_defines);
 
         uint32_t face_width = 16;
-        uint32_t input_num_stick_width = div_up(input_5d_shape[4], face_width);
-        uint32_t num_alignment_width = div_up(output_5d_shape[4], num_elements_per_alignment);
-        uint32_t output_num_stick_width = div_up(output_5d_shape[4], face_width);
+        uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
+        uint32_t num_alignment_width = div_up(output_5d_shape_without_padding[4], num_elements_per_alignment);
+        uint32_t output_num_stick_width = div_up(output_5d_shape_without_paddding[4], face_width);
 
         uint32_t input_num_tile_c = input_5d_shape.value[1];
         uint32_t input_num_tile_d = input_5d_shape.value[2];
@@ -242,20 +242,20 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_stick_idx_stride_d,
                 input_stick_idx_stride_h,
                 input_stick_idx_stride_w,
-                input_5d_shape[1],
-                input_5d_shape[2],
-                input_5d_shape[3],
+                input_5d_shape_without_padding[1],
+                input_5d_shape_without_padding[2],
+                input_5d_shape_without_padding[3],
                 input_num_stick_width,
                 input_noc_id_stride_n,
                 input_noc_id_stride_c,
                 input_noc_id_stride_d,
                 input_noc_id_stride_h,
 
-                input_5d_shape[0],
-                input_5d_shape[1],
-                input_5d_shape[2],
-                input_5d_shape[3],
-                input_5d_shape[4],
+                input_5d_shape_without_padding[0],
+                input_5d_shape_without_padding[1],
+                input_5d_shape_without_padding[2],
+                input_5d_shape_without_padding[3],
+                input_5d_shape_without_padding[4],
 
                 // index
                 index_info[0].is_defined,
@@ -271,11 +271,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 index_size,
 
                 // output
-                output_5d_shape[0],
-                output_5d_shape[1],
-                output_5d_shape[2],
-                output_5d_shape[3],
-                output_5d_shape[4],
+                output_5d_shape_without_padding[0],
+                output_5d_shape_without_padding[1],
+                output_5d_shape_without_padding[2],
+                output_5d_shape_without_padding[3],
+                output_5d_shape_without_padding[4],
                 output_num_stick_width,
 
                 // etc
@@ -291,10 +291,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 output.buffer()->address(),
 
                 // output
-                output_5d_shape[1],
-                output_5d_shape[2],
-                output_5d_shape[3],
-                output_5d_shape[4],
+                output_5d_shape_without_padding[1],
+                output_5d_shape_without_padding[2],
+                output_5d_shape_without_padding[3] output_5d_shape_without_padding[4],
                 output_noc_id_stride_n,
                 output_noc_id_stride_c,
                 output_noc_id_stride_d,
@@ -415,8 +414,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             writer_defines);
 
         uint32_t face_width = 16;
-        uint32_t input_num_stick_width = div_up(input_5d_shape[4], face_width);
-        uint32_t output_num_stick_width = div_up(output_5d_shape[4], face_width);
+        uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
+        uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
 
         uint32_t input_num_tile_c = input_5d_shape.value[1];
         uint32_t input_num_tile_d = input_5d_shape.value[2];
@@ -469,20 +468,20 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_stick_idx_stride_d,
                 input_stick_idx_stride_h,
                 input_stick_idx_stride_w,
-                input_5d_shape[1],
-                input_5d_shape[2],
-                input_5d_shape[3],
+                input_5d_shape_without_padding[1],
+                input_5d_shape_without_padding[2],
+                input_5d_shape_without_padding[3],
                 input_noc_id_stride_n,
                 input_noc_id_stride_c,
                 input_noc_id_stride_d,
                 input_noc_id_stride_h,
                 input_num_stick_width,
 
-                input_5d_shape[0],
-                input_5d_shape[1],
-                input_5d_shape[2],
-                input_5d_shape[3],
-                input_5d_shape[4],
+                input_5d_shape_without_padding[0],
+                input_5d_shape_without_padding[1],
+                input_5d_shape_without_padding[2],
+                input_5d_shape_without_padding[3],
+                input_5d_shape_without_padding[4],
 
                 // index
                 index_info[0].is_defined,
@@ -500,8 +499,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 // output
                 output_5d_shape[0],
                 output_5d_shape[1],
-                output_5d_shape[2],
-                output_5d_shape[3],
+                output_5d_shape_without_padding[2],
+                output_5d_shape_without_padding[3],
                 output_5d_shape[4],
                 output_num_stick_width,
 
@@ -516,10 +515,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 output.buffer()->address(),
 
                 // output
-                output_5d_shape[1],
-                output_5d_shape[2],
-                output_5d_shape[3],
-                output_5d_shape[4],
+                output_5d_shape_without_padding[1],
+                output_5d_shape_without_padding[2],
+                output_5d_shape_without_padding[3],
+                output_5d_shape_without_padding[4],
                 output_noc_id_stride_n,
                 output_noc_id_stride_c,
                 output_noc_id_stride_d,
