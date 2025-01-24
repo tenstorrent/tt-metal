@@ -14,12 +14,12 @@ namespace ttml::modules {
 
 class RMSNormLayer : public autograd::ModuleBase {
 private:
-    float m_epsilon;
-    autograd::TensorPtr m_gamma;
+    float m_epsilon = 1e-5F;
+    autograd::TensorPtr m_gamma = nullptr;
 
 public:
     void initialize_tensors(uint32_t features);
-    explicit RMSNormLayer(uint32_t features, std::optional<float> epsilon = std::nullopt);
+    explicit RMSNormLayer(uint32_t features, float epsilon = 1e-5F);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
 };
