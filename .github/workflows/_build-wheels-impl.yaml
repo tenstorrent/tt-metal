@@ -13,7 +13,9 @@ on:
 
 jobs:
   build-wheel:
-    runs-on: ${{ inputs.os }}
+    runs-on:
+      - build
+      - in-service
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
         with:
