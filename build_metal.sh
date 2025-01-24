@@ -33,6 +33,7 @@ show_help() {
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
+    echo "  --coverage                       Instrument the build for code coverage."
 }
 
 clean() {
@@ -63,6 +64,7 @@ cxx_compiler_path=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+coverage="OFF"
 
 declare -a cmake_args
 
@@ -96,6 +98,7 @@ cxx-compiler-path:
 c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
+coverage
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -169,6 +172,8 @@ while true; do
             build_type="Debug";;
         --clean)
 	    clean; exit 0;;
+        --coverage)
+            coverage="ON";unity_builds="OFF";;
         --)
             shift;break;;
     esac
@@ -180,6 +185,11 @@ if [[ $# -gt 0 ]]; then
     echo "ERROR: Unrecognized positional argument(s): $@"
     show_help
     exit 1
+fi
+
+# For code coverage we are going to froce build type to be Debug
+if [ "$coverage" = "ON" ]; then
+    build_type="Debug"
 fi
 
 # Validate the build_type
@@ -313,6 +323,10 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+fi
+
+if [ "$coverage" = "ON" ]; then
+    cmake_args+=("-DCOVERAGE=ON")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

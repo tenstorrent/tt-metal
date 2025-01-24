@@ -41,3 +41,8 @@ set_target_properties(
         INSTALL_RPATH
             "${PROJECT_BINARY_DIR}/lib"
 )
+
+if(COVERAGE)
+    target_compile_options(tt_fabric PRIVATE --coverage)
+    target_link_options(tt_fabric PRIVATE --coverage)
+endif()

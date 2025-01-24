@@ -77,6 +77,11 @@ include_directories(
     api/tt-metalium
 )
 
+if(COVERAGE)
+    target_compile_options(tt_metal PRIVATE --coverage)
+    target_link_options(tt_metal PRIVATE --coverage)
+endif()
+
 add_subdirectory(hw)
 add_subdirectory(hostdevcommon)
 add_subdirectory(common)

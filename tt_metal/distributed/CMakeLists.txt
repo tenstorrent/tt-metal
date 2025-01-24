@@ -19,3 +19,6 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
 )
+if(COVERAGE)
+    target_compile_options(distributed PRIVATE --coverage)
+endif()

@@ -848,6 +848,11 @@ set_target_properties(
             ""
 )
 
+if(COVERAGE)
+    target_compile_options(ttnn PRIVATE --coverage)
+    target_link_options(ttnn PRIVATE --coverage)
+endif()
+
 TT_ENABLE_UNITY_BUILD(ttnn)
 
 #We move the library binaries to a different path rather than PROJECT_BINARY_DIR

@@ -34,3 +34,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
 )
+
+if(COVERAGE)
+    target_compile_options(common PRIVATE --coverage)
+endif()

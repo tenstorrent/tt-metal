@@ -110,3 +110,6 @@ target_link_libraries(
         Metalium::Metal::Impl
 )
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
+if(COVERAGE)
+    target_compile_options(llrt PRIVATE --coverage)
+endif()
