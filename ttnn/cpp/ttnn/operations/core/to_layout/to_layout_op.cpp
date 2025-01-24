@@ -92,7 +92,8 @@ Tensor to_layout_impl(
 
     auto tensor = tensor_arg;
     const auto tile = tensor.get_tensor_spec().tile();
-    auto output_shape = tensor_arg.get_logical_shape();
+    auto output_shape =
+        tensor_arg.get_logical_shape().rank() == 0 ? tensor_arg.get_padded_shape() : tensor_arg.get_logical_shape();
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
@@ -100,6 +101,8 @@ Tensor to_layout_impl(
         tensor_arg.get_logical_shape(),
         TensorLayout(tensor_arg.dtype(), PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
+    auto original_rank = tensor_arg.get_logical_shape().rank();
+    auto original_shape = tensor_arg.get_logical_shape();
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.get_padded_shape().size() < 2) {
@@ -180,6 +183,9 @@ Tensor to_layout_impl(
                     output_memory_config,
                     dtype,
                     use_multicore_tilize);
+            }
+            if (original_rank == 1) {
+                return ttnn::reshape(tensor, original_shape);
             }
 
             return ttnn::reshape(
