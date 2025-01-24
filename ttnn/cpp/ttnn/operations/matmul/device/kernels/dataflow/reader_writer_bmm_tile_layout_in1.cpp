@@ -54,7 +54,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
 
     // WRITER
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;

@@ -78,7 +78,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
 
     // WRITER
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
 
     // WRITER
     // single-tile
