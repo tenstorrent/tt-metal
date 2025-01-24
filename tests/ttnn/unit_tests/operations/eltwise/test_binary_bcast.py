@@ -9,8 +9,10 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_pcc,
 )
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, torch_random
 from itertools import product as parameters
+from functools import partial
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 
 binary_fns = {
@@ -29,10 +31,12 @@ binary_fns = {
     "squared_difference",
     "add",
     "sub",
+    "rsub",
     "mul",
     "div",
     "bias_gelu",
 }
+
 activation_fns = {
     "EXP": torch.exp,
     "GELU": torch.nn.functional.gelu,
@@ -306,3 +310,225 @@ def test_binary_bcast_sharded(a_shape, b_shape, sharded_config, device):
         out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=sharded_config)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
+        (torch.Size([5, 1, 1]), torch.Size([1, 32, 128])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.add,
+        ttnn.experimental.sub,
+        ttnn.experimental.mul,
+        ttnn.experimental.div,
+        ttnn.experimental.rsub,
+        ttnn.experimental.eq,
+        ttnn.experimental.ne,
+        ttnn.experimental.gt,
+        ttnn.experimental.gte,
+        ttnn.experimental.lt,
+        ttnn.experimental.lte,
+        ttnn.experimental.logical_or,
+        ttnn.experimental.logical_xor,
+        ttnn.experimental.logical_and,
+        ttnn.experimental.ldexp,
+        ttnn.experimental.logaddexp,
+        ttnn.experimental.logaddexp2,
+        ttnn.experimental.squared_difference,
+        ttnn.experimental.bias_gelu,
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ([ttnn.float32]),
+)
+def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
+    a_shape, b_shape = input_shapes
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_tt = ttnn.from_torch(
+        b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cq_id = 0
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
+    tt_out = ttnn.to_torch(out_tt)
+
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
+    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
+    assert status >= 0.999
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128]), torch.Size([5, 3, 64, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1]), torch.Size([5, 3, 128, 64])),
+        (torch.Size([5, 1, 1]), torch.Size([1, 32, 128]), torch.Size([5, 32, 128])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.add,
+        ttnn.experimental.sub,
+        ttnn.experimental.mul,
+        ttnn.experimental.div,
+        ttnn.experimental.rsub,
+        ttnn.experimental.eq,
+        ttnn.experimental.ne,
+        ttnn.experimental.gt,
+        ttnn.experimental.gte,
+        ttnn.experimental.lt,
+        ttnn.experimental.lte,
+        ttnn.experimental.logical_or,
+        ttnn.experimental.logical_xor,
+        ttnn.experimental.logical_and,
+        ttnn.experimental.ldexp,
+        ttnn.experimental.logaddexp,
+        ttnn.experimental.logaddexp2,
+        ttnn.experimental.squared_difference,
+        ttnn.experimental.bias_gelu,
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ([ttnn.float32]),
+)
+def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
+    a_shape, b_shape, out_shape = input_shapes
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+    out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.int32), dtype)(out_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_tt = ttnn.from_torch(
+        b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_tt = ttnn.from_torch(
+        out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cq_id = 0
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
+    tt_out = ttnn.to_torch(out_tt)
+
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
+    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
+    assert status >= 0.999
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
+        (torch.Size([5, 1, 1]), torch.Size([1, 32, 128])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.bitwise_and,
+        ttnn.experimental.bitwise_or,
+        ttnn.experimental.bitwise_xor,
+        ttnn.experimental.bitwise_left_shift,
+        ttnn.experimental.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ([ttnn.int32]),
+)
+def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
+    a_shape, b_shape = input_shapes
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.int32), dtype)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=0, high=31, dtype=torch.int32), dtype)(b_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_tt = ttnn.from_torch(
+        b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cq_id = 0
+    out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
+    tt_out = ttnn.to_torch(out_tt)
+
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
+
+    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
+    assert status >= 0.999
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 32, 32])),
+        (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128]), torch.Size([5, 3, 64, 128])),
+        (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1]), torch.Size([5, 3, 128, 64])),
+        (torch.Size([5, 1, 1]), torch.Size([1, 32, 128]), torch.Size([5, 32, 128])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.bitwise_and,
+        ttnn.experimental.bitwise_or,
+        ttnn.experimental.bitwise_xor,
+        ttnn.experimental.bitwise_left_shift,
+        ttnn.experimental.bitwise_right_shift,
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ([ttnn.int32]),
+)
+def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
+    a_shape, b_shape, out_shape = input_shapes
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.int32), dtype)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=0, high=31, dtype=torch.int32), dtype)(b_shape)
+    out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.int32), dtype)(out_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_tt = ttnn.from_torch(
+        b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_tt = ttnn.from_torch(
+        out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    cq_id = 0
+    ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
+    tt_out = ttnn.to_torch(out_tt)
+
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    out_pt = golden_fn(a_pt, b_pt)
+
+    status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
+    assert status >= 0.999

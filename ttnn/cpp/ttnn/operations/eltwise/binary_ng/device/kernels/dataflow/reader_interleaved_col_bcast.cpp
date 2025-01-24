@@ -50,7 +50,7 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_id_src);
                 noc_async_read_tile(tile_offset + th, src, l1_write_addr);
                 noc_async_read_barrier();
-                fill_tile_with_first_column_bfloat16(cb_id_src);
+                FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
                 cb_push_back(cb_id_src, onetile);
 
                 num_tiles_read += Wt - start_tw;

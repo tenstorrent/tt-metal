@@ -84,6 +84,48 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryOpType>(),
             py::arg("queue_id") = 0});
 }
+
+template <typename T>
+void bind_binary_ng_bitwise_ops(py::module& module, T op, const std::string& docstring) {
+    bind_registered_operation(
+        module,
+        op,
+        docstring,
+
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor_a,
+               const float scalar,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const uint8_t& queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor_a, scalar, memory_config, output_tensor);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("scalar"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0},
+
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const T& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               uint8_t queue_id) -> ttnn::Tensor {
+                return self(queue_id, input_tensor_a, input_tensor_b, memory_config, output_tensor);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = 0});
+}
 }  // namespace detail
 
 void py_module(py::module& module) {
@@ -91,6 +133,8 @@ void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::sub, "Binary Sub Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::mul, "Binary Mul Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::div, "Binary Div Operation");
+    detail::bind_binary_ng_operation(module, ttnn::experimental::rsub, "Binary Rsub Operation");
+    detail::bind_binary_ng_operation(module, ttnn::experimental::pow, "Binary Power Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::gt, "Binary Greater Than Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::lt, "Binary Less Than Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::lte, "Binary Less Than or Equal To Operation");
@@ -106,5 +150,13 @@ void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::ldexp, "Binary Ldexp Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp, "Binary Logaddexp Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp2, "Binary Logaddexp2 Operation");
+
+    detail::bind_binary_ng_bitwise_ops(module, ttnn::experimental::bitwise_and, "Binary bitwise_and Operation");
+    detail::bind_binary_ng_bitwise_ops(module, ttnn::experimental::bitwise_xor, "Binary bitwise_xor Operation");
+    detail::bind_binary_ng_bitwise_ops(module, ttnn::experimental::bitwise_or, "Binary bitwise_or Operation");
+    detail::bind_binary_ng_bitwise_ops(
+        module, ttnn::experimental::bitwise_left_shift, "Binary bitwise_left_shift Operation");
+    detail::bind_binary_ng_bitwise_ops(
+        module, ttnn::experimental::bitwise_right_shift, "Binary bitwise_right_shift Operation");
 }
 }  // namespace ttnn::operations::binary_ng

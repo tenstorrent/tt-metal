@@ -8,6 +8,8 @@ import torch
 
 ttnn.attach_golden_function(ttnn.experimental.add, golden_function=lambda a, b: a + b)
 ttnn.attach_golden_function(ttnn.experimental.sub, golden_function=lambda a, b: a - b)
+ttnn.attach_golden_function(ttnn.experimental.rsub, golden_function=lambda a, b: b - a)
+ttnn.attach_golden_function(ttnn.experimental.pow, golden_function=lambda a, b: torch.pow(a, b))
 ttnn.attach_golden_function(ttnn.experimental.mul, golden_function=lambda a, b: a * b)
 ttnn.attach_golden_function(ttnn.experimental.div, golden_function=lambda a, b: torch.divide(a, b))
 ttnn.attach_golden_function(ttnn.experimental.eq, golden_function=lambda a, b: torch.eq(a, b))
@@ -28,3 +30,12 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.experimental.bias_gelu, golden_function=lambda a, b: torch.nn.functional.gelu(torch.add(a, b))
 )
+ttnn.attach_golden_function(
+    ttnn.experimental.bitwise_left_shift, golden_function=lambda a, b: torch.bitwise_left_shift(a, b)
+)
+ttnn.attach_golden_function(
+    ttnn.experimental.bitwise_right_shift, golden_function=lambda a, b: torch.bitwise_right_shift(a, b)
+)
+ttnn.attach_golden_function(ttnn.experimental.bitwise_and, golden_function=lambda a, b: torch.bitwise_and(a, b))
+ttnn.attach_golden_function(ttnn.experimental.bitwise_or, golden_function=lambda a, b: torch.bitwise_or(a, b))
+ttnn.attach_golden_function(ttnn.experimental.bitwise_xor, golden_function=lambda a, b: torch.bitwise_xor(a, b))

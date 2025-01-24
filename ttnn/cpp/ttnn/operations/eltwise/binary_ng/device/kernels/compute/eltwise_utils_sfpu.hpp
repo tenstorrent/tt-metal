@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,6 @@
 #define PREPROCESS_1(op, cb_pre, cb_post, cb_out, per_core_block_size) \
     do {                                                               \
         using namespace ckernel;                                       \
-                                                                       \
-        reconfig_data_format_srca(/*old*/ cb_post, /*new*/ cb_pre);    \
-        pack_reconfig_data_format(/*old*/ cb_out, /*new*/ cb_post);    \
-                                                                       \
         cb_wait_front(cb_pre, per_core_block_size);                    \
         cb_reserve_back(cb_post, per_core_block_size);                 \
                                                                        \
@@ -36,6 +32,4 @@
         cb_pop_front(cb_pre, per_core_block_size);                     \
         cb_push_back(cb_post, per_core_block_size);                    \
                                                                        \
-        reconfig_data_format_srca(/*old*/ cb_pre, /*new*/ cb_post);    \
-        pack_reconfig_data_format(/*old*/ cb_post, /*new*/ cb_out);    \
     } while (0)
