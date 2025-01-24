@@ -357,6 +357,8 @@ on:
           - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.remainder.remainder_unary
           - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.rpow.rpow
+          - eltwise.binary.rpow.rpow_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.scatter.scatter_forge
@@ -373,18 +375,26 @@ on:
           - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
           - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.logaddexp.logaddexp_sharded
           - eltwise.binary.logaddexp2.logaddexp2
+          - eltwise.binary.logaddexp2.logaddexp2_sharded
           - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.ldexp.ldexp_sharded
           - eltwise.binary.lt.lt_tensor_pytorch2
           - eltwise.binary.lt.lt_scalar_pytorch2
           - eltwise.binary.lt.lt_forge
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.ne.ne_forge
+          - eltwise.binary.isclose.isclose
+          - eltwise.binary.isclose.isclose_sharded
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
-          - eltwise.binary_backward.logaddexp_bw
-          - eltwise.binary_backward.logaddexp2_bw
+          - eltwise.binary_backward.ldexp_bw.ldexp_bw_sharded
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw
+          - eltwise.binary_backward.logaddexp_bw.logaddexp_bw_sharded
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw
+          - eltwise.binary_backward.logaddexp2_bw.logaddexp2_bw_sharded
           - eltwise.binary_backward.addalpha_bw.addalpha_bw
           - eltwise.binary_backward.subalpha_bw.subalpha_bw
           - eltwise.binary_backward.xlogy_bw.xlogy_bw
