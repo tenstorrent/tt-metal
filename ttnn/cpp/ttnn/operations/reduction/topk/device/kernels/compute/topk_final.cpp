@@ -29,6 +29,7 @@ void MAIN {
     constexpr uint32_t Kt = get_compile_time_arg_val(9);
     constexpr uint32_t logk = get_compile_time_arg_val(10);
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
+    constexpr uint32_t largest = get_compile_time_arg_val(12);
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
@@ -83,7 +84,7 @@ void MAIN {
         // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
         for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            bool direction = false;
+            bool direction = !largest;
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
             uint32_t stride = 1 << m_iter;
@@ -102,7 +103,7 @@ void MAIN {
                 copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
+                ckernel::topk_merge<!largest>(0, m_iter, K);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild(0, (uint32_t)direction, m_iter, K, logk, true);
 
