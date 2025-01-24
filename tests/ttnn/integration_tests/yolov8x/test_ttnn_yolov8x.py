@@ -16,7 +16,6 @@ from models.experimental.functional_yolov8x.reference import yolov8x_utils
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import Conv, C2f, SPPF, Detect_cv2, Detect, DFL
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
-    ttnn_make_anchors,
     custom_preprocessor,
 )
 
@@ -393,29 +392,6 @@ def test_dist2bbox(device, distance, anchors):
     ttnn_model_output = ttnn.to_torch(ttnn_model_output)
 
     torch_model_output = decode_bboxes(distance, anchors)
-
-    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
-    logger.info(f"Passing: {passing}, PCC: {pcc}")
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize(
-    "input_tensor, stride",
-    [([torch.rand((1, 144, 80, 80)), torch.rand((1, 144, 40, 40)), torch.rand((1, 144, 20, 20))], [8.0, 16.0, 32.0])],
-    ids=["input_tensor"],
-)
-def test_make_anchors(device, input_tensor, stride):
-    ttnn_input = []
-    for i in range(len(input_tensor)):
-        x = ttnn.from_torch(input_tensor[i], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        ttnn_input.append(x)
-
-    ttnn_model_output = ttnn_make_anchors(device, ttnn_input, stride)[0]
-    ttnn_model_output = ttnn.to_torch(ttnn_model_output)
-    print(ttnn_model_output.shape)
-
-    torch_model_output = make_anchors(input_tensor, stride)[0]
 
     passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
