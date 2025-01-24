@@ -82,6 +82,10 @@ void copy_completion_queue_data_into_user_space(
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
 
+// Selects all sub-devices in the sub device stall group if none are specified
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids);
+
 std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
 std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(

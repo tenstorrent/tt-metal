@@ -146,7 +146,9 @@ public:
 
     // Light Metal
     virtual void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) = 0;
-
+    virtual DispatchCoreConfig get_dispatch_core_config() = 0;
+    virtual const std::vector<CoreCoord>& get_logical_storage_cores() = 0;
+    virtual const std::vector<CoreCoord>& get_logical_dispatch_cores() = 0;
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
 

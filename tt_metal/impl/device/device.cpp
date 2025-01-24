@@ -1521,6 +1521,18 @@ std::size_t Device::num_program_cache_entries() {
     return program_cache_.num_entries();
 }
 
+DispatchCoreConfig Device::get_dispatch_core_config() {
+    return dispatch_core_manager::instance().get_dispatch_core_config(this->id());
+}
+
+const std::vector<CoreCoord>& Device::get_logical_storage_cores() {
+    return tt::get_logical_storage_cores(this->id(), this->num_hw_cqs(), this->get_dispatch_core_config());
+}
+
+const std::vector<CoreCoord>& Device::get_logical_dispatch_cores() {
+    return tt::get_logical_dispatch_cores(this->id(), this->num_hw_cqs(), this->get_dispatch_core_config());
+}
+
 void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
 
 void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
