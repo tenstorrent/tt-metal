@@ -529,7 +529,6 @@ def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
 
     golden_fn = ttnn.get_golden_function(ttnn_fn)
     out_pt = golden_fn(a_pt, b_pt)
-    # print("tt_out", tt_out)
-    # print("out_pt", out_pt)
+
     status = ttnn.pearson_correlation_coefficient(out_pt, tt_out)
     assert status >= 0.999
