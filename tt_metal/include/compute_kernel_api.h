@@ -731,13 +731,16 @@ ALWI void topk_local_sort(
  * Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | m_iter          | The index of the merge & rebuild
- * iteration of the algorithm                | int32    | 0 to 9                                                | True |
- * | k               | The number of sorted values to return                                      | int32    | {4, 8,
- * 16, 32, 64}                                    | True     |
+ * less than the size of the DST register buffer   | True     |
+ * | idir            | The sorting direction of the local sort (0 == decreasing, 1 == increasing) | bool     | 0 to 1
+ *                                                 | True     |
+ * | m_iter          | The index of the merge & rebuild iteration of the algorithm                | int32    | 0 to 9 |
+ * True | | k               | The number of sorted values to return                                      | int32    |
+ * {4, 8, 16, 32, 64}                                     | True     |
  */
+template <bool idir = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, idir>(idst, m_iter, k)));
 }
 
 // topK rebuild
