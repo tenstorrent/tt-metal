@@ -113,8 +113,8 @@ void MAIN {
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
-    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_24;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
+    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
