@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "assert.hpp"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
@@ -201,7 +202,7 @@ TEST_P(BlockFloatVectorConversionTest, ValidStorage) {
     ttnn::SimpleShape shape{32, 32};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
-    Tensor output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR));
+    Tensor output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
     EXPECT_NE(output.storage_type(), StorageType::BORROWED);
 }
 
