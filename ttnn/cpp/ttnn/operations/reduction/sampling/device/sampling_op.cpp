@@ -25,8 +25,11 @@ void Sampling::validate_with_output_tensors(
         input_indices_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for inputs!");
 
-    // TT_FATAL(input_indices_tensor.get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
-    TT_FATAL(input_indices_tensor.get_layout() == Layout::TILE, "Only TILE_LAYOUT is supported for inputs!");
+    TT_FATAL(
+        input_indices_tensor.get_dtype() == DataType::UINT32 || input_indices_tensor.get_dtype() == DataType::INT32,
+        "Only UINT32 & INT32 dtypes are supported for input indices!");
+
+    TT_FATAL(input_indices_tensor.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
@@ -68,7 +71,7 @@ operation::ProgramWithCallbacks Sampling::create_program(
     const auto& input_values_tensor = input_tensors.at(0);
     const auto& input_indices_tensor = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
-    return detail::sampling_multicore_interleaved(input_values_tensor, input_indices_tensor, k, p, output_tensor);
+    return detail::sampling_multicore_interleaved(input_values_tensor, input_indices_tensor, k, p, seed, output_tensor);
 }
 
 }  // namespace ttnn::operations::reduction

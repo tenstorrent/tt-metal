@@ -30,11 +30,11 @@ using namespace ckernel;
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
     DPRINT << "======" << ENDL();
     for (uint8_t r = 0; r < 1; ++r) {
         // DPRINT << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), false, true) << ENDL();
-        DPRINT << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), true, false) << ENDL();
+        DPRINT << TSLICE(cb_id, r, SliceRange::h0_w0_32(), true, false) << ENDL();
 
         // DPRINT << TSLICE(cb_id, 0, sr) << ENDL();
     }
@@ -42,11 +42,19 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 namespace NAMESPACE {
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
+
+    union f2u {
+        float f;
+        uint32_t u;
+    } rand_scale;
+    rand_scale.f = 1;
+    uint32_t rand_from = 0;
+
     rand_tile_init(seed);
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
-    rand_tile(0, 0, 1);
+    rand_tile(0, rand_from, rand_scale.u);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -396,6 +404,8 @@ void MAIN {
     constexpr uint32_t seed = get_compile_time_arg_val(20);
 
     generate_rand_tile(rand_tile_index, seed);
+
+    DPRINT << "starting top k" << nearest32_K << ENDL();
     // top-k
     top_k<
         Ht,
@@ -411,12 +421,11 @@ void MAIN {
         output_ind_cb_index,
         true>();
     DPRINT << "top-k " << ENDL();
-    // print_full_tile(output_ind_cb_index);
     constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     // mask out all values except the top-k
-    // cb_wait_front(topk_mask_cb_index, Kt);
-    // add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
-    // DPRINT << "done add " << ENDL();
+    cb_wait_front(topk_mask_cb_index, Kt);
+    add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
+    DPRINT << "done add " << ENDL();
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
@@ -424,44 +433,5 @@ void MAIN {
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
     DPRINT << "done softmax " << ENDL();
-
-    untilize_block_fn(values_cb_index, output_local_values_rm_cb_index, Ht * Kt);
-    DPRINT << "untilize values_cb_index " << Ht << Kt << ENDL();
-
-    // untilize final indices
-    untilize_block_fn(input_indices_cb_index, output_final_indices_rm_cb_index, Ht * Wt);
-    DPRINT << "Wt " << Wt << ENDL();
-    DPRINT << "Kt " << Kt << ENDL();
-    uint32_t in_cb = output_ind_cb_index;
-    uint32_t out_cb = output_local_indices_rm_cb_index;
-    uint32_t num_tiles = Kt;
-    pack_untilize_init_short<Kt>(in_cb, out_cb);
-    // untilize_init_short(in_cb);
-    for (uint32_t b = 0; b < 1; ++b) {
-        cb_wait_front(in_cb, num_tiles);
-        DPRINT << "cb_wait_front" << ENDL();
-        // print_full_tile(in_cb);
-        cb_reserve_back(out_cb, num_tiles);
-        // DPRINT<<"cb_reserve_back"<<ENDL();
-        tile_regs_wait();
-        pack_untilize_block<Kt>(in_cb, 1, out_cb);
-        tile_regs_release();
-        // DPRINT<<"pack_untilize_block"<<ENDL();
-        cb_push_back(out_cb, num_tiles);
-        // DPRINT<<"cb_push_back"<<ENDL();
-        cb_wait_front(out_cb, num_tiles);
-        // DPRINT << out_cb << " waited for tile "<< num_tiles << ENDL();
-
-        // print_full_tile(out_cb);
-        cb_pop_front(in_cb, num_tiles);
-    }
-    pack_untilize_uninit(out_cb);
-
-    // DPRINT << "untilize input_indices_cb_index " << ENDL();
-    // // untilize values
-    // untilize indices
-    // untilize_block_fn(output_ind_cb_index, output_local_indices_rm_cb_index, Ht * Kt);
-    DPRINT << "done untilizes " << ENDL();
-    // print_full_tile(output_local_indices_rm_cb_index);
 }
 }  // namespace NAMESPACE

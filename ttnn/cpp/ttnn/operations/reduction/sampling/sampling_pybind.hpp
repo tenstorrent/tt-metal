@@ -56,16 +56,18 @@ void bind_reduction_sampling_operation(py::module& module) {
                const ttnn::Tensor& input_values_tensor,
                const ttnn::Tensor& input_indices_tensor,
                const std::vector<uint16_t>& k,
-               const std::vector<uint16_t>& p,
+               const std::vector<float>& p,
+               const uint32_t seed,
                std::optional<ttnn::Tensor> optional_output_tensor,
                uint8_t queue_id) {
-                return self(queue_id, input_values_tensor, input_indices_tensor, k, p, optional_output_tensor);
+                return self(queue_id, input_values_tensor, input_indices_tensor, k, p, seed, optional_output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
             py::kw_only(),
             py::arg("k").noconvert(),
             py::arg("p").noconvert(),
+            py::arg("seed").noconvert() = 0,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0});
 }

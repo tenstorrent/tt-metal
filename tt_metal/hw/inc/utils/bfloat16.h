@@ -38,7 +38,6 @@ bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {
     }
 }
 
-// Function to add two bfloat16 values using integer arithmetic
 uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
     // Extract the sign, exponent, and mantissa from both values
     uint16_t sign_a = bf16_a & 0x8000;
@@ -80,6 +79,11 @@ uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
         }
     }
 
+    // Handle zero result
+    if (mant_res == 0) {
+        return 0;
+    }
+
     // Normalize the result
     if (mant_res & 0x0100) {  // Mantissa overflow
         mant_res >>= 1;
@@ -94,8 +98,9 @@ uint16_t bfloat16_add(uint16_t bf16_a, uint16_t bf16_b) {
     if (exp_a >= 0xFF) {  // Overflow to infinity
         return sign_res | 0x7F80;
     }
-    if (exp_a <= 0) {  // Underflow to zero
-        return sign_res;
+    if (exp_a <= 0) {              // Underflow to zero or subnormal
+        mant_res >>= (1 - exp_a);  // Shift mantissa to make exponent zero
+        exp_a = 0;
     }
 
     // Combine the result

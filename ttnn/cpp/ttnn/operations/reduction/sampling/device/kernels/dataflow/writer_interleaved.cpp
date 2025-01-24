@@ -26,38 +26,29 @@ void kernel_main() {
     constexpr uint32_t ids_per_batch_final = get_compile_time_arg_val(12);
     constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
     constexpr uint32_t k = get_compile_time_arg_val(14);
-    constexpr uint32_t core_id = get_compile_time_arg_val(15);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(16);
+    constexpr uint32_t p = get_compile_time_arg_val(15);
+    constexpr uint32_t core_id = get_compile_time_arg_val(16);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(17);
+
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
-    DPRINT << "generate_reduce_scaler " << ENDL();
-    constexpr uint32_t tile_bytes_final_indices = get_tile_size(output_final_indices_rm_cb_index);
-    constexpr uint32_t tile_bytes_local_values = get_tile_size(output_local_values_rm_cb_index);
-    constexpr uint32_t tile_bytes_local_indices = get_tile_size(output_local_indices_rm_cb_index);
-    DPRINT << "final_indices_stick_size" << tile_bytes_final_indices << ENDL();
-    DPRINT << "output_local_values_rm_cb_index" << tile_bytes_local_values << ENDL();
-    DPRINT << "output_local_indices_rm_cb_index" << tile_bytes_local_indices << ENDL();
-
     // generate the top-k mask
     constexpr uint32_t one = 1;
-    generate_mask<cb_id_mask, one, ids_per_batch / 32>(one, k);
-
-    DPRINT << "generate_mask " << output_final_indices_rm_cb_index << ENDL();
+    generate_mask<cb_id_mask, one, ids_per_batch / 32>(one, k - 1);
 
     // get random number
     cb_wait_front(rand_tile_index, 1);
     uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
-    DPRINT << "recd random number " << ENDL();
+    DPRINT << "recd random number " << rand << ENDL();
 
     // wait for compute kernel
-    cb_wait_front(output_final_indices_rm_cb_index, 8);
-    cb_wait_front(output_local_values_rm_cb_index, values_stick_size / tile_bytes_local_values);
-    cb_wait_front(output_local_indices_rm_cb_index, im_indices_stick_size / tile_bytes_local_indices);
+    cb_wait_front(output_final_indices_rm_cb_index, 32);
+    cb_wait_front(output_local_values_rm_cb_index, 1);
+    cb_wait_front(output_local_indices_rm_cb_index, 1);
 
-    DPRINT << "recd from compute kernel " << ENDL();
     // Use cb as L1 scratch memory
     uint32_t cb_local_values_addr = get_write_ptr(output_local_values_rm_cb_index);
     volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
@@ -65,33 +56,90 @@ void kernel_main() {
     uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_rm_cb_index);
     volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_indices_addr);
 
-    // uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
-    // volatile tt_l1_ptr uint32_t* final_indices = reinterpret_cast<volatile tt_l1_ptr
-    // uint32_t*>(cb_final_indices_addr);
+    uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
+    volatile tt_l1_ptr uint32_t* final_indices =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_final_indices_addr + core_id * final_indices_stick_size);
+
+    for (uint32_t i = 0; i < 32 * 8; ++i) {
+        DPRINT << "final_indices: " << final_indices[i] << ENDL();
+    }
 
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
-    uint32_t start_id_local = core_id * ids_per_batch;
-    uint32_t end_id_local = start_id_local + k;
+    uint32_t start_id_local_phase_0 = core_id * 16;
+    if (core_id >= 16) {
+        start_id_local_phase_0 = 32 * 16 + (core_id - 16) * 16;
+    }
+    uint32_t end_id_local_phase_0 = start_id_local_phase_0 + 16;
+    uint32_t start_id_local_phase_1 = 16 * 16 + start_id_local_phase_0;
+    uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - 16);
+    if (k <= 16) {
+        end_id_local_phase_0 = start_id_local_phase_0 + k;
+        start_id_local_phase_1 = end_id_local_phase_0;
+        end_id_local_phase_1 = end_id_local_phase_0;
+    }
 
     uint32_t start_id_final = core_id * ids_per_batch_final;
     uint32_t end_id_final = start_id_final + ids_per_batch_final;
 
-    uint32_t cum_sum = 0;
-    for (uint32_t i = 0; i < 32; ++i) {
-        DPRINT << "local_indices" << i << " : " << local_indices[i] << ENDL();
-        DPRINT << "local_values" << i << " : " << local_values[i] << ENDL();
+    DPRINT << "p" << p << ENDL();
+    if (p != 0) {
+        uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
+        uint32_t cum_prob = 0;
+        bool cutoff_found = false;
+        uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
+        for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
+            bfloat16_add(cum_prob, local_values[i]);
+            if (bfloat16_greater(cum_prob, bf16_p)) {
+                top_p_cutoff = i + 1;  // Include this token in the top-p set
+                cutoff_found = true;
+                break;
+            }
+        }
+        if (!cutoff_found) {
+            for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+                // cum sum of local values
+                cum_prob = bfloat16_add(cum_prob, local_values[i]);
+                if (bfloat16_greater(cum_prob, bf16_p)) {
+                    top_p_cutoff = i + 1;
+                    break;
+                }
+            }
+        }
+
+        // adjust phase indices
+        end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
+        if (top_p_cutoff <= 16) {
+            end_id_local_phase_0 = start_id_local_phase_0 + top_p_cutoff;
+            start_id_local_phase_1 = end_id_local_phase_0;
+            end_id_local_phase_1 = end_id_local_phase_0;
+        }
     }
-    DPRINT << "core id" << core_id << ENDL();
-    index_out[core_id] = local_indices[end_id_local - 1];  // + local_indices[end_id_local - 1]];
+
+    uint32_t cum_sum = 0;
+    index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
+    bool index_found = false;
+
     // Sample from the top-k values
-    for (uint32_t i = start_id_local; i < end_id_local; ++i) {
+    for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         // cum sum of local values
         cum_sum = bfloat16_add(cum_sum, local_values[i]);
         if (bfloat16_greater(cum_sum, rand)) {
-            index_out[core_id] = local_indices[i];  // final_indices[start_id_final + local_indices[i]];
+            index_out[core_id] = final_indices[local_indices[i]];
+            index_found = true;
             break;
+        }
+    }
+    if (!index_found) {
+        for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
+            // cum sum of local values
+            cum_sum = bfloat16_add(cum_sum, local_values[i]);
+            if (bfloat16_greater(cum_sum, rand)) {
+                index_out[core_id] = final_indices[local_indices[i]];
+                index_found = true;
+                break;
+            }
         }
     }
 

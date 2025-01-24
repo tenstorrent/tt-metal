@@ -16,12 +16,12 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const std::vector<uint16_t>& k,
-    const std::vector<uint16_t>& p,
+    const std::vector<float>& p,
+    const uint32_t seed,
     Tensor& output_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
-    uint32_t seed = 1;
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.get_dtype());
     tt::DataFormat input_indices_cb_data_format =
@@ -176,11 +176,11 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     // final indices
     uint32_t final_indices_rm_unit_size = 4;
 
-    uint32_t aligned_final_indices_rm_unit_size = input_indices_tile_size;  // 32 * 32 * final_indices_rm_unit_size;
+    uint32_t aligned_final_indices_rm_unit_size = 32 * 8 * final_indices_rm_unit_size;
     uint32_t final_indices_rm_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Wt * aligned_final_indices_rm_unit_size, {{final_indices_rm_cb_index, input_indices_cb_data_format}})
+            32 * aligned_final_indices_rm_unit_size, {{final_indices_rm_cb_index, input_indices_cb_data_format}})
             .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
     auto cb_final_indices_rm_tensor =
         tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
@@ -196,12 +196,13 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_values_cb_index,
-        input_indices_cb_index,
+        final_indices_rm_cb_index,
         index_cb_index,
         (uint32_t)input_values_is_dram,
         (uint32_t)input_indices_is_dram,
         Ht,
-        Wt};
+        Wt,
+        aligned_final_indices_rm_unit_size};
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp",
@@ -229,6 +230,9 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
+        bfloat16 bfloat_p_scalar = bfloat16(p[i]);
+        uint32_t packed_p_scalar = pack_two_bfloat16_into_uint32({bfloat_p_scalar, bfloat_p_scalar});
+
         std::vector<uint32_t> writer_compile_time_args = {
             (std::uint32_t)output_is_dram,
             output_cb_index,
@@ -236,8 +240,8 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             scale_cb_index,
             packed_identity_scalar,
             final_indices_rm_cb_index,
-            values_rm_cb_index,
-            indices_rm_cb_index,
+            values_cb_index,
+            output_ind_cb_index,
             aligned_values_rm_unit_size,
             aligned_indices_rm_unit_size,
             aligned_final_indices_rm_unit_size,
@@ -245,6 +249,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             Wt,
             rand_tile_index,
             k[i],
+            packed_p_scalar,
             i,
             round_up_to_mul32(k[i])};
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

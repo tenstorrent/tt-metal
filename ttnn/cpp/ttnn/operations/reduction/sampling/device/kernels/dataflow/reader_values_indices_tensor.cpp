@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr bool input_indices_is_dram = get_compile_time_arg_val(4);
     constexpr uint32_t Ht = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
+    constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(7);
 
     DPRINT << "redaer reads" << Ht << "and" << Wt << ENDL();
 
@@ -59,15 +60,10 @@ void kernel_main() {
         .page_size = tile_bytes_input_values,
         .data_format = data_format_input_values};
 
-    constexpr uint32_t tile_bytes_input_indices = get_tile_size(input_indices_cb_index);
-    constexpr DataFormat data_format_input_indices = get_dataformat(input_indices_cb_index);
+    // constexpr DataFormat data_format_input_indices = get_dataformat(input_indices_cb_index);
 
-    DPRINT << tile_bytes_input_indices << ENDL();
-
-    const InterleavedAddrGenFast<input_indices_is_dram> s1 = {
-        .bank_base_address = indices_addr,
-        .page_size = tile_bytes_input_indices,
-        .data_format = data_format_input_indices};
+    const InterleavedAddrGen<input_indices_is_dram> s1 = {
+        .bank_base_address = indices_addr, .page_size = input_indices_page_size};
 
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
     // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
@@ -89,25 +85,14 @@ void kernel_main() {
         }
 
         // input indices
-        for (uint32_t j = 0; j < Wt; ++j) {
+        for (uint32_t j = 0; j < 32; ++j) {
             cb_reserve_back(input_indices_cb_index, onetile);
             uint32_t l1_write_addr_indices = get_write_ptr(input_indices_cb_index);
-            noc_async_read_tile(tile_id_input_indices, s1, l1_write_addr_indices);
-            l1_write_addr_indices += tile_bytes_input_indices;
-            tile_id_input_indices++;
+            uint64_t input_noc_addr = get_noc_addr(j, s1);
+            noc_async_read(input_noc_addr, l1_write_addr_indices, input_indices_page_size);
             noc_async_read_barrier();
             cb_push_back(input_indices_cb_index, onetile);
         }
     }
     DPRINT << "Reader done " << ENDL();
-
-    // cb_wait_front(input_indices_cb_index, Wt);
-
-    // uint32_t cb_final_indices_addr = get_write_ptr(input_indices_cb_index);
-    // volatile tt_l1_ptr uint32_t* final_indices = reinterpret_cast<volatile tt_l1_ptr
-    // uint32_t*>(cb_final_indices_addr);
-
-    // for (uint32_t i = 0; i < 64; ++i) {
-    //     DPRINT << "final_indices" << i << " : " << final_indices[i] << ENDL();
-    // }
 }
