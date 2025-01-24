@@ -6,20 +6,22 @@
 
 namespace {
 
-CoreType dispatch_core_type() {
-    CoreType dispatch_core_type;
-    CoreType first_core_type;
+tt::tt_metal::DispatchCoreConfig dispatch_core_config() {
+    tt::tt_metal::DispatchCoreConfig dispatch_core_config;
+    tt::tt_metal::DispatchCoreConfig first_dispatch_core_config;
+
     for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
-        dispatch_core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
+        dispatch_core_config = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_config(device_id);
         if (device_id == 0) {
-            first_core_type = dispatch_core_type;
+            first_dispatch_core_config = dispatch_core_config;
         } else {
             TT_FATAL(
-                dispatch_core_type == first_core_type,
-                "Expected the Dispatch Core Type to be consistent across physical devices");
+                dispatch_core_config == first_dispatch_core_config,
+                "Expected the Dispatch Core Config to be consistent across physical devices");
         }
     }
-    return dispatch_core_type;
+
+    return dispatch_core_config;
 }
 
 tt::tt_metal::DispatchQueryManager* inst = nullptr;
@@ -31,7 +33,7 @@ void DispatchQueryManager::initialize(uint8_t num_hw_cqs) {
     if (inst == nullptr) {
         static DispatchQueryManager DispatchQueryManager(num_hw_cqs);
         inst = &DispatchQueryManager;
-    } else if (num_hw_cqs != inst->num_hw_cqs_ or dispatch_core_type() != inst->dispatch_core_type_) {
+    } else if (num_hw_cqs != inst->num_hw_cqs_ or dispatch_core_config() != inst->dispatch_core_config_) {
         inst->reset(num_hw_cqs);
         inst->num_hw_cqs_ = num_hw_cqs;
     }
@@ -50,10 +52,22 @@ NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 
 void DispatchQueryManager::reset(uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
-    dispatch_core_type_ = dispatch_core_type();
-    dispatch_s_enabled_ = (num_hw_cqs == 1 or dispatch_core_type_ == CoreType::WORKER);
-    distributed_dispatcher_ = (num_hw_cqs == 1 and dispatch_core_type_ == CoreType::ETH);
+    dispatch_core_config_ = dispatch_core_config();
+    dispatch_s_enabled_ =
+        (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
+    distributed_dispatcher_ =
+        (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
     go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
+}
+
+const DispatchCoreConfig& DispatchQueryManager::get_dispatch_core_config() const { return dispatch_core_config_; }
+
+const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores(uint32_t device_id) const {
+    return tt::get_logical_storage_cores(device_id, num_hw_cqs_, dispatch_core_config_);
+}
+
+const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
+    return tt::get_logical_dispatch_cores(device_id, num_hw_cqs_, dispatch_core_config_);
 }
 
 DispatchQueryManager::DispatchQueryManager(uint8_t num_hw_cqs) { this->reset(num_hw_cqs); }

@@ -30,11 +30,11 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device->get_device_index(0));
-        program.allocate_circular_buffers(mesh_device->get_device_index(0));
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device->get_device_index(0));
+        program.compile(mesh_device);
+        program.allocate_circular_buffers(mesh_device);
+        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device->get_device_index(0));
+    program_dispatch::finalize_program_offsets(*this, mesh_device);
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -73,7 +73,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
-                const auto& grid_start = device_range.start_coord;
+                auto& grid_start = device_range.start_coord;
                 std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
                 global_kernel_bin_buf_config.size = kernel_bin_size;
                 auto kernel_bin_buf_view = MeshBuffer::create(
@@ -86,7 +86,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                     *kernel_bin_buf_view, program.get_program_transfer_info().binary_data.data(), device_range, false);
 
                 std::shared_ptr<Buffer> buffer_view = Buffer::create(
-                    mesh_device->get_device(grid_start.y, grid_start.x),
+                    mesh_device,
                     kernel_bin_buf_->address(),
                     kernel_bin_size,
                     HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
@@ -118,8 +118,7 @@ void MeshWorkload::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
     for (auto& [device_range, program] : programs_) {
-        auto grid_start = device_range.start_coord;
-        program.generate_dispatch_commands(mesh_device->get_device(grid_start.y, grid_start.x));
+        program.generate_dispatch_commands(mesh_device);
     }
 }
 
@@ -219,7 +218,7 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     for (auto& [device_range, program] : programs_) {
         auto grid_start = device_range.start_coord;
         IDevice* device = mesh_device->get_device(grid_start.y, grid_start.x);
-        auto sub_devs_for_program = program.determine_sub_device_ids(device);
+        auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
         }
