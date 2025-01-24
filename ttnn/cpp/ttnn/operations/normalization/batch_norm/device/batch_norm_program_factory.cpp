@@ -73,8 +73,15 @@ void set_or_update_runtime_arguments(
         }
 
         uint32_t cHtWt = cHt * cWt;
-        class bfloat16 bfloat_scalar_eps(eps);
-        uint32_t packed_scalar_eps = pack_two_bfloat16_into_uint32({bfloat_scalar_eps, bfloat_scalar_eps});
+
+        // class bfloat16 bfloat_scalar_eps(eps);
+        // uint32_t packed_scalar_eps = pack_two_bfloat16_into_uint32({bfloat_scalar_eps, bfloat_scalar_eps});
+
+        const auto scalar = *operation_attributes.eps;
+        const auto packed_scalar_eps = a.get_dtype() == DataType::FLOAT32
+                                           ? std::bit_cast<uint32_t>(scalar)
+                                           : pack_two_bfloat16_into_uint32({scalar, scalar});
+
         std::array reader_runtime_args = {
             packed_scalar_eps,
             input_tensor.buffer()->address(),
@@ -218,12 +225,22 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     const auto e_is_dram = weight_has_value and weight_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     const auto f_is_dram = bias_has_value and bias_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
+    std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
+    if (input_tensor.get_dtype() == DataType::FLOAT32) {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+
     // READER KERNEL
+    auto reader_defines = dataflow_defines;
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram}));
+        tt_metal::ReaderDataMovementConfig({a_is_dram}, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_kernel_id = tt_metal::CreateKernel(

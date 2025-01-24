@@ -38,7 +38,13 @@ void kernel_main() {
     constexpr auto cb_id_eps = tt::CBIndex::c_4;
 
     cb_reserve_back(cb_id_eps, onetile);
-    fill_with_val_bfloat16(cb_id_eps, eps);
+#ifdef FILL_WITH_VALUE_FLOAT
+    float* float_ptr = reinterpret_cast<float*>(&eps);
+    FILL_WITH_VALUE_FLOAT(cb_id_eps, *float_ptr);
+#endif
+#ifdef FILL_WITH_VALUE
+    FILL_WITH_VALUE(cb_id_eps, eps);
+#endif
     cb_push_back(cb_id_eps, onetile);
 
     // Input tile offset
