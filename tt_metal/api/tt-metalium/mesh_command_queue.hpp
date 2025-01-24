@@ -35,7 +35,7 @@ private:
         tt::stl::Span<const SubDeviceId> sub_device_ids);
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(
-        MeshBuffer& buffer,
+        const MeshBuffer& buffer,
         const void* src,
         std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
         tt::stl::Span<const SubDeviceId> sub_device_ids);
@@ -60,10 +60,10 @@ public:
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking);
     // MeshBuffer Write APIs
     void enqueue_write_shard(
-        std::shared_ptr<MeshBuffer>& mesh_buffer, void* host_data, const Coordinate& coord, bool blocking);
+        std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking);
     void enqueue_write_shard_to_sub_grid(
-        MeshBuffer& buffer, void* host_data, const LogicalDeviceRange& device_range, bool blocking);
-    void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, void* host_data, bool blocking);
+        const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking);
+    void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
     // MeshBuffer Read APIs
     void enqueue_read_shard(
         void* host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, const Coordinate& coord, bool blocking);

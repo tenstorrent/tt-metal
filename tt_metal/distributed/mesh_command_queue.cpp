@@ -231,7 +231,7 @@ void MeshCommandQueue::read_shard_from_device(
 }
 
 void MeshCommandQueue::enqueue_write_shard(
-    std::shared_ptr<MeshBuffer>& mesh_buffer, void* host_data, const Coordinate& coord, bool blocking) {
+    std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
     auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
@@ -258,7 +258,7 @@ void MeshCommandQueue::enqueue_read_shard(
 }
 
 void MeshCommandQueue::write_sharded_buffer(
-    MeshBuffer& buffer,
+    const MeshBuffer& buffer,
     const void* src,
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -398,7 +398,7 @@ void MeshCommandQueue::read_sharded_buffer(
 }
 
 void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
-    MeshBuffer& buffer, void* host_data, const LogicalDeviceRange& device_range, bool blocking) {
+    const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
     auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
@@ -423,7 +423,7 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
 }
 
 void MeshCommandQueue::enqueue_write_mesh_buffer(
-    const std::shared_ptr<MeshBuffer>& buffer, void* host_data, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
     LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols(), buffer->device()->num_rows()});
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
