@@ -21,7 +21,7 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.utility_functions import skip_for_grayskull
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 
@@ -82,6 +82,7 @@ def test_multi_op():
     REF_COUNT_DICT = {
         "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
+        "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -152,6 +153,11 @@ def test_full_buffer():
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             56 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
         ],
+        "blackhole": [
+            130 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            120 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+            110 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
+        ],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -189,6 +195,10 @@ def test_dispatch_cores():
             "Tensix CQ Dispatch": 16,
             "Tensix CQ Prefetch": 25,
         },
+        "blackhole": {
+            "Tensix CQ Dispatch": 16,
+            "Tensix CQ Prefetch": 25,
+        },
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
@@ -216,6 +226,7 @@ def test_dispatch_cores():
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
 
 
+@skip_for_blackhole()
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
@@ -297,20 +308,29 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    ERISC_COUNTS = [0, 1, 5]
-    TENSIX_COUNTS = [72, 64, 56]
+    WH_ERISC_COUNTS = [0, 1, 5]
+    WH_TENSIX_COUNTS = [72, 64, 56]
+    BH_ERISC_COUNTS = [0, 1, 5]
+    BH_TENSIX_COUNTS = [130, 120, 110]
 
-    COMBO_COUNTS = []
-    for T in TENSIX_COUNTS:
-        for E in ERISC_COUNTS:
-            COMBO_COUNTS.append((T, E))
+    WH_COMBO_COUNTS = []
+    for T in WH_TENSIX_COUNTS:
+        for E in WH_ERISC_COUNTS:
+            WH_COMBO_COUNTS.append((T, E))
+
+    BH_COMBO_COUNTS = []
+    for T in BH_TENSIX_COUNTS:
+        for E in BH_ERISC_COUNTS:
+            BH_COMBO_COUNTS.append((T, E))
 
     REF_COUNT_DICT = {
         "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
-        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in COMBO_COUNTS],
+        "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
+        "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
     }
     REF_ERISC_COUNT = {
-        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in ERISC_COUNTS],
+        "wormhole_b0": [C * OP_COUNT * ZONE_COUNT for C in WH_ERISC_COUNTS],
+        "blackhole": [C * OP_COUNT * ZONE_COUNT for C in BH_ERISC_COUNTS],
     }
 
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
