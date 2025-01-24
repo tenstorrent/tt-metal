@@ -91,6 +91,16 @@ def attempt_load(weights, map_location=None):
         return model
 
 
+def run_submodule(x, submodule):
+    y = []
+    for m in submodule:
+        if m.f != -1:
+            x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]
+        x = m(x)
+        y.append(x)
+    return x
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [torch.rand((1, 3, 640, 640))], ids=["input_tensor1"])
 def test_demo(device, input_tensor):
@@ -167,7 +177,16 @@ def test_C2f(device, input_tensor):
 
     with torch.inference_mode():
         ttnn_model_output, out_h, out_w = C2f(
-            device, ttnn_input, parameters, "model.21", 1280, 640, n=3, shortcut=False, bfloat8=True
+            device,
+            ttnn_input,
+            parameters,
+            "model.21",
+            1280,
+            640,
+            n=3,
+            shortcut=False,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            change_shard=True,
         )
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
         ttnn_model_output = ttnn_model_output.reshape((1, out_h, out_w, ttnn_model_output.shape[-1]))
@@ -241,7 +260,7 @@ def test_Detect_cv2(device, input_tensor, c1, c2, k, reg_max, idx):
 
     with torch.inference_mode():
         ttnn_model_output, out_h, out_w = Detect_cv2(
-            device, ttnn_input, parameters, f"model.22.cv2.{idx}", c1, c2, k, reg_max, bfloat8=False
+            device, ttnn_input, parameters, f"model.22.cv2.{idx}", c1, c2, k, reg_max
         )
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
         ttnn_model_output = ttnn_model_output.reshape((1, out_h, out_w, ttnn_model_output.shape[-1]))
@@ -283,7 +302,7 @@ def test_Detect_cv3(device, input_tensor, c1, c2, k, reg_max, idx):
 
     with torch.inference_mode():
         ttnn_model_output, out_h, out_w = Detect_cv2(
-            device, ttnn_input, parameters, f"model.22.cv3.{idx}", c1, c2, k, reg_max=reg_max, bfloat8=True
+            device, ttnn_input, parameters, f"model.22.cv3.{idx}", c1, c2, k, reg_max=reg_max
         )
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
         ttnn_model_output = ttnn_model_output.reshape((1, out_h, out_w, ttnn_model_output.shape[-1]))
