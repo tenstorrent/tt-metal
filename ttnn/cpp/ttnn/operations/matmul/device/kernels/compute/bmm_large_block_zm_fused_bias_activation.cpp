@@ -198,6 +198,9 @@ void MAIN {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
+                                for (uint32_t i = 0; i < 10; i++) {
+                                    asm volatile("nop");
+                                }
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,

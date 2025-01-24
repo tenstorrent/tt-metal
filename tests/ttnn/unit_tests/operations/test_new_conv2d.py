@@ -129,6 +129,7 @@ def run_conv(
         )
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=input_mesh_mapper)
+    # tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=input_mesh_mapper)
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -353,6 +354,77 @@ def run_conv_with_split(
     else:
         pcc = 0.998
     assert_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=pcc)
+
+
+def test_resnet_linear(device, use_program_cache):
+    # torch.manual_seed(0)
+    batch_size = 16
+    input_channels = 2048
+    output_channels = 1000
+    input_shape = [1, 1, batch_size, input_channels]
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_weight_tensor = torch.randn([1, 1, output_channels, input_channels], dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn([1, 1, 1, output_channels], dtype=torch.bfloat16)
+    torch_out_golden_tensor = torch.nn.functional.linear(
+        torch_input_tensor[0, 0, :, :], torch_weight_tensor[0, 0, :, :], bias=torch_bias_tensor[0, 0, :, :]
+    )
+
+    # tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight_tensor = ttnn.from_torch(
+        torch.permute(torch_weight_tensor, (0, 1, 3, 2)), ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT
+    )
+    tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    grid_size = (8, 4)
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1),
+            )
+        }
+    )
+    x = tt_input_tensor
+    shard_shape = [
+        x.volume() // x.shape.with_tile_padding()[-1],
+        x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
+    ]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    width_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    x = ttnn.to_memory_config(x, width_sharded_mem_config)
+
+    tt_output_tensor_on_device = ttnn.linear(
+        x,
+        tt_weight_tensor,
+        bias=tt_bias_tensor,
+        program_config=matmul_config,
+        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        dtype=ttnn.bfloat8_b,
+        compute_kernel_config=compute_config,
+    )
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.999)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -878,8 +950,79 @@ def test_resnet50_conv_gs(
     )
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
+    (
+        # (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, False, None),
+        # (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, False, None),
+        # (16, 256, 512, 28, 28, 1, 1, 1, 1, 0, 0, False, None),
+        (16, 2048, 1024, 14, 14, 1, 1, 2, 2, 0, 0, False, None),  # r50 fourth bottleneck downsample shape
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("packer_l1_acc", [True], ids=["pack_l1"])
+@pytest.mark.parametrize("has_bias", [True], ids=["with_bias"])
+@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
+def test_resnet50_tmp(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    use_1d_systolic_array,
+    config_override,
+    packer_l1_acc,
+    has_bias,
+    auto_shard,
+):
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        use_1d_systolic_array,
+        config_override=config_override,
+        use_shallow_conv_variant=False,
+        transpose_mcast=use_1d_systolic_array,
+        packer_l1_acc=packer_l1_acc,
+        fp32_accum=False,
+        has_bias=has_bias,
+        auto_shard=auto_shard,
+    )
+
+
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -966,29 +1109,29 @@ def test_resnet50_conv_wh(
     has_bias,
     auto_shard,
 ):
-    if device.core_grid.y == 7:
-        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
-    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
-        pytest.skip("Batch > 8 must be run fully bfp8")
+    # if device.core_grid.y == 7:
+    #     pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
+    # if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
+    #     pytest.skip("Batch > 8 must be run fully bfp8")
 
-    if (
-        (
-            activations_dtype == ttnn.bfloat16
-            and batch_size == 20
-            and (
-                output_channels == 64
-                or (
-                    stride_h == 2
-                    and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-                )
-            )
-        )
-        # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
-        or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
+    # if (
+    #     (
+    #         activations_dtype == ttnn.bfloat16
+    #         and batch_size == 20
+    #         and (
+    #             output_channels == 64
+    #             or (
+    #                 stride_h == 2
+    #                 and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
+    #             )
+    #         )
+    #     )
+    #     # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
+    #     or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
+    # ):
+    #     pytest.skip("Skipping test because it won't fit in L1!")
 
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() == ttnn.device.Arch.GRAYSKULL
     run_conv(
         device,
         math_fidelity,
