@@ -44,9 +44,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_0_buffer_index_address + field_size;
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_connection_info_address + field_size;
+    std::size_t sender_channel_0_producer_terminate_connection_address =
+        sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_connection_semaphore_address =
-        sender_channel_0_local_flow_control_semaphore_address + field_size;
+        sender_channel_0_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
@@ -60,9 +62,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_1_buffer_index_address + field_size;
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_connection_info_address + field_size;
+    std::size_t sender_channel_1_producer_terminate_connection_address =
+        sender_channel_1_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_connection_semaphore_address =
-        sender_channel_1_local_flow_control_semaphore_address + field_size;
+        sender_channel_1_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
