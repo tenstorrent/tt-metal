@@ -19,5 +19,7 @@ tt::tt_metal::Tensor mean_moreh(const tt::tt_metal::Tensor& t, int dim, bool kee
 tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
+tt::tt_metal::Tensor sum_moreh(
+    const tt::tt_metal::Tensor& t, std::optional<SmallVector<int64_t>> dims = std::nullopt, bool keep_dim = false);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 }  // namespace ttml::ttnn_fixed
