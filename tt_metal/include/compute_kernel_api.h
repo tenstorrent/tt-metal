@@ -730,8 +730,9 @@ ALWI void topk_local_sort(
  * | k               | The number of sorted values to return                                      | int32    | {4, 8, 16, 32, 64}                                    | True     |
  */
  // clang-format on
+template <bool idir = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, idir>(idst, m_iter, k)));
 }
 
 // topK rebuild

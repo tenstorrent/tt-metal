@@ -29,7 +29,7 @@ void CopyDeviceOperation::validate_with_output_tensors(
         "Copy does not currently support sharding");
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
-        TT_FATAL(input_tensor_a.get_legacy_shape() == dst_tensor.get_legacy_shape(), "Error");
+        TT_FATAL(input_tensor_a.get_padded_shape() == dst_tensor.get_padded_shape(), "Error");
         TT_FATAL(input_tensor_a.get_layout() == dst_tensor.get_layout(), "Error");
         TT_FATAL(input_tensor_a.memory_config().memory_layout == dst_tensor.memory_config().memory_layout, "Error");
         TT_FATAL(

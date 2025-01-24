@@ -90,12 +90,6 @@ struct Tensor {
 
     Tensor(
         Storage storage,
-        const ttnn::Shape& shape,
-        DataType dtype,
-        Layout layout,
-        const std::optional<Tile>& tile = std::nullopt);
-    Tensor(
-        Storage storage,
         const ttnn::SimpleShape& shape,
         DataType dtype,
         Layout layout,
@@ -234,8 +228,6 @@ struct Tensor {
     const ttnn::SimpleShape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
 
-    // [[deprecated("Use get_shape() instead.")]]
-    tt::tt_metal::LegacyShape get_legacy_shape() const;
     ttnn::Shape get_shape() const;
     tt::tt_metal::Padding get_padding() const;
 
@@ -243,9 +235,6 @@ struct Tensor {
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline tt::tt_metal::LegacyShape legacy_shape() const {
-        return this->tensor_attributes->tensor_spec.shape().value;
-    };
     inline ttnn::Shape shape() const { return this->tensor_attributes->tensor_spec.shape(); };
     inline const ttnn::SimpleShape& logical_shape() const {
         return this->tensor_attributes->tensor_spec.logical_shape();
@@ -409,13 +398,7 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-Tensor allocate_tensor_on_devices(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    const std::vector<IDevice*>& devices,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
+Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);

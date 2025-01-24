@@ -58,3 +58,14 @@ run_python_model_tests_wormhole_b0() {
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 }
+
+run_python_model_tests_slow_runtime_mode_wormhole_b0() {
+    # Unet Shallow
+    export TTNN_CONFIG_OVERRIDES='{
+        "enable_fast_runtime_mode": false,
+        "enable_comparison_mode": true,
+        "comparison_mode_should_raise_exception": true,
+        "comparison_mode_pcc": 0.998
+    }'
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+}

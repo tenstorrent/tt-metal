@@ -64,7 +64,7 @@ MorehNormBackwardOperation::invoke(
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_legacy_shape().rank());
+    ttnn::SmallVector<int64_t> dims = get_dim(dim, input.get_padded_shape().rank());
     std::sort(dims.begin(), dims.end());
     return {
         operation_attributes_t{

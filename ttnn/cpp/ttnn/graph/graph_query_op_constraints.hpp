@@ -13,15 +13,13 @@
 
 namespace ttnn::graph {
 
-enum class ExecutionStatus { Success, Error };
-
 struct ResourceUsage {
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
     size_t l1_output_buffer_per_core = 0;
 };
 
-struct QueryResponse {
+struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
     std::optional<std::string> error_message;
@@ -38,7 +36,7 @@ struct QueryResponse {
  * @param op The operation that will be invoked to capture the graph operations.
  * @param device A pointer to the Device object, which provides information about the compute grid size.
  * @param args The arguments that will be passed to the operation.
- * @return QueryResponse containing the execution status and resource usage constraints.
+ * @return ConstraintQueryResponse containing the execution status and resource usage constraints.
  *         - On success: ExecutionStatus::Success and the resource usage details.
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
@@ -78,12 +76,12 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         size_t l1_output_buffer_per_core =
             extract_l1_output_buffer_allocation_size_per_core(op_trace, interleaved_storage_cores);
 
-        return QueryResponse{
+        return ConstraintQueryResponse{
             ExecutionStatus::Success, {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core}};
 
     } catch (const std::exception& e) {
         tt::log_debug(tt::LogOp, "op_constraints - error: {}", e.what());
-        return QueryResponse{ExecutionStatus::Error, {0, 0, 0}, e.what()};
+        return ConstraintQueryResponse{ExecutionStatus::Error, {0, 0, 0}, e.what()};
     }
 }
 

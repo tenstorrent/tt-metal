@@ -228,8 +228,20 @@ void Device::initialize_cluster() {
 
 void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
+
+    auto sub_devices = {SubDevice(std::array{
+        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
+        CoreRangeSet(std::move(active_eth_core_ranges))})};
+
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap));
+        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
@@ -388,8 +400,15 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
+                            // Cooperative means active erisc FW needs to context switch to base FW
+                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0;
                             build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_,
+                                JitBuiltStateConfig{
+                                    .processor_id = processor_class,
+                                    .is_fw = is_fw,
+                                    .dispatch_message_addr = dispatch_message_addr,
+                                    .is_cooperative = is_cooperative});
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
@@ -931,11 +950,11 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
-    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
-    hw_command_queues_.resize(num_hw_cqs());
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    hw_command_queues_.reserve(num_hw_cqs());
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
-        // Need to do this since CommandQueue constructor is private
+        hw_command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
         sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }
@@ -978,10 +997,10 @@ void Device::init_command_queue_device() {
 void Device::initialize_synchronous_sw_cmd_queue() {
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
-        sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
+        sw_command_queues_.push_back(
+            std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
     }
 }
 
@@ -1437,39 +1456,11 @@ void Device::deallocate_buffers(SubDeviceId sub_device_id) {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-    auto global_bank_id =
-        this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    // Sub-device banks are currently all compute banks
-    // Since banks are lockstep in an allocator it doesn't matter which core is used
-    uint32_t sub_device_bank_id = 0;
-    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-    for (const auto& sub_device_id : sub_device_ids) {
-        const auto& allocator =
-            sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
-        if (allocator) {
-            auto found_addr = allocator::lowest_occupied_l1_address(*allocator, sub_device_bank_id);
-            if (found_addr.has_value()) {
-                lowest_addr = std::min(lowest_addr, *found_addr);
-            }
-        }
-    }
-    // sub-device allocators sit below global allocator. If an address is found for a sub-device, no need to check the global allocator
-    if (lowest_addr != std::numeric_limits<DeviceAddr>::max()) {
-        return lowest_addr;
-    } else {
-        const auto &allocator = this->get_initialized_allocator();
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        auto global_bank_id =
-            this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-        return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
-    }
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
 std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
@@ -1747,10 +1738,6 @@ SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevi
 
 std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
-
-std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->fabric_sub_device_id();
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {

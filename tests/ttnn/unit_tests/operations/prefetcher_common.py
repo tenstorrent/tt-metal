@@ -5,8 +5,11 @@
 import pytest
 import torch
 import ttnn
+import math
 from loguru import logger
 
+from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor, ConcatMesh2dToTensor
+from models.common.lightweightmodule import LightweightModule
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
@@ -18,7 +21,20 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     run_multi_core_matmul_1d,
     PREFETCHER_NOC1_GRID,
     num_cores_to_rectangle_grid,
+    round_up,
 )
+
+
+def get_buffer_address(tensor):
+    device_tensors = ttnn.get_device_tensors(tensor)
+    buffer_addr = device_tensors[0].buffer_address()
+
+    if len(device_tensors) > 1:
+        for i in range(1, len(device_tensors)):
+            addr = device_tensors[i].buffer_address()
+            assert addr == buffer_addr, f"Expected buffer address on device {i} to be same as device 0"
+
+    return buffer_addr
 
 
 def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
@@ -196,6 +212,25 @@ def run_prefetcher_mm(
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in dram_cores])
     sender_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core_coord, core_coord) for core_coord in sender_cores])
 
+    padded_shapes, shard_shapes = [], []
+    for K, N in input_shapes:
+        num_cores = len(receiver_cores_list)
+        K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
+        K_padded = K_per_shard * num_cores
+        N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+        N_padded = N_per_shard * num_cores
+
+        padded_shapes.append((K_padded, N_padded))
+        shard_shapes.append((K_per_shard, N_per_shard))
+
+    cluster_shape = None
+    mesh_mapper = None
+    mesh_composer = None
+    if isinstance(device, ttnn._ttnn.multi_device.MeshDevice):
+        cluster_shape = device.shape
+        mesh_mapper = ReplicateTensorToMesh(device)
+        mesh_composer = ConcatMesh2dToTensor(device, dims=(0, 1), mesh_shape=cluster_shape)
+
     pt_tensors = []
     for l in range(num_layers):
         for t in range(num_tensors):
@@ -203,7 +238,7 @@ def run_prefetcher_mm(
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):
-        K, N = input_shapes[tid % num_tensors]
+        K, N = padded_shapes[tid % num_tensors]
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
@@ -220,12 +255,13 @@ def run_prefetcher_mm(
             dtype=dtypes[tid % num_tensors],
             memory_config=input_sharded_mem_config,
             layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
         )
         tt_tensors_all.append(tt_tensor)
     tt_tensors = tt_tensors_all[:num_tensors]
 
     # Set up the tensor addrs
-    tensor_addrs = torch.tensor([x.buffer_address() for x in tt_tensors_all])
+    tensor_addrs = torch.tensor([get_buffer_address(x) for x in tt_tensors_all])
     tensor_addrs = tensor_addrs.repeat(len(dram_cores), 1)
     tensor_addrs_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -237,8 +273,13 @@ def run_prefetcher_mm(
         ),
     )
     tt_tensor_addrs = ttnn.as_tensor(
-        tensor_addrs, device=device, dtype=ttnn.uint32, memory_config=tensor_addrs_mem_config
+        tensor_addrs,
+        device=device,
+        dtype=ttnn.uint32,
+        memory_config=tensor_addrs_mem_config,
+        mesh_mapper=mesh_mapper,
     )
+    tt_tensors.append(tt_tensor_addrs)
 
     ##### Setup up sub devices #####
     prefetcher_sub_device = ttnn.SubDevice([sender_core_range_set])
@@ -258,15 +299,22 @@ def run_prefetcher_mm(
     block_dims = []
     for tid in range(num_tensors):
         K, N = input_shapes[tid]
+        _, N_padded = padded_shapes[tid]
+        K_per_shard, N_per_shard = shard_shapes[tid]
+
         in0_shape = [1, 1, M, K]
         in0_shapes.append(in0_shape)
-        out_shape = [1, 1, M, N]
+
+        out_shape = [1, 1, M, N_per_shard]
         out_shapes.append(out_shape)
 
         in0_block_h = M // ttnn.TILE_SIZE
         in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+            in0_block_w -= 1
+
         out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
+        out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
 
         out_subblock_h = 1
         out_subblock_w = max_dst_tiles
@@ -319,14 +367,14 @@ def run_prefetcher_mm(
 
     output_mem_configs = []
     for shape in out_shapes:
-        _, _, M, N = shape
+        _, _, M, N_per_shard = shape
 
         output_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 output_core_range_set,
-                [M, N // num_cores],
+                [M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -334,18 +382,19 @@ def run_prefetcher_mm(
 
     in0_tensors = []
     in0_t_tensors = []
-    for shape in in0_shapes:
+    for shape, shard_shape in zip(in0_shapes, shard_shapes):
         in0 = torch.randn(shape)
         in0_tensors.append(in0)
 
-        _, _, M, K = shape
+        _, _, M, _ = shape
+        K_per_shard, _ = shard_shape
 
         in0_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 input_core_range_set,
-                [M, K // num_cores],
+                [M, K_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -356,6 +405,7 @@ def run_prefetcher_mm(
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=in0_sharded_mem_config,
+            mesh_mapper=mesh_mapper,
         )
         in0_t_tensors.append(in0_t)
 
@@ -389,9 +439,8 @@ def run_prefetcher_mm(
     def run_op():
         ttnn.dram_prefetcher(
             tt_tensors,
-            tt_tensor_addrs,
             num_layers,
-            global_circular_buffer,
+            global_cb=global_circular_buffer,
         )
         device.set_sub_device_stall_group([worker_sub_device_id])
 
@@ -438,7 +487,10 @@ def run_prefetcher_mm(
         for t in range(num_tensors):
             idx = l * num_tensors + t
             logger.info(f"Checking matmul for layer {l}, tensor {t}")
-            tt_out = ttnn.to_torch(outputs_t[idx])
+            tt_out = ttnn.to_torch(
+                outputs_t[idx],
+                mesh_composer=mesh_composer,
+            )[:1, :1, ...]
             pt_out = in0_tensors[t] @ pt_tensors[idx]
 
             dtype = dtypes[t]

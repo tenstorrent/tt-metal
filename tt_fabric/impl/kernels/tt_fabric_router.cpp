@@ -4,12 +4,16 @@
 
 // clang-format off
 #include "dataflow_api.h"
-#include "hw/inc/tt_fabric.h"
+#include "tt_fabric/hw/inc/tt_fabric.h"
 // clang-format on
+
+using namespace tt::tt_fabric;
 
 router_state_t router_state __attribute__((aligned(16)));
 fvc_consumer_state_t fvc_consumer_state __attribute__((aligned(16)));                // replicate for each fvc
 fvc_producer_state_t fvc_producer_state __attribute__((aligned(16)));                // replicate for each fvc
+fvcc_inbound_state_t fvcc_inbound_state __attribute__((aligned(16)));    // inbound fabric virtual control channel
+fvcc_outbound_state_t fvcc_outbound_state __attribute__((aligned(16)));  // outbound fabric virtual control channel
 volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16)));  // replicate for each fvc
 volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;        // replicate for each fvc
 
@@ -17,11 +21,11 @@ constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
-// constexpr uint32_t sync_val = get_compile_time_arg_val(3);
-// constexpr uint32_t router_mask = get_compile_time_arg_val(4);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
 uint32_t sync_val;
 uint32_t router_mask;
+uint32_t gk_message_addr_l;
+uint32_t gk_message_addr_h;
 
 constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
 constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
@@ -41,37 +45,29 @@ constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
 tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
-tt_l1_ptr volatile tt::tt_fabric::fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr tt::tt_fabric::fabric_router_l1_config_t*>(
-        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 uint64_t xy_local_addr;
 
 #define SWITCH_THRESHOLD 0x3FF
 
-inline void notify_all_routers() {
-    uint32_t channel = 0;
-    uint32_t remaining_cores = router_mask;
-    // send semaphore increment to all fabric routers on this device.
+inline void notify_gatekeeper() {
+    // send semaphore increment to gatekeeper on this device.
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
-    for (uint32_t i = 0; i < 16; i++) {
-        if (remaining_cores == 0) {
-            break;
-        }
-        if (remaining_cores & (0x1 << i)) {
-            uint64_t dest_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][i] << 32) | FABRIC_ROUTER_SYNC_SEM;
-            noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
-                noc_index,
-                NCRISC_AT_CMD_BUF,
-                dest_addr,
-                NOC_UNICAST_WRITE_VC,
-                1,
-                31,
-                false,
-                false,
-                MEM_NOC_ATOMIC_RET_VAL_ADDR);
-        }
-    }
+    uint64_t dest_addr =
+        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, router_sync);
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        dest_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
+
     volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
     // wait for all device routers to have incremented the sync semaphore.
     // sync_val is equal to number of tt-fabric routers running on a device.
@@ -84,8 +80,11 @@ inline void notify_all_routers() {
 void kernel_main() {
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
-    sync_val = get_arg_val<uint32_t>(0);
-    router_mask = get_arg_val<uint32_t>(1);
+    uint32_t rt_args_idx = 0;
+    sync_val = get_arg_val<uint32_t>(rt_args_idx++);
+    router_mask = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_message_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
+    gk_message_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt_fabric_init();
 
@@ -99,6 +98,8 @@ void kernel_main() {
     router_state.sync_out = 0;
 
     zero_l1_buf((tt_l1_ptr uint32_t*)fvc_consumer_req_buf, sizeof(chan_req_buf));
+    zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_IN_BUF_START, FVCC_IN_BUF_SIZE);
+    zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_OUT_BUF_START, FVCC_OUT_BUF_SIZE);
     write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX, (uint32_t)&router_state);
     write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX + 1, (uint32_t)&fvc_consumer_state);
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX + 1, (uint32_t)&fvc_producer_state);
@@ -110,12 +111,19 @@ void kernel_main() {
         fvc_data_buf_size_words / 2,
         (uint32_t)&fvc_consumer_state.remote_rdptr);
 
+    fvcc_outbound_state.init(
+        FVCC_OUT_BUF_START, FVCC_SYNC_BUF_START, FVCC_IN_BUF_START, (uint32_t)&fvcc_inbound_state.inbound_wrptr);
+    fvcc_inbound_state.init(
+        FVCC_IN_BUF_START,
+        (uint32_t)&fvcc_outbound_state.remote_rdptr,
+        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
+
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
 
-    notify_all_routers();
+    notify_gatekeeper();
     uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000001);
@@ -194,6 +202,9 @@ void kernel_main() {
             write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
             return;
         }
+
+        fvcc_inbound_state.fvcc_handler();
+        fvcc_outbound_state.fvcc_handler();
 
         loop_count++;
 

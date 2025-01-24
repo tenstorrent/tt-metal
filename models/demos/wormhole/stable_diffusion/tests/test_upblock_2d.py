@@ -5,10 +5,11 @@
 import torch
 from diffusers import StableDiffusionPipeline
 from loguru import logger
+import os
 import ttnn
 import pytest
 
-from models.utility_functions import tt_to_torch_tensor, torch_random
+from models.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import (
     skip_for_grayskull,
@@ -18,7 +19,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_co
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
     post_process_output,
     weight_to_bfp8,
 )
@@ -29,10 +29,9 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
-@pytest.mark.skip(reason="#15931: Fails, need to investigate")
 def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
-    # TODO
-    # setup pytorch model
+    os.environ["SLOW_MATMULS"] = "1"
+
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
     unet.eval()

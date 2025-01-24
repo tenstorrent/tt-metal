@@ -132,7 +132,10 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
 
     return {
         std::move(program),
-        {.unary_reader_kernel_id = unary_reader_kernel_id, .unary_writer_kernel_id = unary_writer_kernel_id}};
+        {.unary_reader_kernel_id = unary_reader_kernel_id,
+         .unary_writer_kernel_id = unary_writer_kernel_id,
+         .core_range = all_cores},
+    };
 }
 
 void PermuteDeviceOperation::MultiCoreRowInvariant::override_runtime_arguments(
