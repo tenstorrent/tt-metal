@@ -89,7 +89,7 @@ The Llama3 demo includes 3 main modes of operation and is fully parametrized to 
 - `batch-32`: Runs a small prompt for a a batch of 32 users
 - `long-context`: Runs a large prompt (64k tokens) for a single user
 
-If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/demo.py`. For convenience we list all the supported params below:
+If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/simple_text_demo.py`. For convenience we list all the supported params below:
 
 - `input_prompts (string)`: input json file with prompts to process. See `models/demos/llama3/demo/*.json` for a list of input files
 - `instruct (bool)`: Whether to use Llama instruct weights or general weights
@@ -115,13 +115,13 @@ Example: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a 
 # Examples of how to run the demo for any supported Llama3 models
 
 # Batch-1
-pytest models/demos/llama3/demo/demo.py -k "performance and batch-1"
+pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-1"
 
 # Batch-32
-pytest models/demos/llama3/demo/demo.py -k "performance and batch-32"
+pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-32"
 
 # Long-context
-pytest models/demos/llama3/demo/demo.py -k "performance and long"
+pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and long"
 ```
 
 The above examples are run in `LlamaOptimizations.performance` mode.
