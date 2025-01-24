@@ -5,6 +5,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 
 #include "autograd/auto_context.hpp"
@@ -25,10 +26,11 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::T
         tensor,
         /* transpose_a */ false,
         /* transpose_b */ true);
-    auto eps_tensor =
-        autograd::create_tensor(core::from_xtensor(xt::xarray<float>{epsilon}, &autograd::ctx().get_device()));
+    std::array<uint32_t, 4> eps_shape = {1, 1, 1, 1};
+    auto eps_tensor = autograd::create_tensor(
+        core::from_vector({epsilon}, core::create_shape(eps_shape), &autograd::ctx().get_device()));
     auto mean_of_squares = ttml::ops::mean(squares);
-    auto mean_of_squares_plus_epsilon = ttml::ops::add(mean_of_squares, eps_tensor);
+    auto mean_of_squares_plus_epsilon = mean_of_squares + eps_tensor;
     auto rms_eps = ttml::ops::sqrt(mean_of_squares_plus_epsilon);
     auto gamma_times_activations = gamma * tensor;
     auto out = gamma_times_activations / rms_eps;
