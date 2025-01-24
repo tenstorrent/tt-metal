@@ -180,20 +180,23 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t in1_single_tile_size,
     uint32_t output_single_tile_size,
     uint32_t interm_single_tile_size,
-    bool has_bias) {
+    uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:
-    // src0 CB: per_core_M * in0_block_w * 2 (for double buffer)
-    // src1 CB: per_core_N * in0_block_w * 2 (for double buffer)
-    // out CB:  per_core_M * per_core_N
+    // src0   CB: per_core_M * in0_block_w * 2 (for double buffer)
+    // src1   CB: per_core_N * in0_block_w * 2 (for double buffer)
+    // src2   CB: per_core_M * in2_CB_tiles
+    // interm CB: per_core_M * per_core_N * interm_single_tile_size
+    // out    CB: per_core_M * per_core_N
+    // bias   CB: per_core_M * in0_block_w
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
     uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
     uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
+    uint32_t in2_size = per_core_M * in0_block_w;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
-    uint32_t total_size = in0_size + in1_size + out_size + interm_size;
-    total_size = has_bias ? total_size + out_size : total_size;
-    return total_size;
+    uint32_t bias_size = in0_block_w * bias_single_tile_size;
+    return in0_size + in1_size + in2_size + out_size + interm_size + bias_size;
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
@@ -207,7 +210,7 @@ inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
 inline bool can_cbs_fit_in_l1(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     uint32_t per_core_M,
     uint32_t per_core_N,
     uint32_t in0_block_w,
@@ -226,14 +229,14 @@ inline bool can_cbs_fit_in_l1(
         in1_single_tile_size,
         in0_single_tile_size,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
-        has_bias);
+        bias_single_tile_size);
     return size < max_l1_space;
 }
 
 inline uint32_t get_per_core_factor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     uint32_t in0_block_w,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
@@ -251,7 +254,7 @@ inline uint32_t get_per_core_factor(
             in1_single_tile_size,
             in0_single_tile_size,
             estimate_interm_tile_size(compute_kernel_config, output_dtype),
-            has_bias);
+            bias_single_tile_size);
         if (size < max_l1_space) {
             return per_core_factor;
         }
@@ -262,7 +265,7 @@ inline uint32_t get_per_core_factor(
 inline std::vector<uint32_t> get_multi_dim_per_core_factor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     uint32_t per_core_M,
     uint32_t per_core_N,
     uint32_t in0_block_w,
@@ -282,7 +285,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
         in1_single_tile_size,
         in0_single_tile_size,
         interm_cb_size,
-        has_bias);
+        bias_single_tile_size);
     if (size < max_l1_space) {
         return {per_core_M, per_core_N, in0_block_w};
     }
@@ -342,7 +345,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
                 in1_single_tile_size,
                 in0_single_tile_size,
                 interm_cb_size,
-                has_bias);
+                bias_single_tile_size);
             if (size < max_l1_space) {
                 return {per_core_factor_m, per_core_factor_n, per_core_factor_k};
             }
@@ -354,7 +357,7 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
 MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const CoreCoord& core_coord,
     const std::optional<const UnaryWithParam>& fused_activation,
     const bool fp32_dest_acc_en,
@@ -410,7 +413,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
     auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
         input_tensor_a,
         input_tensor_b,
-        has_bias,
+        bias_single_tile_size,
         batch_and_m_tiles_per_core,
         n_tiles_per_core,
         k_tiles_per_core,
@@ -440,7 +443,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
 MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const bool fuse_batch,
     const std::optional<UnaryWithParam>& fused_activation,
     const bool mcast_in0,
@@ -473,7 +476,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
         input_tensor_a,
         input_tensor_b,
-        has_bias,
+        bias_single_tile_size,
         per_core_M,
         per_core_N,
         in0_block_w,
@@ -508,7 +511,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
 inline MatmulProgramConfig create_simple_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const CoreCoord& compute_with_storage_grid_size,
     const MemoryConfig& mem_config,
@@ -551,8 +554,8 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     }
 
     // out_subblock h/w doesn't matter
-    per_core_M =
-        get_per_core_factor(input_tensor_a, input_tensor_b, has_bias, in0_block_w, compute_kernel_config, output_dtype);
+    per_core_M = get_per_core_factor(
+        input_tensor_a, input_tensor_b, bias_single_tile_size, in0_block_w, compute_kernel_config, output_dtype);
     per_core_N = per_core_M;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
@@ -579,7 +582,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 false /* fuse_batch */,
                 std::nullopt /* fused_activation */,
                 true /* mcast_in0 */,
@@ -592,7 +595,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
             return get_mcast_1d_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 false /* fuse_batch */,
                 std::nullopt /* fused_activation */,
                 false /* mcast_in0 */,
@@ -621,7 +624,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
                 auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
                     input_tensor_a,
                     input_tensor_b,
-                    has_bias,
+                    bias_single_tile_size,
                     per_core_M,
                     per_core_N,
                     in0_block_w,
@@ -658,7 +661,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
 MatmulProgramConfig create_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const std::optional<const CoreCoord> user_core_coord,
     const std::optional<UnaryWithParam>& fused_activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
@@ -712,7 +715,7 @@ MatmulProgramConfig create_matmul_program_config(
             if (!can_cbs_fit_in_l1(
                     input_tensor_a,
                     input_tensor_b,
-                    has_bias,
+                    bias_single_tile_size,
                     m_tiles_per_core,
                     n_tiles_per_core,
                     k_tiles_per_core,
@@ -721,7 +724,7 @@ MatmulProgramConfig create_matmul_program_config(
                 return create_simple_matmul_program_config(
                     input_tensor_a,
                     input_tensor_b,
-                    has_bias,
+                    bias_single_tile_size,
                     compute_kernel_config,
                     core_coord,
                     mem_config,
@@ -769,7 +772,7 @@ MatmulProgramConfig create_matmul_program_config(
             return create_matmul_1d_systolic_array_program_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 core_coord,
                 fused_activation,
                 fp32_dest_acc_en,
@@ -790,7 +793,7 @@ MatmulProgramConfig create_matmul_program_config(
             return create_matmul_1d_systolic_array_program_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 core_coord,
                 fused_activation,
                 fp32_dest_acc_en,
@@ -811,7 +814,7 @@ MatmulProgramConfig create_matmul_program_config(
     auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
         input_tensor_a,
         input_tensor_b,
-        has_bias,
+        bias_single_tile_size,
         m_tiles_per_core,
         n_tiles_per_core,
         k_tiles_per_core,
@@ -848,7 +851,7 @@ MatmulProgramConfig create_matmul_program_config(
 MatmulProgramConfig get_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const MemoryConfig& output_mem_config,
     const std::optional<UnaryWithParam>& fused_activation,
     const bool matmul,
@@ -909,7 +912,7 @@ MatmulProgramConfig get_matmul_program_config(
             auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 per_core_M,
                 per_core_N,
                 in0_block_w,
@@ -971,7 +974,7 @@ MatmulProgramConfig get_matmul_program_config(
             auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 per_core_M,
                 per_core_N,
                 in0_block_w,
@@ -1055,7 +1058,7 @@ MatmulProgramConfig get_matmul_program_config(
     return create_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
-        has_bias,
+        bias_single_tile_size,
         user_core_coord,
         fused_activation,
         compute_kernel_config,
@@ -1066,7 +1069,7 @@ MatmulProgramConfig get_matmul_program_config(
 inline MatmulProgramConfig generate_matmul_program_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const bool has_bias,
+    const uint32_t bias_single_tile_size,
     const MemoryConfig& mem_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreCoord> user_core_coord,
@@ -1081,7 +1084,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             return create_matmul_program_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 user_core_coord,
                 user_fused_activation,
                 compute_kernel_config,
@@ -1093,7 +1096,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             return create_simple_matmul_program_config(
                 input_tensor_a,
                 input_tensor_b,
-                has_bias,
+                bias_single_tile_size,
                 compute_kernel_config,
                 compute_with_storage_grid_size,
                 mem_config,
@@ -1104,7 +1107,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         return get_matmul_program_config(
             input_tensor_a,
             input_tensor_b,
-            has_bias,
+            bias_single_tile_size,
             mem_config,
             std::nullopt,
             !bmm,
@@ -1115,14 +1118,17 @@ inline MatmulProgramConfig generate_matmul_program_config(
 }
 
 inline MatmulProgramConfig get_program_config(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const bool has_bias, const struct Matmul* matmul) {
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const uint32_t bias_single_tile_size,
+    const struct Matmul* matmul) {
     if (matmul->program_config.has_value()) {
         return matmul->program_config.value();
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
         input_tensor_b,
-        has_bias,
+        bias_single_tile_size,
         matmul->output_mem_config,
         matmul->compute_kernel_config,
         matmul->user_core_coord,
@@ -1434,12 +1440,16 @@ void Matmul::validate(
 
     TT_FATAL(optional_input_tensors.size() == 1, "Error");
     const auto& optional_bias = optional_input_tensors.at(0);
-    const bool has_bias = optional_bias.has_value();
+    uint32_t bias_single_tile_size = 0;
+    if (optional_bias.has_value()) {
+        auto bias_data_format = tt_metal::datatype_to_dataformat_converter(optional_bias.value().get_dtype());
+        bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
+    }
 
     if (is_optional_output_tensor) {
         const auto& optional_output_tensor_c = optional_output_tensors.at(0);
         const auto& optional_output_tensor_shape = optional_output_tensor_c->get_logical_shape();
-        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, has_bias).at(0);
+        const auto output_tensor_spec = this->compute_output_specs(input_tensors, {}, bias_single_tile_size).at(0);
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
             "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
@@ -1487,7 +1497,8 @@ void Matmul::validate(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, has_bias, this);
+    MatmulProgramConfig chosen_program_config =
+        get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
     if (optional_bias.has_value()) {
         const auto& bias = optional_bias.value();
@@ -1941,7 +1952,7 @@ void Matmul::validate(
 std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<Tensor>>& optional_output_tensors,
-    const bool has_bias) const {
+    const uint32_t bias_single_tile_size) const {
     TT_FATAL(
         optional_output_tensors.size() <= 1,
         "None or One Optional output tensor can be passed when accessing it "
@@ -1981,7 +1992,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
     TT_FATAL(this->output_dtype.has_value(), "Error");
     if (this->output_mem_config.is_sharded()) {
-        MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, has_bias, this);
+        MatmulProgramConfig chosen_program_config =
+            get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
         return std::visit(
             [&](const auto& program_config) -> std::vector<TensorSpec> {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -2154,9 +2166,14 @@ operation::ProgramWithCallbacks Matmul::create_program(
     TT_FATAL(this->compute_kernel_config.has_value(), "Error");
     TT_FATAL(this->bcast_batch.has_value(), "Error");
     bool broadcast_batch = this->bcast_batch.value();
+    uint32_t bias_single_tile_size = 0;
+    if (bias.has_value()) {
+        auto bias_data_format = tt_metal::datatype_to_dataformat_converter(bias.value().get_dtype());
+        bias_single_tile_size = tt_metal::detail::TileSize(bias_data_format);
+    }
 
-    const bool has_bias = bias.has_value();
-    MatmulProgramConfig chosen_program_config = get_program_config(input_tensor_a, input_tensor_b, has_bias, this);
+    MatmulProgramConfig chosen_program_config =
+        get_program_config(input_tensor_a, input_tensor_b, bias_single_tile_size, this);
 
     return std::visit(
         [&](const auto& program_config) -> operation::ProgramWithCallbacks {

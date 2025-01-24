@@ -102,7 +102,7 @@ void test_linear(uint32_t batch, uint32_t emb_dim) {
 
     ttml::ops::linear_op(tensor, weight, bias);
 }
-TEST_F(LinearOpTest, TTNNLinearOpCrash) {
+TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
     uint32_t dim = 4096;
     uint32_t batch = 32;  // it works with batch = 1, please try to check from 4 to 64
     test_linear(batch, dim);
