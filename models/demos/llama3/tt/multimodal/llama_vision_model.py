@@ -411,6 +411,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -428,6 +429,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -437,6 +439,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -445,11 +448,18 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_device=self.mesh_device,
         )
 
-        tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH = self.transform_decode_inputs_device(
+        (
+            tt_h,
+            tt_rot_mats,
+            tt_xattn_mask,
+            tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
+        ) = self.transform_decode_inputs_device(
             tt_h,
             tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             B=tokens.shape[0],
         )
 
@@ -457,6 +467,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
@@ -545,6 +556,22 @@ class CrossAttentionTransformer(torch.nn.Module):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        full_text_mask_expand_11SD = full_text_mask
+        if B < self.configuration.tile_size:
+            full_text_mask_expand_11SD = torch.cat(
+                [full_text_mask_expand_11SD, torch.zeros(1, 1, self.configuration.tile_size - B, 1)], dim=2
+            )
+        full_text_mask_expand_11SD = full_text_mask_expand_11SD.expand(
+            -1, -1, -1, self.configuration.dim // self.configuration.num_devices
+        )
+        tt_full_text_mask_expand_11SD = ttnn.from_torch(
+            full_text_mask_expand_11SD,
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         if isinstance(page_table, torch.Tensor):
             # Support vLLM tensor page_table input
             page_table = ttnn.as_tensor(
@@ -567,13 +594,16 @@ class CrossAttentionTransformer(torch.nn.Module):
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             page_table,
             cross_page_table,
         )
 
-    def transform_decode_inputs_device(self, tt_h, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, B):
+    def transform_decode_inputs_device(
+        self, tt_h, tt_rope_id, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_full_text_mask_expand_11SD, B
+    ):
         """
         Does any transformations on device tensors which are necessary before ttnn_decode_forward
         """
@@ -617,8 +647,9 @@ class CrossAttentionTransformer(torch.nn.Module):
                 ],
             ),
         )
+        tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
 
-        return (tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH)
+        return (tt_h, tt_rot_mats, tt_xattn_mask, tt_full_text_mask_expand_1NSH, tt_full_text_mask_expand_11SD)
 
     def process_output_prefill(self, tt_out, B, last_token_idx):
         tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
@@ -680,6 +711,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         h,
         xattn_mask,
         full_text_mas_expand_1NSH,
+        full_text_mask_expand_11SD,
         xattn_caches,
         position_id,
         rot_mats,
@@ -700,7 +732,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             h,
             xattn_mask=xattn_mask,
             full_text_row_masked_out_mask_1NSH=full_text_mas_expand_1NSH,
-            full_text_row_masked_out_mask_11SD=None,
+            full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=position_id,
             rot_mats=rot_mats,
