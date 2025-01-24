@@ -12,7 +12,7 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
-struct Bcast_toOperation {
+struct BcastToOperation {
     struct operation_attributes_t {
         const SmallVector<uint32_t> output_shape = {0};
         const MemoryConfig memory_config;
@@ -26,7 +26,7 @@ struct Bcast_toOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct Bcast_toTileFactory {
+    struct BcastToTileFactory {
         struct shared_variables_t {
             KernelHandle reader_kernel_id;
             KernelHandle writer_kernel_id;
@@ -47,7 +47,7 @@ struct Bcast_toOperation {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<Bcast_toTileFactory>;
+    using program_factory_t = std::variant<BcastToTileFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -66,5 +66,5 @@ struct Bcast_toOperation {
 
 namespace ttnn::prim {
 constexpr auto bcast_to =
-    ttnn::register_operation<"ttnn::prim::bcast_to", ttnn::operations::experimental::broadcast_to::Bcast_toOperation>();
+    ttnn::register_operation<"ttnn::prim::bcast_to", ttnn::operations::experimental::broadcast_to::BcastToOperation>();
 }

@@ -50,7 +50,7 @@ auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
 #ifdef DEBUG
     tt::log_debug("inferred output shape: ");
     for (int i = 0; i < output_shape.size(); ++i) {
-        tt::log_debug(tt::LogTest, "%d ", output_shape[i]);
+        tt::log_debug(tt::LogOp, "%d ", output_shape[i]);
     }
     tt::log_debug("\n");
 #endif
@@ -58,7 +58,7 @@ auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
     return output_shape;
 }
 
-Tensor Bcast_to::invoke(
+Tensor BcastTo::invoke(
     const Tensor& input,
     const std::vector<int32_t>& sizes,
 
@@ -66,7 +66,7 @@ Tensor Bcast_to::invoke(
     const std::optional<MemoryConfig>& memory_config) {
     auto output_shape = infer_size(input, sizes);
 
-    // TT_FATAL(input.get_layout() == Layout::TILE, "Bcast_to: Input tensor layout must be TILE");
+    // TT_FATAL(input.get_layout() == Layout::TILE, "BcastTo: Input tensor layout must be TILE");
     return ttnn::prim::bcast_to(input, output_shape, output, memory_config);
 }
 }  // namespace ttnn::operations::experimental
