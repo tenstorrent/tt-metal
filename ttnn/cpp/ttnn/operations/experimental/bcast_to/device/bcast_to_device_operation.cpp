@@ -10,21 +10,19 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
-Bcast_toOperation::program_factory_t Bcast_toOperation::select_program_factory(
+BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
 
     switch (input.get_layout()) {
-        case Layout::TILE: return Bcast_toTileFactory{};
-        default: TT_THROW("Bcast_to: Unsupported input layout");
+        case Layout::TILE: return BcastToTileFactory{};
+        default: TT_THROW("BcastTo: Unsupported input layout");
     }
 }
 
 void validate(
-    const Bcast_toOperation::operation_attributes_t& operation_attributes,
-    const Bcast_toOperation::tensor_args_t& tensor_args) {
-    // We need to assert that the input and output are ROW_MAJOR. (unfortunately)
-
+    const BcastToOperation::operation_attributes_t& operation_attributes,
+    const BcastToOperation::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
 
@@ -41,17 +39,17 @@ void validate(
     }
 }
 
-void Bcast_toOperation::validate_on_program_cache_miss(
+void BcastToOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 };
 
-void Bcast_toOperation::validate_on_program_cache_hit(
+void BcastToOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate(operation_attributes, tensor_args);
 };
 
-Bcast_toOperation::spec_return_value_t Bcast_toOperation::compute_output_specs(
+BcastToOperation::spec_return_value_t BcastToOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output.has_value()) {
         return tensor_args.output->get_tensor_spec();
@@ -64,7 +62,7 @@ Bcast_toOperation::spec_return_value_t Bcast_toOperation::compute_output_specs(
             operation_attributes.memory_config));
 };
 
-Bcast_toOperation::tensor_return_value_t Bcast_toOperation::create_output_tensors(
+BcastToOperation::tensor_return_value_t BcastToOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Let's just require it to be allocated ahead of time for now
     if (tensor_args.output.has_value()) {
@@ -74,7 +72,7 @@ Bcast_toOperation::tensor_return_value_t Bcast_toOperation::create_output_tensor
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-std::tuple<Bcast_toOperation::operation_attributes_t, Bcast_toOperation::tensor_args_t> Bcast_toOperation::invoke(
+std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_args_t> BcastToOperation::invoke(
     const Tensor& input,
     const SmallVector<uint32_t>& output_shape,
     const std::optional<Tensor>& output,
