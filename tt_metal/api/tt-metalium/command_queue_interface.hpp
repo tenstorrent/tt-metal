@@ -88,9 +88,9 @@ public:
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
-    // dispatch_s CB page size is 128 bytes. This should currently be enough to accomodate all commands that
-    // are sent to it. Change as needed, once this endpoint is required to handle more than go signal mcasts.
-    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 7;
+    // dispatch_s CB page size is 256 bytes. This should currently be enough to accomodate all commands that
+    // are sent to it or change as needed.
+    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 8;
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
     static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
