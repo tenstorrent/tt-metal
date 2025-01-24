@@ -23,6 +23,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 
     auto global_cb = get_global_circular_buffer(*this->global_cb, input_tensors[0].device()->id());
     uint32_t num_receiver_cores = global_cb.receiver_cores().num_cores();
+    uint32_t num_sender_cores = global_cb.sender_cores().num_cores();
 
     // Check that global_cb sender_receiver_core_mapping has same number of receivers for each sender core
     const auto& sender_receiver_core_mapping = global_cb.sender_receiver_core_mapping();
@@ -31,6 +32,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             receiver_core_range.size() == sender_receiver_core_mapping.begin()->second.size(),
             "Global circular buffer must have same number of receivers for each sender core");
     }
+    const uint32_t num_receivers_per_sender = num_receiver_cores / num_sender_cores;
 
     for (size_t i = 0; i < input_tensors.size() - 1; ++i) {
         const auto& tensor = input_tensors[i];
@@ -42,11 +44,13 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
             "Input tensors must be width sharded");
         TT_FATAL(tensor.memory_config().buffer_type == BufferType::DRAM, "Input tensors must be in DRAM");
 
-        // Check that all tensors' k is divisible by number of cores in global CB receiver
+        // Check that all tensors' N (per shard) is divisible by number of cores in global CB receiver
         TT_FATAL(
-            tensor.get_legacy_shape()[1] % num_receiver_cores == 0,
-            "All tensors' k must be divisible by the number of receiver cores = {}.",
-            num_receiver_cores);
+            tensor.buffer()->shard_spec().shape()[1] % num_receivers_per_sender == 0,
+            "All tensors' padded shard size (in last dim) {} must be divisible by the number of receiver cores per "
+            "sender {}.",
+            tensor.buffer()->shard_spec().shape()[1],
+            num_receivers_per_sender);
 
         tt::DataFormat tensor_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.get_dtype());
         TT_FATAL(

@@ -27,7 +27,7 @@ ConcatOpParallelizationStrategy ConcatDeviceOperation::get_parallelization_strat
 
 void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& first_input = input_tensors[0];
-    tt::tt_metal::LegacyShape shape_first = first_input.get_legacy_shape();
+    auto shape_first = first_input.get_padded_shape();
     TT_FATAL(this->dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[this->dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -40,7 +40,7 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.get_layout() == first_input.get_layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.get_dtype() == first_input.get_dtype(), "All Tensors should have same dtypes.");
-        tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
+        auto curr_shape = in_ref.get_padded_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
         // last tensor can support without any kernel changes
@@ -150,8 +150,8 @@ Tensor concat_impl(
                 return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
                     input_tensors[0], output_mem_config)};
             }
-            uint32_t ref_rank = input_tensors[0].get_legacy_shape().rank();
-            uint32_t normalized_dim = input_tensors[0].get_legacy_shape().get_normalized_index(dim);
+            uint32_t ref_rank = input_tensors[0].get_padded_shape().rank();
+            uint32_t normalized_dim = input_tensors[0].get_padded_shape().get_normalized_index(dim);
 
             if (input_tensors[0].is_sharded()) {
                 return operation::run(
@@ -172,7 +172,7 @@ Tensor concat_impl(
                 // this should be dead code when instantiating layout to match the input
                 for (const auto& input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                        const auto& input_shape = input_tensor.get_legacy_shape();
+                        const auto& input_shape = input_tensor.get_padded_shape();
                         if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 ||
                             input_shape[-1] % TILE_WIDTH != 0) {
                             target_layout = Layout::ROW_MAJOR;

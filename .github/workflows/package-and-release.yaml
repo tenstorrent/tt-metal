@@ -151,6 +151,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Create archive with submodules
+        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
+        with:
+          output-files: tt-metalium.tar.gz
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
@@ -184,6 +190,7 @@ jobs:
             INSTALLING.md
             models/MODEL_UPDATES.md
             ttnn-*+*.whl
+            tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [

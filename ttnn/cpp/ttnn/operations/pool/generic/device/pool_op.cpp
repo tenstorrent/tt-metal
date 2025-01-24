@@ -29,7 +29,7 @@ void validate_pool2d(
     TT_FATAL(input.memory_config().is_sharded(), "Input needs to be sharded");
     TT_FATAL(out_mem_config.is_sharded(), "Output memory config needs to be sharded");
 
-    const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
     TT_FATAL(
         (input_shape[3] % tt::constants::TILE_WIDTH == 0) || (input_shape[3] == 16),
         "Input channels ({}) should be padded to nearest TILE_WIDTH ({}) or should be 16",
@@ -66,7 +66,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     // NOTE: Only for RM
     // NOTE2: Assuming { N, 1, H * W, C }
     // NOTE3: Assuming output data type is same as input
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
 
     // confirm that the output size supplied to the function matches
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
@@ -97,7 +97,7 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         TT_FATAL(ncores == sliding_window_config.num_cores_nhw, "Number of cores should match");
         uint32_t out_nhw_per_core = output_shape[0] * output_shape[1] * output_shape[2] / ncores;
         CoreRangeSet shard_grid = sliding_window_config.core_range_set;
-        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_legacy_shape()[-1]};
+        std::array<uint32_t, 2> shard_shape = {out_nhw_per_core, input.get_padded_shape()[-1]};
         mem_config.shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
     }
 
