@@ -122,7 +122,15 @@ Tensor to_layout_impl(
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
+                    const auto tensor_tile = tensor.get_tensor_spec().tile();
+                    uint32_t tile_height = tensor_tile.get_height();
+                    uint32_t tile_width = tensor_tile.get_width();
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
+                    if (shard_shape[0] % tile_height != 0 or shard_shape[1] % tile_width != 0) {
+                        TT_THROW(
+                            "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
+                            "TILE_SIZE!");
+                    }
                 }
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
