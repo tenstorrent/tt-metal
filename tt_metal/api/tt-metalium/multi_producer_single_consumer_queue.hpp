@@ -9,11 +9,8 @@
 #include <memory>
 #include "assert.hpp"
 
-/*
-    Supports single writer, single reader
-*/
 template <typename T>
-class LockFreeQueue {
+class MultiProducerSingleConsumerQueue {
 private:
     struct Node {
         std::shared_ptr<T> data = nullptr;
@@ -24,10 +21,8 @@ private:
     std::atomic<Node*> tail;
 
     std::mutex queue_mutex;
-    std::function<void()> lock_func = []() {};
-    std::function<void()> unlock_func = []() {};
 
-    inline Node* pop_head() {
+    Node* pop_head() {
         Node* oldHead = head.load();
         if (oldHead == tail.load()) {
             return nullptr;  // Queue is empty
@@ -45,7 +40,8 @@ public:
     // Optional - Set these if the worker and parent thread state needs to be tracked
     std::atomic<std::thread::id> worker_thread_id;
     std::atomic<std::thread::id> parent_thread_id;
-    LockFreeQueue() {
+
+    MultiProducerSingleConsumerQueue() {
         // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one, which
         // points to the head.
         for (int node_idx = 0; node_idx < ring_buffer_size; node_idx++) {
@@ -57,15 +53,12 @@ public:
         this->tail = ring_buffer;
     }
 
-    LockFreeQueue(LockFreeQueue&& other) {
-        Node ring_buffer = other.ring_buffer;
-        head.store(other.head.load());
-        tail.store(other.tail.load());
-        worker_thread_id.store(other.worker_thread_id.load());
-        parent_thread_id.store(other.parent_thread_id.load());
-    }
+    MultiProducerSingleConsumerQueue(MultiProducerSingleConsumerQueue&& other) = delete;
+    MultiProducerSingleConsumerQueue& operator=(MultiProducerSingleConsumerQueue&& other) = delete;
+    MultiProducerSingleConsumerQueue(const MultiProducerSingleConsumerQueue& other) = delete;
+    MultiProducerSingleConsumerQueue& operator=(const MultiProducerSingleConsumerQueue& other) = delete;
 
-    inline void push(T&& value) {
+    void push(T&& value) {
         // Legacy Push API allowing copy by value
         // for object T.
 
@@ -73,15 +66,14 @@ public:
         // to match the location of head (rptr). The current push can
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
-        lock_func();
+        std::unique_lock<std::mutex> lock(this->queue_mutex);
         while (tail.load()->next == head.load()) {
         };
         tail.load()->data = std::make_shared<T>(std::move(value));
         tail.store(tail.load()->next);
-        unlock_func();
     }
 
-    inline void push(std::shared_ptr<T> value) {
+    void push(std::shared_ptr<T> value) {
         // Latest Push API, passing ptrs around.
         // Usually faster, since no data-copies.
 
@@ -89,15 +81,14 @@ public:
         // to match the location of head (rptr). The current push can
         // thus overwrite data that's being read. Stall until head
         // has progressed (data has been read).
-        lock_func();
+        std::unique_lock<std::mutex> lock(this->queue_mutex);
         while (tail.load()->next == head.load()) {
         };
         tail.load()->data = std::move(value);
         tail.store(tail.load()->next);
-        unlock_func();
     }
 
-    inline std::shared_ptr<T> pop() {
+    std::shared_ptr<T> pop() {
         Node* oldHead = pop_head();
         std::shared_ptr<T> result(oldHead->data);
         // Does not actually delete oldHead->data.
@@ -113,15 +104,6 @@ public:
     }
 
     bool empty() const { return head.load() == tail.load(); }
-    void set_lock_free() {
-        lock_func = []() {};
-        unlock_func = []() {};
-    }
-
-    void set_lock_based() {
-        lock_func = [this]() { this->queue_mutex.lock(); };
-        unlock_func = [this]() { this->queue_mutex.unlock(); };
-    }
 
     class Iterator {
     public:

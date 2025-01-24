@@ -651,9 +651,6 @@ void MeshDevice::synchronize() {
     this->work_executor_->synchronize();
 }
 WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->get_worker_mode(); }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    this->work_executor_->set_worker_queue_mode(mode);
-}
 bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     this->work_executor_->push_work(std::move(work), blocking);
