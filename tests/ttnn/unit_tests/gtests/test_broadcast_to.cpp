@@ -36,20 +36,15 @@ TEST_P(Broadcast_toFixture, Broadcast_to) {
 
     std::vector<int32_t> broadcast_to = param.broadcast_shape;
     const std::optional<MemoryConfig> memory_config = std::nullopt;
+    std::optional<ttnn::Tensor> output = std::nullopt;
     {
         const auto input_tensor = ttnn::ones(input_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-#if 1
-        std::optional<ttnn::Tensor> output_tensor = std::nullopt;
-#else
-        const auto output_tensor = ttnn::zeros(output_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-#endif
-        ttnn::experimental::broadcast_to(input_tensor, broadcast_to, output_tensor, memory_config);
+
+        auto output_tensor = ttnn::experimental::broadcast_to(input_tensor, broadcast_to, output, memory_config);
         const auto expected_tensor =
             ttnn::operations::creation::full(output_shape, 1, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-        TT_FATAL(output_tensor.has_value(), "Output error");
         TT_FATAL(
-            ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor.value())),
-            "Error");
+            ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
     ttnn::close_device(device);
 }
