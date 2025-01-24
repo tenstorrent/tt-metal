@@ -23,22 +23,6 @@
 namespace tt::tt_metal {
 namespace {
 
-// Selects all sub-devices in the sub device stall group if none are specified
-tt::stl::Span<const SubDeviceId> select_sub_device_ids(
-    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (sub_device_ids.empty()) {
-        return device->get_sub_device_stall_group();
-    } else {
-        for (const auto& sub_device_id : sub_device_ids) {
-            TT_FATAL(
-                sub_device_id.to_index() < device->num_sub_devices(),
-                "Invalid sub-device id specified {}",
-                sub_device_id.to_index());
-        }
-        return sub_device_ids;
-    }
-}
-
 Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
     return std::visit(
         tt::stl::overloaded{
@@ -312,7 +296,7 @@ void HWCommandQueue::enqueue_read_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
-    sub_device_ids = select_sub_device_ids(this->device_, sub_device_ids);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     if (is_sharded(buffer.buffer_layout())) {
         // Forward data from each core to the completion queue.
@@ -386,7 +370,7 @@ void HWCommandQueue::enqueue_write_buffer(
     ZoneScopedN("HWCommandQueue_write_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
 
-    sub_device_ids = select_sub_device_ids(this->device_, sub_device_ids);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
 
     buffer_dispatch::write_to_device_buffer(
@@ -525,7 +509,7 @@ void HWCommandQueue::enqueue_record_event(
     event->device = this->device_;
     event->ready = true;  // what does this mean???
 
-    sub_device_ids = select_sub_device_ids(this->device_, sub_device_ids);
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     auto command = EnqueueRecordEventCommand(
         this->id_,

@@ -518,30 +518,24 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
 }
 
 // Floating point and build environment
-const JitBuildEnv& MeshDevice::build_env() const {
-    TT_THROW("build_env() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->build_env();
-}
+const JitBuildEnv& MeshDevice::build_env() const { return reference_device()->build_env(); }
 
 // Build and firmware paths
 const string MeshDevice::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_firmware_target_path() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_firmware_target_path(programmable_core, processor_class, i);
 }
-const string MeshDevice::build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    TT_THROW("build_kernel_target_path() is not supported on MeshDevice - use individual devices instead");
+const string MeshDevice::build_kernel_target_path(
+    uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
     return reference_device()->build_kernel_target_path(programmable_core, processor_class, i, kernel_name);
 }
-const JitBuildState& MeshDevice::build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_firmware_state() is not supported on MeshDevice - use individual devices instead");
+const JitBuildState& MeshDevice::build_firmware_state(
+    uint32_t programmable_core, uint32_t processor_class, int i) const {
     return reference_device()->build_firmware_state(programmable_core, processor_class, i);
 }
 const JitBuildState& MeshDevice::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_kernel_state() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_kernel_state(programmable_core, processor_class, i);
 }
 const JitBuildStateSubset MeshDevice::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    TT_THROW("build_kernel_states() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_kernel_states(programmable_core, processor_class);
 }
 
@@ -655,13 +649,12 @@ void MeshDevice::push_work(std::function<void()> work, bool blocking) {
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
-std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    TT_THROW("extract_dst_noc_multicast_info() is not supported on MeshDevice - use individual devices instead");
+std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
+    const std::vector<CoreRange>& ranges, const CoreType core_type) {
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 
 size_t MeshDevice::get_device_kernel_defines_hash() {
-    TT_THROW("get_device_kernel_defines_hash() is not supported on MeshDevice - use individual devices instead");
     return validate_and_get_reference_value(
         scoped_devices_->get_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
 }
