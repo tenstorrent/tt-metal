@@ -61,8 +61,7 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
 
     Tensor input_5d = input;
     input_5d = ttnn::experimental::view(input_5d, input_5d_shape);
-
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
+    auto input_5d_shape = input_5d_shape.logical_shape();
 
     IndexInfo index_info[5] = {0};
 
@@ -150,9 +149,9 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         writer_defines);
 
     uint32_t input_stick_idx_stride_h = 1;
-    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+    uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape[3];
+    uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape[2];
+    uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape[1];
 
     // Set Runtime Args
     auto core_x_offset = core_range.start_coord.x;
@@ -181,11 +180,11 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
             input_stick_idx_stride_d,
             input_stick_idx_stride_h,
 
-            input_5d_shape_without_padding[0],
-            input_5d_shape_without_padding[1],
-            input_5d_shape_without_padding[2],
-            input_5d_shape_without_padding[3],
-            input_5d_shape_without_padding[4],
+            input_5d_shape[0],
+            input_5d_shape[1],
+            input_5d_shape[2],
+            input_5d_shape[3],
+            input_5d_shape[4],
 
             // index
             index_info[0].is_defined,

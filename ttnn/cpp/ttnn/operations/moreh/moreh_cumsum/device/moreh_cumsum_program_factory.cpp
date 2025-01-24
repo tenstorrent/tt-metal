@@ -32,17 +32,16 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape();
+    const auto& input_shape_padded = input.get_padded_shape();
 
-    const auto N = input_shape[0];
-    const auto C = input_shape[1];
-    const auto Ht = input_shape[2] / tt::constants::TILE_HEIGHT;
-    const auto Wt = input_shape[3] / tt::constants::TILE_WIDTH;
+    const auto N = input_shape_padded[0];
+    const auto C = input_shape_padded[1];
+    const auto Ht = input_shape_padded[2] / tt::constants::TILE_HEIGHT;
+    const auto Wt = input_shape_padded[3] / tt::constants::TILE_WIDTH;
     const auto HtWt = Ht * Wt;
     const auto CHtWt = C * HtWt;
     const auto NHtWt = N * HtWt;
-    const auto num_cumsum_tiles = input_shape[dim];
+    const auto num_cumsum_tiles = input_shape_padded[dim];
     const auto input_tile_offset = (dim == 0) ? (CHtWt) : (HtWt);
     const auto num_tiles_per_chip = (dim == 0) ? (CHtWt) : (NHtWt);
 

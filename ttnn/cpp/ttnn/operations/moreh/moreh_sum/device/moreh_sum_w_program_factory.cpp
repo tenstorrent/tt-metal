@@ -25,16 +25,16 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
     float scaler = 1.0f;
 
-    const auto shape = input.get_padded_shape();
-    const auto [W, H, other_dims_product] = extract_spatial_dims(shape);
+    const auto shape_padded = input.get_padded_shape();
+    const auto [W, H, other_dims_product] = extract_spatial_dims(shape_padded);
 
     uint32_t HW = H * W;
     uint32_t Wt = W / tt::constants::TILE_WIDTH;
     uint32_t Ht = H / tt::constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = input.get_logical_shape();
-    const auto origin_W = input_shape_without_padding[-1];
+    const auto input_shape = input.get_logical_shape();
+    const auto origin_W = input_shape[-1];
     const bool do_mask_w = (origin_W % tt::constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH;
 

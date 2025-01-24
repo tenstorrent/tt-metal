@@ -64,33 +64,32 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
+    const auto& input_shape_padded = input.get_padded_shape();
+    const auto& input_shape = input.get_logical_shape();
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape();
-
-    const auto input_rank = input_shape.rank();
+    const auto input_rank = input_shape_padded.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    auto num_inner = compute_inner(input_shape, normalized_dims);
-    auto num_outer = compute_outer(input_shape, normalized_dims);
+    auto num_inner = compute_inner(input_shape_padded, normalized_dims);
+    auto num_outer = compute_outer(input_shape_padded, normalized_dims);
 
     const auto gamma_has_value = gamma.has_value();
     const auto beta_has_value = beta.has_value();
     const auto mean_has_value = mean.has_value();
     const auto rstd_has_value = rstd.has_value();
 
-    const auto origin_H = input_shape_without_padding[-2];
-    const auto origin_W = input_shape_without_padding[-1];
+    const auto origin_H = input_shape[-2];
+    const auto origin_W = input_shape[-1];
 
     uint32_t mean_rstd_height = 0;
     uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
-        const auto mean_rstd_shape_without_padding = mean->get_logical_shape();
-        mean_rstd_height = mean_rstd_shape_without_padding[-2];
-        mean_rstd_width = mean_rstd_shape_without_padding[-1];
+        const auto mean_rstd_shape = mean->get_logical_shape();
+        mean_rstd_height = mean_rstd_shap[-2];
+        mean_rstd_width = mean_rstd_shape[-1];
     }
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layer_norm;
@@ -311,7 +310,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     } else {
         auto reduce_size = 1;
         for (uint32_t i = input_rank - normalized_dims; i < input_rank; i++) {
-            auto size = input_shape_without_padding[i];
+            auto size = input_shape[i];
             reduce_size *= size;
         }
 

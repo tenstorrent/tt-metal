@@ -42,10 +42,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    const auto& input_shape = input.get_padded_shape();
-    const auto& input_shape_without_padding = input.get_logical_shape();
-    const auto& output_shape_without_padding = output.get_logical_shape();
-
+    const auto& input_shape_padded = input.get_padded_shape();
+    const auto& input_shape = input.get_logical_shape();
+    const auto& output_shape = output.get_logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -56,7 +55,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_input_padded_shape.fill(1);
     auto input_dim_offset = 5 - input_shape.rank();
     for (auto index = 0; index < input_shape.rank(); index++) {
-        new_input_shape[index + input_dim_offset] = input_shape_without_padding[index];
+        new_input_shape[index + input_dim_offset] = input_shape[index];
         new_input_padded_shape[index + input_dim_offset] = input_shape[index];
     }
 
@@ -64,7 +63,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     new_output_padded_shape.fill(1);
     auto output_dim_offset = 5 - input_shape.rank();
     for (auto index = 0; index < output.get_logical_shape().rank(); index++) {
-        new_output_shape[index + output_dim_offset] = output_shape_without_padding[index];
+        new_output_shape[index + output_dim_offset] = output_shape[index];
         new_output_padded_shape[index + output_dim_offset] = output.get_padded_shape()[index];
     }
 
@@ -78,8 +77,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
     }
 
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
-    auto output_5d_shape_without_padding = output_5d_shape.value.without_padding();
+    auto input_5d_shape = input_5d_shape.value.without_padding();
+    auto output_5d_shape = output_5d_shape.value.without_padding();
 
     auto index_layout = index_tensors.front().get_layout();
     bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);
@@ -105,10 +104,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         uint32_t alignment_size = 32;
         uint32_t num_elements_per_alignment = alignment_size / output_unit_size;
-        uint32_t num_units =
-            output_5d_shape_without_padding[0] * output_5d_shape_without_padding[1] *
-            output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
-            ((output_5d_shape_without_padding[4] + num_elements_per_alignment - 1) / num_elements_per_alignment);
+        uint32_t num_units = output_5d_shape[0] * output_5d_shape[1] * output_5d_shape[2] * output_5d_shape[3] *
+                             ((output_5d_shape[4] + num_elements_per_alignment - 1) / num_elements_per_alignment);
 
         uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -189,9 +186,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             writer_defines);
 
         uint32_t face_width = 16;
-        uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
-        uint32_t num_alignment_width = div_up(output_5d_shape_without_padding[4], num_elements_per_alignment);
-        uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
+        uint32_t input_num_stick_width = div_up(input_5d_shape[4], face_width);
+        uint32_t num_alignment_width = div_up(output_5d_shape[4], num_elements_per_alignment);
+        uint32_t output_num_stick_width = div_up(output_5d_shape[4], face_width);
 
         uint32_t input_num_tile_c = input_5d_shape.value[1];
         uint32_t input_num_tile_d = input_5d_shape.value[2];
@@ -245,20 +242,20 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_stick_idx_stride_d,
                 input_stick_idx_stride_h,
                 input_stick_idx_stride_w,
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
+                input_5d_shape[1],
+                input_5d_shape[2],
+                input_5d_shape[3],
                 input_num_stick_width,
                 input_noc_id_stride_n,
                 input_noc_id_stride_c,
                 input_noc_id_stride_d,
                 input_noc_id_stride_h,
 
-                input_5d_shape_without_padding[0],
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
-                input_5d_shape_without_padding[4],
+                input_5d_shape[0],
+                input_5d_shape[1],
+                input_5d_shape[2],
+                input_5d_shape[3],
+                input_5d_shape[4],
 
                 // index
                 index_info[0].is_defined,
@@ -274,11 +271,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 index_size,
 
                 // output
-                output_5d_shape_without_padding[0],
-                output_5d_shape_without_padding[1],
-                output_5d_shape_without_padding[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
+                output_5d_shape[0],
+                output_5d_shape[1],
+                output_5d_shape[2],
+                output_5d_shape[3],
+                output_5d_shape[4],
                 output_num_stick_width,
 
                 // etc
@@ -294,10 +291,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 output.buffer()->address(),
 
                 // output
-                output_5d_shape_without_padding[1],
-                output_5d_shape_without_padding[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
+                output_5d_shape[1],
+                output_5d_shape[2],
+                output_5d_shape[3],
+                output_5d_shape[4],
                 output_noc_id_stride_n,
                 output_noc_id_stride_c,
                 output_noc_id_stride_d,
@@ -340,9 +337,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t input_unit_size = 16 * input.element_size();
         uint32_t output_unit_size = 16 * output.element_size();
 
-        uint32_t num_units = output_5d_shape_without_padding[0] * output_5d_shape_without_padding[1] *
-                             output_5d_shape_without_padding[2] * output_5d_shape_without_padding[3] *
-                             ((output_5d_shape_without_padding[4] + 15) / 16);
+        uint32_t num_units = output_5d_shape[0] * output_5d_shape[1] * output_5d_shape[2] * output_5d_shape[3] *
+                             ((output_5d_shape[4] + 15) / 16);
 
         uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
         uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
@@ -419,8 +415,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             writer_defines);
 
         uint32_t face_width = 16;
-        uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
-        uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
+        uint32_t input_num_stick_width = div_up(input_5d_shape[4], face_width);
+        uint32_t output_num_stick_width = div_up(output_5d_shape[4], face_width);
 
         uint32_t input_num_tile_c = input_5d_shape.value[1];
         uint32_t input_num_tile_d = input_5d_shape.value[2];
@@ -473,20 +469,20 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 input_stick_idx_stride_d,
                 input_stick_idx_stride_h,
                 input_stick_idx_stride_w,
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
+                input_5d_shape[1],
+                input_5d_shape[2],
+                input_5d_shape[3],
                 input_noc_id_stride_n,
                 input_noc_id_stride_c,
                 input_noc_id_stride_d,
                 input_noc_id_stride_h,
                 input_num_stick_width,
 
-                input_5d_shape_without_padding[0],
-                input_5d_shape_without_padding[1],
-                input_5d_shape_without_padding[2],
-                input_5d_shape_without_padding[3],
-                input_5d_shape_without_padding[4],
+                input_5d_shape[0],
+                input_5d_shape[1],
+                input_5d_shape[2],
+                input_5d_shape[3],
+                input_5d_shape[4],
 
                 // index
                 index_info[0].is_defined,
@@ -505,8 +501,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 output_5d_shape[0],
                 output_5d_shape[1],
                 output_5d_shape[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
+                output_5d_shape[3],
+                output_5d_shape[4],
                 output_num_stick_width,
 
                 // etc
@@ -520,10 +516,10 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 output.buffer()->address(),
 
                 // output
-                output_5d_shape_without_padding[1],
-                output_5d_shape_without_padding[2],
-                output_5d_shape_without_padding[3],
-                output_5d_shape_without_padding[4],
+                output_5d_shape[1],
+                output_5d_shape[2],
+                output_5d_shape[3],
+                output_5d_shape[4],
                 output_noc_id_stride_n,
                 output_noc_id_stride_c,
                 output_noc_id_stride_d,

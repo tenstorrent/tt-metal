@@ -170,7 +170,6 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
                 output_size_vec.push_back(input_shape[input_dim]);
             }
         }
-        // TODO(JB): How to handle this seemingly returning logical shape?
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(
