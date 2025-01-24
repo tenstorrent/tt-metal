@@ -13,6 +13,7 @@
 extern uint32_t* rta_l1_base;
 extern uint32_t* crta_l1_base;
 
+// clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
  * SetRuntimeArgs() API.
@@ -23,8 +24,10 @@ extern uint32_t* crta_l1_base;
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
+ // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
 
+// clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via
  * SetCommonRuntimeArgs() API.
@@ -35,8 +38,10 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
+ // clang-format on
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
 
+// clang-format off
 /**
  * Returns the value at a given runtime argument index for unique (per-core) runtime arguments set via SetRuntimeArgs()
  * API.
@@ -48,6 +53,7 @@ static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t
  * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
+ // clang-format on
 template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
@@ -55,6 +61,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_arg_addr(arg_idx)));
 }
 
+// clang-format off
 /**
  * Returns the value at a given runtime argument index for common (all cores) runtime arguments set via
  * SetCommonRuntimeArgs() API.
@@ -66,6 +73,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
+ // clang-format on
 template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)

@@ -64,6 +64,7 @@ ALWI void reduce_revert_delta(uint32_t ocb) {
     PACK((llk_pack_reduce_config_v2<reduce_dim, false, true, DST_ACCUM_MODE>(ocb)));
 }
 
+// clang-format off
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for
  * dimension reduction on a tile in the CB at a given index and writes the
@@ -88,6 +89,7 @@ ALWI void reduce_revert_delta(uint32_t ocb) {
  * | itile1         | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     | 
  * | idst           | The index of the tile in DST REG for the result                 | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
 ALWI void reduce_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     MATH((llk_math_reduce<reduce_type, reduce_dim, MATH_FIDELITY, DST_ACCUM_MODE>(idst)));

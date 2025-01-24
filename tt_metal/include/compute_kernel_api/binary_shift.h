@@ -15,6 +15,7 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 << x1
  * Both inputs must be of Int32 data type only. Output overwrites first operand in DST.
@@ -31,10 +32,12 @@ namespace ckernel {
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     | 
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_left_shift<APPROX>(idst0, idst1)));
 }
 
+// clang-format off
 /**
  * Performs an elementwise shift operation to the right on the input at idst0, by input at idst1: y = x0 >> x1
  * Both inputs must be of Int32 data type only. Output overwrites first operand in DST.
@@ -51,7 +54,7 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1) {
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     | 
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
-
+// clang-format on
 ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_right_shift<APPROX>(idst0, idst1)));
 }
