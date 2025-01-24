@@ -32,9 +32,9 @@ void set_or_update_runtime_arguments(
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,
     CoreCoord compute_with_storage_grid_size,
-    const Bcast_toOperation::operation_attributes_t& operation_attributes,
-    const Bcast_toOperation::tensor_args_t& tensor_args,
-    Bcast_toOperation::tensor_return_value_t& output,
+    const BcastToOperation::operation_attributes_t& operation_attributes,
+    const BcastToOperation::tensor_args_t& tensor_args,
+    BcastToOperation::tensor_return_value_t& output,
     F handle_args) {
     const auto& input = tensor_args.input;
 
@@ -92,7 +92,7 @@ void set_or_update_runtime_arguments(
 }
 
 namespace ttnn::operations::experimental::broadcast_to {
-Bcast_toOperation::Bcast_toTileFactory::cached_program_t Bcast_toOperation::Bcast_toTileFactory::create(
+BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastToTileFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
@@ -119,7 +119,7 @@ Bcast_toOperation::Bcast_toTileFactory::cached_program_t Bcast_toOperation::Bcas
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
 #ifdef DEBUG
-    tt::log_debug(tt::LogOp, "Data size = %d\n", data_size);
+    tt::log_debug(tt::LogOp, "Data size = {}\n", data_size);
 
     // tt::log_debug("Input Page size = %lu\n", input.buffer()->page_size());
     // tt::log_debug("Output Page size = %lu\n", output.buffer()->page_size());
@@ -138,7 +138,7 @@ Bcast_toOperation::Bcast_toTileFactory::cached_program_t Bcast_toOperation::Bcas
     }
     debug_stream << std::endl;
 
-    tt::log_debug("%s", debug_stream.str().c_str());
+    tt::log_debug(tt::LogOp, "{}", debug_stream.str().c_str());
 
 #endif
 
@@ -181,7 +181,7 @@ Bcast_toOperation::Bcast_toTileFactory::cached_program_t Bcast_toOperation::Bcas
     return {std::move(program), {reader_id, writer_id, compute_with_storage_grid_size}};
 }
 
-void Bcast_toOperation::Bcast_toTileFactory::override_runtime_arguments(
+void BcastToOperation::BcastToTileFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

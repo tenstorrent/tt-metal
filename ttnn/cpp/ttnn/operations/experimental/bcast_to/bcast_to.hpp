@@ -8,7 +8,7 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental {
-struct Bcast_to {
+struct BcastTo {
     static Tensor invoke(
         const Tensor& input,
         const std::vector<int32_t>& sizes,
@@ -19,7 +19,6 @@ struct Bcast_to {
 }  // namespace ttnn::operations::experimental
 
 namespace ttnn::experimental {
-constexpr auto broadcast_to = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::experiment::broadcast_to",
-    ttnn::operations::experimental::Bcast_to>();
+constexpr auto broadcast_to = ttnn::
+    register_operation_with_auto_launch_op<"ttnn::experiment::broadcast_to", ttnn::operations::experimental::BcastTo>();
 }
