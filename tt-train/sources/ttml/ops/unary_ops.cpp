@@ -154,4 +154,19 @@ autograd::TensorPtr sqrt(const autograd::TensorPtr& tensor) {
     return out;
 }
 
+autograd::TensorPtr sum(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttml::ttnn_fixed::sum_moreh(tensor->get_value()));
+
+    autograd::GradFunction grad = [tensor, out]() {
+        // Distribute the gradient to each element in the original tensor
+        auto in_shape = tensor->get_value().get_logical_shape();
+        auto grad_broadcast = ttnn::repeat(out->get_grad(), in_shape);
+        tensor->add_grad(grad_broadcast);
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
 }  // namespace ttml::ops
