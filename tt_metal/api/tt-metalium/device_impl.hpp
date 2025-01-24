@@ -200,10 +200,8 @@ public:
 
     void enable_async(bool enable) override;
     void synchronize() override;
-    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    void set_worker_queue_mode(const WorkerQueueMode& mode) override { this->work_executor_.set_worker_queue_mode(mode); }
-    WorkerQueueMode get_worker_queue_mode() override { return this->work_executor_.get_worker_queue_mode(); }
-    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    WorkExecutorMode get_worker_mode() override { return work_executor_->get_worker_mode(); }
+    bool is_worker_queue_empty() const override { return work_executor_->empty(); }
     bool can_use_passthrough_scheduling() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
@@ -295,7 +293,7 @@ private:
 
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    WorkExecutor work_executor_;
+    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;

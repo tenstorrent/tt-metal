@@ -24,9 +24,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
     IDevice* device = this->device_;
-    // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
-    device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -102,9 +100,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
     // Writer cannot update location until reader has picked up data.
     // Use write_event to stall reader and read_event to stall writer.
     IDevice* device = this->device_;
-    // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
-    device->set_worker_queue_mode(WorkerQueueMode::LOCKBASED);
 
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
