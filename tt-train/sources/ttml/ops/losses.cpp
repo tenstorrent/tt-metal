@@ -68,12 +68,12 @@ autograd::TensorPtr nll_loss(
     }
 
     auto* device = &autograd::ctx().get_device();
-    auto divisor = core::empty(ttnn::Shape({1, 1}, {32, 32}), device, prediction->get_value().memory_config());
+    auto divisor = core::empty(ttnn::SimpleShape({1, 1}), device, prediction->get_value().memory_config());
 
-    auto tensor_shape = prediction->get_value().shape();
+    auto tensor_shape = prediction->get_value().get_logical_shape();
     uint32_t Ndim = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
     uint32_t Cdim = tensor_shape[3];
-    auto reshaped_tensor = ttnn::reshape(prediction->get_value(), ttnn::Shape({Ndim, Cdim}));
+    auto reshaped_tensor = ttnn::reshape(prediction->get_value(), ttnn::SimpleShape({Ndim, Cdim}));
     auto loss_tensor = ttnn::moreh_nll_loss(
         reshaped_tensor,
         target->get_value(),
@@ -87,7 +87,7 @@ autograd::TensorPtr nll_loss(
     auto out = autograd::create_tensor(loss_tensor);
 
     autograd::GradFunction grad = [prediction, target, out, Ndim, Cdim, device, divisor]() {
-        auto out_grad = core::empty(ttnn::Shape({Ndim, Cdim}), device, prediction->get_value().memory_config());
+        auto out_grad = core::empty(ttnn::SimpleShape({Ndim, Cdim}), device, prediction->get_value().memory_config());
         auto grad = ttnn::moreh_nll_loss_backward(
             target->get_value(),
             out->get_grad(),
@@ -98,7 +98,7 @@ autograd::TensorPtr nll_loss(
             /* ignore_index */ -100,
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
-        grad = ttnn::reshape(grad, prediction->get_value().shape());
+        grad = ttnn::reshape(grad, prediction->get_value().get_logical_shape());
         prediction->add_grad(grad);
     };
     auto links = autograd::get_links(prediction);

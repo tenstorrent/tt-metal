@@ -86,7 +86,7 @@ int main() {
             optimizer.zero_grad();
             auto output = (*model)(data);
             auto loss = ttml::ops::mse_loss(output, targets);
-            fmt::print("Loss shape: {}\n", loss->get_value().shape());
+            fmt::print("Loss shape: {}\n", loss->get_value().get_logical_shape());
             auto mesh_shape = device->shape();
             ttml::core::MeshToXTensorVariant<float> identity_composer =
                 ttml::core::VectorMeshToXTensor<float>(mesh_shape);
