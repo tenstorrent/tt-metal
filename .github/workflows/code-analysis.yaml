@@ -190,6 +190,8 @@ jobs:
             # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
             ln -sf $(which clang-tidy-17) ./clang-tidy-shim
 
+            # Keep this line _exactly_ the same as the one in the "Create baseline" or it will not be incremental
+            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
             mkdir -p out
             ccache -s > out/ccache.stats
