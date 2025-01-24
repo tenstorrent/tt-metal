@@ -14,7 +14,7 @@ void RMSNormLayer::initialize_tensors(uint32_t features) {
         autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, features}), &autograd::ctx().get_device()));
 }
 
-RMSNormLayer::RMSNormLayer(uint32_t features, std::optional<float> epsilon) : m_epsilon(epsilon.value_or(1e-5)) {
+RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon) : m_epsilon(epsilon) {
     initialize_tensors(features);
 
     create_name("rmsnorm");
