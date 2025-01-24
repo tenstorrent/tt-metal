@@ -438,15 +438,12 @@ def test_llama_demo_text(
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
-                if len(input_prompts) == 1:
-                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-                else:
-                    for user in range(batch_size):
-                        text = "".join(tokenizer.decode(all_outputs[user]))
-                        if len(text) > 100:
-                            text = "..." + text[-97:]
-                        text = text.replace("\n", " ")
-                        logger.info("[User {}] {}".format(user, text))
+                for user in range(batch_size):
+                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    if len(text) > 100:
+                        text = "..." + text[-97:]
+                    text = text.replace("\n", " ")
+                    logger.info("[User {}] {}".format(user, text))
 
             iteration += 1
 
