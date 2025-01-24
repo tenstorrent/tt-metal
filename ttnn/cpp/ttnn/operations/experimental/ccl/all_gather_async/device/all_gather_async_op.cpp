@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
 
     if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
-        input_tensor_page_layout == tt::tt_metal::Layout::TILE) {
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
         tt::log_info(
             tt::LogOp,
             "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is called");

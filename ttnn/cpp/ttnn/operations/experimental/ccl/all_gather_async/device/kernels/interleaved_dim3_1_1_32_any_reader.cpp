@@ -24,19 +24,15 @@
 #include <cstdint>
 #include <utility>
 
-using arg_idx_t = uint16_t;
-
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint16_t my_chip_id = get_compile_time_arg_val(0);
-constexpr TensorMemoryLayout tensor0_layout = static_cast<TensorMemoryLayout>(get_compile_time_arg_val(1));
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr Layout tensor0_page_layout = static_cast<Layout>(get_compile_time_arg_val(3));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-constexpr uint32_t num_pages_read_total = get_compile_time_arg_val(5);
-constexpr uint32_t num_workers = get_compile_time_arg_val(6);
+constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
+constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(1));
+constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -50,23 +46,21 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
-    const uint16_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
-    uint16_t tensor0_page_size = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
 
     // print every compile and runtime arg in uint32_t
     DPRINT << "ct args: \n";
     DPRINT << "my_chip_id: " << (uint32_t)my_chip_id << "\n";
-    DPRINT << "tensor0_layout: " << (uint32_t)tensor0_layout << "\n";
     DPRINT << "buffer0_type: " << (uint32_t)buffer0_type << "\n";
-    DPRINT << "tensor0_page_layout: " << (uint32_t)tensor0_page_layout << "\n";
     DPRINT << "cb0_id: " << (uint32_t)cb0_id << "\n";
-    DPRINT << "num_pages_read_total: " << (uint32_t)num_pages_read_total << "\n";
-    DPRINT << "num_workers: " << (uint32_t)num_workers << "\n";
+    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
+    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
 
     DPRINT << "rt args: \n";
     DPRINT << "tensor_address0: " << (uint32_t)tensor_address0 << "\n";
-    DPRINT << "packet_size_in_pages: " << (uint32_t)packet_size_in_pages << "\n";
-    DPRINT << "tensor0_page_size: " << (uint32_t)tensor0_page_size << "\n";
+    DPRINT << "tile_id_start: " << (uint32_t)tile_id_start << "\n";
+    DPRINT << "tile_id_end: " << (uint32_t)tile_id_end << "\n";
 
     // interleaved addrgen
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
@@ -76,22 +70,19 @@ void kernel_main() {
     DPRINT << "tensor -> CB: " << (uint32_t)cb0_id << "\n";
     DPRINT << "packet size in pages: " << (uint32_t)packet_size_in_pages << "\n";
 
-    uint32_t tile_id = 0;
-    for (uint32_t i = 0; i < num_pages_read_total / packet_size_in_pages + 1; i++) {
-        DPRINT << "i: " << i << "\n";
+    uint32_t tile_id = tile_id_start;
+    while (tile_id < tile_id_end) {
+        DPRINT << "tile_id: " << tile_id << "\n";
         cb_reserve_back(cb0_id, packet_size_in_pages);
         const uint32_t l1_write_addr_base = get_write_ptr(cb0_id);
         uint32_t l1_write_addr = l1_write_addr_base;
 
-        uint16_t num_pages_to_read = (i == num_pages_read_total / packet_size_in_pages)
-                                         ? num_pages_read_total % packet_size_in_pages
-                                         : packet_size_in_pages;
-        for (uint16_t j = 0; j < num_pages_to_read; j++) {
+        uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
+        for (uint32_t j = 0; j < num_pages_to_read; j++) {
             noc_async_read_tile(tile_id, tensor0_addrgen, l1_write_addr);
             l1_write_addr += tensor0_page_size;
             tile_id++;
         }
-        DPRINT << "tile_id: " << tile_id << "\n";
 
         noc_async_read_barrier();
         cb_push_back(cb0_id, packet_size_in_pages);
