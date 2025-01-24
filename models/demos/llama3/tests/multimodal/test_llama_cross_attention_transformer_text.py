@@ -56,7 +56,7 @@ def test_llama_cross_attention_transformer_text_inference(
 ):
     dtype = ttnn.bfloat8_b
     prefill_pcc_required = 0.98
-    decode_pcc_required = 0.73
+    decode_pcc_required = 0.97
 
     mesh_device.enable_async(True)
 
