@@ -44,18 +44,6 @@ parameters = {
             2,
             3,
             None,
-            [0, 1],
-            [0, 2],
-            [0, 3],
-            [1, 2],
-            [1, 3],
-            [2, 3],
-            [0, 1, 2],
-            [0, 1, 3],
-            [0, 1, 3],
-            [0, 2, 3],
-            [1, 2, 3],
-            [0, 1, 2, 3],
         ],
         "keepdim": [True, False],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
@@ -74,8 +62,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "dim 0 must be 1"
     if test_vector["input_shape"][1] != 1:
         return True, "dim 1 must be 1"
-    if test_vector["dim"] != 3:
-        return True, "Only argmax on last dim is supported"
     if test_vector["dim"] is not None:
         if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
@@ -87,8 +73,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
 
     return False, None
 

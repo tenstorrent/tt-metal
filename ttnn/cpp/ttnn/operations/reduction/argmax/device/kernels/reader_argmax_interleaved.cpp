@@ -40,25 +40,87 @@ void kernel_main() {
     uint32_t max_val = 0;
     uint32_t index_counter = 0;
 
-    for (uint32_t l = 0; l < B; l++) {
+    if (dim == 0) {
         for (uint32_t k = 0; k < C; k++) {
             for (uint32_t j = 0; j < H; j++) {
-                noc_async_read_page(l * C * H + k * H + j, s0, cb_addr);
-                noc_async_read_barrier();
-                if (dim == 3) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint16_t max_val = stick[0];
+                    uint32_t index_counter = 0;
+
+                    for (uint32_t i = 0; i < B; i++) {
+                        uint16_t val = stick[i * C * H * W + k * H * W + j * W + l];
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = i;
+                            max_val = val;
+                        }
+                    }
+
+                    max_vals[k * H * W + j * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 1) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t j = 0; j < H; j++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint16_t max_val = stick[b * C * H * W + 0 * H * W + j * W + l];
+                    uint32_t index_counter = 0;
+
+                    for (uint32_t c = 0; c < C; c++) {
+                        uint16_t val = stick[b * C * H * W + c * H * W + j * W + l];
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = c;
+                            max_val = val;
+                        }
+                    }
+
+                    max_vals[b * H * W + j * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 2) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t c = 0; c < C; c++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint16_t max_val = stick[b * C * H * W + c * H * W + 0 * W + l];
+                    uint32_t index_counter = 0;
+
+                    for (uint32_t h = 0; h < H; h++) {
+                        uint16_t val = stick[b * C * H * W + c * H * W + h * W + l];
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = h;
+                            max_val = val;
+                        }
+                    }
+
+                    // Store the index of the max value for the current (b, c, l)
+                    max_vals[b * C * W + c * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 3) {
+        for (uint32_t l = 0; l < B; l++) {
+            for (uint32_t k = 0; k < C; k++) {
+                for (uint32_t j = 0; j < H; j++) {
+                    noc_async_read_page(l * C * H + k * H + j, s0, cb_addr);
+                    noc_async_read_barrier();
                     index_counter = 0;
                     max_index = 0;
                     max_val = stick[0];
-                }
-                for (uint32_t i = 0; i < W; i++) {
-                    uint16_t val = stick[i];
-                    if (bfloat16_greater(val, max_val)) {
-                        max_index = index_counter;
-                        max_val = val;
+                    for (uint32_t i = 0; i < W; i++) {
+                        uint16_t val = stick[i];
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = index_counter;
+                            max_val = val;
+                        }
+                        index_counter++;
                     }
-                    index_counter++;
-                }
-                if (dim == 3) {
                     max_vals[l * C * H + k * H + j] = max_index;
                 }
             }

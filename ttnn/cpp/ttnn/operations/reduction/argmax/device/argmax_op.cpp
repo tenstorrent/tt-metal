@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_op.hpp"
+#include <cstdint>
 #include "argmax_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -55,10 +56,24 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     }
 
     const auto& input_tensor = input_tensors[0];
-    ttnn::SimpleShape output_shape({1, 1, 1, 1});
+    auto input_shape = input_tensors[0].get_logical_shape();
+    const auto rank = input_shape.rank();
+    cont uint8_t output_rank = keepdim ? rank : rank - 1;
+    ttnn::SmallVector<uint32_t> result_shape(output_rank, 1);
+    ttnn::SimpleShape output_shape;
     if (this->dim.has_value()) {
-        auto input_shape = input_tensors[0].get_logical_shape();
-        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]};
+        for (int i = 0; i < input_rank; i++) {
+            if (insert_idx == dim) {
+                if (keepdim) {
+                    result_shape[insert_idx] = 1;
+                    insert_idx++;
+                }
+                continue;
+            }
+            result_shape[insert_idx] = input_shape[i];
+            insert_idx++;
+        }
+        output_shape = ttnn::SimpleShape{result_shape};
     }
     return {
         TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};

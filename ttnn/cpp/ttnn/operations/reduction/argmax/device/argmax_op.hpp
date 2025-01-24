@@ -15,6 +15,7 @@ namespace ttnn::operations::reduction {
 struct ArgMax {
     const DataType output_dtype;
     const std::optional<int> dim;
+    const bool keepdim;
     const bool use_multicore;
     const MemoryConfig output_mem_config;
 
