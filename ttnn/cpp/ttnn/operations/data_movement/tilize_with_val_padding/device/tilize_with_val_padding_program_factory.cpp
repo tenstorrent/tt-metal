@@ -260,6 +260,314 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
+ttnn::SimpleShape shape_2d(ttnn::SimpleShape shape) {
+    std::array<uint32_t, 2> out_shape;
+    out_shape[0] = 1;
+    for (uint32_t i = 0; i <= shape.rank() - 2; i++) {
+        out_shape[0] *= shape[i];
+    }
+    out_shape[1] = shape[-1];
+    return ttnn::SimpleShape{out_shape};
+}
+/// CHECK NUMBER OF TILES
+
+operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleaved(
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+
+    IDevice* device = a.device();
+    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    printf("executing col one\n");
+    /*
+    printf("executing col one\n");
+    printf("before\n");
+    ttnn::SimpleShape a_logical_2d = shape_2d(a.get_logical_shape());
+    ttnn::SimpleShape output_logical_2d = shape_2d(output.get_logical_shape());
+    ttnn::SimpleShape a_padded_2d = shape_2d(a.get_padded_shape());
+    ttnn::SimpleShape output_padded_2d = shape_2d(output.get_padded_shape());
+    printf("after\n");
+    */
+
+    // uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t num_blocks = output.get_padded_shape()[-1] / TILE_WIDTH;
+    // uint32_t total_num_tiles = output.volume()/ TILE_HW;
+    uint32_t total_num_tiles = output.get_padded_shape()[-1] * output.get_padded_shape()[-2] / TILE_HW;
+
+    /*
+    printf(" total_num_tiles: %u\n", total_num_tiles);
+    printf("output volume: %u\n", output.volume());
+    printf("output height: %u\n", output.get_padded_shape()[-2]);
+    printf("tile width: %u\n", TILE_WIDTH);
+    printf("num of blocks: %u\n", num_blocks);
+    */
+
+    uint32_t num_tiles_per_col = output.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_padding_rows = output.get_padded_shape()[-2] - output.get_logical_shape()[-2];
+    uint32_t total_num_rows = a.get_logical_shape()[-2];
+    uint32_t total_num_cols = a.get_logical_shape()[-1];
+
+    // printf("num_padding_rows: %u\n", num_padding_rows);
+    // printf("total num rows: %u\n", total_num_rows);
+    // printf("total num cols: %u\n", total_num_cols);
+
+    bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    if (!enough_space) {
+        return tilize_with_val_padding_single_core(a, output, pad_value);
+    }
+
+    auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
+        ttnn::split_blocks_for_tilize(grid_size, num_blocks);
+
+    uint32_t total_tiles_per_row = output.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t tiles_per_row_per_core = total_tiles_per_row / ncores;
+    uint32_t padded_size_per_row = tiles_per_row_per_core * TILE_WIDTH * a.element_size();
+
+    uint32_t num_tiles_per_core = num_tiles_per_col * tiles_per_row_per_core;
+
+    /*
+    printf("total_tiles_per_row: %u\n", total_tiles_per_row);
+    printf("tiles_per_row_per_core: %u\n", tiles_per_row_per_core);
+    printf("padded_size_per_row: %u\n", padded_size_per_row);
+    printf("num_tiles_per_core: %u\n", num_tiles_per_core);
+    */
+
+    bool has_cliff = core_range_cliff.size() > 0;
+
+    uint32_t unpadded_row_size_bytes = a.get_padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes = output.get_padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
+
+    auto [src0_cb_index, cb_src0] = create_cb(
+        tt::CBIndex::c_0,
+        program,
+        all_cores,
+        input_single_tile_size,
+        num_tiles_per_col,
+        input_cb_data_format);  // -2 was num_tiles_per_col
+
+    auto [output_cb_index, cb_output] = create_cb(
+        tt::CBIndex::c_16,
+        program,
+        all_cores,
+        output_single_tile_size,
+        num_tiles_per_col,
+        output_cb_data_format);  // -2 was num_tiles_per_col
+
+    Buffer* src0_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
+    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    // reader
+
+    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
+    uint32_t stick_size = unpadded_row_size_bytes;
+    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
+    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
+
+    uint32_t packed_pad_value = get_packed_value(a, pad_value);
+    // log2(TILE_WIDTH * data_format_size_in_bytes)
+    uint32_t shift_bits = (a.get_dtype() == DataType::BFLOAT16) ? 6 : 7;
+
+    uint32_t num_tiles_2d = output.get_padded_shape()[-1] * output.get_padded_shape()[-2] / TILE_HW;
+    // printf("num_tiles_2d: %u\n", num_tiles_2d);
+
+    auto log_shape = output.get_logical_shape();
+    uint32_t third_dim = 1;
+    if (log_shape.rank() == 3) {
+        third_dim = log_shape[-3];
+    } else if (log_shape.rank() >= 4) {
+        third_dim = log_shape[-3] * log_shape[-4];
+    }
+    // printf("third_dim: %u\n", third_dim);
+
+    uint32_t size_of_2d = a.get_padded_shape()[-1] * a.get_padded_shape()[-2] * a.element_size();
+    // printf("size_of_2d: %u\n", size_of_2d);
+
+    KernelHandle unary_reader_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+        "reader_unary_pad_dims_split_cols_multicore.cpp",
+        all_cores,
+        ReaderDataMovementConfig(
+            {src0_is_dram,
+             stick_size_is_power_of_two,
+             log2_stick_size,
+             shift_bits,
+             num_padding_rows,
+             num_tiles_per_col,
+             total_num_rows,
+             padded_size_per_row,
+             ncores,
+             third_dim,
+             size_of_2d}));
+
+    // writer
+
+    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+
+    KernelHandle unary_writer_kernel_id = CreateKernel(
+        program,
+        //"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/write_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
+        "writer_unary_interleaved_col.cpp",
+        all_cores,
+        WriterDataMovementConfig({output_cb_index, out_is_dram, num_tiles_2d, third_dim, nblocks_per_core}));
+
+    // compute
+    if (core_range.size() > 0) {
+        auto tilize_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_w.cpp",
+            core_range,
+            ComputeConfig{.compile_args = {nblocks_per_core, num_tiles_per_col, third_dim}});
+    }
+    if (has_cliff) {
+        auto tilize_cliff_kernel_id = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/tilize_w.cpp",
+            core_range_cliff,
+            ComputeConfig{.compile_args = {nblocks_per_core_cliff, num_tiles_per_col, third_dim}});
+    }
+
+    // RUNTIME ARGS
+    // 1D distribution of blocks across cores
+    uint32_t tile_height = output.get_tensor_spec().tile().get_height();
+
+    /*
+    printf("INFO FOR DISTRIBUTE WORK:\n");
+    printf("output.get_logical_shape(): %u, %u\n", output.get_logical_shape()[0], output.get_logical_shape()[1]);
+    printf("ncores: %u\n", ncores);
+    printf("nblocks_per_core: %u\n", nblocks_per_core);
+    printf("has_cliff: %u\n", has_cliff);
+    printf("nblocks_per_core_cliff: %u\n", nblocks_per_core_cliff);
+    printf("tile_height: %u\n", tile_height);
+    */
+
+    auto core_assignments = ttnn::distribute_work(
+        output.get_logical_shape(),
+        output.get_padding(),
+        ncores,
+        nblocks_per_core,
+        has_cliff,
+        nblocks_per_core_cliff,
+        tile_height);
+
+    uint32_t tile_start_id = 0;
+    uint32_t row_start_id = 0;
+    uint32_t ncores_x = grid_size.x;
+
+    const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
+    uint32_t number_blocks_per_core;
+    for (uint32_t i = 0; i < ncores; ++i) {
+        const auto& core = cores[i];
+        const std::vector<BlockRep>& assignment = core_assignments.at(i);
+
+        // uint32_t start_idx = i * tiles_per_row_per_core * TILE_WIDTH;
+        // uint32_t end_idx = start_idx + tiles_per_row_per_core * TILE_WIDTH;
+        // uint32_t size_per_row_per_core;
+        // if (end_idx <= total_num_cols) {
+        //     printf("in if\n");
+        //     size_per_row_per_core = tiles_per_row_per_core * TILE_WIDTH * a.element_size();
+        // }
+        // else{
+        //     printf("in else\n");
+        //     size_per_row_per_core = (output_logical_2d[-1] - start_idx) > 0 ? (output_logical_2d[-1] - start_idx)
+        //     *a.element_size() : 0;
+        // }
+        // printf("start_idx: %u\n", start_idx);
+        // printf("end_idx: %u\n", end_idx);
+        // printf("size_per_row_per_core: %u\n", size_per_row_per_core);
+
+        if (has_cliff && i == ncores - 1) {
+            number_blocks_per_core = nblocks_per_core_cliff;
+        } else {
+            number_blocks_per_core = nblocks_per_core;
+        }
+        uint32_t size_per_row_per_block =
+            number_blocks_per_core * TILE_WIDTH * a.element_size();  // was without num_tiles_per_col
+        // printf("size_per_row_per_block: %u\n", size_per_row_per_block);
+        //  reader runtime args
+        std::vector<uint32_t> reader_rt_args = {
+            src0_buffer->address(),
+            unpadded_row_size_bytes,
+            padded_row_size_bytes,
+            packed_pad_value,
+            0,  // row_start_id,
+            1,  // static_cast<unsigned int>(assignment.size()),
+            i,
+            size_per_row_per_block,
+            number_blocks_per_core,
+            TILE_WIDTH * a.element_size(),
+        };
+
+        uint32_t nblocks_per_core = 0;
+        // BlockRep ref_el = assignment[0];
+        uint32_t count_repeated = 0;  // will be incremented in first iteration of the loop
+
+        // for (const auto& el : assignment) {
+        //     nblocks_per_core += el.block_count();
+        //     row_start_id += el.data_row_count();
+        //     if (compare_assignments(ref_el, el)) {
+        //         count_repeated++;
+        //     } else {
+        //         // push back information for previous elements
+        //         reader_rt_args.push_back(ref_el.n_data);
+        //         reader_rt_args.push_back(ref_el.n_mixed);
+        //         reader_rt_args.push_back(ref_el.n_pads);
+        //         reader_rt_args.push_back(ref_el.times);
+        //         reader_rt_args.push_back(count_repeated);
+        //         // set up assignment for this element
+        //         ref_el = el;
+        //         count_repeated = 1;
+        //     }
+
+        //}
+
+        // reader_rt_args.push_back(ref_el.n_data);
+        // reader_rt_args.push_back(ref_el.n_mixed);
+        // reader_rt_args.push_back(ref_el.n_pads);
+        // reader_rt_args.push_back(ref_el.times);
+        // reader_rt_args.push_back(count_repeated);
+
+        // uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core;
+
+        // writer runtime args
+        const std::array writer_rt_args = {
+            dst_buffer->address(), total_num_tiles, i, num_tiles_per_row, num_tiles_per_core, number_blocks_per_core};
+        SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
+    }
+
+    auto override_runtime_args_callback =
+        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+            const Program& program,
+            const std::vector<Buffer*>& input_buffers,
+            const std::vector<Buffer*>& output_buffers) {
+            auto src_buffer = input_buffers.at(0);
+            auto dst_buffer = output_buffers.at(0);
+
+            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+            for (const auto& core : cores) {
+                {
+                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                    runtime_args[0] = dst_buffer->address();
+                }
+            }
+        };
+
+    return {std::move(program), override_runtime_args_callback};
+}
+
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -272,8 +580,12 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = output.get_legacy_shape()[-2] / TILE_HEIGHT;
+    if (num_tiles_per_row > num_tiles_per_col) {  // && output.get_legacy_shape()[-2] <= TILE_HEIGHT) {
+        return tilize_with_val_padding_multi_core_col_interleaved(a, output, pad_value);
+    }
 
     bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     if (!enough_space) {
@@ -298,8 +610,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    /** reader
-     */
+    // reader
+
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
@@ -316,8 +628,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         all_cores,
         ReaderDataMovementConfig({src0_is_dram, stick_size_is_power_of_two, log2_stick_size, shift_bits}));
 
-    /** writer
-     */
+    // writer
+
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
@@ -326,8 +638,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
         all_cores,
         WriterDataMovementConfig({output_cb_index, out_is_dram}));
 
-    /** compute
-     */
+    // compute
     if (core_range.size() > 0) {
         auto tilize_kernel_id = CreateKernel(
             program,
@@ -343,7 +654,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
             ComputeConfig{.compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
-    /* RUNTIME ARGS */
+    // RUNTIME ARGS
     // 1D distribution of blocks across cores
     uint32_t tile_height = output.get_tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
@@ -494,8 +805,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    /** reader
-     */
+    // reader
     KernelHandle unary_reader_kernel_id;
     std::vector<uint32_t> reader_ct_args = {
         (std::uint32_t)src0_cb_index,
@@ -510,8 +820,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    /** writer
-     */
+    // writer
     KernelHandle unary_writer_kernel_id;
     bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_ct_args = {
@@ -523,8 +832,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         all_cores,
         WriterDataMovementConfig(writer_ct_args));
 
-    /** compute
-     */
+    // compute
     std::vector<uint32_t> compute_args = {
         (uint32_t)nblocks_per_core,  // per_core_block_cnt
         (uint32_t)ntiles_per_block,  // per_block_ntiles
