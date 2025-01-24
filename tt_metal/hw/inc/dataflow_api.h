@@ -1364,6 +1364,23 @@ FORCE_INLINE void noc_async_read_tile(
     s.noc_async_read_tile(id, dst_local_l1_addr, offset, noc);
 }
 
+template <bool DRAM, uint32_t tile_hw = 1024>
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id, CBIndex cb_idx, const uint32_t bank_base_address, uint32_t offset = 0, uint8_t noc = noc_index) {
+    /*
+        Read requests - use static VC
+        Read responses - assigned VCs dynamically
+    */
+
+    const uint32_t tile_bytes = get_tile_size(cb_idx);
+    const DataFormat data_format = get_dataformat(cb_idx);
+
+    const InterleavedAddrGenFast<DRAM, tile_hw> s = {
+        .bank_base_address = bank_base_address, .page_size = tile_bytes, .data_format = data_format};
+    uint32_t cb_l1_addr = get_write_ptr(cb_idx);
+    s.noc_async_read_tile(id, cb_l1_addr, offset, noc);
+}
+
 /**
  * Initiates an asynchronous write from a source address in L1 memory on the
  * Tensix core executing this function call. The destination is specified using
