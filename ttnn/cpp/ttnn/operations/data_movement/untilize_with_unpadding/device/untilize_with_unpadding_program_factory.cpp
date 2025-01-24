@@ -19,8 +19,8 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::detail {
-
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 inline uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
@@ -41,6 +41,9 @@ inline bool enough_available_space(
         get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     return max_l1_space > estimated_size_of_cbs;
 }
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
@@ -245,7 +248,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
-    bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    bool enough_space = CMAKE_UNIQUE_NAMESPACE::enough_available_space(
+        a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     if (!enough_space) {
         return untilize_with_unpadding_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
