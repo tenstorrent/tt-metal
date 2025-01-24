@@ -10,7 +10,6 @@ constexpr uint32_t tunnel_lanes = get_compile_time_arg_val(1);
 constexpr uint32_t in_queue_start_addr_words = get_compile_time_arg_val(2);
 constexpr uint32_t in_queue_size_words = get_compile_time_arg_val(3);
 constexpr uint32_t in_queue_size_bytes = in_queue_size_words * PACKET_WORD_SIZE_BYTES;
-static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a power of 2");
 static_assert(tunnel_lanes <= MAX_TUNNEL_LANES, "cannot have more than 2 tunnel directions.");
 static_assert(tunnel_lanes, "tunnel directions cannot be 0. 1 => Unidirectional. 2 => Bidirectional");
 
@@ -98,17 +97,6 @@ constexpr uint32_t remote_receiver_queue_size_words[MAX_TUNNEL_LANES] =
         get_compile_time_arg_val(33)
     };
 
-static_assert(is_power_of_2(remote_receiver_queue_size_words[0]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[2]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[3]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[4]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[5]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[6]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
-static_assert(is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
-
 constexpr uint32_t remote_sender_x[MAX_TUNNEL_LANES] =
     {
         (get_compile_time_arg_val(34) & 0xFF),
@@ -174,6 +162,20 @@ tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(
 
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(46);
 constexpr uint32_t inner_stop_mux_d_bypass = get_compile_time_arg_val(47);
+
+#ifdef POW2_CB
+static_assert(is_power_of_2(in_queue_size_words), "in_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[0]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[1]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[2]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[3]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[4]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[5]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[6]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[7]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[8]), "remote_receiver_queue_size_words must be a power of 2");
+static_assert(is_power_of_2(remote_receiver_queue_size_words[9]), "remote_receiver_queue_size_words must be a power of 2");
+#endif
 
 packet_input_queue_state_t input_queues[MAX_TUNNEL_LANES];
 using input_queue_network_sequence = NetworkTypeSequence<remote_sender_network_type[0],

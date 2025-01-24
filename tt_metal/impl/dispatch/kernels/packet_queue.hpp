@@ -2,6 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+//
+// Required defines:
+// FD_CORE_TYPE - Fast dispatch core type.
+//
+// Optional defines:
+// POW2_CB - Enable power of 2 optimizations. This can be enabled if the queue size is a power of 2
+//
+
 #pragma once
 
 #include <utility>
@@ -121,6 +129,7 @@ class packet_output_queue_state_t;
 
 class packet_queue_state_t {
 public:
+    // Credit registers (words)
     volatile uint32_t* local_wptr_val;
     volatile uint32_t* local_rptr_sent_val;
     volatile uint32_t* local_rptr_cleared_val;
@@ -134,14 +143,13 @@ public:
     uint32_t remote_wptr_update_addr;
     uint32_t remote_rptr_sent_update_addr;
     uint32_t remote_rptr_cleared_update_addr;
+
+    // Logical wptr and rptr offsets (words)
     uint32_t local_wptr;
     uint32_t local_rptr_sent;
     uint32_t local_rptr_cleared;
 
-    volatile uint32_t* local_rptr_sent_reset;
-    volatile uint32_t* local_rptr_cleared_reset;
-
-    bool cb_mode; // used in advance_next_packet
+    bool cb_mode; // used in advance_next_packet. need to put into template
     uint32_t cb_mode_page_size_words;
     uint8_t cb_mode_local_sem_id;
     uint8_t cb_mode_remote_sem_id;
@@ -149,10 +157,12 @@ public:
     uint8_t queue_id;
     uint32_t queue_start_addr_words;
     uint32_t queue_size_words;
+#ifdef POW2_CB
     uint32_t ptr_offset_mask;
     uint32_t queue_size_mask;
-
-    bool queue_is_input;
+#else
+    uint32_t queue_size_words_2x;
+#endif
 
     uint8_t remote_x, remote_y; // remote source for input queues, remote dest for output queues
     uint8_t remote_queue_id;
@@ -170,11 +180,15 @@ public:
               uint8_t cb_mode_local_sem_id,
               uint8_t cb_mode_remote_sem_id,
               uint8_t cb_mode_log_page_size) {
-
         this->queue_id = queue_id;
         this->queue_start_addr_words = queue_start_addr_words;
         this->queue_size_words = queue_size_words;
-        this->queue_is_input = queue_is_input;
+#ifdef POW2_CB
+        this->queue_size_mask = (this->queue_size_words << 1) - 1;
+        this->ptr_offset_mask = this->queue_size_words - 1;
+#else
+        this->queue_size_words_2x = this->queue_size_words * 2;
+#endif
         this->remote_x = remote_x;
         this->remote_y = remote_y;
         this->remote_queue_id = remote_queue_id;
@@ -184,16 +198,6 @@ public:
         this->cb_mode_local_sem_id = cb_mode_local_sem_id;
         this->cb_mode_remote_sem_id = cb_mode_remote_sem_id;
         this->cb_mode_page_size_words = (((uint32_t)0x1) << cb_mode_log_page_size)/PACKET_WORD_SIZE_BYTES;
-
-        // Misc. register definitions below.
-
-        // For read/write pointers, we use stream credit registers with auto-increment.
-        // Pointers are in 16B units, and we assume buffer size is power of 2 so we get
-        // automatic wrapping. (If needed, we can fix the pointer advance functions later
-        // to handle non-power-of-2 buffer sizes.)
-
-        // For source/destination ready synchronization signals, we use misc. registers in
-        // streams that behave like scratch registers and are reset to 0.
 
         this->local_rptr_sent = 0;
         this->local_rptr_cleared = 0;
@@ -206,6 +210,8 @@ public:
 
             this->local_wptr_update = reinterpret_cast<volatile uint32_t*>(
                 STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+            *reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
         } else {
             this->local_wptr_val = &this->local_wptr;
             uint32_t adjusted_queue_id = queue_id > 15 ? queue_id - 11 : queue_id;
@@ -220,10 +226,8 @@ public:
                 STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
 
             // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
-            this->local_rptr_sent_reset = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
-            this->local_rptr_cleared_reset = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+            *reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
+            *reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(NUM_PTR_REGS_PER_OUTPUT_QUEUE*adjusted_queue_id+1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = 0;
         }
 
         this->remote_wptr_update_addr =
@@ -246,16 +250,72 @@ public:
         return this->queue_id;
     }
 
-    inline uint32_t get_queue_local_wptr() const {
-        return *this->local_wptr_val;
+    // Return physical offset from a logical offset
+    // already_wrapped = true means to use 1X queue size
+    // already_wrapped = false means to use 2X queue size
+    template<bool already_wrapped>
+    inline uint32_t get_physical_offset(uint32_t logical_offset) const {
+#ifdef POW2_CB
+        return logical_offset & this->ptr_offset_mask;
+#else
+        if constexpr (already_wrapped) {
+            return logical_offset >= this->queue_size_words ? logical_offset - this->queue_size_words : logical_offset;
+        } else {
+            return logical_offset >= this->queue_size_words_2x ? logical_offset - this->queue_size_words_2x : logical_offset;
+        }
+#endif
     }
 
-    inline uint32_t get_queue_local_rptr_sent() const {
-        return *this->local_rptr_sent_val;
+    // Calculate distance between left pointer and right pointer. Right pointer should be
+    // ahead of left pointer. If it is behind, then that means the pointers have wrapped.
+    inline uint32_t calc_distance(uint32_t left, uint32_t right) const {
+#ifdef POW2_CB
+        return (right - left) & this->queue_size_mask;
+#else
+        return right >= left ? right - left : this->queue_size_words_2x - left + right;
+#endif
     }
 
-    inline uint32_t get_queue_local_rptr_cleared() const {
-        return *this->local_rptr_cleared_val;
+    inline uint32_t wrap_logical_offset(uint32_t logical_offset) const {
+        // Wrapping logical offset is not required for pow2. it will use AND mask.
+#ifdef POW2_CB
+        return logical_offset;
+#else
+        if (logical_offset >= this->queue_size_words_2x) {
+            logical_offset -= this->queue_size_words_2x;
+        }
+        return logical_offset;
+#endif
+    }
+
+    template<bool input_queue>
+    inline uint32_t get_queue_local_wptr() {
+        if constexpr (input_queue) {
+            const auto wptr_creds = *this->local_wptr_val;
+            *this->local_wptr_update = (-wptr_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            this->local_wptr = this->wrap_logical_offset(wptr_creds + this->local_wptr);
+        }
+        return this->local_wptr;
+    }
+
+    template<bool input_queue>
+    inline uint32_t get_queue_local_rptr_sent() {
+        if constexpr (!input_queue) {
+            const auto sent_creds = *this->local_rptr_sent_val;
+            *this->local_rptr_sent_update = (-sent_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            this->local_rptr_sent = this->wrap_logical_offset(sent_creds + this->local_rptr_sent);
+        }
+        return this->local_rptr_sent;
+    }
+
+    template<bool input_queue>
+    inline uint32_t get_queue_local_rptr_cleared() {
+        if constexpr (!input_queue) {
+            const auto cleared_creds = *this->local_rptr_cleared_val;
+            *this->local_rptr_cleared_update = (-cleared_creds) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            this->local_rptr_cleared = this->wrap_logical_offset(cleared_creds + this->local_rptr_cleared);
+        }
+        return this->local_rptr_cleared;
     }
 
     template<bool is_input>
@@ -263,14 +323,14 @@ public:
         if constexpr (is_input) {
             *this->local_wptr_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         } else {
-            this->local_wptr += num_words;
+            this->local_wptr = this->wrap_logical_offset(num_words + this->local_wptr);
         }
     }
 
     template<bool is_input>
     inline void advance_queue_local_rptr_sent(uint32_t num_words)  {
         if constexpr (is_input) {
-            this->local_rptr_sent += num_words;
+            this->local_rptr_sent = this->wrap_logical_offset(num_words + this->local_rptr_sent);
         } else {
             *this->local_rptr_sent_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
@@ -279,62 +339,82 @@ public:
     template<bool is_input>
     inline void advance_queue_local_rptr_cleared(uint32_t num_words)  {
         if constexpr (is_input) {
-            this->local_rptr_cleared += num_words;
+            this->local_rptr_cleared = this->wrap_logical_offset(num_words + this->local_rptr_cleared);
         } else {
             *this->local_rptr_cleared_update = num_words << REMOTE_DEST_BUF_WORDS_FREE_INC;
         }
     }
 
-    inline uint32_t get_queue_data_num_words_occupied() const {
-        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_cleared()) & this->queue_size_mask;
+    template<bool is_input>
+    inline uint32_t get_queue_data_num_words_occupied() {
+#ifdef POW2_CB
+        return this->calc_distance(this->get_queue_local_rptr_cleared<is_input>(), this->get_queue_local_wptr<is_input>());
+#else
+        const auto phys_wptr = this->get_physical_offset<false>(this->get_queue_local_wptr<is_input>());
+        const auto phys_rptr = this->get_physical_offset<false>(this->get_queue_local_rptr_cleared<is_input>());
+        return this->calc_distance(phys_rptr, phys_wptr);
+#endif
     }
 
-    inline uint32_t get_queue_data_num_words_free() const {
-        return this->queue_size_words - this->get_queue_data_num_words_occupied();
+    template<bool is_input>
+    inline uint32_t get_queue_data_num_words_free() {
+        return this->queue_size_words - this->get_queue_data_num_words_occupied<is_input>();
     }
 
-    inline uint32_t get_num_words_sent_not_cleared() const {
-        return (this->get_queue_local_rptr_sent() - this->get_queue_local_rptr_cleared()) & this->queue_size_mask;
+    template<bool is_input>
+    inline uint32_t get_num_words_written_not_sent() {
+#ifdef POW2_CB
+        return this->calc_distance(this->get_queue_local_rptr_sent<is_input>(), this->get_queue_local_wptr<is_input>());
+#else
+        const auto phys_wptr = this->get_physical_offset<false>(this->get_queue_local_wptr<is_input>());
+        const auto phys_rptr = this->get_physical_offset<false>(this->get_queue_local_rptr_sent<is_input>());
+        return this->calc_distance(phys_rptr, phys_wptr);
+#endif
     }
 
-    inline uint32_t get_num_words_written_not_sent() const {
-        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
+    template<bool is_input>
+    inline uint32_t get_queue_wptr_offset_words() {
+        return this->get_physical_offset<true>(this->get_queue_local_wptr<is_input>());
     }
 
-    inline uint32_t get_queue_wptr_offset_words() const {
-        return this->get_queue_local_wptr() & this->ptr_offset_mask;
+    template<bool is_input>
+    inline uint32_t get_queue_rptr_sent_offset_words() {
+        return this->get_physical_offset<true>(this->get_queue_local_rptr_sent<is_input>());
     }
 
-    inline uint32_t get_queue_rptr_sent_offset_words() const {
-        return this->get_queue_local_rptr_sent() & this->ptr_offset_mask;
+    template<bool is_input>
+    inline uint32_t get_queue_rptr_cleared_offset_words() {
+        return this->get_physical_offset<true>(this->get_queue_local_rptr_cleared<is_input>());
     }
 
-    inline uint32_t get_queue_rptr_cleared_offset_words() const {
-        return this->get_queue_local_rptr_cleared() & this->ptr_offset_mask;
+    template<bool is_input>
+    inline uint32_t get_queue_rptr_sent_addr_bytes() {
+        return (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words<is_input>())*PACKET_WORD_SIZE_BYTES;
     }
 
-    inline uint32_t get_queue_rptr_sent_addr_bytes() const {
-        return (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES;
+    template<bool is_input>
+    inline uint32_t get_queue_rptr_cleared_addr_bytes() {
+        return (this->queue_start_addr_words + this->get_queue_rptr_cleared_offset_words<is_input>())*PACKET_WORD_SIZE_BYTES;
     }
 
-    inline uint32_t get_queue_rptr_cleared_addr_bytes() const {
-        return (this->queue_start_addr_words + this->get_queue_rptr_cleared_offset_words())*PACKET_WORD_SIZE_BYTES;
+    template<bool is_input>
+    inline uint32_t get_queue_wptr_addr_bytes() {
+        return (this->queue_start_addr_words + this->get_queue_wptr_offset_words<is_input>())*PACKET_WORD_SIZE_BYTES;
     }
 
-    inline uint32_t get_queue_wptr_addr_bytes() const {
-        return (this->queue_start_addr_words + this->get_queue_wptr_offset_words())*PACKET_WORD_SIZE_BYTES;
+    template<bool is_input>
+    inline uint32_t get_queue_words_before_rptr_sent_wrap() {
+        return this->queue_size_words - this->get_queue_rptr_sent_offset_words<is_input>();
     }
 
-    inline uint32_t get_queue_words_before_rptr_sent_wrap() const {
-        return queue_size_words - this->get_queue_rptr_sent_offset_words();
+    template<bool is_input>
+    inline uint32_t get_queue_words_before_rptr_cleared_wrap() {
+        return this->queue_size_words - this->get_queue_rptr_cleared_offset_words<is_input>();
     }
 
-    inline uint32_t get_queue_words_before_rptr_cleared_wrap() const {
-        return queue_size_words - this->get_queue_rptr_cleared_offset_words();
-    }
-
-    inline uint32_t get_queue_words_before_wptr_wrap() const {
-        return queue_size_words - this->get_queue_wptr_offset_words();
+    template<bool is_input>
+    inline uint32_t get_queue_words_before_wptr_wrap() {
+        return this->queue_size_words - this->get_queue_wptr_offset_words<is_input>();
     }
 
     template<DispatchRemoteNetworkType network_type, bool cb_mode>
@@ -442,7 +522,7 @@ public:
 
     template<bool is_input>
     inline uint32_t cb_mode_rptr_sent_advance_page_align() {
-        uint32_t rptr_val = this->get_queue_local_rptr_sent();
+        uint32_t rptr_val = this->get_queue_local_rptr_sent<is_input>();
         uint32_t page_size_words_mask = this->cb_mode_page_size_words - 1;
         uint32_t num_words_past_page_boundary = rptr_val & page_size_words_mask;
         uint32_t input_pad_words_skipped = 0;
@@ -475,11 +555,8 @@ public:
         }
     }
 
-    void yield() {
-        // TODO: implement yield for ethernet here
-    }
-
     void dprint_object() {
+#ifdef DEBUG_PQ
         DPRINT << "  id: " << DEC() << static_cast<uint32_t>(this->queue_id) << ENDL();
         DPRINT << "  start_addr: 0x" << HEX() << static_cast<uint32_t>(this->queue_start_addr_words*PACKET_WORD_SIZE_BYTES) << ENDL();
         DPRINT << "  size_bytes: 0x" << HEX() << static_cast<uint32_t>(this->queue_size_words*PACKET_WORD_SIZE_BYTES) << ENDL();
@@ -491,6 +568,7 @@ public:
         DPRINT << "  local_wptr: 0x" << HEX() << this->get_queue_local_wptr() << ENDL();
         DPRINT << "  local_rptr_sent: 0x" << HEX() << this->get_queue_local_rptr_sent() << ENDL();
         DPRINT << "  local_rptr_cleared: 0x" << HEX() << this->get_queue_local_rptr_cleared() << ENDL();
+#endif
     }
 };
 
@@ -515,7 +593,7 @@ protected:
         if(this->get_queue_data_num_words_available_to_send() > 0) {
             tt_l1_ptr dispatch_packet_header_t* next_packet_header_ptr =
                 reinterpret_cast<tt_l1_ptr dispatch_packet_header_t*>(
-                    (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words())*PACKET_WORD_SIZE_BYTES
+                    (this->queue_start_addr_words + this->get_queue_rptr_sent_offset_words<true>())*PACKET_WORD_SIZE_BYTES
                 );
             this->curr_packet_header_ptr = next_packet_header_ptr;
             uint32_t packet_size_and_flags = next_packet_header_ptr->packet_size_bytes;
@@ -540,13 +618,6 @@ protected:
             this->curr_packet_words_sent = 0;
             this->curr_packet_valid = true;
        }
-    }
-
-    inline void reset_queue_local_wptr() {
-        // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
-        volatile uint32_t* local_wptr_reset = reinterpret_cast<volatile uint32_t*>(
-                STREAM_REG_ADDR(NUM_PTR_REGS_PER_INPUT_QUEUE*queue_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
-        *local_wptr_reset = 0;
     }
 
 public:
@@ -583,10 +654,7 @@ public:
             this->curr_packet_tag = 0xabcd;
         }
 
-        this->ptr_offset_mask = queue_size_words - 1;
-        this->queue_size_mask = (queue_size_words << 1) - 1;
         this->curr_packet_valid = false;
-        this->reset_queue_local_wptr();
         this->reset_ready_flag();
     }
 
@@ -594,8 +662,8 @@ public:
         return this->end_of_cmd;
     }
 
-    inline uint32_t get_queue_data_num_words_available_to_send() const {
-        return (this->get_queue_local_wptr() - this->get_queue_local_rptr_sent()) & this->queue_size_mask;
+    inline uint32_t get_queue_data_num_words_available_to_send() {
+        return this->get_num_words_written_not_sent<true>();
     }
 
     template<bool cb_mode>
@@ -725,6 +793,7 @@ public:
     }
 
     void dprint_object() {
+#ifdef DEBUG_PQ
         DPRINT << "Input queue:" << ENDL();
         packet_queue_state_t::dprint_object();
         DPRINT << "  packet_valid: " << DEC() << static_cast<uint32_t>(this->curr_packet_valid) << ENDL();
@@ -734,6 +803,7 @@ public:
         DPRINT << "  packet_flags: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_flags) << ENDL();
         DPRINT << "  packet_size_words: " << DEC() << static_cast<uint32_t>(this->curr_packet_size_words) << ENDL();
         DPRINT << "  packet_words_sent: " << DEC() << static_cast<uint32_t>(this->curr_packet_words_sent) << ENDL();
+#endif
     }
 
 };
@@ -810,6 +880,7 @@ protected:
         }
 
         void dprint_object() {
+#ifdef DEBUG_PQ
             DPRINT << "  curr_output_total_words_in_flight: " << DEC() << this->curr_output_total_words_in_flight << ENDL();
             for (uint32_t j = 0; j < MAX_SWITCH_FAN_IN; j++) {
                 DPRINT << "       from input queue id " << DEC() <<
@@ -824,17 +895,10 @@ protected:
                             << DEC() << this->prev_input_queue_words_in_flight[j]
                             << ENDL();
             }
+#endif
         }
 
     } input_queue_status;
-
-    inline void reset_queue_local_rptr_sent()  {
-        *this->local_rptr_sent_reset = 0;
-    }
-
-    inline void reset_queue_local_rptr_cleared()  {
-        *this->local_rptr_cleared_reset = 0;
-    }
 
 public:
 
@@ -861,8 +925,6 @@ public:
 
         this->unpacketizer_remove_header = unpacketizer_output_remove_header;
         this->unpacketizer_page_words_sent = 0;
-        this->ptr_offset_mask = queue_size_words - 1;
-        this->queue_size_mask = (queue_size_words << 1) - 1;
         this->input_queue_status.init(input_queue_array, num_input_queues);
         switch (remote_update_network_type) {
             case DispatchRemoteNetworkType::DISABLE_QUEUE:
@@ -880,8 +942,6 @@ public:
                 ASSERT(false);
         }
 
-        this->reset_queue_local_rptr_sent();
-        this->reset_queue_local_rptr_cleared();
         this->reset_ready_flag();
     }
 
@@ -903,14 +963,14 @@ public:
     template<bool cb_mode, typename input_network_types, typename input_cb_modes>
     inline uint32_t prev_words_in_flight_check_flush() {
         if constexpr (cb_mode) {
-            uint32_t words_written_not_sent = get_num_words_written_not_sent();
+            uint32_t words_written_not_sent = this->get_num_words_written_not_sent<false>();
             noc_async_writes_flushed();
             this->advance_queue_local_rptr_sent<false>(words_written_not_sent);
             uint32_t words_flushed = this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
             this->cb_mode_local_sem_rptr_cleared_update<false>();
             return words_flushed;
         }
-        else if (this->get_num_words_written_not_sent() <= this->input_queue_status.get_curr_output_total_words_in_flight()) {
+        else if (this->get_num_words_written_not_sent<false>() <= this->input_queue_status.get_curr_output_total_words_in_flight()) {
             return this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         }
         else {
@@ -929,14 +989,14 @@ public:
            noc_async_writes_flushed();
         }
 
-        while (this->get_queue_data_num_words_occupied() > 0) {
+        while (this->get_queue_data_num_words_occupied<false>() > 0) {
             if constexpr (cb_mode) {
                 this->cb_mode_local_sem_rptr_cleared_update<false>();
                 if (this->cb_mode_local_sem_downstream_complete()) {
                     // There is no guaranteed that dispatch_h will increment semaphore for all commmands
                     // (specifically the final terminate command).
                     // So just clear whatever remains once the completion signal is received.
-                    uint32_t words_occupied = this->get_queue_data_num_words_occupied();
+                    uint32_t words_occupied = this->get_queue_data_num_words_occupied<false>();
                     this->advance_queue_local_rptr_cleared<false>(words_occupied);
                 }
             }
@@ -946,7 +1006,6 @@ public:
                     return false;
                 }
             }
-            this->yield();
         }
         this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
@@ -958,11 +1017,11 @@ public:
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
 
         uint32_t num_words_available_in_input = input_queue_ptr->input_queue_curr_packet_num_words_available_to_send<input_queue_cb_mode>();
-        uint32_t num_words_before_input_rptr_wrap = input_queue_ptr->get_queue_words_before_rptr_sent_wrap();
+        uint32_t num_words_before_input_rptr_wrap = input_queue_ptr->get_queue_words_before_rptr_sent_wrap<true>();
         num_words_available_in_input = std::min(num_words_available_in_input, num_words_before_input_rptr_wrap);
-        uint32_t num_words_free_in_output = this->get_queue_data_num_words_free();
+        uint32_t num_words_free_in_output = this->get_queue_data_num_words_free<false>();
         uint32_t num_words_to_forward = std::min(num_words_available_in_input, num_words_free_in_output);
-        uint32_t output_buf_words_before_wptr_wrap = this->get_queue_words_before_wptr_wrap();
+        uint32_t output_buf_words_before_wptr_wrap = this->get_queue_words_before_wptr_wrap<false>();
 
         num_words_to_forward = std::min(num_words_to_forward, output_buf_words_before_wptr_wrap);
         num_words_to_forward = std::min(num_words_to_forward, this->output_max_send_words);
@@ -987,8 +1046,8 @@ public:
             }
         }
 
-        const auto src_addr = input_queue_ptr->get_queue_rptr_sent_addr_bytes();
-        const auto dest_addr = this->get_queue_wptr_addr_bytes();
+        const auto src_addr = input_queue_ptr->get_queue_rptr_sent_addr_bytes<true>();
+        const auto dest_addr = this->get_queue_wptr_addr_bytes<false>();
 
         this->send_data_to_remote<output_network_type>(src_addr, dest_addr, num_words_to_forward);
         this->input_queue_status.register_words_in_flight<input_network_type, input_cb_mode>(input_queue_index, num_words_to_forward);
@@ -1019,9 +1078,11 @@ public:
     }
 
     void dprint_object() {
+#ifdef DEBUG_PQ
         DPRINT << "Output queue:" << ENDL();
         packet_queue_state_t::dprint_object();
         this->input_queue_status.dprint_object();
+#endif
     }
 };
 
