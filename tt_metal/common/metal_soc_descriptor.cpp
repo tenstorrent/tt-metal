@@ -122,7 +122,7 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
 
     CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::VIRTUAL : CoordSystem::PHYSICAL;
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::WORKER, CoordSystem::LOGICAL}, target_system);
+        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
     return {physical_coord.x, physical_coord.y};
 }
 
