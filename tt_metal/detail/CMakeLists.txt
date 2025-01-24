@@ -12,6 +12,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
 )
+
 if(COVERAGE)
     target_compile_options(detail PRIVATE --coverage)
 endif()

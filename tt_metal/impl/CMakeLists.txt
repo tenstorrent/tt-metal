@@ -71,6 +71,7 @@ target_include_directories(
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
+
 if(COVERAGE)
     target_compile_options(impl PRIVATE --coverage)
 endif()
