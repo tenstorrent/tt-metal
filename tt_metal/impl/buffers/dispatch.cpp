@@ -359,6 +359,74 @@ std::vector<CoreCoord> get_cores_for_sharded_buffer(
                              buffer.shard_spec().orientation() == ShardOrientation::ROW_MAJOR);
 }
 
+// Returns the host page to start reading from / writing to and the number of device pages to read from / write to
+std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
+    uint32_t core_id,
+    const Buffer& buffer,
+    const std::variant<ShardedBufferWriteDispatchParams, ShardedBufferReadDispatchParams>& dispatch_params) {
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
+    uint32_t starting_host_page_idx;
+    uint32_t ending_host_page_idx;
+    std::visit(
+        [&](const auto& params) {
+            using T = std::decay_t<decltype(params)>;
+            buffer_page_mapping = params.buffer_page_mapping;
+            if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
+                starting_host_page_idx = params.starting_dst_host_page_index;
+                ending_host_page_idx =
+                    params.starting_dst_host_page_index + params.total_pages_written + params.total_pages_to_write;
+            } else if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+                starting_host_page_idx = params.starting_src_host_page_index;
+                ending_host_page_idx =
+                    params.starting_src_host_page_index + params.total_pages_read + params.total_pages_to_read;
+            }
+        },
+        dispatch_params);
+
+    const std::vector<uint32_t> core_host_pages = buffer_page_mapping->core_host_page_indices_[core_id];
+    TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
+
+    auto is_host_page_within_region = [&](const uint32_t host_page) {
+        return host_page >= starting_host_page_idx && host_page < ending_host_page_idx;
+    };
+
+    auto core_start_host_page_it =
+        std::find_if(core_host_pages.begin(), core_host_pages.end(), is_host_page_within_region);
+    auto core_end_host_page_it =
+        std::find_if(core_host_pages.rbegin(), core_host_pages.rend(), is_host_page_within_region);
+
+    // If we don't find a host page that lies at the start of the given region, we shouldn't find a host page that lies
+    // at the end of it either
+    TT_ASSERT((core_start_host_page_it == core_host_pages.end()) == (core_end_host_page_it == core_host_pages.rend()));
+
+    uint32_t start_host_page;
+    uint32_t num_dev_pages_to_process;
+    const bool all_core_host_pages_outside_of_region = core_start_host_page_it == core_host_pages.end();
+    if (all_core_host_pages_outside_of_region) {
+        start_host_page = 0;
+        num_dev_pages_to_process = 0;
+    } else {
+        start_host_page = *(core_start_host_page_it);
+        const uint32_t end_host_page = *(core_end_host_page_it);
+        TT_ASSERT(end_host_page >= start_host_page);
+        const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
+        if (is_core_end_host_page_last_page_in_shard) {
+            const uint32_t num_dev_pages_in_shard =
+                buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+            num_dev_pages_to_process =
+                num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
+        } else {
+            const uint32_t host_page_after_end_host_page = *(core_end_host_page_it - 1);
+            num_dev_pages_to_process =
+                buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page_after_end_host_page] -
+                buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
+        }
+        TT_ASSERT(num_dev_pages_to_process > 0);
+    }
+
+    return {start_host_page, num_dev_pages_to_process};
+}
+
 void write_sharded_buffer_to_core(
     const void* src,
     uint32_t core_id,
@@ -377,47 +445,19 @@ void write_sharded_buffer_to_core(
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
     if (dispatch_params.width_split) {
-        num_pages = dispatch_params.buffer_page_mapping->core_shard_shape_[core_id][0] *
-                    buffer.shard_spec().shape_in_pages()[1];
+        auto [host_page, num_pages_to_write] = calculate_pages_to_process_in_shard(core_id, buffer, dispatch_params);
+        num_pages = num_pages_to_write;
+
         if (num_pages == 0) {
             return;
         }
 
-        const std::vector<uint32_t> core_host_pages =
-            dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id];
-        TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
-        TT_ASSERT(num_pages % core_host_pages.size() == 0);
-        const uint32_t num_dev_pages_per_host_page = num_pages / core_host_pages.size();
-        bool all_core_host_pages_outside_of_region = true;
-        uint32_t host_page = core_host_pages.back();
-        uint32_t starting_host_page_index = core_host_pages.size() - 1;
-        for (int32_t i = core_host_pages.size() - 1; i >= 0; i--) {
-            const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
-                                                        dispatch_params.total_pages_written +
-                                                        dispatch_params.total_pages_to_write;
-            const bool host_page_within_region = core_host_pages[i] >= dispatch_params.starting_dst_host_page_index &&
-                                                 core_host_pages[i] < ending_dst_host_page_index;
-            if (host_page_within_region) {
-                all_core_host_pages_outside_of_region = false;
-                host_page = core_host_pages[i];
-                starting_host_page_index = i;
-            } else {
-                num_pages -= num_dev_pages_per_host_page;
-            }
-        }
-        if (all_core_host_pages_outside_of_region) {
-            return;
-        }
-
         dispatch_params.dst_page_index = dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
-        // starting_dst_device_page_index =
-        //     dispatch_params.buffer_page_mapping
-        //         ->host_page_to_dev_page_mapping_[dispatch_params.starting_dst_host_page_index];
-        curr_page_idx_in_shard = starting_host_page_index * num_dev_pages_per_host_page;
+        curr_page_idx_in_shard = dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page];
         remaining_pages_in_shard -= curr_page_idx_in_shard;
     } else {
         // starting_dst_device_page_index = dispatch_params.starting_dst_host_page_index;
-        curr_page_idx_in_shard = 0;
+        // curr_page_idx_in_shard = 0;
         while (dispatch_params.initial_pages_skipped < dispatch_params.starting_dst_host_page_index) {
             dispatch_params.initial_pages_skipped += 1;
             curr_page_idx_in_shard += 1;
@@ -654,41 +694,14 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t pages_per_txn = 0;
     uint32_t curr_page_idx_in_shard = 0;
     uint32_t host_page;
-    uint32_t bank_base_address = buffer.address();
+    uint32_t address = buffer.address();
 
     if (dispatch_params.width_split) {
-        pages_per_txn = dispatch_params.buffer_page_mapping->core_shard_shape_[core_id][0] *
-                        buffer.shard_spec().shape_in_pages()[1];
-
+        auto [start_host_page, num_pages_to_read] =
+            calculate_pages_to_process_in_shard(core_id, buffer, dispatch_params);
+        host_page = start_host_page;
+        pages_per_txn = num_pages_to_read;
         if (pages_per_txn > 0) {
-            const std::vector<uint32_t> core_host_pages =
-                dispatch_params.buffer_page_mapping->core_host_page_indices_[core_id];
-            TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
-            TT_ASSERT(pages_per_txn % core_host_pages.size() == 0);
-            const uint32_t num_dev_pages_per_host_page = pages_per_txn / core_host_pages.size();
-            bool all_core_host_pages_outside_of_region = true;
-            host_page = core_host_pages.back();
-            // uint32_t starting_host_page_index = core_host_pages.size() - 1;
-            for (int32_t i = core_host_pages.size() - 1; i >= 0; i--) {
-                const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
-                                                            dispatch_params.total_pages_to_read +
-                                                            dispatch_params.total_pages_read;
-                const bool host_page_within_region =
-                    core_host_pages[i] >= dispatch_params.starting_src_host_page_index &&
-                    core_host_pages[i] < ending_src_host_page_index;
-                if (host_page_within_region) {
-                    all_core_host_pages_outside_of_region = false;
-                    host_page = core_host_pages[i];
-                    // starting_host_page_index = i;
-                } else {
-                    pages_per_txn -= num_dev_pages_per_host_page;
-                }
-            }
-            if (all_core_host_pages_outside_of_region) {
-                dispatch_params.pages_per_txn = 0;
-                return;
-            }
-
             dispatch_params.src_page_index =
                 dispatch_params.buffer_page_mapping->host_page_to_dev_page_mapping_[host_page];
             curr_page_idx_in_shard =
@@ -713,10 +726,10 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     }
 
     if (buffer.is_dram()) {
-        bank_base_address +=
+        address +=
             buffer.device()->bank_offset(BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
-    bank_base_address += curr_page_idx_in_shard * buffer.aligned_page_size();
+    address += curr_page_idx_in_shard * buffer.aligned_page_size();
 
     dispatch_params.total_pages_to_read -= pages_per_txn;
     dispatch_params.total_pages_read += pages_per_txn;
@@ -725,7 +738,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     if (dispatch_params.pages_per_txn > 0) {
         dispatch_params.unpadded_dst_offset =
             (host_page - dispatch_params.starting_src_host_page_index) * buffer.page_size();
-        dispatch_params.address = bank_base_address;
+        dispatch_params.address = address;
         dispatch_params.core = core;
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
     }
