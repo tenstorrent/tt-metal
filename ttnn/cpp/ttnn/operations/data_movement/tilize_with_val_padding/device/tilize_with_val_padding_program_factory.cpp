@@ -318,7 +318,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleav
 
     bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     if (!enough_space) {
+        // printf("not enough space\n");
         return tilize_with_val_padding_single_core(a, output, pad_value);
+    } else {
+        printf("enough space\n");
     }
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
@@ -489,7 +492,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleav
             number_blocks_per_core = nblocks_per_core;
         }
         uint32_t size_per_row_per_block =
-            number_blocks_per_core * TILE_WIDTH * a.element_size();  // was without num_tiles_per_col
+            nblocks_per_core * TILE_WIDTH * a.element_size();  // was without num_tiles_per_col
         // printf("size_per_row_per_block: %u\n", size_per_row_per_block);
         //  reader runtime args
         std::vector<uint32_t> reader_rt_args = {
