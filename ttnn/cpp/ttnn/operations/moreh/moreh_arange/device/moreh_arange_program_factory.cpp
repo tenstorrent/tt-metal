@@ -12,7 +12,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto dtype = output.get_dtype();
-    auto W = output.get_legacy_shape()[-1];
+    auto W = output.get_padded_shape()[-1];
     auto Wt = tt::div_up(W, tt::constants::TILE_WIDTH);
 
     auto start = operation_attributes.start;

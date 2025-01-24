@@ -33,7 +33,7 @@ struct address_map {
     static constexpr std::int32_t MAX_L1_LOADING_SIZE = 1;
 
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = 0;
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2056;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;
 
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = 0;
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = 0;

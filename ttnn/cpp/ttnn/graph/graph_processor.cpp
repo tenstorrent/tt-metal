@@ -282,7 +282,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
         tensor_id = t.tensor_id.value();
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
-    auto shape = t.get_shape();
+    auto shape = t.get_logical_shape();
 
     std::unordered_map<std::string, std::string> params = {
         {kShape, fmt::format("{}", shape)},

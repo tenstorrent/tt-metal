@@ -27,6 +27,12 @@ std::span<const uint8_t> to_bytes(T& value) {
     return std::span<const uint8_t>(ptr, sizeof(T));
 }
 
+template <>
+std::span<const uint8_t> to_bytes(ttnn::SimpleShape& value) {
+    auto ptr = reinterpret_cast<const uint8_t*>(value.view().data());
+    return std::span<const uint8_t>(ptr, sizeof(value[0]) * value.rank());
+}
+
 template <typename T>
 void from_bytes(std::span<const uint8_t> bytes, T& value) {
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
@@ -41,6 +47,19 @@ void from_bytes(std::span<const uint8_t> bytes, T& value) {
     std::memcpy(&value, bytes.data(), sizeof(T));
 }
 
+template <>
+void from_bytes(std::span<const uint8_t> bytes, ttnn::SimpleShape& value) {
+    if (bytes.size() % sizeof(uint32_t) != 0) {
+        std::ostringstream oss;
+        oss << "Invalid byte size for conversion to type T. Expected divisible by" << sizeof(uint32_t)
+            << " Actual: " << bytes.size() << ", type: " << typeid(ttnn::SimpleShape).name();
+        throw std::invalid_argument(oss.str());
+    }
+    ttnn::SmallVector<uint32_t> data(bytes.size() / sizeof(uint32_t));
+    std::memcpy(data.data(), bytes.data(), bytes.size());
+    value = ttnn::SimpleShape(std::move(data));
+}
+
 template <typename T>
 void get_enum(MsgPackFile& file, std::string_view name, T& value) {
     int int_value = 0;
@@ -49,7 +68,7 @@ void get_enum(MsgPackFile& file, std::string_view name, T& value) {
 }
 
 void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_metal::Tensor& tensor) {
-    auto shape = tensor.get_shape();
+    auto shape = tensor.get_logical_shape();
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto storage_type = tensor.storage_type();
@@ -89,7 +108,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
     auto shape = core::create_shape({1, 1, 1, 1});
     std::vector<uint8_t> bytes;
     file.get(std::string(name) + "/shape", bytes);
-    from_bytes<ttnn::Shape>(bytes, shape);
+    from_bytes<ttnn::SimpleShape>(bytes, shape);
 
     get_enum(file, std::string(name) + "/data_type", data_type);
     get_enum(file, std::string(name) + "/layout", layout);

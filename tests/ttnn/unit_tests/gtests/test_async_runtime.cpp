@@ -67,7 +67,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     Tensor input_tensor = Tensor(
         input_storage,
         TensorSpec(input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{})));
-    Tensor output_tensor = Tensor(output_storage, np_out.get_shape(), DataType::BFLOAT16, Layout::TILE);
+    Tensor output_tensor = Tensor(output_storage, np_out.get_logical_shape(), DataType::BFLOAT16, Layout::TILE);
     // Populate input_tensor with data
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
     // Record the completion of the write event

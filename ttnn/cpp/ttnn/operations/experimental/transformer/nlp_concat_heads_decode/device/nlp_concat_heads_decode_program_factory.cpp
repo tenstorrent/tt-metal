@@ -18,7 +18,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode(
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
@@ -154,7 +154,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode_subcoregrids(
     const Tensor& input_tensor, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_shape().with_tile_padding();
+    const auto& input_shape = input_tensor.get_padded_shape();
     const uint32_t head_dim = input_shape[-1];
     const uint32_t batch = input_shape[1];
 
