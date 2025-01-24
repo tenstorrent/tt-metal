@@ -453,9 +453,6 @@ public:
             dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
         auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
         uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
-        TT_ASSERT(
-            lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE),
-            "Data for go signal mcast must fit within one page");
         this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
         auto initialize_set_go_signal_noc_data_cmd = [&](CQDispatchCmd* set_go_signal_noc_data_cmd) {
             set_go_signal_noc_data_cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA;
@@ -777,7 +774,9 @@ private:
         bool flush, uint32_t lengthB, DispatcherSelect dispatcher_type = DispatcherSelect::DISPATCH_MASTER) {
         if (!flush) {
             TT_ASSERT(
-                lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE),
+                lengthB <= (1 << dispatcher_type == DispatcherSelect::DISPATCH_MASTER
+                                ? dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE
+                                : dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE),
                 "Data to relay for inline no flush must fit within one page");
         }
         auto initialize_relay_write = [&](CQPrefetchCmd* relay_write) {
