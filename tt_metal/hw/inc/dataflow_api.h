@@ -1366,7 +1366,11 @@ FORCE_INLINE void noc_async_read_tile(
 
 template <bool DRAM, uint32_t tile_hw = 1024>
 FORCE_INLINE void noc_async_read_tile(
-    const uint32_t id, CBIndex cb_idx, const uint32_t bank_base_address, uint32_t offset = 0, uint8_t noc = noc_index) {
+    const uint32_t id,
+    tt::CBIndex cb_idx,
+    const uint32_t bank_base_address,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
