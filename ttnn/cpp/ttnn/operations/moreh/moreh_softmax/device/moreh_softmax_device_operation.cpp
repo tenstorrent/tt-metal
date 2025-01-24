@@ -91,7 +91,7 @@ void MorehSoftmaxOperation::validate_inputs(
         input.get_dtype() == DataType::BFLOAT16 || input.get_dtype() == DataType::BFLOAT8_B,
         "Inputs must be of bfloat16 or bfloat8_b type");
 
-    const auto& rank = input.get_logical_shape().rank();
+    const auto& rank = input.get_padded_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
 }
@@ -156,7 +156,7 @@ MorehSoftmaxOpParallelizationStrategy MorehSoftmaxOperation::get_parallelization
     const auto dim = operation_attributes.dim;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    const auto& rank = input.get_logical_shape().rank();
+    const auto& rank = input.get_padded_shape().rank();
     if (strategy == MorehSoftmaxOpParallelizationStrategy::NONE) {
         if (rank - 1 == dim) {
             if (is_moreh_softmax_w_small_available(input, compute_kernel_config)) {
