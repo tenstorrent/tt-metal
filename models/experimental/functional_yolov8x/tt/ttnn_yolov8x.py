@@ -7,7 +7,6 @@ import torch.nn as nn
 
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     autopad,
-    ttnn_make_anchors,
     ttnn_decode_bboxes,
 )
 
@@ -410,15 +409,10 @@ def DFL(device, x, parameters, path, c1=16):
 
 
 def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
-    dynamic = False
-    format = None
-    self_shape = None
     nc = nc
     nl = len(ch)
     reg_max = 16
     no = nc + reg_max * 4
-
-    stride = [8.0, 16.0, 32.0]
 
     c2, c3 = max((16, ch[0] // 4, reg_max * 4)), max(ch[0], min(nc, 100))
 
@@ -448,16 +442,7 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
 
     shape = x[0].shape
 
-    if format != "imx" and (dynamic or self_shape != shape):
-        temp = ttnn_make_anchors(device, x, stride, 0.5)
-        ls = []
-        for i in temp:
-            i = ttnn.permute(i, (1, 0))
-            ls.append(i)
-
-        anchors, strides = ls[0], ls[1]
-        anchors = ttnn.reshape(anchors, (-1, anchors.shape[0], anchors.shape[1]))
-        self_shape = shape
+    anchors, strides = parameters["anchors"], parameters["strides"]
 
     xi = []
     for i in x:
