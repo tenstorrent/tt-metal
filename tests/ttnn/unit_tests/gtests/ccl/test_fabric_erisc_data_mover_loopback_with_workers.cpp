@@ -246,14 +246,15 @@ static constexpr size_t PACKET_HEADER_SIZE_BYTES = sizeof(tt::fabric::PacketHead
 void generate_sender_worker_kernels(
     Program& program,
     IDevice* device,
-    CoreCoord const& worker_core,
-    ttnn::ccl::SenderWorkerAdapterSpec const& worker_fabric_connection,
-    mode_variant_t const& mode,
+    const CoreCoord& worker_core,
+    const ttnn::ccl::SenderWorkerAdapterSpec& worker_fabric_connection,
+    const mode_variant_t& mode,
     std::size_t edm_buffer_size,
     uint32_t page_plus_header_size,
     uint32_t num_pages_total,
     uint32_t num_pages_per_edm_buffer,
     uint32_t local_worker_fabric_semaphore_id,
+    uint32_t local_worker_teardown_semaphore_id,
     uint32_t local_worker_last_message_semaphore_id,
     uint32_t dram_input_buffer_base_addr,
     bool src_is_dram,
@@ -261,7 +262,7 @@ void generate_sender_worker_kernels(
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
     // farthest to closest
-    std::vector<ttnn::ccl::edm_termination_info_t> const& edm_termination_infos) {
+    const std::vector<ttnn::ccl::edm_termination_info_t>& edm_termination_infos) {
     auto const& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
         src_is_dram,      //
@@ -295,6 +296,7 @@ void generate_sender_worker_kernels(
         worker_fabric_connection.edm_buffer_base_addr,
         worker_fabric_connection.edm_l1_sem_addr,
         local_worker_fabric_semaphore_id,
+        local_worker_teardown_semaphore_id,
         (uint32_t)edm_noc_core.x,
         (uint32_t)edm_noc_core.y,
         worker_fabric_connection.num_buffers_per_channel,
@@ -377,6 +379,7 @@ bool RunLoopbackTest(
     std::vector<CoreCoord> worker_cores = {CoreCoord(0, 0)};
 
     auto local_worker_fabric_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
+    auto local_worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
     auto local_worker_last_message_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(sender_program, worker_cores.at(0), 0);
 
@@ -447,6 +450,7 @@ bool RunLoopbackTest(
         num_pages_total,
         pages_per_send,
         local_worker_fabric_semaphore_id,
+        local_worker_teardown_semaphore_id,
         local_worker_last_message_semaphore_id,
         local_input_buffer_address,
         src_is_dram,
@@ -947,6 +951,7 @@ bool RunLineFabricTest(
     ////////////////////////////////////////////////////////////////////////////
 
     auto local_worker_fabric_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
+    auto local_worker_teardown_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
     auto local_worker_last_message_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
     auto worker_buffer_index_semaphore_id = tt::tt_metal::CreateSemaphore(programs[0], worker_cores.at(0), 0);
     ////////////////////////////////////////////////////////////////////////////
@@ -976,6 +981,7 @@ bool RunLineFabricTest(
         num_pages_total,
         pages_per_send,
         local_worker_fabric_semaphore_id,
+        local_worker_teardown_semaphore_id,
         local_worker_last_message_semaphore_id,
         local_input_buffer_address,
         src_is_dram,

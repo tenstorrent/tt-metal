@@ -51,6 +51,8 @@ void kernel_main() {
     const uint32_t eth_sender_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
     volatile uint32_t* const writer_send_sem_addr =
         reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
+    volatile uint32_t* const worker_teardown_sem_addr =
+        reinterpret_cast<volatile uint32_t* const>(get_semaphore(get_arg_val<uint32_t>(arg_idx++)));
     const uint32_t eth_sender_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t eth_sender_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_buffers_per_edm_channel = get_arg_val<uint32_t>(arg_idx++);
@@ -69,6 +71,7 @@ void kernel_main() {
     ASSERT(edm_buffer_index_sem_id < 8);
     auto edm_buffer_index_id = edm_buffer_index_sem_id;
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
+    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
     ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
 
     transmit_config config;
@@ -96,6 +99,7 @@ void kernel_main() {
         edm_buffer_size_bytes,
         edm_buffer_index_id,
         writer_send_sem_addr,
+        worker_teardown_sem_addr,
         worker_buffer_index_semaphore_addr);
 
     sender.open();

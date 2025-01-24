@@ -149,9 +149,11 @@ struct CCLWorkerArgBuilder {
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
         const size_t sender_worker_forward_flow_control_semaphore_id,
+        const size_t sender_worker_forward_teardown_semaphore_id,
         const size_t sender_worker_forward_buffer_index_semaphore_id,
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
         const size_t sender_worker_backward_flow_control_semaphore_id,
+        const size_t sender_worker_backward_teardown_semaphore_id,
         const size_t sender_worker_backward_buffer_index_semaphore_id,
         const size_t forward_direction_distance_to_end_of_line,
         const size_t backward_direction_distance_to_end_of_line,
