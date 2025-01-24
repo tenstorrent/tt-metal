@@ -252,7 +252,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     // tensor_shape is [N, H, W, C]
     TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
     // uint32_t channels = tensor_shape[3];
-    uint32_t channels = (tensor_shape[3] + constants::TILE_HEIGHT - 1) / constants::TILE_HEIGHT;
+    uint32_t channels = tensor_shape[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
     auto shard_scheme = parallel_config.shard_scheme;
