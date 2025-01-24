@@ -188,7 +188,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t face_width = 16;
         uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
         uint32_t num_alignment_width = div_up(output_5d_shape_without_padding[4], num_elements_per_alignment);
-        uint32_t output_num_stick_width = div_up(output_5d_shape_without_paddding[4], face_width);
+        uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
 
         uint32_t input_num_tile_c = input_5d_shape.value[1];
         uint32_t input_num_tile_d = input_5d_shape.value[2];
@@ -293,7 +293,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
                 // output
                 output_5d_shape_without_padding[1],
                 output_5d_shape_without_padding[2],
-                output_5d_shape_without_padding[3] output_5d_shape_without_padding[4],
+                output_5d_shape_without_padding[3],
+                output_5d_shape_without_padding[4],
                 output_noc_id_stride_n,
                 output_noc_id_stride_c,
                 output_noc_id_stride_d,
