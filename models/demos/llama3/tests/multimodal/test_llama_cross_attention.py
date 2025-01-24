@@ -213,10 +213,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             )
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
-                shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, vision_seq_len],
-                    [1, batch, 32, vision_seq_len],
-                ),
+                shape=ttnn.Shape([1, batch, n_heads // model_args.num_devices, vision_seq_len]),
             )
 
             full_text_mask_expand = full_text_mask_expand.permute(2, 0, 1, 3).contiguous()
@@ -230,10 +227,7 @@ def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset
             )
             tt_full_text_mask = ttnn.reshape(
                 tt_full_text_mask,
-                shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, head_dim],
-                    [1, batch, 32, head_dim],
-                ),
+                shape=ttnn.Shape([1, batch, n_heads // model_args.num_devices, head_dim]),
             )
 
             tt_out = tt_model(

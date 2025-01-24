@@ -259,7 +259,7 @@ class TtLlamaAttention_optimized:
         d = fused_query_key_value.shape.with_tile_padding()[-1]
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
-            ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
+            ttnn.Shape((1, 1, self.max_batch_size, d)),
         )
 
         # Split QKV

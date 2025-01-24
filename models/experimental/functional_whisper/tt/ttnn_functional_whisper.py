@@ -41,10 +41,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
     key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
     value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
 
-    desired_shape = ttnn.Shape(
-        [bsz, config.encoder_attention_heads, tgt_len, head_size],
-        [bsz, config.encoder_attention_heads, tgt_len_padded, head_size],
-    )
+    desired_shape = ttnn.Shape([bsz, config.encoder_attention_heads, tgt_len, head_size])
     key_states = ttnn.reshape(key_states, shape=desired_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
 
@@ -78,10 +75,7 @@ def split_query_key_value_and_split_heads(
     key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
     value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
 
-    desired_shape = ttnn.Shape(
-        [batch_size, encoder_attention_heads, seq_length, head_size],
-        [batch_size, encoder_attention_heads, padded_seq_length, head_size],
-    )
+    desired_shape = ttnn.Shape([batch_size, encoder_attention_heads, seq_length, head_size])
     query_states = ttnn.reshape(query_states, shape=desired_shape)
     key_states = ttnn.reshape(key_states, shape=desired_shape)
     value_states = ttnn.reshape(value_states, shape=desired_shape)
@@ -121,15 +115,9 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
 
     query_states *= scaling
 
-    proj_shape = ttnn.Shape(
-        [bsz * config.encoder_attention_heads, tgt_len, head_size],
-        [bsz * config.encoder_attention_heads, padded_tgt_len, head_size],
-    )
+    proj_shape = ttnn.Shape([bsz * config.encoder_attention_heads, tgt_len, head_size])
     query_states = ttnn.reshape(query_states, shape=proj_shape)
-    proj_shape = ttnn.Shape(
-        [bsz * config.encoder_attention_heads, key_value_tgt_len, head_size],
-        [bsz * config.encoder_attention_heads, padded_key_value_tgt_len, head_size],
-    )
+    proj_shape = ttnn.Shape([bsz * config.encoder_attention_heads, key_value_tgt_len, head_size])
     key_states = ttnn.reshape(key_states, shape=proj_shape)
     value_states = ttnn.reshape(value_states, shape=proj_shape)
 

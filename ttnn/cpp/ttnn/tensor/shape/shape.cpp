@@ -55,33 +55,38 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shap
 
 }  // namespace tt::tt_metal
 
-#if TTNN_WITH_PYTHON_BINDINGS
-namespace PYBIND11_NAMESPACE {
-namespace detail {
-namespace py = pybind11;
-bool type_caster<ttnn::SimpleShape>::load(handle src, bool) {
-    if (!py::isinstance<py::iterable>(src)) {
-        return false;
-    }
-    ttnn::SmallVector<uint32_t> vec;
-    for (auto item : src.cast<py::iterable>()) {
-        if (!py::isinstance<py::int_>(item)) {
-            return false;
-        }
-        vec.push_back(item.cast<uint32_t>());
-    }
-    value = ttnn::SimpleShape(std::move(vec));
-    return true;
-}
-
-handle type_caster<ttnn::SimpleShape>::cast(
-    const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */) {
-    py::list py_list;
-    for (size_t i = 0; i < src.rank(); i++) {
-        py_list.append(src[i]);
-    }
-    return py_list.release();
-}
-}  // namespace detail
-}  // namespace PYBIND11_NAMESPACE
-#endif
+// #if TTNN_WITH_PYTHON_BINDINGS
+// namespace PYBIND11_NAMESPACE {
+// namespace detail {
+// namespace py = pybind11;
+// bool type_caster<ttnn::SimpleShape>::load(handle src, bool convert) {
+//     if (py::isinstance<py::object>(src)) {
+//         type_caster_base<ttnn::SimpleShape> base;
+//         if (base.load(src, convert)) {
+//             value = *static_cast<ttnn::SimpleShape*>(base.value);
+//             return true;
+//         }
+//     }
+//     if (!py::isinstance<py::iterable>(src)) {
+//         return false;
+//     }
+//     ttnn::SmallVector<uint32_t> vec;
+//     for (auto item : src.cast<py::iterable>()) {
+//         if (!py::isinstance<py::int_>(item)) {
+//             return false;
+//         }
+//         vec.push_back(item.cast<uint32_t>());
+//     }
+//     value = ttnn::SimpleShape(std::move(vec));
+//     return true;
+// }
+//
+// handle type_caster<ttnn::SimpleShape>::cast(
+//     const ttnn::SimpleShape& src, return_value_policy policy, handle parent) {
+//     //py::object py_class = py::module::import("ttnn").attr("Shape");
+//     //return py_class(py::cast(src.view())).release();
+//     return type_caster_base<ttnn::SimpleShape>::cast(src, policy, parent);
+// }
+// }  // namespace detail
+// }  // namespace PYBIND11_NAMESPACE
+// #endif

@@ -33,7 +33,7 @@ def run_test_update_cache_decode(
     x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
 
     xt = ttnn.Tensor(x_pad, input_dtype).to(ttnn.TILE_LAYOUT)
-    xt = ttnn.reshape(xt, ttnn.Shape(input_shape, x_pad.shape))
+    xt = ttnn.reshape(xt, ttnn.Shape(input_shape))
     # Input is sharded
     compute_grid_size = device.compute_with_storage_grid_size()
     num_cores = num_users
