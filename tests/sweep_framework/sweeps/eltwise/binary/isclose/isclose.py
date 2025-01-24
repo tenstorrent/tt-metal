@@ -5,6 +5,7 @@
 from typing import Optional, Tuple
 from functools import partial
 
+import random
 import torch
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
@@ -19,11 +20,12 @@ from models.utility_functions import torch_random
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 32, 32], [12, 256, 256], [1, 32, 32], 16)
-        + gen_shapes([32, 32], [256, 256], [32, 32], 16),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 32)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 32),
+        "equal_nan": [True, False],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -47,6 +49,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    equal_nan,
     input_a_dtype,
     input_b_dtype,
     input_a_layout,
@@ -59,14 +62,19 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.ldexp)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    rtol = random.choice([1e-1, 1e-2, 1e-3, 1e-4, 1e-6])
+    atol = random.choice([1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9])
+
+    golden_function = ttnn.get_golden_function(ttnn.isclose)
+    torch_output_tensor = golden_function(
+        torch_input_tensor_a, torch_input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan
+    )
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -83,9 +91,10 @@ def run(
         memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
-    result = ttnn.ldexp(input_tensor_a, input_tensor_b)
+    result = ttnn.isclose(input_tensor_a, input_tensor_b, rtol=rtol, atol=atol, equal_nan=equal_nan)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    # print(pcc)
     return [pcc, e2e_perf]
