@@ -24,6 +24,50 @@ void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program& program, con
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
+template <typename DType>
+void WriteShard(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    std::vector<DType>& src,
+    const Coordinate& coord,
+    bool blocking = false) {
+    mesh_cq.enqueue_write_shard(mesh_buffer, src.data(), coord, blocking);
+}
+
+template <typename DType>
+void ReadShard(
+    MeshCommandQueue& mesh_cq,
+    std::vector<DType>& dst,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const Coordinate& coord,
+    bool blocking = true) {
+    auto shard = mesh_buffer->get_device_buffer(coord);
+    dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
+    mesh_cq.enqueue_read_shard(dst.data(), mesh_buffer, coord, blocking);
+}
+
+template <typename DType>
+void EnqueueWriteMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    std::vector<DType>& src,
+    bool blocking = false) {
+    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
+}
+
+template <typename DType>
+void EnqueueReadMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::vector<DType>& dst,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    bool blocking = true) {
+    TT_FATAL(
+        mesh_buffer->global_layout() == MeshBufferLayout::SHARDED,
+        "Can only read a Sharded MeshBuffer from a MeshDevice.");
+    dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+}
+
 void Finish(MeshCommandQueue& mesh_cq);
 
 }  // namespace distributed

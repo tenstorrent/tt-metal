@@ -52,26 +52,20 @@ class TtBertBatchDram:
             ).to(device, self.model_config["QA_LINEAR_BIAS_MEMCFG"])
         else:
             weight = pad_weight(torch.transpose(state_dict["qa_outputs.weight"], -2, -1))
-            weight = (
-                ttnn.Tensor(
-                    weight.reshape(-1).tolist(),
-                    weight.shape,
-                    model_config["QA_LINEAR_WEIGHTS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["QA_LINEAR_WEIGHTS_MEMCFG"])
+            weight = ttnn.from_torch(
+                weight,
+                model_config["QA_LINEAR_WEIGHTS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["QA_LINEAR_WEIGHTS_MEMCFG"],
             )
             bias = pad_weight(state_dict["qa_outputs.bias"])
-            bias = (
-                ttnn.Tensor(
-                    bias.reshape(-1).tolist(),
-                    bias.shape,
-                    model_config["QA_LINEAR_BIAS_DTYPE"],
-                    ttnn.ROW_MAJOR_LAYOUT,
-                )
-                .to(ttnn.TILE_LAYOUT)
-                .to(device, model_config["QA_LINEAR_BIAS_MEMCFG"])
+            bias = ttnn.from_torch(
+                bias,
+                model_config["QA_LINEAR_BIAS_DTYPE"],
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=model_config["QA_LINEAR_BIAS_MEMCFG"],
             )
 
         # QA linear

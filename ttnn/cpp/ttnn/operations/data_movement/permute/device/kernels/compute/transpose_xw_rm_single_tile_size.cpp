@@ -55,7 +55,6 @@ void MAIN {
 
         cb_push_back(cb_out, w_block_size);
 
-        cb_wait_front(cb_out, w_block_size);
         pack_untilize_uninit(cb_out);
 
         cb_pop_front(cb_tilize, 1);

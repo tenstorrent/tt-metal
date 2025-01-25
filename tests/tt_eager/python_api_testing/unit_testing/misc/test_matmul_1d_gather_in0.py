@@ -26,6 +26,9 @@ def num_cores_to_rectangle_grid(num_cores, device):
 
     Return None if rectangle grid is not possible.
     """
+    is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
+    if is_mesh_device:
+        device = device.get_device(device.get_device_ids()[0])
     x = device.compute_with_storage_grid_size().x
     while x > 0 and num_cores % x != 0:
         x -= 1
@@ -50,6 +53,13 @@ def get_physical_to_logical_core_mapping(device):
             physical_core = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
             mapping[(physical_core.x, physical_core.y)] = (x, y)
     return mapping
+
+
+def round_up(a, b):
+    """
+    Round up a to the nearest multiple of b
+    """
+    return b * math.ceil(a / b)
 
 
 # physical coords
@@ -144,13 +154,21 @@ def run_multi_core_matmul_1d(
 
     M *= B  # Fuse batch always enabled
 
+    K_per_shard = round_up(math.ceil(K / num_cores), ttnn.TILE_SIZE)
+    K_padded = K_per_shard * num_cores
+    N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+    N_padded = N_per_shard * num_cores
+
     in0_block_h = M // ttnn.TILE_SIZE
     in0_block_w = K // num_cores // ttnn.TILE_SIZE
+    while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+        in0_block_w -= 1
+
     out_block_h = M // ttnn.TILE_SIZE
-    out_block_w = N // num_cores // ttnn.TILE_SIZE
+    out_block_w = N_padded // num_cores // ttnn.TILE_SIZE
 
     num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-    num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+    num_blocks_x = (N_padded // ttnn.TILE_SIZE - 1) // out_block_w + 1
     num_blocks_total = num_blocks_y * num_blocks_x
 
     if num_blocks_total != num_cores:
@@ -214,7 +232,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [M, K // num_cores],
+            [M, K_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -224,7 +242,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [K, N // num_cores],
+            [K_padded, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -234,7 +252,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [M, N // num_cores],
+            [M, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -308,6 +326,79 @@ def run_multi_core_matmul_1d(
 
     # Check program cache
     assert device.num_program_cache_entries() == 1  # Only 1 op
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    [
+        (1, 32, 2048, 1280, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, (8, 3)),
+        (1, 32, 1280, 2048, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, True, (8, 3)),
+        (1, 32, 2048, 3584, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, False, (8, 3)),
+        (1, 32, 2048, 3584, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, False, (8, 3)),
+        (1, 32, 3584, 2048, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True, False, (8, 3)),
+        (1, 32, 96, 64, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (2, 1)),
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_arbitrary_cores, hop_grid",
+    [
+        (False, None),
+        (False, [(3, 6)]),
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        1,
+    ],
+)
+def test_multi_core_matmul_1d_pad_wh(
+    device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    activation,
+    grid,
+    hop_grid,
+    use_arbitrary_cores,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        activation,
+        grid,
+        use_arbitrary_cores,
+        num_iters,
+        hop_grid=hop_grid,
+    )
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -444,7 +535,6 @@ def test_multi_core_matmul_1d_wh(
     "num_iters",
     [1, 3],
 )
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_multi_core_matmul_1d_ring_hop_wh(
     device,
     in0_dtype,

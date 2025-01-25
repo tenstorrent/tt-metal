@@ -228,8 +228,20 @@ void Device::initialize_cluster() {
 
 void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
+
+    auto sub_devices = {SubDevice(std::array{
+        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
+        CoreRangeSet(std::move(active_eth_core_ranges))})};
+
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap));
+        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
@@ -250,25 +262,28 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .dram_bank_offsets = {},
          .dram_unreserved_base =
              hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
+         .l1_unreserved_base = align(
+             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+             hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
+         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
          .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
+         .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.alignment == 0,
-        "Reserved size must be aligned to allocator alignment {}",
-        config.alignment);
+        config.l1_small_size % config.l1_alignment == 0,
+        "Reserved size must be aligned to L1 allocator alignment {}",
+        config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -388,8 +403,15 @@ void Device::initialize_build() {
                             break;
                         }
                         case HalProgrammableCoreType::ACTIVE_ETH: {
+                            // Cooperative means active erisc FW needs to context switch to base FW
+                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0;
                             build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
+                                this->build_env_,
+                                JitBuiltStateConfig{
+                                    .processor_id = processor_class,
+                                    .is_fw = is_fw,
+                                    .dispatch_message_addr = dispatch_message_addr,
+                                    .is_cooperative = is_cooperative});
                             break;
                         }
                         case HalProgrammableCoreType::IDLE_ETH: {
@@ -730,6 +752,8 @@ void Device::initialize_and_launch_firmware() {
 
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
+    core_info->worker_grid_size_x = this->logical_grid_size().x;  // Grid size as virtual coords see it (workers only)
+    core_info->worker_grid_size_y = this->logical_grid_size().y;
 
     // Download to worker cores
     log_debug("Initializing firmware");
@@ -931,11 +955,11 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
-    this->sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
-    hw_command_queues_.resize(num_hw_cqs());
+    sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    hw_command_queues_.reserve(num_hw_cqs());
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_[cq_id] = std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc);
-        // Need to do this since CommandQueue constructor is private
+        hw_command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
         sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }
@@ -978,10 +1002,10 @@ void Device::init_command_queue_device() {
 void Device::initialize_synchronous_sw_cmd_queue() {
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
+    sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        // Need to do this since CommandQueue constructor is private
-        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
-        sw_command_queues_[cq_id]->set_mode(CommandQueue::CommandQueueMode::PASSTHROUGH);
+        sw_command_queues_.push_back(
+            std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
     }
 }
 
@@ -1031,6 +1055,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 }
 
 void Device::push_work(std::function<void()> work, bool blocking) {
+    if (not this->initialized_) {
+        log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+        return;
+    }
     this->work_executor_.push_work(std::move(work), blocking);
 }
 
@@ -1048,7 +1076,7 @@ bool Device::close() {
     }
 
     this->work_executor_.reset();
-    tt_metal::detail::DumpDeviceProfileResults(this, true);
+    tt_metal::detail::DumpDeviceProfileResults(this, ProfilerDumpState::LAST_CLOSE_DEVICE);
 
     sub_device_manager_tracker_.reset(nullptr);
 
@@ -1377,14 +1405,14 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
     return allocator::get_statistics(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment() const {
+uint32_t Device::get_allocator_alignment(const BufferType &buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.alignment;
+    return allocator::get_alignment(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
+uint32_t Device::get_allocator_alignment(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.alignment;
+    return allocator::get_alignment(*allocator, buffer_type);
 }
 
 size_t Device::get_l1_small_size() const {
@@ -1433,39 +1461,11 @@ void Device::deallocate_buffers(SubDeviceId sub_device_id) {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-    auto global_bank_id =
-        this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    // Sub-device banks are currently all compute banks
-    // Since banks are lockstep in an allocator it doesn't matter which core is used
-    uint32_t sub_device_bank_id = 0;
-    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-    for (const auto& sub_device_id : sub_device_ids) {
-        const auto& allocator =
-            sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
-        if (allocator) {
-            auto found_addr = allocator::lowest_occupied_l1_address(*allocator, sub_device_bank_id);
-            if (found_addr.has_value()) {
-                lowest_addr = std::min(lowest_addr, *found_addr);
-            }
-        }
-    }
-    // sub-device allocators sit below global allocator. If an address is found for a sub-device, no need to check the global allocator
-    if (lowest_addr != std::numeric_limits<DeviceAddr>::max()) {
-        return lowest_addr;
-    } else {
-        const auto &allocator = this->get_initialized_allocator();
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        auto global_bank_id =
-            this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-        return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
-    }
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
 std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
@@ -1523,6 +1523,10 @@ bool Device::can_use_passthrough_scheduling() const {
 }
 
 void Device::synchronize() {
+    if (not this->initialized_) {
+        log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
+        return;
+    }
     this->work_executor_.synchronize();
 }
 
@@ -1716,11 +1720,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
     }
 }
 
-LaunchMessageRingBufferState& Device::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_worker_launch_message_buffer_state(
-        sub_device_id);
-}
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     return this->hw_command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
 }
@@ -1744,10 +1743,6 @@ SubDeviceManagerId Device::create_sub_device_manager(tt::stl::Span<const SubDevi
 
 std::tuple<SubDeviceManagerId, SubDeviceId> Device::create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     return sub_device_manager_tracker_->create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-}
-
-std::optional<SubDeviceId> Device::get_fabric_sub_device_id() const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->fabric_sub_device_id();
 }
 
 void Device::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
@@ -1895,10 +1890,7 @@ bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
 void v1::DeallocateBuffers(IDevice* device) { device->deallocate_buffers(); }
 
-void v1::DumpDeviceProfileResults(IDevice* device, const CoreRangeSet &worker_cores, bool last_dump) {
-    auto worker_cores_vec = corerange_to_cores(worker_cores);
-    detail::DumpDeviceProfileResults(device, worker_cores_vec, last_dump);
-}
+void v1::DumpDeviceProfileResults(IDevice* device) { detail::DumpDeviceProfileResults(device); }
 
 ARCH v1::GetArch(IDevice* device) { return device->arch(); }
 

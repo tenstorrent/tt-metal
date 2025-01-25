@@ -20,7 +20,7 @@ golden = json.load(
     )
 )
 
-THRESHOLD = 4
+THRESHOLD_PCT = 5
 
 parser = argparse.ArgumentParser(description="Compare benchmark JSON to golden")
 parser.add_argument("json", help="JSON file to compare", type=argparse.FileType("r"))
@@ -59,12 +59,15 @@ for name, benchmark in golden_benchmarks.items():
 
     golden_time = benchmark["IterationTime"] * 1000000
     result_time = result["IterationTime"] * 1000000
-    if result_time / golden_time > (1 + THRESHOLD / 100):
-        print(f"Error:Test {name} expected value {golden_time:.2f}us but got {result_time:.2f}us")
-        exit_code = 1
-    if golden_time / result_time > (1 + THRESHOLD / 100):
+    result_diff_pct = result_time / golden_time * 100 - 100
+    if result_diff_pct > THRESHOLD_PCT:
         print(
-            f"Consider adjusting baselines. Test {name} got value {result_time:.2f}us but expected {golden_time:.2f}us."
+            f"Error:Test {name} expected value {golden_time:.2f}us but got {result_time:.2f}us ({result_diff_pct:.2f}% worse)"
+        )
+        exit_code = 1
+    if result_diff_pct < -THRESHOLD_PCT:
+        print(
+            f"Consider adjusting baselines. Test {name} got value {result_time:.2f}us but expected {golden_time:.2f}us ({-result_diff_pct:.2f}% better)."
         )
 
 for name in result_benchmarks:

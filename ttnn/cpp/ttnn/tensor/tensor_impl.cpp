@@ -50,80 +50,6 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-void validate_sharded_buffer_allocation(
-    const ttnn::SimpleShape& shape,
-    Layout layout,
-    DataType data_type,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const Tile& tile) {
-    const auto& shard_spec = memory_config.shard_spec.value();
-    const auto& shard_shape = shard_spec.shape;
-
-    uint32_t num_cores = shard_spec.num_cores();
-
-    uint32_t total_height = shape.volume() / shape[-1];
-    uint32_t total_width = shape[-1];
-    if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_ASSERT(
-            total_width == shard_shape[1],
-            "Shard shape {} does not divide tensor shape {} correctly according to sharding scheme",
-            shard_shape[1],
-            total_width);
-        uint32_t num_shards = div_up(total_height, shard_shape[0]);
-        TT_ASSERT(num_shards <= num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_ASSERT(
-            total_height == shard_shape[0],
-            "Shard shape does not divide tensor shape correctly according to sharding scheme");
-        uint32_t num_shards = div_up(total_width, shard_shape[1]);
-        TT_ASSERT(num_shards <= num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_ASSERT(
-            shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
-        uint32_t num_shards_along_height = div_up(total_height, shard_shape[0]);
-        uint32_t num_shards_along_width = div_up(total_width, shard_shape[1]);
-
-        // Additionally check that number of cores along height and width matches shard grid
-        const CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
-        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-            TT_ASSERT(
-                num_shards_along_height <= shard_grid.y,
-                "Number of shards along height {} must match number of rows {} for row major orientation!",
-                num_shards_along_height,
-                shard_grid.y);
-            TT_ASSERT(
-                num_shards_along_width <= shard_grid.x,
-                "Number of shards along width {} must match number of columns {} for row major orientation!",
-                num_shards_along_width,
-                shard_grid.x);
-        } else {
-            TT_ASSERT(
-                num_shards_along_height <= shard_grid.x,
-                "Number of shards along height {} must match number of columns {} for column major orientation!",
-                num_shards_along_height,
-                shard_grid.x);
-            TT_ASSERT(
-                num_shards_along_width <= shard_grid.y,
-                "Number of shards along width {} must match number of rows {} for column major orientation!",
-                num_shards_along_width,
-                shard_grid.y);
-        }
-    } else {
-        TT_THROW("Unsupported sharding scheme");
-    }
-    if (layout == Layout::TILE) {
-        auto tile_shape = tile.get_tile_shape();
-        TT_FATAL(
-            (shard_shape[0] % tile_shape[0] == 0 && shard_shape[1] % tile_shape[1] == 0),
-            "Shard shape {} must be tile {} sized!",
-            shard_shape,
-            tile_shape);
-    } else if (layout == Layout::ROW_MAJOR) {
-        TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0, "Error");
-    }
-}
-
 DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
@@ -187,10 +113,17 @@ Tensor pad_bfloat8_b(
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -218,10 +151,17 @@ Tensor unpad_bfloat8_b(
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .unpad(output_tensor_start, output_tensor_end);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -230,10 +170,14 @@ Tensor unpad_bfloat8_b(
     auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-        float_tensor.get_legacy_shape(),
-        DataType::BFLOAT8_B,
-        tensor.get_layout(),
-        tile);
+        TensorSpec(
+            float_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT8_B,
+                PageConfig(tensor.get_layout(), tile),
+                MemoryConfig{},
+                float_tensor.get_logical_shape(),
+                float_tensor.get_padded_shape())));
 }
 
 Tensor pad_bfloat4_b(
@@ -249,10 +193,17 @@ Tensor pad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_logical_shape())))
+                            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -280,10 +231,17 @@ Tensor unpad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .unpad(output_tensor_start, output_tensor_end);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -292,10 +250,14 @@ Tensor unpad_bfloat4_b(
     auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-        float_tensor.get_legacy_shape(),
-        DataType::BFLOAT4_B,
-        tensor.get_layout(),
-        tile);
+        TensorSpec(
+            float_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT4_B,
+                PageConfig(tensor.get_layout(), tile),
+                MemoryConfig{},
+                float_tensor.get_logical_shape(),
+                float_tensor.get_padded_shape())));
 }
 
 // ======================================================================================
@@ -721,10 +683,11 @@ Tensor to_device<bfloat8_b>(
 // ======================================================================================
 //     Helpers for converting between logical <-> physical data with full tensor spec
 // ======================================================================================
+namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 // TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
-std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
+std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
     if (tensor_spec.memory_config().is_sharded()) {
         return {
             tensor_spec.tensor_layout().get_logical_shard_shape(),
@@ -732,13 +695,13 @@ std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tens
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
-    Size logical_shard_shape{logical_shape[-2], logical_shape[-1]};
+    Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
     auto physical_shard_shape = logical_shard_shape;
     if (tensor_spec.layout() == Layout::TILE) {
         const auto& tile = tensor_spec.tile();
         auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
         auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
-        physical_shard_shape = Size{physical_shard_height, physical_shard_width};
+        physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
     }
     return {logical_shard_shape, physical_shard_shape};
 }
@@ -746,14 +709,14 @@ std::array<Size, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tens
 using LogicalPhysicalIdxPairs = std::vector<std::pair<size_t, size_t>>;
 using LogicalPhysicalMapping = std::pair<LogicalPhysicalIdxPairs, size_t>;
 std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
-    const Size& logical_2D_shape,
-    const Size& logical_shard_shape,
-    const Size& physical_shard_shape,
+    const Shape2D& logical_2d_shape,
+    const Shape2D& logical_shard_shape,
+    const Shape2D& physical_shard_shape,
     const size_t physical_stride) {
-    const auto logical_stride = logical_2D_shape.width();
+    const auto logical_stride = logical_2d_shape.width();
 
     const auto [num_shards_height, last_shard_height, num_shards_width, last_shard_width] =
-        tt::tt_metal::compute_shard_division_spec(logical_2D_shape, logical_shard_shape);
+        tt::tt_metal::compute_shard_division_spec(logical_2d_shape, logical_shard_shape);
 
     std::vector<LogicalPhysicalMapping> logical_physical_mapping(num_shards_height * num_shards_width);
 
@@ -779,9 +742,10 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
     return logical_physical_mapping;
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 template <typename T>
-std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const TensorSpec& tensor_spec) {
+std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
@@ -790,94 +754,104 @@ std::vector<T> encode_tensor_data(const std::vector<T>& logical_data, const Tens
         logical_shape);
 
     const auto& physical_shape = tensor_spec.physical_shape();
-    auto [logical_shard_shape, physical_shard_shape] =
-        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-    std::vector<T> physical_data(physical_shape.height() * physical_shape.width(), 0);
+    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& logical_data) {
+        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
 
-    auto logical_2D_shape = tt::tt_metal::get_2d_shape(logical_shape);
-    size_t physical_stride = physical_shape.width();
+        if (logical_2d_shape != physical_shape) {
+            auto [logical_shard_shape, physical_shard_shape] =
+                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
 
-    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+            auto row_major_physical_data = std::vector<T>(physical_shape.height() * physical_shape.width(), 0);
 
-    for (const auto& [indices, cols] : logical_physical_mapping) {
-        for (const auto [logical_idx_start, physical_idx_start] : indices) {
-            for (size_t col = 0; col < cols; col++) {
-                physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+            size_t physical_stride = physical_shape.width();
+
+            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+            for (const auto& [indices, cols] : logical_physical_mapping) {
+                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                    for (size_t col = 0; col < cols; col++) {
+                        row_major_physical_data[physical_idx_start + col] = logical_data[logical_idx_start + col];
+                    }
+                }
             }
+            return row_major_physical_data;
+        } else {
+            return logical_data;
         }
-    }
+    }(std::move(logical_data));
 
     TT_FATAL(
-        physical_data.size() == physical_shape.height() * physical_shape.width(),
+        row_major_physical_data.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
-        physical_data.size(),
+        row_major_physical_data.size(),
         physical_shape);
 
     if (tensor_spec.layout() == Layout::TILE) {
-        // TODO: Fix convert_layout_row_major_to_tile to take in vector instead of buffer?
         return tensor_impl::convert_layout_row_major_to_tile(
-            physical_shape, tensor_spec.tile(), owned_buffer::create(std::move(physical_data)));
+            physical_shape, tensor_spec.tile(), row_major_physical_data);
     }
-    return physical_data;
+    return row_major_physical_data;
 }
 
 template std::vector<bfloat16> encode_tensor_data<bfloat16>(
-    const std::vector<bfloat16>& logical_data, const TensorSpec& tensor_spec);
-template std::vector<float> encode_tensor_data<float>(
-    const std::vector<float>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<bfloat16>&& logical_data, const TensorSpec& tensor_spec);
+template std::vector<float> encode_tensor_data<float>(std::vector<float>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> encode_tensor_data<int32_t>(
-    const std::vector<int32_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<int32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> encode_tensor_data<uint32_t>(
-    const std::vector<uint32_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint32_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> encode_tensor_data<uint16_t>(
-    const std::vector<uint16_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint16_t>&& logical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> encode_tensor_data<uint8_t>(
-    const std::vector<uint8_t>& logical_data, const TensorSpec& tensor_spec);
+    std::vector<uint8_t>&& logical_data, const TensorSpec& tensor_spec);
 
 template <typename T>
-std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const TensorSpec& tensor_spec) {
-    auto physical_shape = tensor_spec.physical_shape();
+std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+    const auto& physical_shape = tensor_spec.physical_shape();
     TT_FATAL(
         physical_data.size() == physical_shape.height() * physical_shape.width(),
         "Physical data size {} should be same as volume indicated by physical shape {}",
         physical_data.size(),
         physical_shape);
 
-    tt::stl::Span<const T> row_major_physical_data;
-    std::vector<T> converted_physical_data;
-    if (tensor_spec.layout() == Layout::TILE) {
-        // TODO: Fix convert_layout_tile_to_row_major to take in vector instead of buffer?
-        converted_physical_data = tensor_impl::convert_layout_tile_to_row_major(
-            physical_shape,
-            tensor_spec.tile(),
-            owned_buffer::Buffer<T>{std::make_shared<std::vector<T>>(physical_data)});
-        row_major_physical_data = tt::stl::Span<const T>(converted_physical_data);
-    } else {
-        row_major_physical_data = tt::stl::Span<const T>(physical_data);
-    }
+    auto row_major_physical_data = [&tensor_spec, &physical_shape](auto&& physical_data) {
+        if (tensor_spec.layout() == Layout::TILE) {
+            return tensor_impl::convert_layout_tile_to_row_major(physical_shape, tensor_spec.tile(), physical_data);
+        } else {
+            return physical_data;
+        }
+    }(std::move(physical_data));
+
+    auto logical_data = [&tensor_spec, &physical_shape](auto&& row_major_physical_data) {
+        const auto& logical_2d_shape = tensor_spec.logical_2d_shape();
+
+        if (logical_2d_shape != physical_shape) {
+            auto [logical_shard_shape, physical_shard_shape] =
+                CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
+
+            auto logical_data = std::vector<T>(logical_2d_shape.height() * logical_2d_shape.width(), 0);
+
+            size_t physical_stride = physical_shape.width();
+
+            const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
+                logical_2d_shape, logical_shard_shape, physical_shard_shape, physical_stride);
+
+            for (const auto& [indices, cols] : logical_physical_mapping) {
+                for (const auto [logical_idx_start, physical_idx_start] : indices) {
+                    for (size_t col = 0; col < cols; col++) {
+                        logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
+                    }
+                }
+            }
+            return logical_data;
+        } else {
+            return row_major_physical_data;
+        }
+    }(std::move(row_major_physical_data));
 
     const auto& logical_shape = tensor_spec.logical_shape();
-    auto [logical_shard_shape, physical_shard_shape] =
-        CMAKE_UNIQUE_NAMESPACE::get_logical_and_physical_shard_shapes(tensor_spec);
-
-    auto logical_2D_shape = tt::tt_metal::get_2d_shape(logical_shape);
-    std::vector<T> logical_data(logical_2D_shape.height() * logical_2D_shape.width(), 0);
-
-    size_t physical_stride = physical_shape.width();
-
-    const auto logical_physical_mapping = CMAKE_UNIQUE_NAMESPACE::compute_logical_to_physical_shards_mapping(
-        logical_2D_shape, logical_shard_shape, physical_shard_shape, physical_stride);
-
-    for (const auto& [indices, cols] : logical_physical_mapping) {
-        for (const auto [logical_idx_start, physical_idx_start] : indices) {
-            for (size_t col = 0; col < cols; col++) {
-                logical_data[logical_idx_start + col] = row_major_physical_data[physical_idx_start + col];
-            }
-        }
-    }
-
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
         "Logical data size {} should be same as volume indicated by logical shape {}",
@@ -888,17 +862,17 @@ std::vector<T> decode_tensor_data(const std::vector<T>& physical_data, const Ten
 }
 
 template std::vector<bfloat16> decode_tensor_data<bfloat16>(
-    const std::vector<bfloat16>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<bfloat16>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<float> decode_tensor_data<float>(
-    const std::vector<float>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<float>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<int32_t> decode_tensor_data<int32_t>(
-    const std::vector<int32_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<int32_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint32_t> decode_tensor_data<uint32_t>(
-    const std::vector<uint32_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint32_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint16_t> decode_tensor_data<uint16_t>(
-    const std::vector<uint16_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint16_t>&& physical_data, const TensorSpec& tensor_spec);
 template std::vector<uint8_t> decode_tensor_data<uint8_t>(
-    const std::vector<uint8_t>& physical_data, const TensorSpec& tensor_spec);
+    std::vector<uint8_t>&& physical_data, const TensorSpec& tensor_spec);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -1182,7 +1156,7 @@ Tensor pad<bfloat4_b>(
 template <typename T>
 Tensor unpad(
     const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
-    const auto input_shape = tensor.get_legacy_shape();
+    const auto input_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
@@ -1242,7 +1216,7 @@ Tensor unpad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        output_shape,
+        ttnn::SimpleShape(output_shape),
         tensor.get_dtype(),
         tensor.get_layout(),
         tensor.get_tensor_spec().tile());
@@ -1281,8 +1255,7 @@ template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
-    std::array<uint32_t, 4> shard_shape_array = {1, 1, buffer_shard_shape[0], buffer_shard_shape[1]};
-    tt::tt_metal::LegacyShape shard_shape(shard_shape_array);
+    ttnn::SimpleShape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);
 

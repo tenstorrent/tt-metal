@@ -599,7 +599,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
-        // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+        // TT_ASSERT(input_tensor.get_padded_shape() == input_tensor.get_shape());
         const auto& input_shape = input_tensor.get_logical_shape();
         uint32_t tensor_height = input_shape[0] * input_shape[1] * input_shape[2];
         uint32_t round_up_size = tt::constants::TILE_HEIGHT;
@@ -742,13 +742,13 @@ void validate_weight_and_bias_tensors(
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_logical_shape().rank() == 4);
     // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_padded_shape());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_logical_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_padded_shape());
     }
 }
 
@@ -1059,7 +1059,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, 16) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1162,7 +1162,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, 16) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

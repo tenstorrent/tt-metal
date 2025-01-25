@@ -23,7 +23,7 @@ namespace conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    auto in_w_shape = conv_weight_tensor.get_legacy_shape();
+    auto in_w_shape = conv_weight_tensor.get_padded_shape();
     auto dtype = conv_weight_tensor.dtype();
     // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
     // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}

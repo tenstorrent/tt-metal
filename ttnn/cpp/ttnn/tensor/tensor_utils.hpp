@@ -127,11 +127,6 @@ inline uint32_t get_batch_size(const T& shape) {
     return result;
 }
 
-// Flattens input shape into height and width
-// - Height is accumulated over all dims except last
-// - Width is equal to the last dim
-Size get_2d_shape(const ttnn::SimpleShape& shape);
-
 // Useful information about how a shard_shape cuts a 2D shape
 // - num_shards_height: Number of shards along the height (including partial last shard, if any)
 // - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
@@ -145,7 +140,7 @@ struct ShardDivisionSpec {
 };
 
 // Returns ShardDivisionSpecs given 2D shape and shard_shape
-ShardDivisionSpec compute_shard_division_spec(const Size& shape, const Size& shard_shape);
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
 
 }  // namespace tt_metal
 }  // namespace tt

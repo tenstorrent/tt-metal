@@ -166,7 +166,9 @@ def test_to_layout_6D(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]])
+@pytest.mark.parametrize(
+    "shape", [[3, 1370, 1, 1, 1280], [3, 50, 1, 1, 768], [3, 50, 1, 1, 1024], [3, 197, 1, 1, 768], [3, 197, 1, 1, 1024]]
+)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_to_layout_nd_hangs(shape, input_layout, output_layout, device):
@@ -229,3 +231,16 @@ def test_to_layout_sharded(dtype, device, use_program_cache):
     output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
 
     assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("batch_size", [9, 32])
+@pytest.mark.parametrize("sentence_size", [32, 256])
+def test_int_untilize(device, batch_size, sentence_size):
+    torch_input_tensor = torch.randint(0, 10, (batch_size, sentence_size), dtype=torch.int16)
+    ttnn_input = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT)
+
+    output_tt = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
+    output_torch = ttnn.to_torch(output_tt)
+
+    assert_with_pcc(torch_input_tensor, output_torch)

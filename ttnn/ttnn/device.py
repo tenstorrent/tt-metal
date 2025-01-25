@@ -87,8 +87,8 @@ CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
 
 
-def DumpDeviceProfiler(device, last_dump: bool = False):
-    ttnn._ttnn.device.DumpDeviceProfiler(device, last_dump)
+def DumpDeviceProfiler(device):
+    ttnn._ttnn.device.DumpDeviceProfiler(device)
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
@@ -98,7 +98,6 @@ EnableCompilationReports = ttnn._ttnn.device.EnableCompilationReports
 DisableCompilationReports = ttnn._ttnn.device.DisableCompilationReports
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
-SetLazyCommandQueueMode = ttnn._ttnn.device.SetLazyCommandQueueMode
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 
 

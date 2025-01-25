@@ -330,7 +330,8 @@ struct Empty {
         const Layout& layout,
         ttnn::AnyDevice device,
         const MemoryConfig& memory_config) {
-        return allocate_tensor_on_devices(shape, dtype, layout, device.get_devices(), memory_config);
+        return allocate_tensor_on_devices(
+            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device.get_devices());
     }
 };
 
@@ -346,7 +347,9 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.get_layout());
         DataType dtype_value = dtype.value_or(tensor.get_dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
-        return allocate_tensor_on_devices(tensor.get_logical_shape(), dtype_value, layout_value, devices, mem_cfg);
+        return allocate_tensor_on_devices(
+            TensorSpec(tensor.get_logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
+            devices);
     }
 };
 

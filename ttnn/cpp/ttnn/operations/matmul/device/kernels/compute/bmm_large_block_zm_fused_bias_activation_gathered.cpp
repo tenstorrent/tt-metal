@@ -130,10 +130,7 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
 }
 
 void MAIN {
-    // Runtime args
-    uint32_t rt_args_idx = 0;
-    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
-
+    // Compile time args
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
     constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(1);  // outer row block size (in inner row blocks)
     constexpr uint32_t in0_block_num_tiles =
@@ -153,6 +150,13 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
+    constexpr uint32_t ring_size = num_blocks;
+
+    // Runtime args
+    uint32_t rt_args_idx = 0;
+    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+    rt_args_idx += ring_size;
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -216,6 +220,9 @@ void MAIN {
         cb_pop_front(sync_cb2, 1);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
+            const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
+            uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
+
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
@@ -251,7 +258,7 @@ void MAIN {
 #ifdef ENABLE_GLOBAL_CB
                 int in1_index_subblock_offset = 0;
 #else
-                int in1_index_subblock_offset = in1_block_num_tiles * ((ring_idx + block) % num_blocks);
+                int in1_index_subblock_offset = in1_block_num_tiles * (curr_ring_idx);
 #endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
@@ -273,7 +280,7 @@ void MAIN {
                     uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                     // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
-                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+                    for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
@@ -306,13 +313,6 @@ void MAIN {
                         // Pack out to output buffer
                         cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
                         tile_regs_wait();
-
-#ifdef ENABLE_GLOBAL_CB
-                        // Release in1
-                        cb_reserve_back(sync_cb, 1);
-                        cb_push_back(sync_cb, 1);
-                        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
-#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -382,6 +382,13 @@ void MAIN {
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
 #endif
         }
+
+#ifdef ENABLE_GLOBAL_CB
+        // Release in1
+        cb_reserve_back(sync_cb, 1);
+        cb_push_back(sync_cb, 1);
+        cb_pop_front(in1_cb_id, in1_block_num_tiles * num_blocks);
+#endif
 
         if constexpr (batch > 1) {
             // reconfigure init for matmul

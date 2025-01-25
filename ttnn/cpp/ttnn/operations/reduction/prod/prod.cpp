@@ -36,8 +36,8 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     auto formatted_input_tensor = input_a;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_padded_shape(), false, false, true, true);
-        auto out_shape = input_a.get_legacy_shape();
-        out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
+        auto out_shape = input_a.get_padded_shape();
+        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -52,8 +52,8 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_padded_shape(), false, false, true, true);
-        auto out_shape = temp.get_legacy_shape();
-        out_shape = {out_shape[0], out_shape[1], out_shape[2], out_shape[3]};
+        auto out_shape = temp.get_padded_shape();
+        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -61,7 +61,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     }
     // Apply prod
     ttnn::SmallVector<int64_t> dimension = {(dim == 1 || dim == -3) ? 1 : 0};
-    const auto input_shape = formatted_input_tensor.get_shape();
+    const auto& input_shape = formatted_input_tensor.get_logical_shape();
     std::array<uint32_t, 4> required = {
         ((dim == 1 || dim == -3) ? input_shape[0] : 1),
         ((dim == 1 || dim == -3) ? 1 : input_shape[1]),
@@ -90,7 +90,7 @@ Tensor ProdOperation::invoke(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const int size = static_cast<int>(input_a.get_shape().size());
+    const int size = static_cast<int>(input_a.get_logical_shape().rank());
     TT_FATAL(
         size && dim >= -size && dim <= size - 1,
         "Dimension out of range (expected to be in range of [-{}, {}]",
@@ -103,7 +103,7 @@ Tensor ProdOperation::invoke(
 
     // FIXME: all the prod code is based on 4D tensors, so we need to convert the input tensor to 4D.
     // TODO: We need to handle the case where the input tensor is not 4D.
-    const auto old_rank = input_a.get_shape().rank();
+    const auto old_rank = input_a.get_logical_shape().rank();
     auto input_tensor_4d = ttnn::unsqueeze_to_4D(input_a);
 
     // update the dim because we unsqueezed input to 4d
@@ -129,7 +129,7 @@ Tensor ProdOperation::invoke(
     } else if (dim == 2 || dim == -2) {
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
-        const auto input_shape = input_tensor_4d.get_shape();
+        const auto& input_shape = input_tensor_4d.get_logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
         result = ttnn::squeeze_from_4D(
@@ -139,7 +139,7 @@ Tensor ProdOperation::invoke(
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
         Tensor required = ttnn::permute(result, after_permute_dims, output_mem_config);
         // unpad
-        const auto input_shape = input_tensor_4d.get_shape();
+        const auto& input_shape = input_tensor_4d.get_logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
         Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);

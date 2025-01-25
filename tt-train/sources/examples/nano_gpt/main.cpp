@@ -11,6 +11,8 @@
 #include <wandbcpp.hpp>
 
 #include "autograd/tensor.hpp"
+#include "core/clip_grad_norm.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -329,7 +331,8 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-
+    bool use_clip_grad_norm = false;
+    float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -352,6 +355,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+    config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
+    config.clip_grad_norm_max_norm =
+        training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
@@ -416,6 +422,8 @@ int main(int argc, char **argv) {
                  ? "trainable"
                  : "fixed"},
             {"scheduler_type", config.scheduler_type},
+            {"using_clip_grad_norm", config.use_clip_grad_norm},
+            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
         });
     }
 
@@ -530,8 +538,8 @@ int main(int argc, char **argv) {
 
                 auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
                     data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
-                auto targets_tensor = ttml::autograd::create_tensor(
-                    ttml::core::from_vector<int32_t, DataType::INT32>(targets, {batch_size * sequence_length}, device));
+                auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
+                    targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
@@ -624,8 +632,15 @@ int main(int argc, char **argv) {
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
-            auto samples = features->get_value().get_shape()[0];
+            auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
+
+            // synchronize gradients for multi-device case, no-op if single device
+            auto parameters = model->parameters();
+            ttml::core::distributed::synchronize_parameters(parameters);
+            if (config.use_clip_grad_norm) {
+                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+            }
 
             if (gradient_accumulator_helper.should_step()) {
                 optimizer->step();

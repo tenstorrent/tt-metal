@@ -31,8 +31,6 @@ Note the current compatability matrix:
 ```sh
 sudo ./install_dependencies.sh
 ```
-- Note: `CMake 3.16` is the targetted required version of `CMake` as it aligns with the default from `Ubuntu 20.04`. Some advanced build configurations like unity builds require `CMake 3.20`.
-  - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
 ### Step 3. Install and start using TT-NN and TT-Metalium!
@@ -124,16 +122,12 @@ sudo cpupower frequency-set -g performance
 
 #### Option 3: From Docker Release Image
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page for
-the particular Tenstorrent card architecture that you have installed on your
-system. (ie. Grayskull, Wormhole, etc)
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
 ```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc
-docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc bash
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc bash
 ```
-where `arch_name` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
-depending on your Tenstorrent card type.
 
 When inside of the container,
 ```sh
