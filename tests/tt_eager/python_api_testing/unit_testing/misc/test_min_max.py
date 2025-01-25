@@ -53,8 +53,6 @@ def test_min_max_for_dim_hw(device, use_program_cache, shape_dim, kind, layout):
     if kind == "max":
         value = x.max()
     elif kind == "min":
-        if N * C % 32 != 0:
-            pytest.skip("global min with Tensor dimension N*C not multiple of 32 is not supported at this time.")
         value = x.min()
     elif kind == "mean":
         value = x.mean()
