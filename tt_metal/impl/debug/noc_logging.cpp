@@ -40,11 +40,11 @@ void PrintNocData(noc_data_t noc_data, const string& file_name) {
 }
 
 void DumpCoreNocData(IDevice* device, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
-    CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
     for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
-        uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
-        auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, addr, DPRINT_BUFFER_SIZE);
+        uint64_t addr = GetDprintBufAddr(device, virtual_core, risc_id);
+        auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, addr, DPRINT_BUFFER_SIZE);
         DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         uint32_t* data = reinterpret_cast<uint32_t*>(l->data);
 
@@ -99,11 +99,11 @@ void ClearNocData(IDevice* device) {
 
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (const CoreDescriptor& logical_core : all_cores) {
-        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+        CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
-            uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
+            uint64_t addr = GetDprintBufAddr(device, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
-            tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, addr);
+            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, initbuf, addr);
         }
     }
 }
