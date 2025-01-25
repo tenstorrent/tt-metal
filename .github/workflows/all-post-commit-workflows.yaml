@@ -76,6 +76,7 @@ jobs:
     with:
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      coverage: ${{ inputs.coverage }}
   build-artifact-profiler:
     needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
