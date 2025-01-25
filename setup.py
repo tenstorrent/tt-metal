@@ -178,6 +178,8 @@ packages = [
     "ttnn",
     "ttnn.cpp",
     "ttnn.distributed",
+    "ttnn.experimental_loader",
+    "ttnn.operations",
     "tracy",
 ]
 
