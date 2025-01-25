@@ -21,12 +21,7 @@
 #include <kernel_includes.hpp>
 #include <stdint.h>
 
-extern uint32_t __kernel_init_local_l1_base[];
-extern uint32_t __fw_export_end_text[];
-
 void kernel_launch(uint32_t kernel_base_addr) {
-    DeviceZoneScopedMainChildN("ACTIVE-ERISC-KERNEL");
-
     extern uint32_t __kernel_init_local_l1_base[];
     extern uint32_t __fw_export_end_text[];
     do_crt1((uint32_t tt_l1_ptr*)(kernel_base_addr + (uint32_t)__kernel_init_local_l1_base -
@@ -34,5 +29,19 @@ void kernel_launch(uint32_t kernel_base_addr) {
 
     noc_local_state_init(NOC_INDEX);
 
-    kernel_main();
+    {
+        DeviceZoneScopedMainChildN("ACTIVE-ERISC-KERNEL");
+        kernel_main();
+        if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
+            WAYPOINT("NKFW");
+            // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
+            // NOC interface is in a known idle state for the next kernel.
+            ASSERT(ncrisc_noc_reads_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_writes_sent(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_writes_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX));
+            ASSERT(ncrisc_noc_posted_writes_sent(NOC_INDEX));
+            WAYPOINT("NKFD");
+        }
+    }
 }
