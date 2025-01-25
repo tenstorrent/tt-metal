@@ -174,21 +174,21 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     // Intermediate CBs for handling untilizing, copying rows, and tilizing to output CB
     uint32_t interm_cb_num_tiles =
         2 * intermediate_num_tiles;  // TODO: Generalize; double buffering should help when we are not reader bound
-    uint32_t cb_intermed0_index = tt::CBIndex::c_24;
+    uint32_t cb_intermed0_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_interm0_config =
         tt::tt_metal::CircularBufferConfig(
             interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
     auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
-    uint32_t cb_intermed1_index = tt::CBIndex::c_25;
+    uint32_t cb_intermed1_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_interm1_config =
         tt::tt_metal::CircularBufferConfig(MtNt * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
             .set_page_size(cb_intermed1_index, interm_single_tile_size);
     auto cb_interm1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
 
     // CB for output (if sharded, full num tiles per core)
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_5;
     CBHandle cb_output;
     if (output_is_sharded) {
         uint32_t num_output_tiles =
