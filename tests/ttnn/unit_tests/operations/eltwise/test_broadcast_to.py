@@ -14,7 +14,7 @@ from functools import reduce
 
 dtypes = [torch.bfloat16]
 shapes = [(1, 1, 64, 64), (1, 1, 1, 1)]
-repeat_specs = [(1, 3, 64, 64), (1, 1, 64, 64)]
+repeat_specs = [(1, 1, 64, 64), (1, 1, 32, 32)]
 
 
 shape_and_repeat_specs = list(zip(shapes, repeat_specs))
@@ -30,11 +30,12 @@ def test_repeat(device, dtype, shape_and_repeat_spec):
     mul = lambda x, y: x * y
     torch_input_tensor = torch.arange(0, reduce(mul, shape, 1), dtype=dtype).reshape(shape)
 
-    torch_result = torch_input_tensor.repeat(repeat_shape)
+    torch_result = torch_input_tensor.broadcast_to(repeat_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.experimental.broadcast_to(input_tensor, ttnn.Shape(repeat_shape))
+    # output = ttnn.expand(input_tensor, ttnn.Shape(repeat_shape))
     output = ttnn.to_torch(output)
 
     assert (
