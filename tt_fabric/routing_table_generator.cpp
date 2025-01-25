@@ -228,7 +228,7 @@ void RoutingTableGenerator::print_routing_tables() const {
             ss << std::endl;
         }
     }
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
     ss << "Routing Table Generator: InterMesh Routing Tables" << std::endl;
     for (mesh_id_t mesh_id = 0; mesh_id < this->inter_mesh_table_.size(); mesh_id++) {
@@ -244,6 +244,6 @@ void RoutingTableGenerator::print_routing_tables() const {
             ss << std::endl;
         }
     }
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 }  // namespace tt::tt_fabric

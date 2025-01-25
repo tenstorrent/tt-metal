@@ -919,7 +919,8 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
         const auto& local_eth_channels_connectivity = this->chip_to_eth_connected_chips[chip_id];
         for (uint32_t local_chip_chan = 0; local_chip_chan < local_eth_channels_connectivity.size();
              local_chip_chan++) {
-            if (local_eth_channels_connectivity[local_chip_chan].has_value()) {
+            if (local_eth_channels_connectivity[local_chip_chan].has_value() and
+                this->is_ethernet_link_up(chip_id, soc_desc.chan_to_logical_eth_core_map.at(local_chip_chan))) {
                 auto connected_chip_id = local_eth_channels_connectivity[local_chip_chan].value().first;
                 connected_chips[connected_chip_id].emplace_back(
                     get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));

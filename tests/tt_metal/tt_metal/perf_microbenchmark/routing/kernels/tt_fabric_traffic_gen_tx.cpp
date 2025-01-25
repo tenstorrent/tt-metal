@@ -377,8 +377,28 @@ void kernel_main() {
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
 
+    /*
+
+    define NOC_ADDR_LOCAL_BITS 36
+    define NOC_ADDR_NODE_ID_BITS 6
+
+    define NOC_XY_ADDR(x, y, addr) -> (y << 0x2A) | (x << 0x24) | 0x6F660
+
+     0x4100006F660 & 0xFFFFFFFFF
+
+    (0x40000000000) | (0x5000000000) |
+
+    */
+    DPRINT << HEX() << "x " << NOC_X(router_x) << " y " << NOC_Y(router_y) << " FABRIC_ROUTER_CONFIG_BASE "
+           << eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE << " size of fabric router "
+           << (uint32_t)sizeof(fabric_router_l1_config_t) << DEC() << ENDL();
     uint64_t router_config_addr =
         NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+
+    uint64_t noc_local_addr = NOC_LOCAL_ADDR(router_config_addr);
+    DPRINT << "loal addr " << HEX() << noc_local_addr << DEC() << ENDL();
+
+    DPRINT << "router config addr " << HEX() << router_config_addr << DEC() << ENDL();
     noc_async_read_one_packet(router_config_addr, routing_table_start_addr, sizeof(fabric_router_l1_config_t));
     noc_async_read_barrier();
 

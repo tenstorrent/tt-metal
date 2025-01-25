@@ -26,6 +26,8 @@
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
+#include "debug/ring_buffer.h"
+#include "debug/dprint.h"
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
@@ -684,11 +686,15 @@ void noc_async_read_one_packet(
         Read responses - assigned VCs dynamically
     */
 
-    WAYPOINT("RP2W");
+    // WAYPOINT("RP2W");
     while (!noc_cmd_buf_ready(noc, read_cmd_buf));
-    WAYPOINT("RP2D");
+    // WAYPOINT("RP2D");
 
-    WAYPOINT("NAOW");
+    uint64_t noc_local_addr = NOC_LOCAL_ADDR(src_noc_addr);
+    // DPRINT << "local addr to read " << HEX() << noc_local_addr << DEC() << ENDL();
+    // DPRINT << "MEM ETH SIZE " << MEM_ETH_SIZE << ENDL();
+
+    // WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
 
     NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dst_local_l1_addr);

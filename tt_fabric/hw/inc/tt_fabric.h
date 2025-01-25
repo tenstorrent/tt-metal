@@ -881,6 +881,7 @@ typedef struct fvcc_inbound_state {
         uint32_t wrptr = fvcc_buf->wrptr.ptr;
         noc_addr = dest_addr + offsetof(ctrl_chan_msg_buf, rdptr);
         while (1) {
+            WAYPOINT("NAVY");
             noc_async_read_one_packet(noc_addr, (uint32_t)(&fvcc_buf->rdptr.ptr), 4);
             noc_async_read_barrier();
             if (!fvcc_buf_ptrs_full(wrptr, fvcc_buf->rdptr.ptr)) {
@@ -1428,6 +1429,7 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     uint32_t wrptr = local_pull_request->wrptr.ptr;
     noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
     while (1) {
+        WAYPOINT("LOVE");
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {

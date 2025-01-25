@@ -78,7 +78,9 @@ inline void notify_gatekeeper() {
 }
 
 void kernel_main() {
+#ifndef ARCH_BLACKHOLE
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
+#endif
 
     uint32_t rt_args_idx = 0;
     sync_val = get_arg_val<uint32_t>(rt_args_idx++);

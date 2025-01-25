@@ -43,7 +43,7 @@ struct address_map {
     static constexpr uint32_t MEM_ERISC_RESERVED1_SIZE = 1024;
 
     static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE;
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3344;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3344;  // 3360;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
 
     static constexpr std::int32_t FIRMWARE_BASE = ERISC_MEM_MAILBOX_END;

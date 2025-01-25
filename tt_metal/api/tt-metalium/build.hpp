@@ -155,8 +155,7 @@ public:
 class JitBuildActiveEthernet : public JitBuildState {
 private:
 public:
-    // is_cooperative denotes whether active ethernet
-    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, bool is_cooperative);
+    JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
 };
 
 class JitBuildIdleEthernet : public JitBuildState {

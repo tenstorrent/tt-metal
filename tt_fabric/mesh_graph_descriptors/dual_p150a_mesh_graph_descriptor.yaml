@@ -1,0 +1,26 @@
+ChipSpec: {
+  arch: blackhole,
+  ethernet_ports: {
+    N: 4,
+    E: 4,
+    S: 4,
+    W: 4,
+  }
+}
+
+Board: [
+  { name: P150A,
+    type: Mesh,
+    topology: [1, 2]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: P150A,
+  topology: [1, 1],
+  host_mapping: [[]]}
+]
+
+Graph: [
+]

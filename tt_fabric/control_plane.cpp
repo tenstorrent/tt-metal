@@ -78,13 +78,8 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     while (!q.empty()) {
         chip_id_t current_chip_id = q.front();
         q.pop();
-
         auto eth_links = get_ethernet_cores_grouped_by_connected_chips(current_chip_id);
         for (const auto& [connected_chip_id, eth_ports] : eth_links) {
-            bool is_edge = is_chip_on_edge_of_mesh(
-                connected_chip_id,
-                num_ports_per_side,
-                get_ethernet_cores_grouped_by_connected_chips(connected_chip_id));
             if (eth_ports.size() == num_ports_per_side) {
                 if (visited_physical_chips.find(connected_chip_id) == visited_physical_chips.end()) {
                     q.push(connected_chip_id);
@@ -126,8 +121,9 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
 
     TT_ASSERT(
         physical_chip_ids.size() == mesh_ew_size,
-        "Did not find edge with expected number of East-West chips {}",
-        mesh_ew_size);
+        "Did not find edge with expected number of East-West chips ({}), found {} instead",
+        mesh_ew_size,
+        physical_chip_ids.size());
 
     // Loop over edge and populate entire mesh with physical chip ids
     // reset and reuse the visited set of physical chip ids
@@ -189,6 +185,12 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
     } else if (mesh_graph_desc_file.find("n300_mesh_graph_descriptor.yaml") != std::string::npos) {
         cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
                                  "tests/tt_metal/tt_fabric/common/n300_cluster_desc.yaml";
+        nw_chip_eth_coord = {0, 0, 0, 0, 0};
+        mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
+        mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);
+    } else if (mesh_graph_desc_file.find("dual_p150a_mesh_graph_descriptor.yaml") != std::string::npos) {
+        cluster_desc_file_path = std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+                                 "tests/tt_metal/tt_fabric/common/dual_p150a_cluster_desc.yaml";
         nw_chip_eth_coord = {0, 0, 0, 0, 0};
         mesh_ns_size = routing_table_generator_->get_mesh_ns_size(/*mesh_id=*/0);
         mesh_ew_size = routing_table_generator_->get_mesh_ew_size(/*mesh_id=*/0);

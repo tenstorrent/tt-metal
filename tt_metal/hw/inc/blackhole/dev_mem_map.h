@@ -48,7 +48,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 128)
+#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 256)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1536
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
@@ -125,6 +125,7 @@
 // TODO: reduce this when mailbox sizes are core type aware for some members (eg watcher/dprint)
 // TODO: also, move into gap above in the reserved area
 #define MEM_IERISC_MAILBOX_BASE (MEM_IERISC_RESERVED1 + MEM_IERISC_RESERVED1_SIZE)
+// 3360
 #define MEM_IERISC_MAILBOX_SIZE 3344
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
 #define MEM_IERISC_FIRMWARE_BASE (MEM_IERISC_MAILBOX_END)

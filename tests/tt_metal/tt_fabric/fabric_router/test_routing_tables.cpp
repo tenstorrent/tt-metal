@@ -65,5 +65,34 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestDualP150MeshGraphInit) {
+    const std::filesystem::path dual_p150_mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_fabric/mesh_graph_descriptors/dual_p150a_mesh_graph_descriptor.yaml";
+    auto mesh_graph_desc = std::make_unique<MeshGraph>(dual_p150_mesh_graph_desc_path.string());
+}
+
+TEST_F(ControlPlaneFixture, TestDualP150ControlPlaneInit) {
+    const std::filesystem::path dual_p150_mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_fabric/mesh_graph_descriptors/dual_p150a_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(dual_p150_mesh_graph_desc_path.string());
+}
+
+TEST_F(ControlPlaneFixture, TestDualP150FabricRoutes) {
+    const std::filesystem::path dual_p150_mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_fabric/mesh_graph_descriptors/dual_p150a_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(dual_p150_mesh_graph_desc_path.string());
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(0, 0, 0, 1, chan);
+    }
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(0, 0, 1);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(0, 0, 0, 1, chan);
+    }
+}
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

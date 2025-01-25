@@ -725,7 +725,10 @@ void Device::initialize_and_launch_firmware() {
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
         pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
-        "Detected more pcie/dram/eth cores than fit in the device mailbox.");
+        "Detected more pcie/dram/eth cores than fit in the device mailbox. num pcie {} num unique drams {} num eths {}",
+        pcie_cores.size(),
+        unique_dram_cores.size(),
+        eth_cores.size());
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
