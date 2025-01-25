@@ -171,20 +171,6 @@ class CMakeBuild(build_ext):
         return self.inplace
 
 
-"""
-packages = [
-    "tt_lib",
-    "tt_metal",
-    "tt_lib.models",
-    "ttnn",
-    "ttnn.cpp",
-    "ttnn.distributed",
-    "ttnn.experimental_loader",
-    "ttnn.operations",
-    "tracy",
-]
-"""
-
 packages = find_namespace_packages(where="ttnn")
 
 packages.append("tt_metal")
