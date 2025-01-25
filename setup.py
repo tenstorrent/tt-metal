@@ -171,6 +171,7 @@ class CMakeBuild(build_ext):
         return self.inplace
 
 
+"""
 packages = [
     "tt_lib",
     "tt_metal",
@@ -182,6 +183,13 @@ packages = [
     "ttnn.operations",
     "tracy",
 ]
+"""
+
+packages = find_namespace_packages(where="ttnn")
+
+packages.append("tt_metal")
+
+print(("packaging: ", packages))
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
