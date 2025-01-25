@@ -79,6 +79,7 @@ on:
           - eltwise.unary.elu.elu_sharded
           - eltwise.unary.erfc.erfc
           - eltwise.unary.erfc.erfc_sharded
+          - eltwise.unary.erfc.erfc_output
           - eltwise.unary.eqz.eqz
           - eltwise.unary.eqz.eqz_sharded
           - eltwise.unary.exp.exp
@@ -141,6 +142,7 @@ on:
           - eltwise.unary.erf.erf_sharded
           - eltwise.unary.erfinv.erfinv
           - eltwise.unary.erfinv.erfinv_sharded
+          - eltwise.unary.erfinv.erfinv_output
           - eltwise.unary.i0.i0
           - eltwise.unary.reciprocal.reciprocal
           - eltwise.unary.reciprocal.reciprocal_sharded
