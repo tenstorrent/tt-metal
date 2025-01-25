@@ -10,7 +10,7 @@ on:
       coverage:
         required: false
         type: boolean
-        default: false
+        default: true
   workflow_dispatch:
     inputs:
       build-type:
