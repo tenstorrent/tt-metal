@@ -377,7 +377,7 @@ int main() {
             {config.batch_size,
              config.input_hw.first + 2 * config.pad_hw.first,
              config.input_hw.second + 2 * config.pad_hw.second});
-        auto output_tensor_shape = config.get_output_shape().value;
+        auto output_tensor_shape = config.get_output_shape();
         ttnn::SimpleShape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 
         Tensor input_padded_tensor =
@@ -390,12 +390,12 @@ int main() {
         vector<float> filter_vector = create_filter_vec(filter_tensor_buf, tc.filter_h, tc.filter_w);
         owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
             input_padded_tensor,
-            ttnn::Shape(input_tensor_shape),
+            input_tensor_shape,
             tc.stride_h,
             tc.stride_w,
             filter_vector,
-            ttnn::Shape(filter_tensor_shape),
-            ttnn::Shape(output_tensor_shape));
+            filter_tensor_shape,
+            output_tensor_shape);
 
         auto failed_tests = validate_generate_functions(
             device,
