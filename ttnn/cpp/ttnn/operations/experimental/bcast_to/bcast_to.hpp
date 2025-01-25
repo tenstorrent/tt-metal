@@ -19,6 +19,7 @@ struct BcastTo {
 }  // namespace ttnn::operations::experimental
 
 namespace ttnn::experimental {
-constexpr auto broadcast_to = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::experiment::broadcast_to", ttnn::operations::experimental::BcastTo>();
+constexpr auto broadcast_to = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::broadcast_to",
+    ttnn::operations::experimental::BcastTo>();
 }
