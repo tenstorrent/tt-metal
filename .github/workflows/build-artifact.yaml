@@ -21,6 +21,11 @@ on:
         type: boolean
         default: true
         description: "Build docker image"
+      coverage:
+        required: false
+        type: boolean
+        default: false
+        description: "Build with coverage instrumentation"
   workflow_dispatch:
     inputs:
       build-docker:
@@ -124,9 +129,11 @@ jobs:
             ccache -z
 
             build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
-            echo "${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
+            fi
+            if [ "${{ inputs.coverage }}" = "true" ]; then
+              build_command="$build_command --coverage"
             fi
             nice -n 19 $build_command
             ccache -s > build/ccache.stats

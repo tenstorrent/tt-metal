@@ -7,6 +7,10 @@ on:
         required: false
         default: Release
         type: string
+      coverage:
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       build-type:
@@ -18,6 +22,10 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+      coverage:
+        required: false
+        type: boolean
+        default: false
   push:
     branches: ["main"]
 
@@ -75,6 +83,7 @@ jobs:
       build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
+      coverage: ${{ inputs.coverage }}
     secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -157,6 +166,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
+      upload_coverage: ${{ inputs.coverage }}
   code-analysis:
     needs: build-docker-image-2204
     uses: ./.github/workflows/code-analysis.yaml
