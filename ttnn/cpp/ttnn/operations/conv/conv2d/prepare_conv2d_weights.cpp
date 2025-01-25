@@ -683,6 +683,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     uint32_t out_channels_padded = tt::round_up(out_channels, output_num_cores_channels * tt::constants::TILE_WIDTH);
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
+    uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     ttnn::SimpleShape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
     if (is_non_tile_mul_width) {
@@ -718,11 +719,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
-    TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
-
+    TT_FATAL(weight_tensor_.shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
     ttnn::SimpleShape target_shape({1, 1, weight_matrix_height, out_channels});
-    ttnn::SimpleShape padded_target_shape({1, 1, weight_tensor_.get_logical_shape()[2], out_channels_padded});
+    ttnn::SimpleShape padded_target_shape(
+        {1, 1, weight_tensor_.get_logical_shape()[2], out_channels + out_channel_padding});
     weight_tensor_ = ttnn::reshape(weight_tensor_, ttnn::Shape(target_shape.view(), padded_target_shape.view()));
 
     if (parameters_on_device) {
