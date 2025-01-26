@@ -128,6 +128,18 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
     bool enable_persistent_fabric_mode);
+operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
+    const Tensor& input_tensor,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore semaphore,
+    bool enable_persistent_fabric_mode);
 
 namespace operations {
 namespace experimental {

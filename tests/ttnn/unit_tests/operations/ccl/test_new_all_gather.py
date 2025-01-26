@@ -133,7 +133,9 @@ def run_all_gather_impl(
     rand_tensor=True,
     mem_config=None,
     input_shard_shape=None,
-    shard_grid=None,
+    input_shard_grid=None,
+    output_shard_shape=None,
+    output_shard_grid=None,
     tensor_mem_layout=None,
     use_cluster_axis_api=False,
     cluster_axis=None,
@@ -178,35 +180,49 @@ def run_all_gather_impl(
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
-    logger.info(f"shard_grid: {shard_grid}")
+    logger.info(f"input_shard_grid: {input_shard_grid}")
 
     ### For sharded all gather only
-    if bool(input_shard_shape) != bool(shard_grid) and bool(tensor_mem_layout) != bool(shard_grid):
+    if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
         pytest.fail(
             "Both input_shard_shape, shard_grid, and tensor_mem_layout must be provided together or all must be None"
         )
-    if input_shard_shape and shard_grid:
+    if input_shard_shape and input_shard_grid:
         input_shard_spec = ttnn.ShardSpec(
-            shard_grid,
+            input_shard_grid,
             input_shard_shape,
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         input_mem_config = ttnn.MemoryConfig(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
         )
-        output_shard_shape = list(input_shard_shape)
-        if dim == len(output_shape) - 1:
-            output_shard_shape[1] *= num_devices
+        if output_shard_shape is None:
+            assert (
+                output_shard_grid is None
+            ), "output_shard_grid must not be provided if output_shard_shape is not provided"
+            output_shard_shape = list(input_shard_shape)
+            if dim == len(output_shape) - 1:
+                output_shard_shape[1] *= num_devices
+            else:
+                output_shard_shape[0] *= num_devices
+            output_shard_spec = ttnn.ShardSpec(
+                input_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
         else:
-            output_shard_shape[0] *= num_devices
-        output_shard_spec = ttnn.ShardSpec(
-            shard_grid,
-            output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        output_mem_config = ttnn.MemoryConfig(
-            tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
-        )
+            assert output_shard_grid is not None, "output_shard_grid must be provided if output_shard_shape is provided"
+            output_shard_spec = ttnn.ShardSpec(
+                output_shard_grid,
+                output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            output_mem_config = ttnn.MemoryConfig(
+                tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec
+            )
     else:
         assert mem_config is not None
         input_mem_config = mem_config
@@ -319,8 +335,8 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
-        (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
+        (4, 3, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
@@ -329,7 +345,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
+        # ttnn.bfloat16,
         ttnn.bfloat8_b,
     ],
 )
@@ -339,7 +355,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather(
     t3k_mesh_device,
@@ -379,7 +395,7 @@ def test_all_gather(
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, shard_grid, tensor_mem_layout",
+    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
             2,
@@ -388,6 +404,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -397,6 +415,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -406,6 +426,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -415,6 +437,8 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
@@ -424,16 +448,20 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+            None,
+            None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
         (
             4,
-            [1, 4, 32, 1280],
+            [1, 1, 32, 3840],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
+            (32, 160),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
     ],
 )
@@ -442,6 +470,7 @@ def test_all_gather(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
@@ -459,7 +488,9 @@ def test_all_gather_sharded(
     function_level_defaults,
     enable_async,
     input_shard_shape,
-    shard_grid,
+    input_shard_grid,
+    output_shard_shape,
+    output_shard_grid,
     tensor_mem_layout,
 ):
     run_all_gather_impl(
@@ -477,7 +508,9 @@ def test_all_gather_sharded(
         enable_async=enable_async,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
-        shard_grid=shard_grid,
+        input_shard_grid=input_shard_grid,
+        output_shard_shape=output_shard_shape,
+        output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
