@@ -4,6 +4,8 @@
 
 #include "ttnn/core.hpp"
 
+#include <magic_enum/magic_enum.hpp>
+
 namespace ttnn::core {
 
 std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value, std::uint32_t tile_size) {
