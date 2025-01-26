@@ -174,6 +174,7 @@ class CMakeBuild(build_ext):
 packages = find_namespace_packages(where="ttnn")
 
 packages.append("tt_metal")
+packages.append("ttnn.cpp")
 
 print(("packaging: ", packages))
 
