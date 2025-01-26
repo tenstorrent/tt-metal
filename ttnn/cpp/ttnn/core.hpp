@@ -29,15 +29,11 @@ namespace ttnn {
 
 namespace core {
 
-std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value, std::uint32_t tile_size);
-
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type);
 
 std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor);
 
 void set_printoptions(const std::string& profile);
-
-void segfault_handler(int sig);
 
 void dump_stack_trace_on_segfault();
 
