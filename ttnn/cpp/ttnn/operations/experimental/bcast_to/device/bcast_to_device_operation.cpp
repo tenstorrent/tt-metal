@@ -10,6 +10,23 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::experimental::broadcast_to {
+SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint32_t b_h, uint32_t b_w) {
+    if (a_h == b_h && a_w == b_w) {
+        return SubtileBroadcastType::NONE;
+    }
+    if (a_h == 1 && a_w == 1) {
+        return SubtileBroadcastType::SCALAR;
+    }
+    if (a_h == 1) {
+        return SubtileBroadcastType::ROW;
+    }
+    if (a_w == 1) {
+        return SubtileBroadcastType::COL;
+    }
+
+    TT_THROW("Invalid subtile broadcast type");
+}
+
 BcastToOperation::program_factory_t BcastToOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
@@ -77,6 +94,13 @@ std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_ar
     const SmallVector<uint32_t>& output_shape,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config) {
-    return {{output_shape, memory_config.value_or(input.memory_config())}, {input, output}};
+    auto subtile_broadcast_type = get_subtile_broadcast_type(
+        input.get_logical_shape()[-2],
+        input.get_logical_shape()[-1],
+        output_shape[output_shape.size() - 2],
+        output_shape[output_shape.size() - 1]);
+    return {
+        operation_attributes_t{output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type},
+        tensor_args_t{input, output}};
 }
 }  // namespace ttnn::operations::experimental::broadcast_to
