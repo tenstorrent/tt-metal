@@ -1,91 +1,53 @@
-name: "[internal] Build C++ binaries with all configs impl"
+name: "Build TT-Metalium across all configs"
 
 on:
-  #TODO: If we want to run this via dispatch, will need to include build docker image workflow
-  #workflow_dispatch:
+  workflow_dispatch:
   workflow_call:
 
 jobs:
-  build-lib:
-    strategy:
-      fail-fast: false
-      matrix:
-        build: [
-          {type: Debug, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          {type: RelWithDebInfo, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-20.04},
-          {type: Release, toolchain: cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release, toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-          {type: Release, toolchain: cmake/x86_64-linux-gcc-12-toolchain.cmake, runs-on: ["build", "in-service"], os: ubuntu-22.04},
-        ]
-    env:
-      # So we can get all the makefile output we want
-      VERBOSE: 1
-    runs-on: ${{ matrix.build.runs-on }}
-    name: ${{ matrix.build.type }} ${{ matrix.build.toolchain }} any ${{ matrix.build.os }}
-    steps:
-      - name: Verify ccache availability
-        shell: bash
-        run: |
-          if [ ! -d "/mnt/MLPerf/ccache" ]; then
-            echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
-            exit 1
-          fi
-          if [ ! -d "$HOME/.ccache-ci" ]; then
-            echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
-            exit 1
-          fi
-      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
-      - name: Set up dynamic env vars for build
-        run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
-          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
-      - name: Build C++ libraries and tests
-        uses: ./.github/actions/docker-run
-        with:
-          docker_username: ${{ github.actor }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            --group-add 1457
-            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
-            -e CCACHE_DIR=/home/ubuntu/.ccache
-            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-          docker_os_arch: tt-metalium/${{ matrix.build.os }}-amd64
-          run_args: |
-            set -eu # basic shell hygiene
-            set -x
+  ubuntu-2004-debug:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-20.04-amd64"
+      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+      build-type: "Debug"
+      publish-artifact: false
 
-            # /tmp is a tmpfs; more efficient than persisted storage
-            mkdir -p /tmp/ccache
-            export CCACHE_TEMPDIR=/tmp/ccache
+  ubuntu-2004-relwithdebinfo:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-20.04-amd64"
+      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+      build-type: "RelWithDebInfo"
+      publish-artifact: false
 
-            ccache --version
-            ccache --show-config
-            ccache --show-stats
+  ubuntu-2204-release:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-22.04-amd64"
+      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+      build-type: "Release"
+      publish-artifact: false
 
-            # Zero out the stats so we can see how we did this build
-            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-            ccache -z
+  ubuntu-2204-libstdcpp:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-22.04-amd64"
+      toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+      build-type: "Release"
+      publish-artifact: false
+      skip-tt-train: true
 
-            build_command="./build_metal.sh --build-type ${{ matrix.build.type }} --toolchain-path ${{ matrix.build.toolchain }} --build-tests --build-programming-examples --disable-unity-builds --enable-ccache"
-            nice -n 19 $build_command
-
-            ccache --show-stats
-            mkdir out
-            ccache -s > out/ccache.stats
-            cat out/ccache.stats
-      - name: Publish Ccache summary
-        run: |
-          cat out/ccache.stats
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat out/ccache.stats >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-      - name: Check disk space
-        run: |
-          df -h
-      - uses: ./.github/actions/slack-report
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: U06CXU895AP # Michael Chiou
+  ubuntu-2204-gcc12:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      os: "ubuntu-22.04-amd64"
+      toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+      build-type: "Release"
+      publish-artifact: false
+      skip-tt-train: true # FIXME
