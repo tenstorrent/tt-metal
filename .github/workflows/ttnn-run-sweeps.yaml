@@ -187,10 +187,13 @@ on:
           - eltwise.unary.cosh.cosh
           - eltwise.unary.relu_min.relu_min
           - eltwise.unary.relu_min.relu_min_sharded
+          - eltwise.unary.relu_min.relu_min_output
           - eltwise.unary.relu_max.relu_max
           - eltwise.unary.relu_max.relu_max_sharded
+          - eltwise.unary.relu_max.relu_max_output
           - eltwise.unary.softplus.softplus
           - eltwise.unary.softplus.softplus_sharded
+          - eltwise.unary.softplus.softplus_output
           - eltwise.unary.selu.selu
           - eltwise.unary.selu.selu_sharded
           - eltwise.unary.softshrink.softshrink_sharded
