@@ -18,6 +18,7 @@ on:
             - "ubuntu-22.04-amd64"
 jobs:
   build-docker-image:
+    name: "🐳️ Build ${{ inputs.os }} image"
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       CONFIG: ci
