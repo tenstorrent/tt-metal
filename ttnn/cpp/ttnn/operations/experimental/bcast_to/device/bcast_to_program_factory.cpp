@@ -16,6 +16,7 @@
 #include "impl/kernels/kernel_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
+#include "bcast_to_utils.hpp"
 
 using namespace tt::tt_metal;
 using namespace ttnn::operations::experimental::broadcast_to;
@@ -150,17 +151,19 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
     const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());
 
+    auto kernel_config = BcastToKernelConfig(operation_attributes.subtile_broadcast_type);
+
     // READER KERNEL
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/dataflow/reader_bcast_to.cpp",
+        get_kernel_file_path(kernel_config.reader_kernel),
         all_device_cores,
         tt::tt_metal::ReaderDataMovementConfig({src_is_dram}));
 
     // WRITER KERNEL
     auto writer_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/dataflow/writer_bcast_to.cpp",
+        get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
         tt::tt_metal::WriterDataMovementConfig({dst_is_dram}));
 

@@ -56,40 +56,54 @@ TEST_P(Broadcast_toFixture, Broadcast_to) {
 }
 
 // no change - single tile
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 32, 32, {1, 1, 32, 32}}));
+INSTANTIATE_TEST_SUITE_P(
+    no_change_single_tile, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 32, 32, {1, 1, 32, 32}}));
 
 // no change - multiple tiles - multiple cores
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 1, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(
+    no_change_multi_tile, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 1, 64, 64}}));
 
 // single dimension width
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 1, {1, 1, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(dim_w, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 1, {1, 1, 64, 64}}));
 
 // single dimension height
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 64, {1, 1, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(dim_h, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 64, {1, 1, 64, 64}}));
 
 // both dimension change - scalar
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 1, {1, 1, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(dim_w_h, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 1, {1, 1, 64, 64}}));
 
 // higher dimension change - c
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 3, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(dim_c, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 3, 64, 64}}));
 
 // higher dimension change - n
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {3, 1, 64, 64}}));
+INSTANTIATE_TEST_SUITE_P(dim_n, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {3, 1, 64, 64}}));
 
-// large tensor in w h dimension
-// INSTANTIATE_TEST_SUITE_P(
-//    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 1, {1, 1, 64, 64 * 64}}));
+// size 32x32x64 will have each core read 32x32x1
+// no change large tensor
+INSTANTIATE_TEST_SUITE_P(
+    no_change_large,
+    Broadcast_toFixture,
+    ::testing::Values(BroadcastParam{1, 1, 32 * 16, 32 * 16, {1, 1, 32 * 16, 32 * 16}}));
+
+// large tensor - w
+INSTANTIATE_TEST_SUITE_P(
+    large_w, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 1, {1, 1, 1, 32 * 32 * 64}}));
+
+// large tensor - h
+INSTANTIATE_TEST_SUITE_P(
+    large_h, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 1, {1, 1, 32 * 32 * 64, 1}}));
+
+// large tensor - scalar
+INSTANTIATE_TEST_SUITE_P(
+    large_w_h, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 1, 1, {1, 1, 32 * 16, 32 * 16}}));
 
 // large tensor in c
 INSTANTIATE_TEST_SUITE_P(
-    Broadcast_toTests, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 16, 64, 64}}));
+    large_c, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {1, 32, 64, 64}}));
+
+// large tensor in n
+INSTANTIATE_TEST_SUITE_P(
+    large_n, Broadcast_toFixture, ::testing::Values(BroadcastParam{1, 1, 64, 64, {32, 1, 64, 64}}));
 
 }  // namespace test
 }  // namespace broadcast_to
