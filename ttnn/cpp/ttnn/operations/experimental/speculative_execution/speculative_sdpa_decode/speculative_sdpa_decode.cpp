@@ -5,9 +5,9 @@
 #include "speculative_sdpa_decode.hpp"
 
 #include "device/speculative_sdpa_decode_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/run_operation.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 using namespace tt::tt_metal;

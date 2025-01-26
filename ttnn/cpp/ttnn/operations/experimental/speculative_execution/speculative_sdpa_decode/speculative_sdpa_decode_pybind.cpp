@@ -8,8 +8,8 @@
 #include <pybind11/stl.h>
 
 #include "speculative_sdpa_decode.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::speculative_execution {
 
