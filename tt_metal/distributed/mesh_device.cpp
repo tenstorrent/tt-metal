@@ -129,6 +129,8 @@ MeshDevice::MeshDevice(
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)) {
     work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
+    work_executor_->initialize();
+    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
