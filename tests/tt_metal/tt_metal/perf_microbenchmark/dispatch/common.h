@@ -651,7 +651,7 @@ inline void generate_random_paged_payload(
         words_per_page);
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment(buf_type);
+    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
@@ -931,9 +931,8 @@ inline void gen_dispatcher_paged_write_cmd(
     uint32_t start_page,
     uint32_t page_size,
     uint32_t pages) {
-    BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment(buffer_type);
-    uint32_t num_banks = device->num_banks(buffer_type);
+    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
+    uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
     CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
 
     // Not safe to mix paged L1 and paged DRAM writes currently in this test since same book-keeping.

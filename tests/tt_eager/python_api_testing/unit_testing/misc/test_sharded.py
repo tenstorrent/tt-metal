@@ -164,7 +164,7 @@ def test_sharded_rm(
         ),
     )
 
-    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation, keep_l1_aligned=True)
+    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
 
     zt = ttnn.sharded_to_interleaved(
         yt,
@@ -172,7 +172,6 @@ def test_sharded_rm(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.BufferType.L1,
         ),
-        is_l1_aligned=True,
     )
 
     tt_og = xt.cpu().to_torch()
