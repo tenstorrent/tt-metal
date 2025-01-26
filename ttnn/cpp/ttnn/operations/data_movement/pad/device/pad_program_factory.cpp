@@ -1431,12 +1431,14 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }
 
-    auto l1_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    // FIXME: assumes that this was sharded using DRAM alignment so that gaps are left in the tensor.
+    // if this changes, we should change the stick step to be 16B (L1 alignment).
+    auto dram_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
     uint32_t padded_stick_step = tt::round_up(
-        padded_stick_bytes, l1_alignment_bytes);  // round padded_stick bytes to a multiple of l1_alignment_bytes
+        padded_stick_bytes, dram_alignment_bytes);  // round padded_stick bytes to a multiple of dram_alignment_bytes
     uint32_t unpadded_stick_step = tt::round_up(
         unpadded_stick_bytes,
-        l1_alignment_bytes);  // round unpadded_stick bytes to a multiple of l1_alignment_bytes
+        dram_alignment_bytes);  // round unpadded_stick bytes to a multiple of dram_alignment_bytes
 
     std::vector<uint32_t> reader_ct_args = {
         unpadded_stick_bytes,

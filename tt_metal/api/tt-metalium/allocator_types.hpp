@@ -43,7 +43,6 @@ struct AllocatorConfig {
     size_t dram_bank_size = 0;
     std::vector<size_t> dram_bank_offsets = {};
     uint32_t dram_unreserved_base = 0;
-    uint32_t dram_alignment = 0;
     //! worker specific configuration
     uint32_t l1_unreserved_base = 0;
     CoreRangeSet worker_grid = {};
@@ -57,7 +56,7 @@ struct AllocatorConfig {
     BankMapping l1_bank_remap =
         {};  // for remapping which l1 bank points to which bank if we assume normal row-major assignment
     CoreRangeSet compute_grid = {};
-    uint32_t l1_alignment = 0;
+    uint32_t alignment = 0;
     bool disable_interleaved = false;
     void reset();
     ~AllocatorConfig() { reset(); }

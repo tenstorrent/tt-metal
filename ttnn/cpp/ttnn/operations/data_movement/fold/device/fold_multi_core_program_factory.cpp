@@ -39,7 +39,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // input CB
     uint32_t cb_src0_index = tt::CBIndex::c_0;
-    uint32_t aligned_pixel_size = round_up_to_mul16(pixel_size);
+    uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
     auto src_cb_config = CircularBufferConfig(num_pixels * aligned_pixel_size, {{cb_src0_index, cb_data_format}})
                              .set_page_size(cb_src0_index, aligned_pixel_size)
                              .set_globally_allocated_address(*input.buffer());
@@ -47,7 +47,7 @@ Fold::MultiCore::cached_program_t fold_multi_core(
 
     // output CB
     uint32_t cb_dst0_index = tt::CBIndex::c_16;
-    uint32_t aligned_dst_pixel_size = round_up_to_mul16(dst_pixel_size);
+    uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
     auto dst_cb_config =
         CircularBufferConfig(num_dst_pixels * aligned_dst_pixel_size, {{cb_dst0_index, cb_data_format}})
             .set_page_size(cb_dst0_index, aligned_dst_pixel_size)

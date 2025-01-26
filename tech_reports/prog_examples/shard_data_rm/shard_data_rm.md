@@ -71,12 +71,12 @@ uint32_t shard_size = shard_height * shard_width;
 uint32_t input_unit_size = sizeof(uint32_t);
 uint32_t shard_width_bytes = shard_width * data_size;
 uint32_t num_units_per_row = shard_width * input_unit_size;
-uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment(BufferType::L1));
+uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
 ```
 
 In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function.
 For this situation, 16 units of data will be sharded across 4 cores; each core will have 4 units of data in their corresponding circular buffer.
-The `padded_offset_bytes` is set to ensure that the correct address is read from the kernel function when moving data to the circular buffer; in this case, the addresses are aligned to L1 memory with explicit referencing to BufferType::L1.
+The `padded_offset_bytes` is set to ensure that the correct address is read from the kernel function when moving data to the circular buffer; in this case, the addresses are aligned to L1 memory.
 This example demonstrates height sharding; the shard height is therefore set to evenly distribute the number of vector values across the cores.
 If the sharding strategy was different (i.e. width sharding or block sharding), the appropriate values for both the shard height and width would need to be set.
 

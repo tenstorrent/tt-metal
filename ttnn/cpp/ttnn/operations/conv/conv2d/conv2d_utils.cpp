@@ -1061,7 +1061,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 16) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1164,7 +1164,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 16) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

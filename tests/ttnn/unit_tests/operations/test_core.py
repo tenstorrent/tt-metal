@@ -527,9 +527,8 @@ def test_bh_alignment_i2s(
         memory_config=input_buffer_type,
         dtype=ttnn.bfloat16,
     )
-    # So far the sharded tensor alignment is controled by keep_l1_aligned flag, will remove it later after launch
-    x_t_sharded = ttnn.interleaved_to_sharded(x_t, shard_config, keep_l1_aligned=True)
-    x_t = ttnn.sharded_to_interleaved(x_t_sharded, output_buffer_type, is_l1_aligned=True)
+    x_t_sharded = ttnn.to_memory_config(x_t, shard_config)
+    x_t = ttnn.to_memory_config(x_t_sharded, output_buffer_type)
     output_data = ttnn.from_device(x_t)
     output_data = ttnn.to_torch(output_data)
     passing = torch.equal(input_data, output_data)

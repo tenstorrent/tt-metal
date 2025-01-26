@@ -312,8 +312,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto local_core_type = local_tensor.buffer()->core_type();
     auto remote_core_type = remote_tensor.buffer()->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
-    constexpr uint32_t scratch_cb_index_k0 = tt::CBIndex::c_1;
-    constexpr uint32_t scratch_cb_index_k1 = tt::CBIndex::c_2;
     auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     auto remote_cores = corerange_to_cores(
@@ -333,11 +331,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         remote_units_per_shard = remote_shard_spec.shape[0];
     }
     const uint32_t total_size = std::min(local_units_per_shard, remote_units_per_shard) * unit_size;
-    uint32_t read_stride_bytes = (is_reader && input.buffer()->buffer_type() == BufferType::DRAM)
-                                     ? tt::align(unit_size, hal.get_alignment(HalMemType::DRAM))
-                                     : tt::align(unit_size, hal.get_alignment(HalMemType::L1));
-    uint32_t write_stride_bytes = tt::align(unit_size, hal.get_alignment(HalMemType::L1));
-
     const std::string kernel_name =
         is_reader
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
@@ -348,13 +341,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
         program,
         kernel_name,
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram, scratch_cb_index_k0}));
+        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program,
         kernel_name,
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram, scratch_cb_index_k1}));
+        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -395,14 +388,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
-                        {
-                            bank_id,
-                            (remote_units_per_shard - remote_core_units_rem) * unit_size,
-                            units_to_transfer,
-                            unit_size,
-                            read_stride_bytes,
-                            write_stride_bytes,
-                        });
+                        {bank_id,
+                         (remote_units_per_shard - remote_core_units_rem) * unit_size,
+                         units_to_transfer * unit_size});
                     local_units_per_core -= units_to_transfer;
                     local_units_to_transfer -= units_to_transfer;
                     remote_core_units_rem -= units_to_transfer;
@@ -413,17 +401,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             SetRuntimeArgs(program, kernel_id, core, kernel_args);
         }
     }
-    // Set up scratch pad for unaligned DRAM access
-    uint32_t aligned_cb_bytes = tt::align(unit_size, hal.get_alignment(HalMemType::DRAM));
-
-    tt::tt_metal::CircularBufferConfig scratch_cb_k0_config =
-        tt::tt_metal::CircularBufferConfig(unit_size, {{scratch_cb_index_k0, data_format}})
-            .set_page_size(scratch_cb_index_k0, 1);
-    auto cb_scratch_k0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_k0_config);
-    tt::tt_metal::CircularBufferConfig scratch_cb_k1_config =
-        tt::tt_metal::CircularBufferConfig(unit_size, {{scratch_cb_index_k1, data_format}})
-            .set_page_size(scratch_cb_index_k1, 1);
-    auto cb_scratch_k1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_k1_config);
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_0, local_cores](
                                                    const void* operation,

@@ -64,7 +64,7 @@ BankManager::BankManager(
     }
     this->interleaved_address_limit_ = 0;
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
 BankManager::BankManager(
@@ -80,7 +80,7 @@ BankManager::BankManager(
     interleaved_address_limit_(interleaved_address_limit),
     alignment_bytes_(alignment_bytes) {
     validate_num_banks(this->bank_id_to_bank_offset_.size(), this->buffer_type_, disable_interleaved);
-    this->init_allocator(size_bytes, hal.get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocator(size_bytes, alignment_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return this->bank_id_to_bank_offset_.size(); }
@@ -245,7 +245,7 @@ void init_one_bank_per_channel(Allocator& allocator, const AllocatorConfig& allo
         BufferType::DRAM,
         bank_offsets,
         dram_bank_size,
-        alloc_config.dram_alignment,
+        alloc_config.alignment,
         alloc_config.dram_unreserved_base,
         alloc_config.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
@@ -260,7 +260,7 @@ void init_one_bank_per_channel(Allocator& allocator, const AllocatorConfig& allo
         BufferType::TRACE,
         bank_offsets,
         alloc_config.trace_region_size,
-        alloc_config.dram_alignment,
+        alloc_config.alignment,
         dram_bank_size + alloc_config.dram_unreserved_base,
         alloc_config.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < alloc_config.num_dram_channels; bank_id++) {
@@ -281,7 +281,7 @@ void init_one_bank_per_l1(Allocator& allocator, const AllocatorConfig& alloc_con
         BufferType::L1,
         bank_offsets,
         l1_bank_size,
-        alloc_config.l1_alignment,
+        alloc_config.alignment,
         alloc_config.l1_unreserved_base,
         alloc_config.disable_interleaved);
 
@@ -356,18 +356,6 @@ const std::vector<uint32_t>& bank_ids_from_logical_core(
         TT_THROW("No {} bank exists for core {}", magic_enum::enum_name(buffer_type), logical_core.str());
     }
     return allocator.logical_core_to_bank_ids.at(buffer_type).at(logical_core);
-}
-
-uint32_t get_alignment(const Allocator& alloator, const BufferType& buffer_type) {
-    switch (buffer_type) {
-        case BufferType::DRAM:
-        case BufferType::TRACE: return alloator.config.dram_alignment;
-        case BufferType::L1:
-        case BufferType::L1_SMALL: return alloator.config.l1_alignment;
-        default: {
-            TT_THROW("Allocator does not support buffer ");
-        }
-    }
 }
 
 Statistics get_statistics(const Allocator& allocator, const BufferType& buffer_type) {

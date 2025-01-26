@@ -525,11 +525,10 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    uint32_t common_align_len = std::max(input_tensors[0].buffer()->alignment(), output.buffer()->alignment());
     if (rm_layout) {
         num_output_pages = output.volume() / output.get_padded_shape()[-1];
         single_page_size =
-            tt::align(output.element_size() * output.get_padded_shape()[-1], common_align_len);
+            tt::align(output.element_size() * output.get_padded_shape()[-1], output.buffer()->alignment());
     } else {
         num_output_pages = output.volume() / TILE_HW;
         single_page_size = tt_metal::detail::TileSize(cb_data_format);

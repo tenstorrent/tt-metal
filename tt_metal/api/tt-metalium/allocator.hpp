@@ -120,8 +120,6 @@ const std::vector<uint32_t>& bank_ids_from_dram_channel(const Allocator& allocat
 const std::vector<uint32_t>& bank_ids_from_logical_core(
     const Allocator& allocator, BufferType buffer_type, const CoreCoord& logical_core);
 
-uint32_t get_alignment(const Allocator& alloator, const BufferType& buffer_type);
-
 Statistics get_statistics(const Allocator& allocator, const BufferType& buffer_type);
 
 void dump_memory_blocks(const Allocator& allocator, const BufferType& buffer_type, std::ofstream& out);

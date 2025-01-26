@@ -171,8 +171,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
-    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, l1_alignment);
+    uint32_t per_core_N_bytes_padded = round_up_to_mul32(per_core_N * datum_size_bytes);
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
     bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
