@@ -8,10 +8,6 @@
 
 namespace ttnn::core {
 
-std::uint32_t pad_to_multiple_of_tile_size(std::uint32_t value, std::uint32_t tile_size) {
-    return (value + (tile_size - 1)) / tile_size * tile_size;
-}
-
 bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
     return tensor.storage_type() == storage_type;
 }
@@ -28,11 +24,6 @@ void set_printoptions(const std::string& profile) {
         magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
             return std::tolower(lhs) == std::tolower(rhs);
         }).value();
-}
-
-void segfault_handler(int sig) {
-    std::cerr << tt::assert::backtrace_to_string() << std::endl;
-    exit(EXIT_FAILURE);
 }
 
 void dump_stack_trace_on_segfault() {
