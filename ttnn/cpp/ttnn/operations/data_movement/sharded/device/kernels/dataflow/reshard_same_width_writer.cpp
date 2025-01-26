@@ -20,10 +20,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = dst_addr + args[args_idx++];
-        uint32_t units_to_transfer = args[args_idx++];
-        uint32_t unit_size = args[args_idx++];
-        args_idx += 2;  // Skip read_stride_bytes, write_stride_bytes
-        uint32_t write_size = units_to_transfer * unit_size;
+        uint32_t write_size = args[args_idx++];
         noc_async_write(l1_read_addr, get_noc_addr_from_bank_id<write_to_dram>(bank_id, addr), write_size);
         l1_read_addr += write_size;
     }
