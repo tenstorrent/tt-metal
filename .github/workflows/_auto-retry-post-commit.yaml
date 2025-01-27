@@ -56,8 +56,8 @@ jobs:
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt_number }}" == "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "$original_trigger" != "workflow_dispatch" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was not dispatched. Not re-trying"
+          elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
+            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
             should_continue=false
           elif [[ "$conclusion" != "failure" ]]; then
             echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
