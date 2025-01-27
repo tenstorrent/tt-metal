@@ -17,6 +17,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor,
     const std::optional<int> dim,
+    const bool keepdim,
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
@@ -24,6 +25,7 @@ ttnn::Tensor ArgMaxOperation::invoke(
                ArgMax{
                    tt::tt_metal::DataType::UINT32,
                    dim,
+                   keepdim,
                    use_muticore,
                    memory_config.value_or(input_tensor.memory_config())},
                {input_tensor},
@@ -36,10 +38,12 @@ ttnn::Tensor ArgMaxOperation::invoke(
 ttnn::Tensor ArgMaxOperation::invoke(
     const Tensor& input_tensor,
     const std::optional<int> dim,
+    const bool keepdim,
     const bool use_muticore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensor, dim, use_muticore, memory_config, std::move(optional_output_tensor));
+    return invoke(
+        DefaultQueueId, input_tensor, dim, keepdim, use_muticore, memory_config, std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::reduction

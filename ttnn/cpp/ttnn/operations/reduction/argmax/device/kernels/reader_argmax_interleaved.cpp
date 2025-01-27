@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "debug/dprint.h"
 
 #include "dataflow_api.h"
 #include "utils/bfloat16.h"
@@ -34,31 +35,125 @@ void kernel_main() {
 
     // Use cb as L1 scratch memory
     uint32_t cb_addr = get_write_ptr(cb_id_in0);
-    volatile tt_l1_ptr uint16_t* stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_addr);
+    volatile tt_l1_ptr uint16_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_addr);
 
     uint32_t max_index = 0;
     uint32_t max_val = 0;
     uint32_t index_counter = 0;
 
-    for (uint32_t l = 0; l < B; l++) {
-        for (uint32_t k = 0; k < C; k++) {
-            for (uint32_t j = 0; j < H; j++) {
-                noc_async_read_page(l * C * H + k * H + j, s0, cb_addr);
-                noc_async_read_barrier();
-                if (dim == 3) {
-                    index_counter = 0;
-                    max_index = 0;
-                    max_val = stick[0];
-                }
-                for (uint32_t i = 0; i < W; i++) {
-                    uint16_t val = stick[i];
+    for (uint32_t b = 0; b < B; b++) {
+        for (uint32_t c = 0; c < C; c++) {
+            for (uint32_t h = 0; h < H; h++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint32_t index_counter = 0;
+                    max_val = input_ptr[0];
+
+                    noc_async_read_page(b * C * H * W + c * H * W + h * W, s0, cb_addr);
+                    noc_async_read_barrier();
+                    uint16_t val = input_ptr[b * C * H * W + c * H * W + h * W + l];
+                    DPRINT << b << "x" << c << "x" << h << "x" << l << " : idx "
+                           << b * C * H * W + c * H * W + h * W + l << " val " << val << ENDL();
+
                     if (bfloat16_greater(val, max_val)) {
-                        max_index = index_counter;
+                        max_index = h;
                         max_val = val;
                     }
-                    index_counter++;
+
+                    // Store the index of the max value for the current (b, c, l)
+                    max_vals[b * C * W + c * W + l] = max_index;
                 }
-                if (dim == 3) {
+            }
+        }
+    }
+
+    if (dim == 0) {
+        for (uint32_t k = 0; k < C; k++) {
+            for (uint32_t j = 0; j < H; j++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint16_t max_val = input_ptr[0];
+                    uint32_t index_counter = 0;
+
+                    for (uint32_t i = 0; i < B; i++) {
+                        noc_async_read_page(i * C * H * W + k * H * W + j * W + l, s0, cb_addr);
+                        noc_async_read_barrier();
+                        uint16_t val = input_ptr[i * C * H * W + k * H * W + j * W + l];
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = i;
+                            max_val = val;
+                        }
+                    }
+
+                    max_vals[k * H * W + j * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 1) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t j = 0; j < H; j++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint32_t index_counter = 0;
+                    max_val = input_ptr[0];
+                    for (uint32_t c = 0; c < C; c++) {
+                        noc_async_read_page(b * C * H * W + c * H * W + j * W + l, s0, cb_addr);
+                        noc_async_read_barrier();
+                        uint16_t val = input_ptr[b * C * H * W + c * H * W + j * W + l];
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = c;
+                            max_val = val;
+                        }
+                    }
+
+                    max_vals[b * H * W + j * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 2) {
+        for (uint32_t b = 0; b < B; b++) {
+            for (uint32_t c = 0; c < C; c++) {
+                for (uint32_t l = 0; l < W; l++) {
+                    uint32_t max_index = 0;
+                    uint32_t index_counter = 0;
+                    max_val = input_ptr[0];
+                    for (uint32_t h = 0; h < H; h++) {
+                        noc_async_read_page(b * C * H * W + c * H * W + h * W + l, s0, cb_addr);
+                        noc_async_read_barrier();
+                        uint16_t val = input_ptr[b * C * H * W + c * H * W + h * W + l];
+                        // DPRINT<<b<<"x"<<c<<"x"<<h<<"x"<<l<<" : idx "<< b * C * H * W + c * H * W + h * W + l << " val
+                        // " << val << ENDL();
+
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = h;
+                            max_val = val;
+                        }
+                    }
+
+                    // Store the index of the max value for the current (b, c, l)
+                    max_vals[b * C * W + c * W + l] = max_index;
+                }
+            }
+        }
+    } else if (dim == 3) {
+        for (uint32_t l = 0; l < B; l++) {
+            for (uint32_t k = 0; k < C; k++) {
+                for (uint32_t j = 0; j < H; j++) {
+                    noc_async_read_page(l * C * H + k * H + j, s0, cb_addr);
+                    noc_async_read_barrier();
+                    index_counter = 0;
+                    max_index = 0;
+                    max_val = input_ptr[0];
+                    for (uint32_t i = 0; i < W; i++) {
+                        uint16_t val = input_ptr[i];
+                        if (bfloat16_greater(val, max_val)) {
+                            max_index = index_counter;
+                            max_val = val;
+                        }
+                        index_counter++;
+                    }
                     max_vals[l * C * H + k * H + j] = max_index;
                 }
             }

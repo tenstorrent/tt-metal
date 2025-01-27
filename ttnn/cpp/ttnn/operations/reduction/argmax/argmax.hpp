@@ -16,6 +16,7 @@ struct ArgMaxOperation {
         uint8_t queue_id,
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
+        const bool keepdim = false,
         const bool use_muticore = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -23,6 +24,7 @@ struct ArgMaxOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<int> dim = std::nullopt,
+        const bool keepdim = false,
         const bool use_muticore = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

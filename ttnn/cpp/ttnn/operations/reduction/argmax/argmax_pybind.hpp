@@ -37,6 +37,7 @@ void bind_reduction_argmax_operation(py::module& module) {
 
             Keyword args:
                 dim (int, optional): dimension to reduce. Defaults to `None`.
+                dim (bool, optional): retain the dim or not. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
@@ -55,15 +56,17 @@ void bind_reduction_argmax_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<int> dim,
+               const bool keepdim,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
                uint8_t queue_id) {
-                return self(queue_id, input_tensor, dim, use_multicore, memory_config, optional_output_tensor);
+                return self(queue_id, input_tensor, dim, keepdim, use_multicore, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("dim") = std::nullopt,
+            py::arg("keepdim") = false,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,

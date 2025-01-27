@@ -202,3 +202,25 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+def test_argmax(
+    device,
+) -> list:
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.randn((1, 1, 16, 8), dtype=torch.bfloat16)
+    torch_output_tensor = torch.argmax(torch_input_tensor, dim=2)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_tensor = ttnn.argmax(input_tensor, dim=2)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    torch.set_printoptions(linewidth=10000, edgeitems=10000)
+    print(torch_input_tensor)
+    print(torch_output_tensor)
+    print(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
