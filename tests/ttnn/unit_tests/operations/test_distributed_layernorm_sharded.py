@@ -160,6 +160,38 @@ def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps):
         )
 
 
+def create_output_memory_config(output_core_grid, input_shape):
+    if isinstance(output_core_grid, tuple):
+        output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(output_core_grid[0] - 1, output_core_grid[1] - 1)),
+            ]
+        )
+    else:
+        output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in output_core_grid
+            ]
+        )
+    padded_out_w = math.ceil(input_shape[3] / output_core_range_set.num_cores() / 32) * 32
+    output_memory_config = ttnn.create_sharded_memory_config(
+        shape=(
+            input_shape[0] * input_shape[1] * input_shape[2],
+            padded_out_w,
+        ),
+        core_grid=output_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    return output_memory_config
+
+
 def run_pre_allgather_layernorm(
     device,
     use_program_cache,
@@ -411,7 +443,7 @@ def test_post_allgather_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width, output_df
+            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width, output_df, None
         )
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
@@ -424,66 +456,22 @@ def test_post_allgather_layernorm(
     logger.info("Post-allgather layernorm test passed for all devices")
 
 
-def create_output_memory_config(output_core_grid, input_shape):
-    if isinstance(output_core_grid, tuple):
-        output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(output_core_grid[0] - 1, output_core_grid[1] - 1)),
-            ]
-        )
-    else:
-        output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in output_core_grid
-            ]
-        )
-    padded_out_w = math.ceil(input_shape[3] / output_core_range_set.num_cores() / 32) * 32
-    output_memory_config = ttnn.create_sharded_memory_config(
-        shape=(
-            input_shape[0] * input_shape[1] * input_shape[2],
-            padded_out_w,
-        ),
-        core_grid=output_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    return output_memory_config
-
-
 @skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
 @pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4])
-@pytest.mark.parametrize(
-    "input_df",
-    [
-        # ttnn.bfloat8_b,
-        ttnn.bfloat16
-    ],
-)
-@pytest.mark.parametrize(
-    "weights_df",
-    [
-        ttnn.bfloat8_b,
-        #  ttnn.bfloat16
-    ],
-)
+@pytest.mark.parametrize("num_devices", [1])
+@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize(
-    "input_core_grid, input_grid_offset, output_core_grid",
+    "core_grid, grid_offset, output_core_grid",
     [
-        ((2, 8), ttnn.CoreCoord(0, 0), (2, 8)),
-        # ((4, 4), ttnn.CoreCoord(1, 0), (4, 4))
-        # ((2, 8), ttnn.CoreCoord(1, 0), PREFETCHER_NOC1_GRID)
+        ((4, 8), ttnn.CoreCoord(0, 0), (4, 8)),
+        ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
+        ((2, 8), ttnn.CoreCoord(0, 0), (3, 8)),
     ],
 )
 def test_simulated_distributed_layernorm(
@@ -500,8 +488,8 @@ def test_simulated_distributed_layernorm(
     std,
     min_pcc,
     max_atol,
-    input_core_grid,
-    input_grid_offset,
+    core_grid,
+    grid_offset,
     output_core_grid,
 ):
     # Create input and weight tensors
@@ -510,7 +498,7 @@ def test_simulated_distributed_layernorm(
     )
 
     if output_core_grid is None:
-        output_core_grid = input_core_grid
+        output_core_grid = core_grid
     out_memory_config = create_output_memory_config(output_core_grid, torch_input_chunks[0].shape)
     print(out_memory_config)
 
@@ -518,17 +506,14 @@ def test_simulated_distributed_layernorm(
     torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
     torch_output_chunks = torch.chunk(torch_output_tensor, num_devices, dim=-1)
 
-    print("before pre all gathers")
-
     # Simulate multi-device pre-allgather computation
     tt_pre_allgather_outputs = []
     for d in range(num_devices):
         tt_input_tensor = create_tt_tensors(
-            torch_input_chunks[d], device, input_df, input_core_grid, input_width, grid_offset=input_grid_offset
+            torch_input_chunks[d], device, input_df, core_grid, input_width, grid_offset=grid_offset
         )
-        tt_pre_allgather_output = compute_pre_allgather_stats(tt_input_tensor, input_core_grid, input_width, is_rmsnorm)
+        tt_pre_allgather_output = compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm)
         tt_pre_allgather_outputs.append(tt_pre_allgather_output)
-    print("after pre all gathers")
 
     # Extract and concatenate statistics from pre-allgather outputs
     tt_stats_list = []
@@ -540,42 +525,34 @@ def test_simulated_distributed_layernorm(
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
-        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(input_grid_offset, input_grid_offset)]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    print("before stats to mem config")
     tt_global_stats = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
-
-    print("after stats to mem config")
 
     # Simulate multi-device post-allgather computation
     tt_output_chunks = []
     for d in range(num_devices):
         tt_input_tensor = create_tt_tensors(
-            torch_input_chunks[d], device, input_df, input_core_grid, input_width, grid_offset=input_grid_offset
+            torch_input_chunks[d], device, input_df, core_grid, input_width, grid_offset=grid_offset
         )
         tt_weights = create_tt_tensors(
-            torch_weight_chunks[d], device, weights_df, input_core_grid, input_width, is_weight=True
+            torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
-        print("before compute post all gather")
         tt_output_tensor = compute_post_allgather_output(
             tt_input_tensor,
             tt_weights,
             tt_global_stats,
             eps,
             is_rmsnorm,
-            input_core_grid,
+            core_grid,
             input_width,
             input_df,
             out_memory_config,
         )
-        print("after compute post all gather")
-        print(tt_output_tensor)
-        tt_output_tensor_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
-        print("after out torch conversion")
-        print(tt_output_tensor_torch)
-        tt_output_chunks.append(tt_output_tensor_torch)
+
+        tt_output_chunks.append(ttnn.to_torch(tt_output_tensor).to(torch.bfloat16))
 
     # Concatenate output chunks
     tt_output_torch = torch.cat(tt_output_chunks, dim=-1)
