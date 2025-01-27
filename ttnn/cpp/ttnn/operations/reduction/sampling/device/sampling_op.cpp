@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,14 +31,33 @@ void Sampling::validate_with_output_tensors(
 
     TT_FATAL(input_indices_tensor.get_layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR is supported for input indices!");
 
+    TT_FATAL(
+        input_indices_tensor.get_logical_shape() == input_values_tensor.get_logical_shape(),
+        "Input values and indices must have the same shape!");
+    auto input_shape = input_values_tensor.get_logical_shape();
+    TT_FATAL(input_shape[0] * input_shape[01] * input_shape[2] == 32, "Input must have 32 users!");
+
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
-            optional_output_tensor.value().get_dtype() == DataType::UINT32, "Only UINT32 is supported for outputs!");
+            optional_output_tensor.value().get_dtype() == DataType::UINT32 ||
+                optional_output_tensor.value().get_dtype() == DataType::INT32,
+            "Only UINT32 & INT32 dtypes are supported for outputs!");
+
         TT_FATAL(
             optional_output_tensor.value().memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
+    }
+
+    // Check all elements of k are <= 32
+    for (const auto& value : k) {
+        TT_FATAL(value <= 32, "All elements of k must be less than or equal to 32.");
+    }
+
+    // Check all elements of p are between 0 and 1 (inclusive)
+    for (const auto& value : p) {
+        TT_FATAL(value >= 0.0f && value <= 1.0f, "All elements of p must be between 0 and 1 (inclusive).");
     }
 }
 

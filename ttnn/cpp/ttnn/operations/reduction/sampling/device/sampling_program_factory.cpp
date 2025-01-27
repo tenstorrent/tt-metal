@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include "tt_metal/common/math.hpp"
 #include "ttnn/operation.hpp"
 #include <algorithm>
+
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks sampling_multicore_interleaved(
@@ -30,7 +31,6 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
-    uint32_t input_indices_tile_size = tile_size(input_indices_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
     auto input_values_buffer = input_values_tensor.buffer();
@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     uint32_t num_input_indices_tiles = input_indices_tensor.volume() / TILE_HW;
     auto device = input_values_tensor.device();
 
-    auto input_shape = input_values_tensor.get_legacy_shape();
+    auto input_shape = input_values_tensor.get_logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
     const auto& num_cores = Ht * TILE_HEIGHT;
@@ -56,22 +56,14 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     uint32_t num_cb_unit = 2;
     uint32_t cb_in_units = 2 * num_cb_unit;
 
-    // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid stalls, so allocate
-    // four tiles of space
-    // TODO: In theory if we have enough memory we could allocate 2*Wt tiles to reduce stalls
+    // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid stalls, so allocate four
+    // tiles of space
     uint32_t input_values_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig input_values_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_in_units * input_values_tile_size, {{input_values_cb_index, input_values_cb_data_format}})
             .set_page_size(input_values_cb_index, input_values_tile_size);
     auto cb_input_values_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, input_values_cb_config);
-
-    uint32_t input_indices_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig input_indices_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            Wt * input_indices_tile_size, {{input_indices_cb_index, input_indices_cb_data_format}})
-            .set_page_size(input_indices_cb_index, input_indices_tile_size);
-    auto cb_input_indices_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, input_indices_cb_config);
 
     uint32_t index_cb_index = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
@@ -153,41 +145,21 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             .set_page_size(rand_tile_index, rand_tile_size);
     auto cb_rand = tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_rand_config);
 
-    // values
-    uint32_t num_out0_units = 32;
-    uint32_t values_rm_unit_size = input_values_tensor.element_size();
-    uint32_t aligned_values_rm_unit_size = 32 * 32 * values_rm_unit_size;
-    uint32_t values_rm_cb_index = tt::CBIndex::c_11;
-    tt::tt_metal::CircularBufferConfig values_rm_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            aligned_values_rm_unit_size, {{values_rm_cb_index, input_values_cb_data_format}})
-            .set_page_size(values_rm_cb_index, aligned_values_rm_unit_size);
-    auto cb_values_rm_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, values_rm_cb_config);
-
-    // indices
-    uint32_t indices_rm_unit_size = 2;  // uint16 datum size
-    uint32_t aligned_indices_rm_unit_size = 32 * 32 * indices_rm_unit_size;
-    uint32_t indices_rm_cb_index = tt::CBIndex::c_12;
-    tt::tt_metal::CircularBufferConfig indices_rm_cb_config =
-        tt::tt_metal::CircularBufferConfig(aligned_indices_rm_unit_size, {{indices_rm_cb_index, index_cb_data_format}})
-            .set_page_size(indices_rm_cb_index, aligned_indices_rm_unit_size);
-    auto cb_indices_rm_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, indices_rm_cb_config);
-
     // final indices
-    uint32_t final_indices_rm_unit_size = 4;
-
-    uint32_t aligned_final_indices_rm_unit_size = 32 * 8 * final_indices_rm_unit_size;
+    uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
+    uint32_t aligned_final_indices_rm_unit_size = Wt * TILE_WIDTH * final_indices_rm_unit_size;
     uint32_t final_indices_rm_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            32 * aligned_final_indices_rm_unit_size, {{final_indices_rm_cb_index, input_indices_cb_data_format}})
+            Ht * TILE_HEIGHT * aligned_final_indices_rm_unit_size,
+            {{final_indices_rm_cb_index, input_indices_cb_data_format}})
             .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
     auto cb_final_indices_rm_tensor =
         tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
 
     // // Output sampling indices
     uint32_t output_unit_size = output_tensor.element_size();
-    uint32_t aligned_out0_unit_size = num_out0_units * output_unit_size;
+    uint32_t aligned_out0_unit_size = Ht * TILE_HEIGHT * output_unit_size;
     uint32_t output_cb_index = tt::CBIndex::c_14;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(aligned_out0_unit_size, {{output_cb_index, index_cb_data_format}})
@@ -242,11 +214,8 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             final_indices_rm_cb_index,
             values_cb_index,
             output_ind_cb_index,
-            aligned_values_rm_unit_size,
-            aligned_indices_rm_unit_size,
             aligned_final_indices_rm_unit_size,
             aligned_out0_unit_size,
-            Wt,
             rand_tile_index,
             k[i],
             packed_p_scalar,
@@ -264,7 +233,6 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
         std::vector<uint32_t> compute_args = {
             input_values_cb_index,
-            input_indices_cb_index,
             index_cb_index,
             input_transposed_cb_index,
             index_transposed_cb_index,
@@ -274,9 +242,6 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
             scale_cb_index,
             cb_cur_max_index,
             cb_cur_sum_index,
-            values_rm_cb_index,
-            indices_rm_cb_index,
-            final_indices_rm_cb_index,
             Ht,
             Wt,
             (std::uint32_t)std::log2(Wt),
@@ -318,7 +283,4 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
 }  // namespace ttnn::operations::reduction::detail
 
-// accept optional seed
 // accept optional core_grid
-// implement top-p sampling
-// make final_indices optional

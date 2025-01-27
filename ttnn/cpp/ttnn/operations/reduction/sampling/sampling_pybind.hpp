@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,34 +16,55 @@ namespace py = pybind11;
 void bind_reduction_sampling_operation(py::module& module) {
     auto doc =
         R"doc(
+            Samples from the input tensor based on provided top-k and top-p constraints.
 
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
+            This operation samples values from the input tensor `input_values_tensor` based on the provided thresholds `k` (top-k sampling)
+            and `p` (top-p nucleus sampling). The operation uses the `input_indices_tensor` for indexing and applies sampling
+            under the given seed for reproducibility.
 
-            Currenly this op only support dimension-specific reduction on last dimension.
+            Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.
 
-            Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.
+            Constraints:
+                - `input_values_tensor`:
+                    - Must have `BFLOAT16` data type.
+                    - Must have `TILE` layout.
+                    - Must have `INTERLEAVED` memory layout.
+                - `input_indices_tensor`:
+                    - Must have `UINT32` or `INT32` data type.
+                    - Must have `ROW_MAJOR` layout.
+                    - Must have the same shape as `input_values_tensor`.
+                - The input tensors must represent exactly `32 users` (based on their shape).
+                - `k`: All values in the list must be ≤ 32.
+                - `p`: All values in the list must be in the range `[0.0, 1.0]`.
+                - Output tensor (if provided):
+                    - Must have `UINT32` or `INT32` data type.
+                    - Must have `INTERLEAVED` memory layout.
 
-            Output tensor will have UINT32 data type.
-
-            Equivalent pytorch code:
+            Equivalent PyTorch code:
 
             .. code-block:: python
 
-                return torch.sampling(input_tensor, dim=dim)
+                return torch.sampling(
+                    input_values_tensor,
+                    input_indices_tensor,
+                    k=k,
+                    p=p,
+                    seed=seed,
+                    optional_output_tensor=optional_output_tensor,
+                    queue_id=queue_id
+                )
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
-
-            Keyword args:
-                dim (int, optional): dimension to reduce. Defaults to `None`.
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
+                input_values_tensor (ttnn.Tensor): The input tensor containing values to sample from.
+                input_indices_tensor (ttnn.Tensor): The input tensor containing indices to assist with sampling.
+                k (List[int]): Top-k values for sampling.
+                p (List[float]): Top-p (nucleus) probabilities for sampling.
+                seed (int, optional): Seed for sampling randomness. Defaults to `0`.
+                optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                queue_id (int, optional): Command queue ID for execution. Defaults to `0`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
-
+                ttnn.Tensor: The output tensor containing sampled indices.
         )doc";
 
     using OperationType = decltype(ttnn::sampling);

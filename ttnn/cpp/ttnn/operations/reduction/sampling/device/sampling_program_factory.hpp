@@ -1,6 +1,7 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::reduction::detail {

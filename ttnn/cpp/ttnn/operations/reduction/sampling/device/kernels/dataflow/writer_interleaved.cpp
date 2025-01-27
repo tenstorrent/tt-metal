@@ -1,12 +1,14 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "utils/bfloat16.h"
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "debug/dprint.h"
 
 void kernel_main() {
-    DPRINT << "Writer kernel " << ENDL();
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
     uint32_t arg_id = 0;
@@ -17,18 +19,15 @@ void kernel_main() {
     constexpr uint32_t scale_cb_index = get_compile_time_arg_val(3);
     constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(4);
     constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t output_local_values_rm_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t values_stick_size = get_compile_time_arg_val(8);
-    constexpr uint32_t im_indices_stick_size = get_compile_time_arg_val(9);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(10);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t ids_per_batch_final = get_compile_time_arg_val(12);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
-    constexpr uint32_t k = get_compile_time_arg_val(14);
-    constexpr uint32_t p = get_compile_time_arg_val(15);
-    constexpr uint32_t core_id = get_compile_time_arg_val(16);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(17);
+    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(8);
+    constexpr uint32_t out_stick_size = get_compile_time_arg_val(9);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(10);
+    constexpr uint32_t k = get_compile_time_arg_val(11);
+    constexpr uint32_t p = get_compile_time_arg_val(12);
+    constexpr uint32_t core_id = get_compile_time_arg_val(13);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(14);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
@@ -42,27 +41,22 @@ void kernel_main() {
     uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
-    DPRINT << "recd random number " << rand << ENDL();
 
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 32);
-    cb_wait_front(output_local_values_rm_cb_index, 1);
-    cb_wait_front(output_local_indices_rm_cb_index, 1);
+    cb_wait_front(output_local_values_cb_index, 1);
+    cb_wait_front(output_local_indices_cb_index, 1);
 
     // Use cb as L1 scratch memory
-    uint32_t cb_local_values_addr = get_write_ptr(output_local_values_rm_cb_index);
+    uint32_t cb_local_values_addr = get_write_ptr(output_local_values_cb_index);
     volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);
 
-    uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_rm_cb_index);
+    uint32_t cb_local_indices_addr = get_write_ptr(output_local_indices_cb_index);
     volatile tt_l1_ptr uint16_t* local_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_indices_addr);
 
     uint32_t cb_final_indices_addr = get_write_ptr(output_final_indices_rm_cb_index);
     volatile tt_l1_ptr uint32_t* final_indices =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_final_indices_addr + core_id * final_indices_stick_size);
-
-    for (uint32_t i = 0; i < 32 * 8; ++i) {
-        DPRINT << "final_indices: " << final_indices[i] << ENDL();
-    }
 
     uint32_t out_addr = get_write_ptr(cb_id_out);
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
@@ -80,10 +74,6 @@ void kernel_main() {
         end_id_local_phase_1 = end_id_local_phase_0;
     }
 
-    uint32_t start_id_final = core_id * ids_per_batch_final;
-    uint32_t end_id_final = start_id_final + ids_per_batch_final;
-
-    DPRINT << "p" << p << ENDL();
     if (p != 0) {
         uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
         uint32_t cum_prob = 0;

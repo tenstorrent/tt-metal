@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 /**
  * add a cb full of indices for the tile
  * each row is identical in the index tensor, so we just need to add an offset based on which row tile it is
@@ -34,7 +33,6 @@ FORCE_INLINE void generate_index_tile(const uint32_t cb_id, const uint32_t wt) {
 }
 
 void kernel_main() {
-    DPRINT << "Reader kernel " << ENDL();
     uint32_t values_addr = get_arg_val<uint32_t>(0);
     uint32_t indices_addr = get_arg_val<uint32_t>(1);
 
@@ -48,10 +46,9 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr uint32_t input_indices_page_size = get_compile_time_arg_val(7);
 
-    DPRINT << "redaer reads" << Ht << "and" << Wt << ENDL();
-
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
+    constexpr uint32_t TILE_HEIGHT = 32;
     constexpr uint32_t tile_bytes_input_values = get_tile_size(input_values_cb_index);
     constexpr DataFormat data_format_input_values = get_dataformat(input_values_cb_index);
 
@@ -60,19 +57,13 @@ void kernel_main() {
         .page_size = tile_bytes_input_values,
         .data_format = data_format_input_values};
 
-    // constexpr DataFormat data_format_input_indices = get_dataformat(input_indices_cb_index);
-
     const InterleavedAddrGen<input_indices_is_dram> s1 = {
         .bank_base_address = indices_addr, .page_size = input_indices_page_size};
-
-    // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
-    // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
-    // require substantially more memory (we would be double buffering four Wt sized CBs)
 
     uint32_t tile_id_input_values = 0;
     uint32_t tile_id_input_indices = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // input values
+        // input values TILE
         for (uint32_t j = 0; j < Wt; ++j) {
             cb_reserve_back(input_values_cb_index, onetile);
             uint32_t l1_write_addr_values = get_write_ptr(input_values_cb_index);
@@ -83,16 +74,15 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(input_values_cb_index, onetile);
         }
-
-        // input indices
-        for (uint32_t j = 0; j < 32; ++j) {
-            cb_reserve_back(input_indices_cb_index, onetile);
-            uint32_t l1_write_addr_indices = get_write_ptr(input_indices_cb_index);
-            uint64_t input_noc_addr = get_noc_addr(j, s1);
-            noc_async_read(input_noc_addr, l1_write_addr_indices, input_indices_page_size);
-            noc_async_read_barrier();
-            cb_push_back(input_indices_cb_index, onetile);
-        }
     }
-    DPRINT << "Reader done " << ENDL();
+
+    // input indices RM
+    for (uint32_t j = 0; j < Ht * TILE_HEIGHT; ++j) {
+        cb_reserve_back(input_indices_cb_index, onetile);
+        uint32_t l1_write_addr_indices = get_write_ptr(input_indices_cb_index);
+        uint64_t input_noc_addr = get_noc_addr(j, s1);
+        noc_async_read(input_noc_addr, l1_write_addr_indices, input_indices_page_size);
+        noc_async_read_barrier();
+        cb_push_back(input_indices_cb_index, onetile);
+    }
 }

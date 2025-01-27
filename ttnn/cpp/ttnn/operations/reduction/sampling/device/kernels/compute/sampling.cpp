@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
-#include "debug/dprint.h"
 #include "ckernel_sfpu.h"
 
 #include "compute_kernel_api/pack_untilize.h"
@@ -30,15 +29,6 @@ using namespace ckernel;
 // this can only be removed once that's fixed
 int32_t topk_replay_init = 0;
 
-void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 1; ++r) {
-        // DPRINT << TSLICE(cb_id, 0, SliceRange::h0_w0_32(), false, true) << ENDL();
-        DPRINT << TSLICE(cb_id, r, SliceRange::h0_w0_32(), true, false) << ENDL();
-
-        // DPRINT << TSLICE(cb_id, 0, sr) << ENDL();
-    }
-}
 namespace NAMESPACE {
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
@@ -376,36 +366,27 @@ void top_k() {
 }
 
 void MAIN {
-    DPRINT << "compute kernel" << ENDL();
-    uint32_t arg_id = 0;
     constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_indices_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(3);
+    constexpr uint32_t values_cb_index = get_compile_time_arg_val(4);
+    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(5);
 
-    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(10);
-
-    constexpr uint32_t output_local_values_rm_cb_index = get_compile_time_arg_val(11);
-    constexpr uint32_t output_local_indices_rm_cb_index = get_compile_time_arg_val(12);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(13);
-
-    constexpr uint32_t Ht = get_compile_time_arg_val(14);
-    constexpr uint32_t Wt = get_compile_time_arg_val(15);
-    constexpr uint32_t logWt = get_compile_time_arg_val(16);
-    constexpr uint32_t nearest32_K = get_compile_time_arg_val(17);
-    constexpr uint32_t logk = get_compile_time_arg_val(18);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(19);
-    constexpr uint32_t seed = get_compile_time_arg_val(20);
+    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(9);
+    constexpr uint32_t Ht = get_compile_time_arg_val(10);
+    constexpr uint32_t Wt = get_compile_time_arg_val(11);
+    constexpr uint32_t logWt = get_compile_time_arg_val(12);
+    constexpr uint32_t nearest32_K = get_compile_time_arg_val(13);
+    constexpr uint32_t logk = get_compile_time_arg_val(14);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(15);
+    constexpr uint32_t seed = get_compile_time_arg_val(16);
 
     generate_rand_tile(rand_tile_index, seed);
 
-    DPRINT << "starting top k" << nearest32_K << ENDL();
     // top-k
     top_k<
         Ht,
@@ -420,18 +401,17 @@ void MAIN {
         values_cb_index,
         output_ind_cb_index,
         true>();
-    DPRINT << "top-k " << ENDL();
-    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
+
     // mask out all values except the top-k
+    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
     cb_wait_front(topk_mask_cb_index, Kt);
     add_block_inplace(values_cb_index, topk_mask_cb_index, Ht * Kt);
-    DPRINT << "done add " << ENDL();
+
     // softmax
     reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_max, Ht, Kt>();
     sub_exp_block_bcast_cols_inplace<values_cb_index, cb_cur_max, Ht, Kt>();
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, values_cb_index, scale_cb_index, cb_cur_sum, Ht, Kt>();
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols_inplace(values_cb_index, cb_cur_sum, Ht, Kt);
-    DPRINT << "done softmax " << ENDL();
 }
 }  // namespace NAMESPACE
