@@ -50,6 +50,9 @@ tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 # fabric
 tt_fabric/ @ubcheema @aliuTT @aagarwalTT @eelkozahTT
 
+# Metalium - public API
+tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
+
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
