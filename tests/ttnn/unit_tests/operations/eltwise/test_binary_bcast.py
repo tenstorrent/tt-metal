@@ -868,3 +868,41 @@ def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, out_shape",
+    ((torch.Size([1, 1]), torch.Size([5, 3, 128, 64]), torch.Size([5, 3, 128, 64])),),
+)
+def test_inplace_add_opt_output(a_shape, b_shape, out_shape, device):
+    torch.manual_seed(0)
+
+    min, max = (1, 0)
+    torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
+    torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device, min=min, max=max)
+    out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.bfloat16), ttnn.bfloat8_b)(out_shape)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_tt = ttnn.from_torch(
+        out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    golden_function = ttnn.get_golden_function(ttnn.experimental.add)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+
+    ttnn.experimental.add(input_tensor_a, input_tensor_b, output_tensor=out_tt)
+    output_tensor = ttnn.to_torch(out_tt)
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
