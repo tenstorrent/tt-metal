@@ -184,7 +184,6 @@ inline uint32_t get_estimated_size_of_cbs(
     // Circular Buffer sizes:
     // src0   CB: per_core_M * in0_block_w * 2 (for double buffer)
     // src1   CB: per_core_N * in0_block_w * 2 (for double buffer)
-    // src2   CB: per_core_M * in2_CB_tiles
     // interm CB: per_core_M * per_core_N * interm_single_tile_size
     // out    CB: per_core_M * per_core_N
     // bias   CB: per_core_M * in0_block_w
@@ -192,11 +191,10 @@ inline uint32_t get_estimated_size_of_cbs(
     // program config.
     uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
     uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
-    uint32_t in2_size = per_core_M * in0_block_w;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
     uint32_t bias_size = in0_block_w * bias_single_tile_size;
-    return in0_size + in1_size + in2_size + out_size + interm_size + bias_size;
+    return in0_size + in1_size + out_size + interm_size + bias_size;
 }
 
 inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
