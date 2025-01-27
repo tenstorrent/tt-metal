@@ -207,7 +207,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
             }
         }
     };
-    return {.program = std::move(program)};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const Tensor& output) {
