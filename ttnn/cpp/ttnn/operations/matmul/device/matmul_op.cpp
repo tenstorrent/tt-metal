@@ -1267,6 +1267,15 @@ void add_stagger_defines_if_needed(
     }
 }
 
+void add_nops_in_matmul(std::map<string, string>& mm_kernel_defines) {
+    // Limit matmul op throughput by inserting NOP instruction ever 3 MVMUL instructions
+    const bool enable_mm_add_nops = std::getenv("TT_ENABLE_MM_ADD_NOPS");
+    if (enable_mm_add_nops) {
+        mm_kernel_defines["TT_ENABLE_MM_ADD_NOPS"] = "1";
+        log_warning(tt::LogOp, "Throttle matmul perf to max 75% by adding NOPs as every 4th inst");
+    }
+}
+
 void add_mm_throttle_defines_if_needed(
     const tt::ARCH arch, MathFidelity fidelity, std::map<string, string>& mm_kernel_defines) {
     constexpr uint32_t stallwait_nops_equ = 6;
