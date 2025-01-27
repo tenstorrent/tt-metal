@@ -10,6 +10,7 @@
 #include "command_queue_fixture.hpp"
 #include "core_coord.hpp"
 #include "math.hpp"
+#include "shape2d.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
@@ -83,9 +84,9 @@ struct ShardedSubBufferStressTestConfig {
     uint32_t region_offset = 0;
     uint32_t region_size = 0;
     CoreRangeSet cores;
-    std::array<uint32_t, 2> shard_shape;
-    std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2> tensor2d_shape;
+    Shape2D shard_shape;
+    Shape2D page_shape;
+    Shape2D tensor2d_shape;
     TensorMemoryLayout layout;
     ShardOrientation orientation;
 };
@@ -1066,12 +1067,12 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) 
                 config.page_size,
                 config.region_offset,
                 config.region_size,
-                tt::constants::TILE_HEIGHT,
-                tt::constants::TILE_WIDTH,
-                config.page_shape[0],
-                config.page_shape[1],
-                config.tensor2d_shape[0],
-                config.tensor2d_shape[1],
+                config.shard_shape.height(),
+                config.shard_shape.width(),
+                config.page_shape.height(),
+                config.page_shape.width(),
+                config.tensor2d_shape.height(),
+                config.tensor2d_shape.width(),
                 magic_enum::enum_name(config.layout).data(),
                 magic_enum::enum_name(config.orientation).data(),
                 config.cores.str());
