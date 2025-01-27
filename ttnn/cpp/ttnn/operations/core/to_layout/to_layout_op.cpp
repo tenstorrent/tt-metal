@@ -92,8 +92,7 @@ Tensor to_layout_impl(
 
     auto tensor = tensor_arg;
     const auto tile = tensor.get_tensor_spec().tile();
-    auto output_shape =
-        tensor_arg.get_logical_shape().rank() == 0 ? tensor_arg.get_padded_shape() : tensor_arg.get_logical_shape();
+    auto output_shape = tensor_arg.get_logical_shape();
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
