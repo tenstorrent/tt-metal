@@ -1255,6 +1255,15 @@ void add_stagger_defines_if_needed(
     }
 }
 
+void throttle_mm_perf(std::map<string, string>& mm_kernel_defines) {
+    // Limit matmul op throughput by inserting NOP instruction ever 3 MVMUL instructions
+    const bool enable_throttle_mm_perf = std::getenv("TT_THROTTLE_MM_PERF");
+    if (enable_throttle_mm_perf) {
+        mm_kernel_defines["TT_THROTTLE_MM_PERF"] = "1";
+        log_warning(tt::LogOp, "Throttle matmul perf to max 75% by adding NOPs as every 4th inst");
+    }
+}
+
 }  // namespace bmm_op_utils
 
 namespace ttnn {
