@@ -287,7 +287,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({this->virtual_core_from_physical_core(core.first, core.second.type), AllocCoreType::Invalid});
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core(core.first), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -720,7 +721,7 @@ void Device::initialize_and_launch_firmware() {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const CoreCoord &core : eth_cores) {
-            auto virtual_core = this->virtual_core_from_physical_core(core, CoreType::ETH);
+            auto virtual_core = this->virtual_core_from_physical_core(core);
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
     }
@@ -1173,11 +1174,12 @@ CoreCoord Device::compute_with_storage_grid_size() const {
 }
 
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
-        TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
-
-    return soc_desc.physical_cores.at(physical_coord).type;
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    if (core_type == CoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    }
+    return core_type;
 }
 
 CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
@@ -1196,7 +1198,7 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     } else {
         const auto& grid_size = this->grid_size();
         // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        coord = this->virtual_core_from_physical_core(coord);
         // Derive virtual coord in noc_index space.
         CoreCoord virtual_coord = {
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
@@ -1219,7 +1221,7 @@ CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) con
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
-        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
+        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 
@@ -1248,8 +1250,8 @@ CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord,
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
 
-CoreCoord Device::virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const {
-    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
