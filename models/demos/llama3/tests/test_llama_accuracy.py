@@ -13,7 +13,7 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.llama3.demo.demo import preprocess_inputs_prefill
+from models.demos.llama3.demo.simple_text_demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
