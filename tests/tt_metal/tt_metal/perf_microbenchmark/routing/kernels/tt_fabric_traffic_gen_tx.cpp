@@ -327,6 +327,7 @@ bool test_buffer_handler() {
     } else if constexpr (test_command == ASYNC_WR_RESP) {
         return test_buffer_handler_fvcc();
     }
+    return false;
 }
 
 void kernel_main() {
