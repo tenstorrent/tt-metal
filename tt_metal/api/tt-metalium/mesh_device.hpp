@@ -174,6 +174,9 @@ public:
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
+    // Light Metal
+    void load_trace(const uint8_t cq_id, const uint32_t tid, detail::TraceDescriptor& trace_desc) override;
+
     bool using_slow_dispatch() const override;
     bool using_fast_dispatch() const override;
 

@@ -10,6 +10,8 @@
 #include <map>
 #include <optional>
 #include <unordered_set>
+#include <flatbuffers/flatbuffers.h>
+#include "flatbuffers/flatbuffer_builder.h"
 
 #include "logger.hpp"
 #include "tt_backend_api_types.hpp"
@@ -18,12 +20,30 @@
 
 #include "circular_buffer_constants.h"
 
+// Forward declarations for external flatbuffer serialization function
+namespace tt::tt_metal::flatbuffer {
+class CircularBufferConfig;
+}
+namespace tt::tt_metal {
+inline namespace v0 {
+class CircularBufferConfig;
+}
+inline flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> ToFlatbuffer(
+    const tt::tt_metal::CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder);
+inline CircularBufferConfig FromFlatBuffer(const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb);
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal {
 inline namespace v0 {
 
 using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
+    friend flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> tt::tt_metal::ToFlatbuffer(
+        const tt::tt_metal::CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder);
+    friend CircularBufferConfig FromFlatbuffer(
+        const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
+
 public:
     // Static circular buffer spec
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec);

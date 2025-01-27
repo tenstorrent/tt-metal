@@ -209,6 +209,7 @@ private:
     friend void FinishImpl(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
     friend CommandQueue;
     friend detail::Program_;
+    friend void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 };
 
 }  // namespace tt::tt_metal

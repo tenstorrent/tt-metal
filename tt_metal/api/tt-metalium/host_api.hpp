@@ -12,6 +12,7 @@
 #include "device.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
+#include "lightmetal_types.hpp"
 
 /** @file */
 
@@ -31,6 +32,11 @@ class CoreRangeSet;
 namespace tt {
 
 namespace tt_metal {
+
+namespace detail {
+struct TraceDescriptor;
+}
+
 inline namespace v0 {
 
 class Program;
@@ -882,6 +888,43 @@ void ReleaseTrace(IDevice* device, const uint32_t tid);
  */
 // clang-format on
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
+
+// clang-format off
+/**
+ * Begin Light Metal binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
+ * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
+ * Note: This LightMetal Trace feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: void
+ */
+// clang-format on
+void LightMetalBeginCapture();
+
+// clang-format off
+/**
+ * Ends Light Metal binary capturing on host and all devices returns the binary blob to the user.
+ * Note: This LightMetal Trace feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: LightMetalBinary
+ */
+// clang-format on
+LightMetalBinary LightMetalEndCapture();
+
+// clang-format off
+/**
+ * Load an existing trace descriptor onto a particular device and command queue and assign it as user-provided trace id. Useful for Light Metal Binary replay.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device to load the trace onto.                                     | IDevice *                     |                                    | Yes      |
+ * | cq_id        | The command queue id to load the trace onto.                           | uint8_t                       |                                    | Yes      |
+ * | trace_id     | A unique id to represent the trace on device.                          | uint32_t                      |                                    | Yes      |
+ * | trace_desc   | The trace descriptor to load onto the device.                          | detail::TraceDescriptor&      |                                    | Yes      |
+ */
+// clang-format on
+void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, detail::TraceDescriptor& trace_desc);
 
 // clang-format off
 /**

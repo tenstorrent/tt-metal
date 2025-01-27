@@ -110,6 +110,7 @@ message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 
 ############################################################################################################################
 
@@ -230,6 +231,10 @@ add_link_options(
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
+
+if(TT_ENABLE_LIGHT_METAL_TRACE)
+    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE)
+endif()
 
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
