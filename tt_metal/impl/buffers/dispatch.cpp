@@ -363,26 +363,9 @@ std::vector<CoreCoord> get_cores_for_sharded_buffer(
 std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     uint32_t core_id,
     const Buffer& buffer,
-    const std::variant<ShardedBufferWriteDispatchParams, ShardedBufferReadDispatchParams>& dispatch_params) {
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    uint32_t starting_host_page_idx;
-    uint32_t ending_host_page_idx;
-    std::visit(
-        [&](const auto& params) {
-            using T = std::decay_t<decltype(params)>;
-            buffer_page_mapping = params.buffer_page_mapping;
-            if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
-                starting_host_page_idx = params.starting_dst_host_page_index;
-                ending_host_page_idx =
-                    params.starting_dst_host_page_index + params.total_pages_written + params.total_pages_to_write;
-            } else if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
-                starting_host_page_idx = params.starting_src_host_page_index;
-                ending_host_page_idx =
-                    params.starting_src_host_page_index + params.total_pages_read + params.total_pages_to_read;
-            }
-        },
-        dispatch_params);
-
+    const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping,
+    uint32_t starting_host_page_idx,
+    uint32_t ending_host_page_idx) {
     const std::vector<uint32_t> core_host_pages = buffer_page_mapping->core_host_page_indices_[core_id];
     TT_ASSERT(std::is_sorted(core_host_pages.begin(), core_host_pages.end()));
 
@@ -444,7 +427,15 @@ void write_sharded_buffer_to_core(
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
     if (dispatch_params.width_split) {
-        auto [host_page, num_pages_to_write] = calculate_pages_to_process_in_shard(core_id, buffer, dispatch_params);
+        const uint32_t ending_dst_host_page_index = dispatch_params.starting_dst_host_page_index +
+                                                    dispatch_params.total_pages_written +
+                                                    dispatch_params.total_pages_to_write;
+        auto [host_page, num_pages_to_write] = calculate_pages_to_process_in_shard(
+            core_id,
+            buffer,
+            dispatch_params.buffer_page_mapping,
+            dispatch_params.starting_dst_host_page_index,
+            ending_dst_host_page_index);
         num_pages = num_pages_to_write;
 
         if (num_pages == 0) {
@@ -692,8 +683,15 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     uint32_t address = buffer.address();
 
     if (dispatch_params.width_split) {
-        auto [start_host_page, num_pages_to_read] =
-            calculate_pages_to_process_in_shard(core_id, buffer, dispatch_params);
+        const uint32_t ending_src_host_page_index = dispatch_params.starting_src_host_page_index +
+                                                    dispatch_params.total_pages_read +
+                                                    dispatch_params.total_pages_to_read;
+        auto [start_host_page, num_pages_to_read] = calculate_pages_to_process_in_shard(
+            core_id,
+            buffer,
+            dispatch_params.buffer_page_mapping,
+            dispatch_params.starting_src_host_page_index,
+            ending_src_host_page_index);
         host_page = start_host_page;
         pages_per_txn = num_pages_to_read;
         if (pages_per_txn > 0) {
