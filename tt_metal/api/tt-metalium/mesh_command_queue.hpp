@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include <mesh_device.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
-
-#include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_workload.hpp"
+#include "command_queue_interface.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_device.hpp"
+#include "mesh_workload.hpp"
 
 namespace tt::tt_metal::distributed {
 

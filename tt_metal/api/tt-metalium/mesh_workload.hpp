@@ -4,11 +4,9 @@
 
 #pragma once
 
-#include <host_api.hpp>
-#include <mesh_device.hpp>
-
-#include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/impl/program/dispatch.hpp"
+#include "host_api.hpp"
+#include "mesh_device.hpp"
+#include "mesh_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
 // The LogicalDeviceRange concept is fundamentally identical to the CoreRange concept

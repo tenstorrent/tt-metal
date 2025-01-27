@@ -7,9 +7,9 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_metal/distributed/distributed.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
