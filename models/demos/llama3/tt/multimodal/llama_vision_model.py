@@ -360,7 +360,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
         else:
-            assert cross_attention_masks is None and full_text_row_masked_out_mask is None and cross_page_table is None
+            assert cross_attention_masks is None and full_text_row_masked_out_mask is None
             tt_xattn_mask = None
             tt_full_text_mask_expand_1NSH = None
             tt_full_text_mask_expand_11SD = None

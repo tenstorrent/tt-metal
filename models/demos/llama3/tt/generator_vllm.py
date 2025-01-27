@@ -114,9 +114,10 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
         vision_masks = []
         total_lens = []
         for user_id in range(batch):
-            vision_images.append([images[user_id]])
+            image = images[user_id]
+            vision_images.append([image] if image else None)
             prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
-            vision_masks.append(create_vision_mask(prompt_tokens, self.MLLAMA_IMAGE_TOKEN_ID))
+            vision_masks.append(create_vision_mask(prompt_tokens, self.MLLAMA_IMAGE_TOKEN_ID) if image else None)
             total_lens.append(prompt_lens[user_id] + self.max_gen_len)
 
         return super().prefill_forward(
