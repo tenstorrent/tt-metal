@@ -59,8 +59,11 @@ TensorSpec get_tensor_spec_with_memory(
             MemoryConfig{
                 .memory_layout = mem_layout,
                 .buffer_type = BufferType::DRAM,
-                .shard_spec =
-                    ShardSpec{ttnn::CoreRangeSet{}, {32, 64}, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL}}));
+                .shard_spec = ShardSpec{
+                    ttnn::CoreRangeSet{ttnn::CoreRange{ttnn::CoreRange{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{4, 1}}}},
+                    {32, 64},
+                    ShardOrientation::ROW_MAJOR,
+                    ShardMode::LOGICAL}}));
 }
 
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype, Layout layout = Layout::ROW_MAJOR) {
@@ -366,11 +369,6 @@ TEST_P(ShardVectorConversionTest, BlockfloatRoundtripTilizedShardMapping) {
 
     auto tensor =
         Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::BFLOAT8_B, Layout::TILE, GetParam()));
-
-    std::cout << tensor.get_tensor_spec().logical_2d_shape().height() << " "
-              << tensor.get_tensor_spec().logical_2d_shape().width() << std::endl;
-    std::cout << tensor.get_tensor_spec().physical_shape().height() << " "
-              << tensor.get_tensor_spec().physical_shape().width() << std::endl;
 
     ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
 
