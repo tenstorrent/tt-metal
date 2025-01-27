@@ -19,6 +19,7 @@ struct SamplingOperation {
         const std::vector<uint16_t>& k,
         const std::vector<float>& p,
         const uint32_t seed,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 
     static ttnn::Tensor invoke(
@@ -27,6 +28,7 @@ struct SamplingOperation {
         const std::vector<uint16_t>& k,
         const std::vector<float>& p,
         const uint32_t seed,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 

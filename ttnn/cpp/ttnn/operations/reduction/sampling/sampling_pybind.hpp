@@ -79,9 +79,18 @@ void bind_reduction_sampling_operation(py::module& module) {
                const std::vector<uint16_t>& k,
                const std::vector<float>& p,
                const uint32_t seed,
+               const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor,
                uint8_t queue_id) {
-                return self(queue_id, input_values_tensor, input_indices_tensor, k, p, seed, optional_output_tensor);
+                return self(
+                    queue_id,
+                    input_values_tensor,
+                    input_indices_tensor,
+                    k,
+                    p,
+                    seed,
+                    sub_core_grids,
+                    optional_output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
@@ -89,6 +98,7 @@ void bind_reduction_sampling_operation(py::module& module) {
             py::arg("k").noconvert(),
             py::arg("p").noconvert(),
             py::arg("seed").noconvert() = 0,
+            py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = 0});
 }

@@ -19,6 +19,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
     const uint32_t seed,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
@@ -48,9 +49,19 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto input_shape = input_values_tensor.get_logical_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
-    const auto& num_cores = Ht * TILE_HEIGHT;
-    CoreRangeSet core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {8 - 1, 4 - 1})});
-    const auto cores = corerange_to_cores(core_grid, 32, true);
+    auto num_cores = Ht * TILE_HEIGHT;
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    CoreRangeSet core_grid =
+        CoreRangeSet(std::vector{CoreRange({0, 0}, {num_cores_x - 1, (num_cores / num_cores_x) - 1})});
+
+    if (sub_core_grids.has_value()) {
+        core_grid = sub_core_grids.value();
+        num_cores = core_grid.num_cores();
+    }
+    auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     // for streaming in input
     uint32_t num_cb_unit = 2;

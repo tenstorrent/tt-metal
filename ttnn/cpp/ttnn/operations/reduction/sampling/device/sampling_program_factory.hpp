@@ -12,6 +12,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const std::vector<uint16_t>& k,
     const std::vector<float>& p,
     const uint32_t seed,
+    const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor);
 
 }  // namespace ttnn::operations::reduction::detail

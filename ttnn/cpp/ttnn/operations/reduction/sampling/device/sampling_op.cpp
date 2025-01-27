@@ -90,7 +90,8 @@ operation::ProgramWithCallbacks Sampling::create_program(
     const auto& input_values_tensor = input_tensors.at(0);
     const auto& input_indices_tensor = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
-    return detail::sampling_multicore_interleaved(input_values_tensor, input_indices_tensor, k, p, seed, output_tensor);
+    return detail::sampling_multicore_interleaved(
+        input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, output_tensor);
 }
 
 }  // namespace ttnn::operations::reduction
