@@ -253,9 +253,9 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
                 for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
                     const auto& physical_connected_chip_id =
-                        this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_connected_chip_id];
+                        this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
+                                                                               [logical_connected_chip_id];
                     const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
-
                     for (const auto& eth_core : connected_eth_cores) {
                         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
                             .push_back(tt::Cluster::instance()
