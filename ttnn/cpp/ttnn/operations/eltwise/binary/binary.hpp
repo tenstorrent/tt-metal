@@ -8,7 +8,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
-#include "device/binary_device_operation.hpp"
 
 namespace ttnn {
 
@@ -220,7 +219,7 @@ constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>>();
 constexpr auto divide = ttnn::register_operation_with_auto_launch_op<
     "ttnn::divide",
-    operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV_FAST>>();
+    operations::binary::BinaryOperation<operations::binary::BinaryOpType::DIV>>();
 constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::gt_",
     operations::binary::InplaceRelationalBinary<operations::binary::BinaryOpType::GT>>();
