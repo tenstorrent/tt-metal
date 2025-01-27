@@ -15,7 +15,6 @@ from models.experimental.functional_yolov8m.reference import yolov8m_utils
 
 from models.experimental.functional_yolov8m.tt.ttnn_yolov8m_utils import (
     ttnn_decode_bboxes,
-    ttnn_make_anchors,
     custom_preprocessor,
 )
 

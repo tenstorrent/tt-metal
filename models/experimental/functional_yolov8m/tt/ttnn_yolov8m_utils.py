@@ -45,57 +45,24 @@ def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
         return ttnn.concat([c_xy, wh], 1)
 
 
-def ttnn_make_anchors(device, feats, strides, grid_cell_offset=0.5):
+def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     anchor_points, stride_tensor = [], []
     assert feats is not None
     for i, stride in enumerate(strides):
-        h, w = feats[i].shape[1], feats[i].shape[2]
+        h, w = feats[i], feats[i]
+        sx = torch.arange(end=w) + grid_cell_offset
+        sy = torch.arange(end=h) + grid_cell_offset
+        sy, sx = torch.meshgrid(sy, sx)
+        anchor_points.append(torch.stack((sx, sy), -1).view(-1, 2))
+        stride_tensor.append(torch.full((h * w, 1), stride))
 
-        sx = ttnn.arange(start=0, end=w, dtype=ttnn.bfloat16, device=device)
-        sy = ttnn.arange(start=0, end=h, dtype=ttnn.bfloat16, device=device)
+    a = torch.cat(anchor_points).transpose(0, 1).unsqueeze(0)
+    b = torch.cat(stride_tensor).transpose(0, 1)
 
-        sx = ttnn.to_layout(sx, ttnn.TILE_LAYOUT)
-        sy = ttnn.to_layout(sy, ttnn.TILE_LAYOUT)
-
-        sy = sy + grid_cell_offset
-        sx = sx + grid_cell_offset
-
-        sx = ttnn.reshape(sx, (1, 1, h, 1))
-        sx = ttnn.repeat(sx, ttnn.Shape((1, w, 1, 1)))
-
-        sy = ttnn.reshape(sy, (w, 1, 1, 1))
-        sy = ttnn.repeat(sy, ttnn.Shape((1, h, 1, 1)))
-
-        sx = ttnn.reshape(sx, (w, h))
-        sy = ttnn.reshape(sy, (h, w))
-
-        sx = ttnn.sharded_to_interleaved(sx, ttnn.L1_MEMORY_CONFIG)
-        sx = ttnn.to_layout(sx, ttnn.ROW_MAJOR_LAYOUT)
-        sx = ttnn.reshape(sx, (sx.shape[0], sx.shape[1], -1))
-
-        sy = ttnn.sharded_to_interleaved(sy, ttnn.L1_MEMORY_CONFIG)
-        sy = ttnn.to_layout(sy, ttnn.ROW_MAJOR_LAYOUT)
-        sy = ttnn.reshape(sy, (sx.shape[0], sx.shape[1], -1))
-
-        temp = ttnn.concat([sx, sy], dim=-1)
-        temp = ttnn.reshape(temp, (-1, 2))
-
-        temp = ttnn.sharded_to_interleaved(temp, ttnn.L1_MEMORY_CONFIG)
-        temp = ttnn.to_layout(temp, ttnn.TILE_LAYOUT)
-        temp = ttnn.to_device(temp, device)
-        anchor_points.append(temp)
-
-        temp = ttnn.full(shape=[h * w, 1], fill_value=stride, dtype=ttnn.bfloat16)
-
-        temp = ttnn.sharded_to_interleaved(temp, ttnn.L1_MEMORY_CONFIG)
-        temp = ttnn.to_layout(temp, ttnn.TILE_LAYOUT)
-        temp = ttnn.to_device(temp, device)
-        stride_tensor.append(temp)
-
-    a = ttnn.concat(anchor_points, dim=0)
-    b = ttnn.concat(stride_tensor, dim=0)
-
-    return (a, b)
+    return (
+        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+    )
 
 
 def preprocess_parameters(state_dict, path, bias=True):
@@ -215,5 +182,13 @@ def custom_preprocessor(device, state_dict):
     # DFL conv
 
     parameters["model.22.dfl"] = preprocess_parameters(state_dict, "model.22.dfl", bias=False)
+
+    feats = [80, 40, 20]  # Values depends on input resolution. Current: 640*640
+    strides = [8.0, 16.0, 32.0]
+
+    anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
+
+    parameters["anchors"] = anchors
+    parameters["strides"] = strides
 
     return parameters

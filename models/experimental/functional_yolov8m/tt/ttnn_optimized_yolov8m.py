@@ -8,9 +8,13 @@ import torch.nn as nn
 
 from models.experimental.functional_yolov8m.tt.ttnn_yolov8m_utils import (
     autopad,
-    ttnn_make_anchors,
     ttnn_decode_bboxes,
 )
+import math
+from tt_lib.utils import (
+    _nearest_y,
+)
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def Conv(
@@ -87,6 +91,23 @@ def Conv(
         return_weights_and_bias=True,
         return_output_dim=True,
     )
+    # ncores = 32
+    # input_2d_height = x.shape.with_tile_padding()[2]
+    # input_2d_width = x.shape.with_tile_padding()[3]
+
+    # input_2d_height_padded = _nearest_y(input_2d_height, ncores * 32)
+
+    # shard_height = math.ceil(input_2d_height_padded / ncores)
+    # shard_grid = get_shard_grid_from_num_cores(ncores, device)
+    # shard_width = input_2d_width
+    # shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    # tensor_memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    # shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation)
+
+    # in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
+
+    # x = ttnn.to_memory_config(x, memory_config=in_sharded_mem_config)
 
     x = ttnn.silu(x)
 
@@ -406,26 +427,13 @@ def Detect(device, x, parameters, path, nc=80, ch=()):
 
     shape = x[0].shape
 
-    if format != "imx" and (dynamic or self_shape != shape):
-        temp = ttnn_make_anchors(device, x, stride, 0.5)
-        ls = []
-        for i in temp:
-            i = ttnn.sharded_to_interleaved(i, ttnn.L1_MEMORY_CONFIG)
-            i = ttnn.to_layout(i, ttnn.ROW_MAJOR_LAYOUT)
-            i = ttnn.permute(i, (1, 0))
-            ls.append(i)
-
-        anchors, strides = ls[0], ls[1]
-        anchors = ttnn.reshape(anchors, (-1, anchors.shape[0], anchors.shape[1]))
-        self_shape = shape
+    anchors, strides = parameters["anchors"], parameters["strides"]
 
     xi = []
     for i in x:
-        i = ttnn.sharded_to_interleaved(i, ttnn.L1_MEMORY_CONFIG)
-        i = ttnn.to_layout(i, ttnn.ROW_MAJOR_LAYOUT)
         i = ttnn.permute(i, (0, 3, 1, 2))
         i = ttnn.reshape(i, (shape[0], no, -1))
-        i = ttnn.to_layout(i, ttnn.TILE_LAYOUT)
+        # i = ttnn.to_layout(i, ttnn.TILE_LAYOUT)
         xi.append(i)
 
     x_cat = ttnn.concat(xi, 2)
@@ -435,9 +443,6 @@ def Detect(device, x, parameters, path, nc=80, ch=()):
 
     dfl = DFL(device, box, parameters, f"{path}.dfl")
 
-    anchors = ttnn.to_layout(anchors, ttnn.TILE_LAYOUT)
-    strides = ttnn.to_layout(strides, ttnn.TILE_LAYOUT)
-
     dbox = ttnn_decode_bboxes(device, dfl, anchors)
 
     dbox = dbox * strides
@@ -446,17 +451,17 @@ def Detect(device, x, parameters, path, nc=80, ch=()):
 
 
 def DetectionModel(device, x, parameters):
-    Conv_0, out_h, out_w = Conv(device, x, parameters, "model.0", x.shape[1], x.shape[2], 3, 2, 1, act_block_h=True)
+    conv_0, out_h, out_w = Conv(device, x, parameters, "model.0", x.shape[1], x.shape[2], 3, 2, 1, act_block_h=True)
     ttnn.deallocate(x)
 
-    Conv_1, out_h, out_w = Conv(device, Conv_0, parameters, "model.1", out_h, out_w, 3, 2, 1, act_block_h=True)
-    ttnn.deallocate(Conv_0)
+    conv_1, out_h, out_w = Conv(device, conv_0, parameters, "model.1", out_h, out_w, 3, 2, 1, act_block_h=True)
+    ttnn.deallocate(conv_0)
 
-    C2f_2, out_h, out_w = C2f(device, Conv_1, parameters, "model.2", out_h, out_w, n=2, shortcut=True, act_block_h=True)
-    ttnn.deallocate(Conv_1)
+    c2f_2, out_h, out_w = C2f(device, conv_1, parameters, "model.2", out_h, out_w, n=2, shortcut=True, act_block_h=True)
+    ttnn.deallocate(conv_1)
 
-    conv_3, out_h, out_w = Conv(device, C2f_2, parameters, "model.3", out_h, out_w, 3, 2, 1)
-    ttnn.deallocate(C2f_2)
+    conv_3, out_h, out_w = Conv(device, c2f_2, parameters, "model.3", out_h, out_w, 3, 2, 1)
+    ttnn.deallocate(c2f_2)
 
     c2f_4, out_h, out_w = C2f(device, conv_3, parameters, "model.4", out_h, out_w, n=4, shortcut=True, bfloat8=True)
     c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
@@ -478,6 +483,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(conv_7)
 
     spppf_9, out_h, out_w = SPPF(device, c2f_8, parameters, "model.9", out_h, out_w)
+    spppf_9 = ttnn.sharded_to_interleaved(spppf_9, ttnn.L1_MEMORY_CONFIG)
     nine = ttnn.clone(spppf_9, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     spppf_9 = ttnn.to_layout(spppf_9, ttnn.ROW_MAJOR_LAYOUT)
     spppf_9 = ttnn.reshape(spppf_9, (1, out_h, out_w, spppf_9.shape[-1]))
