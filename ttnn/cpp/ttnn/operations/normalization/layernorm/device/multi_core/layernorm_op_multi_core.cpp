@@ -1647,64 +1647,69 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
         std::vector<uint32_t> write_back_writer_args;
 
-        // uint32_t num_storage_cores = (block_wt * num_cores + block_wt_resharded - 1) / block_wt_resharded;  // TODO:
-        // need to pass in storage core grid anyway, take from there
-        uint32_t num_storage_cores = all_storage_cores.num_cores();
-
-        write_back_writer_args.push_back(
-            current_storage_core_offset * out_single_tile_size);  // storage_core_start_offset
-
-        uint32_t current_worker_num_segments_to_write_back = 0;
-        uint32_t worker_core_current_offset = 0;
-
-        // 8192 / 4 = 2048 per device, 2048 / 16 = 128 per worker core (=4 tiles)
-        // 9216 / 4 = 2304 per device, 2304 / 24 = 96 per stoorage core (=3 tiles)
-
-        tt::log_debug("block_wt: {}, block_wt_resharded: {}", block_wt, block_wt_resharded);
-
-        while (worker_core_current_offset <
-               block_wt) {  // Continue until all worker core data has been written to corresponding storage cores
-            uint32_t num_tiles_available_at_current_storage_core = block_wt_resharded - current_storage_core_offset;
-            uint32_t num_tiles_left_on_current_worker_core = block_wt - worker_core_current_offset;
-            uint32_t num_tiles_to_write_back =
-                std::min(num_tiles_left_on_current_worker_core, num_tiles_available_at_current_storage_core);
-            current_worker_num_segments_to_write_back += 1;
-
-            tt::log_debug(
-                "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to write "
-                "back: {}",
-                i,
-                worker_core_current_offset,
-                current_storage_core_offset,
-                num_tiles_to_write_back);
+        if (is_post_all_gather && !skip_write_back) {
+            // uint32_t num_storage_cores = (block_wt * num_cores + block_wt_resharded - 1) / block_wt_resharded;  //
+            // TODO: need to pass in storage core grid anyway, take from there
+            uint32_t num_storage_cores = all_storage_cores.num_cores();
 
             write_back_writer_args.push_back(
-                num_tiles_to_write_back * out_single_tile_size);                         // num_bytes_to_write_back
-            write_back_writer_args.push_back(storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
-            write_back_writer_args.push_back(storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
+                current_storage_core_offset * out_single_tile_size);  // storage_core_start_offset
 
-            tt::log_debug("num_bytes_to_write_back: {}", num_tiles_to_write_back * out_single_tile_size);
-            tt::log_debug("storage_core_noc_x[current_storage_core]: {}", storage_core_noc_x[current_storage_core]);
-            tt::log_debug("storage_core_noc_y[current_storage_core]: {}", storage_core_noc_y[current_storage_core]);
+            uint32_t current_worker_num_segments_to_write_back = 0;
+            uint32_t worker_core_current_offset = 0;
 
-            worker_core_current_offset += num_tiles_to_write_back;
-            current_storage_core_offset += num_tiles_to_write_back;
+            // 8192 / 4 = 2048 per device, 2048 / 16 = 128 per worker core (=4 tiles)
+            // 9216 / 4 = 2304 per device, 2304 / 24 = 96 per stoorage core (=3 tiles)
 
-            if (current_storage_core_offset >= block_wt_resharded) {
-                current_storage_core += 1;        // Move to next storage core
-                current_storage_core_offset = 0;  // Reset offset on new storage core
+            tt::log_debug("block_wt: {}, block_wt_resharded: {}", block_wt, block_wt_resharded);
+
+            while (worker_core_current_offset <
+                   block_wt) {  // Continue until all worker core data has been written to corresponding storage cores
+                uint32_t num_tiles_available_at_current_storage_core = block_wt_resharded - current_storage_core_offset;
+                uint32_t num_tiles_left_on_current_worker_core = block_wt - worker_core_current_offset;
+                uint32_t num_tiles_to_write_back =
+                    std::min(num_tiles_left_on_current_worker_core, num_tiles_available_at_current_storage_core);
+                current_worker_num_segments_to_write_back += 1;
 
                 tt::log_debug(
-                    "Resetting storage core offset and moving to next storage core: {}", current_storage_core);
+                    "New segment for worker core {}, Worker core offset: {}, Storage core offset: {}, Num tiles to "
+                    "write "
+                    "back: {}",
+                    i,
+                    worker_core_current_offset,
+                    current_storage_core_offset,
+                    num_tiles_to_write_back);
 
-                assert(
-                    current_storage_core <=
-                    num_storage_cores);  //  Sanity check: should not exceed number of storage cores
+                write_back_writer_args.push_back(
+                    num_tiles_to_write_back * out_single_tile_size);  // num_bytes_to_write_back
+                write_back_writer_args.push_back(
+                    storage_core_noc_x[current_storage_core]);  // current_storage_core_noc_x
+                write_back_writer_args.push_back(
+                    storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
+
+                tt::log_debug("num_bytes_to_write_back: {}", num_tiles_to_write_back * out_single_tile_size);
+                tt::log_debug("storage_core_noc_x[current_storage_core]: {}", storage_core_noc_x[current_storage_core]);
+                tt::log_debug("storage_core_noc_y[current_storage_core]: {}", storage_core_noc_y[current_storage_core]);
+
+                worker_core_current_offset += num_tiles_to_write_back;
+                current_storage_core_offset += num_tiles_to_write_back;
+
+                if (current_storage_core_offset >= block_wt_resharded) {
+                    current_storage_core += 1;        // Move to next storage core
+                    current_storage_core_offset = 0;  // Reset offset on new storage core
+
+                    tt::log_debug(
+                        "Resetting storage core offset and moving to next storage core: {}", current_storage_core);
+
+                    assert(
+                        current_storage_core <=
+                        num_storage_cores);  //  Sanity check: should not exceed number of storage cores
+                }
             }
-        }
-        assert(worker_core_current_offset == block_wt);  // Sanity check: all worker core data should be written
+            assert(worker_core_current_offset == block_wt);  // Sanity check: all worker core data should be written
 
-        write_back_writer_args.insert(write_back_writer_args.begin(), current_worker_num_segments_to_write_back);
+            write_back_writer_args.insert(write_back_writer_args.begin(), current_worker_num_segments_to_write_back);
+        }
 
         // Set writer runtime args
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
