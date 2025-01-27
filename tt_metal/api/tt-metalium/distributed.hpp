@@ -4,15 +4,15 @@
 
 #pragma once
 
-#include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_command_queue.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_command_queue.hpp"
+#include "mesh_workload.hpp"
 
 namespace tt::tt_metal {
 
 inline namespace v0 {
 
 class IDevice;
-class Tensor;
 
 }  // namespace v0
 
