@@ -29,18 +29,30 @@ from models.demos.llama3.tt.llama_common import HostEmbedding
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
+    "batch_dp_tp",
+    [(1, 1, 2), (2, 2, 1), (4, 2, 1)],
+    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
 @pytest.mark.parametrize(
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_llama_embedding(max_seq_len, batch_dp_tp, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+
     dtype = ttnn.bfloat16
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    if data_parallel > 1:
+        mesh_device.reshape(ttnn.MeshShape(2, 1))
+
+    model_args = TtModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        data_parallel=data_parallel,
+        tensor_parallel=tensor_parallel,
+        max_seq_len=max_seq_len,
+    )
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -61,7 +73,7 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
         dtype=dtype,
     )
 
-    prompts = ["Joy"] * 32
+    prompts = ["Joy"] * batch_size  # 32
     pt_input = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False) for prompt in prompts])
     reference_output = reference_emb(pt_input)
     logger.info(f"reference_output: {reference_output.shape}")
@@ -69,7 +81,11 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
     tt_input = ttnn.from_torch(
         pt_input.squeeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(0, None) if model_args.num_devices_dp > 1 else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
