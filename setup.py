@@ -178,7 +178,6 @@ packages.append("ttnn.cpp")
 
 print(("packaging: ", packages))
 
-kernel_files = find_files_in_kernels_subdir("ttnn")
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
 
