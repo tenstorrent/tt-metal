@@ -43,3 +43,6 @@ exclude .pre-commit-config.yaml
 prune ttnn/ttnn/examples/bert/
 
 recursive-include runtime *
+
+# JIT Kernel Sources from TTNN
+recursive-include ttnn/cpp **/kernels *.cc *.cpp *.h *.hpp
