@@ -13,9 +13,9 @@ namespace buffer_dispatch {
 
 // Dispatch constants required for writing buffer data
 struct BufferDispatchConstants {
-    uint32_t issue_queue_cmd_limit;
-    uint32_t max_prefetch_cmd_size;
-    uint32_t max_data_sizeB;
+    uint32_t issue_queue_cmd_limit = 0;
+    uint32_t max_prefetch_cmd_size = 0;
+    uint32_t max_data_sizeB = 0;
 };
 
 // Dispatch parameters computed during runtime. These are used
@@ -23,31 +23,31 @@ struct BufferDispatchConstants {
 // required to write buffer data.
 struct BufferWriteDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    uint32_t address;
-    uint32_t dst_page_index;
-    uint32_t page_size_to_write;
-    uint32_t total_pages_to_write;
-    uint32_t total_pages_written;
-    uint32_t pages_per_txn;
-    bool issue_wait;
-    IDevice* device;
-    uint32_t cq_id;
+    uint32_t address = 0;
+    uint32_t dst_page_index = 0;
+    uint32_t page_size_to_write = 0;
+    uint32_t total_pages_to_write = 0;
+    uint32_t total_pages_written = 0;
+    uint32_t pages_per_txn = 0;
+    bool issue_wait = false;
+    IDevice* device = nullptr;
+    uint32_t cq_id = 0;
 };
 
 // Parameters specific to interleaved buffers
 struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
-    uint32_t write_partial_pages;
-    uint32_t padded_buffer_size;
-    uint32_t max_num_pages_to_write;
+    uint32_t write_partial_pages = 0;
+    uint32_t padded_buffer_size = 0;
+    uint32_t max_num_pages_to_write = 0;
 };
 
 // Parameters specific to sharded buffers
 struct ShardedBufferWriteDispatchParams : BufferWriteDispatchParams {
-    bool width_split;
-    uint32_t starting_dst_host_page_index;
-    uint32_t initial_pages_skipped;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    uint32_t max_pages_per_shard;
+    bool width_split = false;
+    uint32_t starting_dst_host_page_index = 0;
+    uint32_t initial_pages_skipped = 0;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
+    uint32_t max_pages_per_shard = 0;
     CoreCoord core;
 };
 
