@@ -217,20 +217,24 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
         writer_rt_args.push_back(forward_fabric_connection.has_value());
         if (forward_fabric_connection.has_value()) {
             auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
             auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
             append_worker_to_fabric_edm_sender_rt_args(
                 forward_fabric_connection.value(),
                 sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_connection.has_value());
         if (backward_fabric_connection.has_value()) {
             auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
             auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
             append_worker_to_fabric_edm_sender_rt_args(
                 backward_fabric_connection.value(),
                 sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
@@ -504,20 +508,24 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
         writer_rt_args.push_back(forward_fabric_connection.has_value());
         if (forward_fabric_connection.has_value()) {
             auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
             auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
             append_worker_to_fabric_edm_sender_rt_args(
                 forward_fabric_connection.value(),
                 sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
         writer_rt_args.push_back(backward_fabric_connection.has_value());
         if (backward_fabric_connection.has_value()) {
             auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
             auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
             append_worker_to_fabric_edm_sender_rt_args(
                 backward_fabric_connection.value(),
                 sender_worker_flow_control_semaphore_id,
+                sender_worker_teardown_semaphore_id,
                 sender_worker_buffer_index_semaphore_id,
                 writer_rt_args);
         }
