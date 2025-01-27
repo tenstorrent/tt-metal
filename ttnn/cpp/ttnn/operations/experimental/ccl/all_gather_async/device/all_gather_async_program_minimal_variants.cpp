@@ -63,7 +63,12 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+            device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
+            &program,
+            enable_persistent_fabric_mode,
+            num_links);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -297,7 +302,12 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+            device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
+            &program,
+            enable_persistent_fabric_mode,
+            num_links);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};

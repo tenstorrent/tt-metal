@@ -25,8 +25,8 @@ AllGatherAsync create_all_gather_async_struct(
     bool enable_persistent_fabric_mode) {
     uint32_t num_devices = devices.size();
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
+    IDevice* forward_device = nullptr;
+    IDevice* backward_device = nullptr;
     std::optional<GlobalSemaphore> semaphore = std::nullopt;
     uint32_t device_index = 0;  // Initialize device index
     for (uint32_t i = 0; i < num_devices; ++i) {
