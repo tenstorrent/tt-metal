@@ -106,6 +106,10 @@ jobs:
             pip install -r tt_metal/python_env/requirements-dev.txt
             pip install -e .
             ${{ matrix.test-group.cmd }}
+            echo "Checking for gcno files"
+            find . -name "*.gcno"
+            echo "Checking for gcda files"
+            find . -name "*.gcda"
             lcov --directory . --capture --output-file coverage.info
       - uses: codecov/codecov-action@v5
         if: ${{ inputs.upload_coverage }}
