@@ -41,6 +41,7 @@ void dump_stack_trace_on_segfault();
 
 using core::get_memory_config;
 using core::has_storage_type_of;
+using core::pad_to_multiple_of_tile_size;
 using core::set_printoptions;
 
 class CoreIDs {
