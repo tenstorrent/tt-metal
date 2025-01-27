@@ -33,18 +33,11 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: "ubuntu-22.04-amd64"
   build-artifact:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       os: "ubuntu-22.04-amd64"
-      build-docker: false
   build-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_build-wheels-impl.yaml

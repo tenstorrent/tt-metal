@@ -11,11 +11,6 @@ on:
         required: false
         type: boolean
         default: false
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
   workflow_dispatch:
     inputs:
       os:
@@ -26,24 +21,16 @@ on:
         required: false
         type: boolean
         default: false
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.build-docker == true }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
       os: ${{ inputs.os }}
 
-
   clang-tidy:
     needs: build-docker-image
-    if: always()
     env:
       ARCH_NAME: wormhole_b0
     runs-on:

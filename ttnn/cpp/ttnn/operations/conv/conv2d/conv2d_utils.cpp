@@ -242,7 +242,7 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 }
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
-    const ttnn::Shape& tensor_shape, const ParallelConfig& parallel_config, uint32_t tile_size) {
+    const ttnn::SimpleShape& tensor_shape, const ParallelConfig& parallel_config, uint32_t tile_size) {
     log_debug(
         tt::LogOp,
         "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}",
@@ -252,7 +252,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     // tensor_shape is [N, H, W, C]
     TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
     // uint32_t channels = tensor_shape[3];
-    uint32_t channels = tensor_shape.with_tile_padding()[3];
+    uint32_t channels = tensor_shape[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
     auto shard_scheme = parallel_config.shard_scheme;
@@ -480,7 +480,7 @@ static TensorMemoryLayout select_shard_spec(
 }
 
 template <typename T>
-static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
+static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -616,22 +616,26 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
                 tt::round_up(input_shape[3], conv_config.input_channels_alignment);
         }
 
-        auto input_padded_shape = ttnn::Shape(std::array<uint32_t, 4>{
-            1,
-            1,
-            input_tensor_height_snapped_to_tile,
-            input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                 // tt::tt_metal::LegacyShape issue to clean up next
-                                                                 // line
+        auto input_padded_shape = ttnn::SimpleShape(
+            {1,
+             1,
+             input_tensor_height_snapped_to_tile,
+             input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
+                                                                  // tt::tt_metal::LegacyShape issue to clean up next
+                                                                  // line
         MemoryConfig input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            ttnn::Shape(std::array<uint32_t, 4>{
-                input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
+            ttnn::SimpleShape(
+                {input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
             parallel_config,
             round_up_size);
 
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard, use_non_tile_height};
     } else {
-        return {input_tensor.shape(), input_tensor.memory_config(), needs_shard_or_reshard, use_non_tile_height};
+        return {
+            input_tensor.get_logical_shape(),
+            input_tensor.memory_config(),
+            needs_shard_or_reshard,
+            use_non_tile_height};
     }
 }
 
@@ -888,9 +892,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         out_channels_padded = tt::round_up(out_channels, 32);
     }
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(std::array<uint32_t, 4>{1, 1, nhw_out, out_channels_padded}),
-        output_parallel_config,
-        round_up_size);
+        ttnn::SimpleShape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
     ParallelConfig largest_parallel_config =
         output_parallel_config.grid.num_cores() > input_parallel_config.grid.num_cores() ? output_parallel_config
                                                                                          : input_parallel_config;
@@ -1256,7 +1258,8 @@ template bool check_non_tile_mul_width<IDevice>(
 template bool check_non_tile_mul_width<MeshDevice>(
     MeshDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
+template std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool>
+get_conv_padded_input_shape_and_mem_config<IDevice>(
     IDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -1268,7 +1271,8 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded
     bool is_mm_conv,
     bool is_non_tile_mul_width);
 
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
+template std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool>
+get_conv_padded_input_shape_and_mem_config<MeshDevice>(
     MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
