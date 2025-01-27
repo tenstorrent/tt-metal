@@ -36,14 +36,6 @@ void ArgMax::validate_with_output_tensors(
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
-    if (this->dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.get_padded_shape().rank();
-        const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
-
-        // TODO: Add support for normalized_dim = 0, 1, 2
-        TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
-    }
-
     auto input_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(input_shape[0] == 1, "dim 0 must be 1");
     TT_FATAL(input_shape[1] == 1, "dim 1 must be 1");
@@ -58,12 +50,13 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     auto input_shape = input_tensors[0].get_logical_shape();
     const auto rank = input_shape.rank();
-    cont uint8_t output_rank = keepdim ? rank : rank - 1;
+    const uint8_t output_rank = keepdim ? rank : rank - 1;
     ttnn::SmallVector<uint32_t> result_shape(output_rank, 1);
     ttnn::SimpleShape output_shape;
     if (this->dim.has_value()) {
-        for (int i = 0; i < input_rank; i++) {
-            if (insert_idx == dim) {
+        int insert_idx = 0;
+        for (int i = 0; i < input_shape.rank(); i++) {
+            if (i == dim.value()) {
                 if (keepdim) {
                     result_shape[insert_idx] = 1;
                     insert_idx++;
