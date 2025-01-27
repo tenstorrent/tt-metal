@@ -277,6 +277,7 @@ std::tuple<uint32_t, uint32_t> get_matmul_subblock_params(
 
 void add_stagger_defines_if_needed(
     const tt::ARCH arch, const int num_cores, std::map<string, string>& mm_kernel_defines);
+void add_nops_in_matmul(std::map<string, string>& mm_kernel_defines);
 void add_mm_throttle_defines_if_needed(
     const tt::ARCH arch, MathFidelity fidelity, std::map<string, string>& mm_kernel_defines);
 void add_precision_defines_if_needed(const tt::ARCH arch, std::map<string, string>& mm_kernel_defines);
