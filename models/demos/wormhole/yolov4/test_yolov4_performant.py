@@ -24,7 +24,7 @@ def test_run_yolov4_inference(device, use_program_cache, batch_size, act_dtype, 
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1843200}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 6422528}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
     ((1, ttnn.bfloat16, ttnn.bfloat16),),
