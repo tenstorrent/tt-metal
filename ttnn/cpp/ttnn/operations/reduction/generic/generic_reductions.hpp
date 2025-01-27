@@ -34,6 +34,7 @@ struct Reduce {
 };
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
+[[deprecated]]
 Tensor pool_sum(
     const Tensor& input_tensor_arg,
     int dim_arg,
