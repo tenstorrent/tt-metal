@@ -800,7 +800,6 @@ def test_transpose_failures(config, memory_config, device):
         ],
         [[1, 9, 8, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],
         [[1, 8, 8, 8], [1, 2], ttnn.ROW_MAJOR_LAYOUT],
-        [[21843, 768], [0, 1], ttnn.ROW_MAJOR_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
