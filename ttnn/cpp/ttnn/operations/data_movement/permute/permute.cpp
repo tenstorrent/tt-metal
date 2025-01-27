@@ -82,6 +82,8 @@ ttnn::Tensor permute_impl(
             output = transpose_hc(transpose_wh(formatted_input_tensor));
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
             output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        } else {
+            TT_FATAL(false, "Sharded permute not supported for this permutation");
         }
     } else {
         if (N == 0 && C == 1 && H == 2 && W == 3) {

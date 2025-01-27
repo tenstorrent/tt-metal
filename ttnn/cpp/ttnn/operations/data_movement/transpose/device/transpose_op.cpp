@@ -69,10 +69,24 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
                 H,
                 shard_spec.shape[0]);
             TT_FATAL(shard_spec.shape[1] == W, "Only height sharding is supported");
+            if (H > shard_spec.shape[0]) {
+                TT_FATAL(
+                    N == 1,
+                    "Transpose WH does not support sharded inputs when shard height {} is less than H {} and N {} > 1",
+                    shard_spec.shape[0],
+                    H,
+                    N);
+                TT_FATAL(
+                    C == 1,
+                    "Transpose WH does not support sharded inputs when  shard height {} is less than H {} and C {} > 1",
+                    shard_spec.shape[0],
+                    H,
+                    N);
+            }
             TT_FATAL(this->output_mem_config.is_sharded(), "Output must be sharded for transpose WH");
             TT_FATAL(
-                this->output_mem_config.memory_layout != TensorMemoryLayout::WIDTH_SHARDED,
-                "Only height and block sharding is supported for transpose wh");
+                this->output_mem_config.memory_layout != TensorMemoryLayout::BLOCK_SHARDED,
+                "Only height and width sharding output is supported for transpose wh");
         } else {
             TT_FATAL(!this->output_mem_config.is_sharded(), "Interleaved input tensors cannot output sharded outputs");
         }
@@ -175,7 +189,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
             } else {
                 std::swap(shard_spec.shape[0], shard_spec.shape[1]);
                 output_mem_config.shard_spec = shard_spec;
-                output_mem_config.memory_layout = TensorMemoryLayout::BLOCK_SHARDED;
+                output_mem_config.memory_layout = TensorMemoryLayout::WIDTH_SHARDED;
             }
         } else if (this->dim == TransposeOpDim::HC) {
             output_mem_config.shard_spec = input_tensor.shard_spec().value();
