@@ -48,7 +48,7 @@ tests/scripts/tg/ @tenstorrent/metalium-developers-infra
 tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 
 # fabric
-tt_fabric/ @ubcheema @aliuTT @aagarwalTT @eelkozahTT
+tt_fabric/ @ubcheema @aliuTT @aagarwalTT
 
 # metal - base
 tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
@@ -60,7 +60,7 @@ tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
 tt_metal/impl/dispatch/kernels/eth_* @ubcheema @aliuTT
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema
+tests/tt_metal/tt_metal/perf_microbenchmark/routing/ @ubcheema @aagarwalTT
 
 # metal - fw, llks, risc-v
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @ttmtrajkovic
