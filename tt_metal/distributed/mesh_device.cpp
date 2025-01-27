@@ -15,7 +15,7 @@
 #include <tt_metal.hpp>
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>
-#include "tt_metal/distributed/mesh_command_queue.hpp"
+#include <mesh_command_queue.hpp>
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mesh_buffer.hpp>
+#include <mesh_command_queue.hpp>
+#include <mesh_workload.hpp>
 #include <tt_metal.hpp>
 
-#include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_command_queue.hpp"
-#include "tt_metal/distributed/mesh_workload.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
