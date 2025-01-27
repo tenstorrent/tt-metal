@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+import math
 import torch.nn as nn
 
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
@@ -29,6 +30,9 @@ def Conv(
     change_shard=False,
     deallocate_activation=False,
     output_layout=ttnn.TILE_LAYOUT,
+    is_fused=True,
+    is_dfl=False,
+    is_detect_cv2=False,
 ):
     p = autopad(k, p, d)
 
@@ -64,18 +68,21 @@ def Conv(
         packer_l1_acc=False,
     )
 
-    fused_weight, fused_bias = parameters[path]
+    if is_fused:
+        fused_weight, fused_bias = parameters[path]
+    else:
+        conv_weight, conv_bias = parameters[path]
 
     if bfloat8:
         conv_config.weights_dtype = ttnn.bfloat8_b
 
     [x, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=x,
-        weight_tensor=fused_weight,
-        in_channels=fused_weight.shape[1],
-        out_channels=fused_weight.shape[0],
+        weight_tensor=fused_weight if is_fused else conv_weight,
+        in_channels=fused_weight.shape[1] if is_fused else conv_weight.shape[1],
+        out_channels=fused_weight.shape[0] if is_fused else conv_weight.shape[0],
         device=device,
-        bias_tensor=fused_bias,
+        bias_tensor=fused_bias if is_fused else conv_bias,
         kernel_size=(k, k),
         stride=(s, s),
         padding=(p, p),
@@ -92,6 +99,13 @@ def Conv(
         return_weights_and_bias=False,
         return_output_dim=True,
     )
+
+    if is_dfl:
+        return ttnn.reshape(x, (x.shape[0], 4, -1))
+
+    if is_detect_cv2:
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        return (x, out_height, out_width)
 
     x = ttnn.silu(x)
 
@@ -236,7 +250,7 @@ def C2f(
     return x, out_h, out_w
 
 
-def SPPF(device, x, parameters, path, in_h, in_w, k=5, bfloat8=True):
+def SPPF(device, x, parameters, path, in_h, in_w, k=5):
     cv1, out_h, out_w = Conv(device, x, parameters, f"{path}.cv1", in_h, in_w, 1, 1)
 
     cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
@@ -270,67 +284,29 @@ def SPPF(device, x, parameters, path, in_h, in_w, k=5, bfloat8=True):
 def Detect_cv2(device, x, parameters, path, inp_h, inp_w, k, reg_max, bfloat8=True):
     x, out_h, out_w = Conv(device, x, parameters, f"{path}.0", inp_h, inp_w, k, bfloat8=bfloat8)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x = x.reshape((1, out_h, out_w, x.shape[-1]))
-
     x, out_h, out_w = Conv(device, x, parameters, f"{path}.1", out_h, out_w, k, bfloat8=bfloat8)
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.bfloat16,
-        activation="",
-        shard_layout=None,
-        input_channels_alignment=(16 if False or (x.shape[-1] == 16 and x.shape[-2] == 115) else 32),
-        deallocate_activation=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        output_layout=ttnn.TILE_LAYOUT,
+    x, out_h, out_w = Conv(
+        device,
+        x,
+        parameters,
+        path,
+        out_h,
+        out_w,
+        k=1,
+        s=1,
+        p=0,
+        g=1,
+        d=1,
+        bfloat8=True,
+        is_fused=False,
+        change_shard=True,
+        is_detect_cv2=True,
     )
-
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    conv_weight, conv_bias = parameters[path]
-
-    if bfloat8:
-        conv_config.weights_dtype = ttnn.bfloat8_b
-
-    [x, [out_height, out_width]] = ttnn.conv2d(
-        input_tensor=x,
-        weight_tensor=conv_weight,
-        in_channels=conv_weight.shape[1],
-        out_channels=conv_weight.shape[0],
-        device=device,
-        bias_tensor=conv_bias,
-        kernel_size=(1, 1),
-        stride=(1, 1),
-        padding=(0, 0),
-        dilation=(1, 1),
-        batch_size=x.shape[0],
-        input_height=out_h,
-        input_width=out_w,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        conv_op_cache={},
-        debug=False,
-        groups=1,
-        memory_config=None,
-        return_weights_and_bias=False,
-        return_output_dim=True,
-    )
-
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    return x, out_height, out_width
+    return x, out_h, out_w
 
 
 def DFL(device, x, parameters, path, c1=16):
-    c1 = c1
     b, _, a = x.shape
 
     x = ttnn.reshape(x, (b, 4, c1, a))
@@ -339,53 +315,23 @@ def DFL(device, x, parameters, path, c1=16):
 
     x = ttnn.permute(x, (0, 1, 3, 2))
 
-    conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
-        weights_dtype=ttnn.float32,
-        activation="",
-        shard_layout=None,
-        input_channels_alignment=(16 if False or (c1 == 16 and x.shape[-2] == 115) else 32),
-        deallocate_activation=False,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
-        enable_subblock_padding=False,
-        output_layout=ttnn.TILE_LAYOUT,
+    x = Conv(
+        device,
+        x,
+        parameters,
+        path,
+        x.shape[1],
+        x.shape[2],
+        k=1,
+        s=1,
+        p=0,
+        g=1,
+        d=1,
+        bfloat8=True,
+        is_fused=False,
+        is_dfl=True,
+        change_shard=True,
     )
-
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    conv_weight = parameters[path]
-
-    [x, [out_height, out_width]] = ttnn.conv2d(
-        input_tensor=x,
-        weight_tensor=conv_weight,
-        in_channels=c1,
-        out_channels=1,
-        device=device,
-        bias_tensor=None,
-        kernel_size=(1, 1),
-        stride=(1, 1),
-        padding=(0, 0),
-        dilation=(1, 1),
-        batch_size=x.shape[0],
-        input_height=x.shape[1],
-        input_width=x.shape[2],
-        conv_config=conv_config,
-        compute_config=compute_config,
-        conv_op_cache={},
-        debug=False,
-        groups=1,
-        memory_config=None,
-        return_weights_and_bias=False,
-        return_output_dim=True,
-    )
-
-    x = ttnn.reshape(x, (b, 4, -1))
 
     return x
 
@@ -396,17 +342,15 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
     reg_max = 16
     no = nc + reg_max * 4
 
-    c2, c3 = max((16, ch[0] // 4, reg_max * 4)), max(ch[0], min(nc, 100))
-
     for i in range(nl):
-        dim = x[i].shape[2]
+        inp_h = inp_w = int(math.sqrt(x[i].shape[2]))
         a = Detect_cv2(
             device,
             x[i],
             parameters,
             path=f"{path}.cv2.{i}",
-            inp_h=dim,
-            inp_w=dim,
+            inp_h=inp_h,
+            inp_w=inp_w,
             k=3,
             reg_max=4 * reg_max,
         )[0]
@@ -415,8 +359,8 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
             x[i],
             parameters,
             path=f"{path}.cv3.{i}",
-            inp_h=dim,
-            inp_w=dim,
+            inp_h=inp_h,
+            inp_w=inp_w,
             k=3,
             reg_max=nc,
             bfloat8=bfloat8,
@@ -447,30 +391,36 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
 
 
 def DetectionModel(device, x, parameters):
-    x = ttnn.permute(x, (0, 2, 3, 1))
-
-    x, out_h, out_w = Conv(
+    Conv_0, out_h, out_w = Conv(
         device, x, parameters, "model.0", x.shape[1], x.shape[2], 3, 2, 1, change_shard=True, deallocate_activation=True
     )
+    ttnn.deallocate(x)
 
-    x, out_h, out_w = Conv(
-        device, x, parameters, "model.1", out_h, out_w, 3, 2, 1, act_block_h=True, deallocate_activation=True
+    Conv_1, out_h, out_w = Conv(
+        device, Conv_0, parameters, "model.1", out_h, out_w, 3, 2, 1, act_block_h=True, deallocate_activation=True
     )
+    ttnn.deallocate(Conv_0)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.2", out_h, out_w, n=3, shortcut=True, change_shard=True)
-
-    x, out_h, out_w = Conv(
-        device, x, parameters, "model.3", out_h, out_w, 3, 2, 1, change_shard=True, deallocate_activation=False
+    C2f_2, out_h, out_w = C2f(
+        device, Conv_1, parameters, "model.2", out_h, out_w, n=3, shortcut=True, change_shard=True
     )
+    ttnn.deallocate(Conv_1)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.4", out_h, out_w, n=6, shortcut=True, change_shard=True)
+    Conv_3, out_h, out_w = Conv(
+        device, C2f_2, parameters, "model.3", out_h, out_w, 3, 2, 1, change_shard=True, deallocate_activation=False
+    )
+    ttnn.deallocate(C2f_2)
 
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
-    four = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    C2f_4, out_h, out_w = C2f(
+        device, Conv_3, parameters, "model.4", out_h, out_w, n=6, shortcut=True, change_shard=True
+    )
+    ttnn.deallocate(Conv_3)
 
-    x, out_h, out_w = Conv(
+    four = ttnn.clone(C2f_4, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    Conv_5, out_h, out_w = Conv(
         device,
-        x,
+        C2f_4,
         parameters,
         "model.5",
         out_h,
@@ -482,22 +432,18 @@ def DetectionModel(device, x, parameters):
         block_shard=False,
         deallocate_activation=True,
     )
+    ttnn.deallocate(C2f_4)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
-
-    x, out_h, out_w = C2f(
-        device, x, parameters, "model.6", out_h, out_w, n=6, shortcut=True, block_shard=False, change_shard=True
+    C2f_6, out_h, out_w = C2f(
+        device, Conv_5, parameters, "model.6", out_h, out_w, n=6, shortcut=True, block_shard=False, change_shard=True
     )
+    ttnn.deallocate(Conv_5)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    six = ttnn.clone(C2f_6, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    six = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    x, out_h, out_w = Conv(
+    Conv_7, out_h, out_w = Conv(
         device,
-        x,
+        C2f_6,
         parameters,
         "model.7",
         out_h,
@@ -509,78 +455,94 @@ def DetectionModel(device, x, parameters):
         change_shard=True,
         deallocate_activation=True,
     )
+    ttnn.deallocate(C2f_6)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    Conv_7 = ttnn.sharded_to_interleaved(Conv_7, ttnn.L1_MEMORY_CONFIG)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.8", out_h, out_w, n=3, shortcut=True, change_shard=True)
+    C2f_8, out_h, out_w = C2f(
+        device, Conv_7, parameters, "model.8", out_h, out_w, n=3, shortcut=True, change_shard=True
+    )
+    ttnn.deallocate(Conv_7)
 
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    SPPF_9, out_h, out_w = SPPF(device, C2f_8, parameters, "model.9", out_h, out_w)
+    ttnn.deallocate(C2f_8)
 
-    x, out_h, out_w = SPPF(device, x, parameters, "model.9", out_h, out_w)
+    nine = ttnn.clone(SPPF_9, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    SPPF_9 = ttnn.to_layout(SPPF_9, ttnn.ROW_MAJOR_LAYOUT)
 
-    nine = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x = ttnn.upsample(x, scale_factor=(2, 2))
+    SPPF_9 = ttnn.reshape(SPPF_9, (1, out_h, out_w, SPPF_9.shape[-1]))
+    SPPF_9 = ttnn.upsample(SPPF_9, scale_factor=(2, 2))
+
+    x = ttnn.reshape(SPPF_9, (1, 1, SPPF_9.shape[1] * SPPF_9.shape[2], SPPF_9.shape[-1]))
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     x = ttnn.concat([x, six], dim=3)
     ttnn.deallocate(six)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.12", x.shape[1], x.shape[2], n=3, shortcut=False)
+    C2f_12, out_h, out_w = C2f(
+        device, x, parameters, "model.12", SPPF_9.shape[1], SPPF_9.shape[2], n=3, shortcut=False, bfloat8=True
+    )
+    ttnn.deallocate(x)
+    ttnn.deallocate(SPPF_9)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    C2f_12 = ttnn.sharded_to_interleaved(C2f_12, ttnn.L1_MEMORY_CONFIG)
+    C2f_12 = ttnn.to_layout(C2f_12, ttnn.ROW_MAJOR_LAYOUT)
 
-    twelve = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    twelve = ttnn.clone(C2f_12, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    x = ttnn.upsample(x, scale_factor=(2, 2))
+    C2f_12 = ttnn.reshape(C2f_12, (1, out_h, out_w, C2f_12.shape[-1]))
+
+    C2f_12 = ttnn.upsample(C2f_12, scale_factor=(2, 2))
+
+    x = ttnn.reshape(C2f_12, (1, 1, C2f_12.shape[1] * C2f_12.shape[2], C2f_12.shape[-1]))
 
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
     x = ttnn.concat([x, four], dim=3)
 
     ttnn.deallocate(four)
+    ttnn.deallocate(C2f_12)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.15", x.shape[1], x.shape[2], n=3, shortcut=False)
+    C2f_15, out_h, out_w = C2f(device, x, parameters, "model.15", C2f_12.shape[1], C2f_12.shape[2], n=3, shortcut=False)
+    ttnn.deallocate(x)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    C2f_15 = ttnn.sharded_to_interleaved(C2f_15, ttnn.L1_MEMORY_CONFIG)
 
-    fifteen = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    fifteen = ttnn.clone(C2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    x, out_h, out_w = Conv(device, x, parameters, "model.16", out_h, out_w, 3, 2, 1)
+    Conv_16, out_h, out_w = Conv(device, C2f_15, parameters, "model.16", out_h, out_w, 3, 2, 1)
+    ttnn.deallocate(C2f_15)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
-    twelve = ttnn.to_layout(twelve, ttnn.TILE_LAYOUT)
+    Conv_16 = ttnn.sharded_to_interleaved(Conv_16, ttnn.L1_MEMORY_CONFIG)
 
-    x = ttnn.concat([x, twelve], dim=3)
+    x = ttnn.concat([Conv_16, twelve], dim=3)
     ttnn.deallocate(twelve)
+    ttnn.deallocate(Conv_16)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.18", x.shape[1], x.shape[2], n=3, shortcut=False)
+    C2f_18, out_h, out_w = C2f(device, x, parameters, "model.18", out_h, out_w, n=3, shortcut=False)
+    ttnn.deallocate(x)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    C2f_18 = ttnn.sharded_to_interleaved(C2f_18, ttnn.L1_MEMORY_CONFIG)
 
-    eighteen = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    eighteen = ttnn.clone(C2f_18, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    x, out_h, out_w = Conv(device, x, parameters, "model.19", out_h, out_w, 3, 2, 1, block_shard=True)
+    Conv_19, out_h, out_w = Conv(device, C2f_18, parameters, "model.19", out_h, out_w, 3, 2, 1, block_shard=True)
+    ttnn.deallocate(C2f_18)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    Conv_19 = ttnn.sharded_to_interleaved(Conv_19, ttnn.L1_MEMORY_CONFIG)
 
-    x = ttnn.concat([x, nine], dim=3)
+    x = ttnn.concat([Conv_19, nine], dim=3)
     ttnn.deallocate(nine)
+    ttnn.deallocate(Conv_19)
 
-    x, out_h, out_w = C2f(device, x, parameters, "model.21", x.shape[1], x.shape[2], n=3, shortcut=False)
+    C2f_21, out_h, out_w = C2f(device, x, parameters, "model.21", out_h, out_w, n=3, shortcut=False)
+    ttnn.deallocate(x)
 
-    x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-    x = ttnn.reshape(x, (1, out_h, out_w, x.shape[-1]))
+    C2f_21 = ttnn.sharded_to_interleaved(C2f_21, ttnn.L1_MEMORY_CONFIG)
 
-    twentyone = ttnn.clone(x, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    twentyone = ttnn.clone(C2f_21, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(C2f_21)
 
     x = [fifteen, eighteen, twentyone]
 
