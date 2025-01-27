@@ -416,8 +416,6 @@ def test_slice_negative_ends(layout, dim, ends, device):
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
     if dim == 3:
-        if layout == ttnn.ROW_MAJOR_LAYOUT and ends == -32:
-            pytest.skip("Page size will become 0 and we don't handle transforming pages to second last dimension")
         torch_output = torch_input[:, :, :, 0:ends]
         ttnn_output = ttnn_input[:, :, :, 0:ends]
     elif dim == 2:
@@ -454,8 +452,6 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2 != 0:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -504,8 +500,6 @@ def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_co
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2 != 0:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -581,8 +575,6 @@ def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layou
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -624,8 +616,6 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -659,13 +649,9 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
 )
 def test_slice_5d(input_shape, input_start, input_ends, input_stride, layout, device):
     if layout == ttnn.TILE_LAYOUT:
-        if input_stride != (1, 1, 1, 1, 1):
-            pytest.skip("Cannot untilize 5D tensor")
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -758,7 +744,6 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     ),
 )
 def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
-    pytest.skip("These tests are known to fail")
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     slice_obj = slice(start, end, step)
