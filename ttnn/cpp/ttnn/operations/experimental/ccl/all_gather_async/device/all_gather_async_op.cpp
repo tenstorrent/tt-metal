@@ -123,8 +123,21 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
 }
 
 const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    auto input_shape = input_tensors[0].get_padded_shape();
+    auto input_memory_layout = input_tensors[0].get_layout();
+    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
     return operation::hash_operation<AllGatherAsync>(
-        this->dim, this->num_links, this->ring_size, this->ring_index, this->output_mem_config, this->topology);
+        this->dim,
+        this->num_links,
+        this->ring_size,
+        this->ring_index,
+        this->output_mem_config,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config);
 }
 
 
