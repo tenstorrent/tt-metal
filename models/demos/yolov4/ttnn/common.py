@@ -153,5 +153,4 @@ class Conv:
             return_output_dim=False,
             return_weights_and_bias=False,
         )
-        print(ttnn.get_memory_config(output_tensor))
         return output_tensor
