@@ -206,6 +206,13 @@ def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strate
     shard_shape = (shard_height, shard_width)
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
+    if shard_strategy == ttnn.ShardStrategy.BLOCK and shard_orientation == ttnn.ShardOrientation.COL_MAJOR:
+        grid_size = shard_grid.bounding_box().grid_size()
+        num_shards_along_height = int((batch_size * height * width) / shard_height)
+        num_shards_along_width = int(num_channels / shard_width)
+        print(num_shards_along_height, num_shards_along_width)
+        if num_shards_along_width < grid_size.y or num_shards_along_height < grid_size.x:
+            pytest.skip("incorrect config")
 
     ## output shard
     shard_height = shard_height * scale_h * scale_w
