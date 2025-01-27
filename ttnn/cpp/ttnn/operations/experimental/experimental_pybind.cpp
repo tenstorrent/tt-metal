@@ -37,6 +37,7 @@
 #include "ttnn/operations/experimental/plusone/plusone_pybind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 #include "ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/speculative_sdpa_decode_pybind.hpp"
+#include "ttnn/operations/experimental/speculative_execution/swap_tensor/swap_tensor_pybind.hpp"
 
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 
@@ -88,6 +89,7 @@ void py_module(py::module& module) {
     ccl::py_module(m_experimental_ccl);
 
     speculative_execution::py_bind_speculative_sdpa_decode(module);
+    speculative_execution::py_bind_swap_tensor(module);
 }
 
 }  // namespace ttnn::operations::experimental
