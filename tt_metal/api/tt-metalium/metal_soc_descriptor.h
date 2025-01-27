@@ -29,12 +29,6 @@ public:
     std::vector<tt_xy_pair> physical_harvested_workers;
     std::vector<tt_xy_pair> physical_ethernet_cores;
 
-    std::unordered_map<int, int> worker_log_to_physical_routing_x;
-    std::unordered_map<int, int> worker_log_to_physical_routing_y;
-    // Physical to virtual maps are only applicable for x and y of tensix workers
-    std::unordered_map<int, int> physical_routing_to_virtual_routing_x;
-    std::unordered_map<int, int> physical_routing_to_virtual_routing_y;
-
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
     std::map<int, CoreCoord> chan_to_logical_eth_core_map;
 
