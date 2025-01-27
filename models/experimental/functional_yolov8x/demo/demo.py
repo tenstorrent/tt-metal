@@ -210,7 +210,8 @@ def test_demo(device, source, model_type):
 
         im = preprocess(im0s)
 
-        ttnn_im = ttnn.from_torch(im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        ttnn_im = im.permute((0, 2, 3, 1))
+        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         if model_type == "torch_model":
             preds = model(im)
