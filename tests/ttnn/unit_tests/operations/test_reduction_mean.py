@@ -22,6 +22,7 @@ def test_mean(device, batch_size, h, w, dim):
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True, dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.fill_implicit_tile_padding(input_tensor, 42)  # garbage padding to test that mean removes it
 
     output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
