@@ -30,7 +30,7 @@ def test_down1(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = Down1(weights_pth)
+    ttnn_model = Down1(device, weights_pth)
 
     torch_input = torch.randn((1, 320, 320, 3), dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
@@ -49,11 +49,11 @@ def test_down1(device, reset_seeds, model_location_generator):
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    result_ttnn = ttnn_model(device, ttnn_input)
+    result_ttnn = ttnn_model(ttnn_input)
 
     start_time = time.time()
     for x in range(100):
-        result_ttnn = ttnn_model(device, ttnn_input)
+        result_ttnn = ttnn_model(ttnn_input)
     logger.info(f"Time taken: {time.time() - start_time}")
     result = ttnn.to_torch(result_ttnn)
 

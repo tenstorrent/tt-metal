@@ -10,13 +10,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 
 
 class Down1:
-    def __init__(self, model) -> None:
+    def __init__(self, device, model) -> None:
         if type(model) is str:
             torch_model = torch.load(model)
         else:
             torch_model = model.torch_model
         self.torch_model = torch_model
         self.conv1 = Conv(
+            device,
             torch_model,
             "down1.conv1",
             [1, 320, 320, 3],
@@ -26,6 +27,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv2 = Conv(
+            device,
             torch_model,
             "down1.conv2",
             [1, 320, 320, 32],
@@ -34,6 +36,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv3 = Conv(
+            device,
             torch_model,
             "down1.conv3",
             [1, 160, 160, 64],
@@ -43,6 +46,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv4 = Conv(
+            device,
             torch_model,
             "down1.conv4",
             [1, 160, 160, 64],
@@ -51,6 +55,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv5 = Conv(
+            device,
             torch_model,
             "down1.conv5",
             [1, 160, 160, 64],
@@ -60,6 +65,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv6 = Conv(
+            device,
             torch_model,
             "down1.conv6",
             [1, 160, 160, 32],
@@ -68,6 +74,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv7 = Conv(
+            device,
             torch_model,
             "down1.conv7",
             [1, 160, 160, 64],
@@ -76,6 +83,7 @@ class Down1:
             enable_act_double_buffer=True,
         )
         self.conv8 = Conv(
+            device,
             torch_model,
             "down1.conv8",
             [1, 160, 160, 128],
@@ -85,29 +93,25 @@ class Down1:
         )
         self.convs = [self.conv1, self.conv2, self.conv3, self.conv4, self.conv5, self.conv6, self.conv7, self.conv8]
 
-    def print_tensor(self, tensor):
-        print(tensor)
-        print(ttnn.get_memory_config(tensor))
-
-    def __call__(self, device, input_tensor):
-        output_tensor = self.conv1(device, input_tensor)
+    def __call__(self, input_tensor):
+        output_tensor = self.conv1(input_tensor)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor_split = self.conv2(device, output_tensor)
+        output_tensor_split = self.conv2(output_tensor)
         output_tensor_split = ttnn.mish(output_tensor_split)
 
-        output_tensor_left = self.conv3(device, output_tensor_split)
+        output_tensor_left = self.conv3(output_tensor_split)
         output_tensor_left = ttnn.mish(output_tensor_left)
 
-        output_tensor_split_2 = self.conv4(device, output_tensor_split)
+        output_tensor_split_2 = self.conv4(output_tensor_split)
         output_tensor_split_2 = ttnn.mish(output_tensor_split_2)
-        output_tensor = self.conv5(device, output_tensor_split_2)
+        output_tensor = self.conv5(output_tensor_split_2)
         output_tensor = ttnn.mish(output_tensor)
-        output_tensor = self.conv6(device, output_tensor)
+        output_tensor = self.conv6(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         output_tensor = output_tensor_split_2 + output_tensor
 
         ttnn.deallocate(output_tensor_split_2)
-        output_tensor = self.conv7(device, output_tensor)
+        output_tensor = self.conv7(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -123,7 +127,7 @@ class Down1:
         )
         ttnn.deallocate(output_tensor_left)
 
-        output_tensor = self.conv8(device, output_tensor)
+        output_tensor = self.conv8(output_tensor)
         output_tensor = ttnn.mish(output_tensor)
         return output_tensor
 
