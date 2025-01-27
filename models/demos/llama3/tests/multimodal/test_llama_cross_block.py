@@ -140,13 +140,12 @@ def test_llama_cross_attention_transformer_block_inference(
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
-
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
         )
 
         if mode == "prefill":
+            full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
                 tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
@@ -235,11 +234,26 @@ def test_llama_cross_attention_transformer_block_inference(
                 ),
             )
 
+            full_text_mask_expand_11SD = full_text_mask.transpose(0, 2)
+            if batch < 32:
+                full_text_mask_expand_11SD = torch.cat(
+                    [full_text_mask_expand_11SD, torch.zeros(1, 1, 32 - batch, 1)], dim=2
+                )
+            full_text_mask_expand_11SD = full_text_mask_expand_11SD.expand(-1, -1, -1, dim // model_args.num_devices)
+            tt_full_text_mask_expand_11SD = ttnn.from_torch(
+                full_text_mask_expand_11SD,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
+
             tt_out = tt_model(
                 tt_x,
                 xattn_mask=tt_xattn_mask,
                 full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
-                full_text_row_masked_out_mask_11SD=None,
+                full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                 xattn_cache=tt_xattn_cache,
                 mode=mode,
             )
