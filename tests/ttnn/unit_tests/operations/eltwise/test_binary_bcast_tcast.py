@@ -9,10 +9,9 @@ import ttnn
 from functools import partial
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from models.utility_functions import torch_random, skip_for_grayskull
+from models.utility_functions import torch_random
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -40,7 +39,7 @@ def test_binary_scalar_ops(input_shapes, dtype, device):
         b_pt, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     cq_id = 0
-    out_tt = ttnn.experimental.add(a_tt, b_tt, queue_id=cq_id)
+    out_tt = ttnn.add(a_tt, b_tt, queue_id=cq_id, use_legacy=False)
     out_pt = a_pt + b_pt
 
     comp_pass = compare_pcc([out_tt], [out_pt])
