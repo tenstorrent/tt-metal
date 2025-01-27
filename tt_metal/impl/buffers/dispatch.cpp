@@ -440,8 +440,7 @@ void write_sharded_buffer_to_core(
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-    // uint32_t starting_dst_device_page_index;
-    uint32_t num_pages;
+    uint32_t num_pages = 0;
     uint32_t remaining_pages_in_shard = dispatch_params.max_pages_per_shard;
     uint32_t curr_page_idx_in_shard = 0;
     if (dispatch_params.width_split) {
@@ -456,15 +455,11 @@ void write_sharded_buffer_to_core(
         curr_page_idx_in_shard = dispatch_params.buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page];
         remaining_pages_in_shard -= curr_page_idx_in_shard;
     } else {
-        // starting_dst_device_page_index = dispatch_params.starting_dst_host_page_index;
-        // curr_page_idx_in_shard = 0;
-        while (dispatch_params.initial_pages_skipped < dispatch_params.starting_dst_host_page_index) {
+        while (remaining_pages_in_shard > 0 &&
+               dispatch_params.initial_pages_skipped < dispatch_params.starting_dst_host_page_index) {
             dispatch_params.initial_pages_skipped += 1;
             curr_page_idx_in_shard += 1;
             remaining_pages_in_shard -= 1;
-            if (remaining_pages_in_shard == 0) {
-                return;
-            }
         }
         num_pages = std::min(dispatch_params.total_pages_to_write, remaining_pages_in_shard);
     }
