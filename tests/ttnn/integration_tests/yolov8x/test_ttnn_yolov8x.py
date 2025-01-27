@@ -359,7 +359,7 @@ def test_DFL(device, input_tensor):
     torch_model = attempt_load("yolov8x.pt", map_location="cpu")
     torch_model.eval()
 
-    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     state_dict = torch_model.state_dict()
 
