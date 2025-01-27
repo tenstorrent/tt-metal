@@ -501,8 +501,10 @@ def test_llama_demo_text(
     avg_decode_iteration_time = total_inference_decode_time / (iteration - 1)
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time / batch_size
-    decode_tok_s_user = num_tokens_generated_decode[0] / total_inference_decode_time
-    decode_tok_s = num_tokens_generated_decode[0] / total_inference_decode_time * batch_size
+    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
+    decode_tok_s = (
+        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * batch_size
+    )  # Remove the compile time
 
     measurements = {
         # Required measurements
