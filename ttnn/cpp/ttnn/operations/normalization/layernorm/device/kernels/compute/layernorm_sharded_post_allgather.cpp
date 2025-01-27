@@ -14,8 +14,6 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/tile_move_copy.h"
 
-#include "debug/dprint.h"
-
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 void MAIN {
@@ -298,7 +296,6 @@ void MAIN {
             }
             index_h_offset += block_w;
         }
-        // cb_push_back(cb_outgamma, num_tiles_per_block);
         cb_pop_front(cb_im, num_tiles_per_block);
     }
 

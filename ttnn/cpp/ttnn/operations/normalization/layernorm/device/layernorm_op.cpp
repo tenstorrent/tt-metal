@@ -287,7 +287,6 @@ std::vector<Tensor> LayerNorm::create_output_tensors(const std::vector<Tensor>& 
                 }
             }
             auto output_spec = compute_output_specs(input_tensors)[0];
-            // std::cout << "output_spec: " << output_spec << std::endl;
             return {create_device_tensor(output_spec, input_tensors.at(0).device())};
         },
         this->program_config);

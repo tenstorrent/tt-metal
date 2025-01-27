@@ -8,8 +8,6 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-#include "debug/dprint.h"
-
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
@@ -38,6 +36,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
+
+    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
@@ -92,14 +92,17 @@ void kernel_main() {
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
-    cb_wait_front(cb_out, block_ht * block_w);
     uint32_t cb_out_read_base_addr = get_read_ptr(cb_out);
     uint32_t cb_out_reshard_write_base_addr = get_write_ptr(cb_out_resharded);
+
+    uint32_t num_tiles_in_write_queue = 0;
 
     for (uint32_t i = 0; i < num_segments_to_write_back; ++i) {
         uint32_t write_size = segment_args[args_idx++];
         uint32_t storage_core_x = segment_args[args_idx++];
         uint32_t storage_core_y = segment_args[args_idx++];
+
+        uint32_t num_tiles_to_write_in_current_segment = write_size / out_single_tile_size_bytes * block_ht;
 
         uint32_t worker_core_read_addr = cb_out_read_base_addr + worker_core_read_offset;
         uint32_t local_storage_core_write_addr = cb_out_reshard_write_base_addr;
@@ -112,13 +115,18 @@ void kernel_main() {
             get_noc_addr(storage_core_x, storage_core_y, local_storage_core_write_addr);
 
         for (uint32_t h = 0; h < block_ht; ++h) {
-            noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, write_size);
+            for (uint32_t w = 0; w < num_tiles_to_write_in_current_segment; ++w) {
+                num_tiles_in_write_queue += 1;
+                cb_wait_front(cb_out, num_tiles_in_write_queue);
+                noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, out_single_tile_size_bytes);
+                worker_core_read_addr += out_single_tile_size_bytes;
+                remote_storage_core_write_addr += out_single_tile_size_bytes;
+            }
             worker_core_read_addr += worker_core_stride_w_bytes;
             remote_storage_core_write_addr += storage_core_stride_w_bytes;
         }
         worker_core_read_offset += write_size;
     }
     noc_async_write_barrier();
-    cb_pop_front(cb_out, block_ht * block_w);
 #endif
 }

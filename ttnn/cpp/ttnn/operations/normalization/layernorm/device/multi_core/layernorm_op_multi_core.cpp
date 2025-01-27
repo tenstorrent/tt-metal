@@ -478,16 +478,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool is_pre_all_gather = distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER;
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
-    tt::log_debug("layernorm_multi_core_sharded: output.shard_spec().value()={}", output.shard_spec().value());
-
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value().grid == a.shard_spec().value().grid;
-
-    // std::cout << "skip_write_back: " << skip_write_back << std::endl;
-    // std::cout << "block_wt_resharded: " << block_wt_resharded << std::endl;
-    // std::cout << "block_wt: " << block_wt << std::endl;
-    // std::cout << "output.shard_spec().value().grid: " << output.shard_spec().value().grid << std::endl;
-    // std::cout << "a.shard_spec().value().grid: " << a.shard_spec().value().grid;
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
@@ -986,11 +978,13 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         (std::uint32_t)0,
         (std::uint32_t)reduce_second_stage_semaphore_id};
 
-    // tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    // tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
 
-    tt::tt_metal::NOC reader_noc = NOC::NOC_0;
-    tt::tt_metal::NOC writer_noc = NOC::NOC_1;
+    if (is_post_all_gather && !skip_write_back) {
+        reader_noc = NOC::NOC_0;
+        writer_noc = NOC::NOC_1;
+    }
 
     // reader kernel
     std::string sender_reader_kernel_file =
@@ -1648,8 +1642,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         std::vector<uint32_t> write_back_writer_args;
 
         if (is_post_all_gather && !skip_write_back) {
-            // uint32_t num_storage_cores = (block_wt * num_cores + block_wt_resharded - 1) / block_wt_resharded;  //
-            // TODO: need to pass in storage core grid anyway, take from there
             uint32_t num_storage_cores = all_storage_cores.num_cores();
 
             write_back_writer_args.push_back(
@@ -1657,11 +1649,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
             uint32_t current_worker_num_segments_to_write_back = 0;
             uint32_t worker_core_current_offset = 0;
-
-            // 8192 / 4 = 2048 per device, 2048 / 16 = 128 per worker core (=4 tiles)
-            // 9216 / 4 = 2304 per device, 2304 / 24 = 96 per stoorage core (=3 tiles)
-
-            tt::log_debug("block_wt: {}, block_wt_resharded: {}", block_wt, block_wt_resharded);
 
             while (worker_core_current_offset <
                    block_wt) {  // Continue until all worker core data has been written to corresponding storage cores
@@ -1687,19 +1674,12 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 write_back_writer_args.push_back(
                     storage_core_noc_y[current_storage_core]);  // current_storage_core_noc_y
 
-                tt::log_debug("num_bytes_to_write_back: {}", num_tiles_to_write_back * out_single_tile_size);
-                tt::log_debug("storage_core_noc_x[current_storage_core]: {}", storage_core_noc_x[current_storage_core]);
-                tt::log_debug("storage_core_noc_y[current_storage_core]: {}", storage_core_noc_y[current_storage_core]);
-
                 worker_core_current_offset += num_tiles_to_write_back;
                 current_storage_core_offset += num_tiles_to_write_back;
 
                 if (current_storage_core_offset >= block_wt_resharded) {
                     current_storage_core += 1;        // Move to next storage core
                     current_storage_core_offset = 0;  // Reset offset on new storage core
-
-                    tt::log_debug(
-                        "Resetting storage core offset and moving to next storage core: {}", current_storage_core);
 
                     assert(
                         current_storage_core <=

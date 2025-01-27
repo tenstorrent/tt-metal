@@ -8,11 +8,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
-#include "debug/dprint.h"
-
 void kernel_main() {
-    DPRINT << "In writer!!!!!!!!!!!!!!!!!!!!!!    " << ENDL();
-
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
     constexpr bool fuse_beta = get_compile_time_arg_val(2) == 1;
@@ -43,10 +39,6 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
 
-    // return;
-
-    // constexpr uint32_t block_w = 4;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     {
@@ -130,9 +122,7 @@ void kernel_main() {
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 
-    // cb_wait_front(cb_out, block_ht * block_w);
     uint32_t cb_out_read_base_addr = get_read_ptr(cb_out);
-    // cb_reserve_back(cb_out_resharded, block_ht*block_w);
     uint32_t cb_out_reshard_write_base_addr = get_write_ptr(cb_out_resharded);
 
     uint32_t num_tiles_in_write_queue = 0;
@@ -162,17 +152,11 @@ void kernel_main() {
                 worker_core_read_addr += out_single_tile_size_bytes;
                 remote_storage_core_write_addr += out_single_tile_size_bytes;
             }
-            // noc_async_write(worker_core_read_addr, remote_storage_core_write_addr, write_size);
             worker_core_read_addr += worker_core_stride_w_bytes;
             remote_storage_core_write_addr += storage_core_stride_w_bytes;
         }
         worker_core_read_offset += write_size;
-
-        // noc_async_write_barrier();
-        // cb_pop_front(cb_out, num_tiles_to_write);
     }
     noc_async_write_barrier();
-    // cb_pop_front(cb_out, block_ht * block_w);
-    // cb_push_back(cb_out_resharded, block_ht*block_w);
 #endif
 }
