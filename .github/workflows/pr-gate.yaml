@@ -30,6 +30,6 @@ concurrency:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
-    secrets: inherit
+    # secrets: inherit
     with:
       os: "ubuntu-22.04-amd64"
