@@ -51,7 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          MAX_ATTEMPTS=5
+          MAX_ATTEMPTS=3
           original_trigger=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event')
           conclusion=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.conclusion')
           if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt_number }}" == "$MAX_ATTEMPTS" ]]; then
