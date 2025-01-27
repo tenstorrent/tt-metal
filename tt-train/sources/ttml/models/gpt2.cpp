@@ -66,6 +66,8 @@ void weights_initialization(Transformer& model) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
             init::normal_init(tensor_ptr, tensor.shape(), {0.F, 0.02F});
+            // const float init_k = std::sqrtf(1.F / static_cast<float>(tensor.get_shape()[-1]));
+            // init::uniform_init(tensor_ptr, tensor.get_shape(), init::UniformRange{-init_k, init_k});
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.shape(), 0.F);
         }
