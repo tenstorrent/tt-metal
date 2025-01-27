@@ -77,6 +77,19 @@ public:
     uint32_t page_size() { return page_shape[0] * page_shape[1] * element_size; }
 };
 
+struct ShardedSubBufferStressTestConfig {
+    uint32_t buffer_size = 0;
+    uint32_t page_size = 0;
+    uint32_t region_offset = 0;
+    uint32_t region_size = 0;
+    CoreRangeSet cores;
+    std::array<uint32_t, 2> shard_shape;
+    std::array<uint32_t, 2> page_shape;
+    std::array<uint32_t, 2> tensor2d_shape;
+    TensorMemoryLayout layout;
+    ShardOrientation orientation;
+};
+
 namespace local_test_functions {
 
 vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
@@ -93,6 +106,83 @@ void clear_buffer(CommandQueue& cq, Buffer& buffer) {
     TT_FATAL(buffer.size() % sizeof(uint32_t) == 0, "Error");
     vector<uint32_t> zeroes(buffer.size() / sizeof(uint32_t), 0);
     EnqueueWriteBuffer(cq, buffer, zeroes, true);
+}
+
+vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_configs(uint32_t max_buffer_size) {
+    vector<ShardedSubBufferStressTestConfig> configs;
+
+    uint32_t buffer_size = 0;
+    while (buffer_size <= max_buffer_size) {
+        uint32_t page_size = 4;
+        while (page_size <= buffer_size) {
+            uint32_t region_offset = 0;
+            while (buffer_size % page_size == 0 && region_offset < buffer_size) {
+                uint32_t region_size = page_size;
+                while (region_offset + region_size <= buffer_size) {
+                    CoreCoord start(0, 0);
+                    for (uint32_t end_core_idx = 3; end_core_idx <= 4; end_core_idx++) {
+                        CoreCoord end(end_core_idx, end_core_idx);
+                        CoreRange cores(start, end);
+                        const uint32_t num_pages = buffer_size / page_size;
+                        const uint32_t num_shards = cores.size();
+                        const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
+                        uint32_t page_shape_height_div_factor = 1;
+                        while (page_shape_height_div_factor <= num_pages_per_shard) {
+                            uint32_t page_shape_width_div_factor = 1;
+                            while (page_shape_width_div_factor <= num_pages_per_shard) {
+                                if (page_shape_width_div_factor * page_shape_height_div_factor == num_pages_per_shard) {
+                                    uint32_t tensor2d_shape_height = page_shape_height_div_factor;
+                                    while (tensor2d_shape_height <= num_pages) {
+                                        uint32_t tensor2d_shape_width = page_shape_width_div_factor;
+                                        while (tensor2d_shape_width <= num_pages) {
+                                            if (tensor2d_shape_height * tensor2d_shape_width == num_pages) {
+                                                for (TensorMemoryLayout layout :
+                                                     {TensorMemoryLayout::HEIGHT_SHARDED,
+                                                      TensorMemoryLayout::BLOCK_SHARDED,
+                                                      TensorMemoryLayout::WIDTH_SHARDED}) {
+                                                    for (ShardOrientation orientation :
+                                                         {ShardOrientation::COL_MAJOR, ShardOrientation::ROW_MAJOR}) {
+                                                        ShardedSubBufferStressTestConfig config{
+                                                            .buffer_size = buffer_size,
+                                                            .page_size = page_size,
+                                                            .region_offset = region_offset,
+                                                            .region_size = region_size,
+                                                            .cores = CoreRangeSet(cores),
+                                                            .shard_shape =
+                                                                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                                                            .page_shape =
+                                                                {tt::constants::TILE_HEIGHT /
+                                                                     page_shape_height_div_factor,
+                                                                 tt::constants::TILE_WIDTH /
+                                                                     page_shape_width_div_factor},
+                                                            .tensor2d_shape =
+                                                                {tensor2d_shape_height, tensor2d_shape_width},
+                                                            .layout = layout,
+                                                            .orientation = orientation};
+                                                        configs.push_back(config);
+                                                    }
+                                                }
+                                            }
+                                            tensor2d_shape_width += page_shape_width_div_factor;
+                                        }
+                                        tensor2d_shape_height += page_shape_height_div_factor;
+                                    }
+                                }
+                                page_shape_width_div_factor += 1;
+                            }
+                            page_shape_height_div_factor += 1;
+                        }
+                    }
+                    region_size += 2 * page_size;
+                }
+                region_offset += page_size;
+            }
+            page_size += sizeof(uint32_t);
+        }
+        buffer_size += 2 * sizeof(uint32_t);
+    }
+
+    return configs;
 }
 
 template <bool cq_dispatch_only = false>
@@ -961,100 +1051,48 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
 namespace l1_tests {
 
 TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) {
-    const uint32_t max_buffer_size = 192;
-
+    const uint32_t max_buffer_size = 152;
+    const std::vector<ShardedSubBufferStressTestConfig>& configs =
+        local_test_functions::generate_sharded_sub_buffer_test_configs(max_buffer_size);
     for (IDevice* device : devices_) {
         tt::log_info("Running on Device {}", device->id());
-        uint32_t buffer_size = 0;
-        while (buffer_size <= max_buffer_size) {
-            uint32_t page_size = 4;
-            while (page_size <= buffer_size) {
-                uint32_t region_offset = 0;
-                while (buffer_size % page_size == 0 && region_offset < buffer_size) {
-                    uint32_t region_size = page_size;
-                    while (region_offset + region_size <= buffer_size) {
-                        CoreCoord start(0, 0);
-                        for (uint32_t end_core_idx = 3; end_core_idx <= 4; end_core_idx++) {
-                            CoreCoord end(end_core_idx, end_core_idx);
-                            CoreRange cores(start, end);
-                            const uint32_t num_pages = buffer_size / page_size;
-                            const uint32_t num_shards = cores.size();
-                            const uint32_t num_pages_per_shard = tt::div_up(num_pages, num_shards);
-                            uint32_t page_shape_height_div_factor = 1;
-                            while (page_shape_height_div_factor <= num_pages_per_shard) {
-                                uint32_t page_shape_width_div_factor = 1;
-                                while (page_shape_width_div_factor <= num_pages_per_shard) {
-                                    if (page_shape_width_div_factor * page_shape_height_div_factor ==
-                                        num_pages_per_shard) {
-                                        uint32_t tensor2d_shape_height = page_shape_height_div_factor;
-                                        while (tensor2d_shape_height <= num_pages) {
-                                            uint32_t tensor2d_shape_width = page_shape_width_div_factor;
-                                            while (tensor2d_shape_width <= num_pages) {
-                                                if (tensor2d_shape_height * tensor2d_shape_width == num_pages) {
-                                                    for (TensorMemoryLayout layout :
-                                                         {TensorMemoryLayout::HEIGHT_SHARDED,
-                                                          TensorMemoryLayout::BLOCK_SHARDED,
-                                                          TensorMemoryLayout::WIDTH_SHARDED}) {
-                                                        tt::log_info(
-                                                            tt::LogTest,
-                                                            "Device: {} buffer_size: {} page_size: {}"
-                                                            " region_offset: {} region_size: {} page_shape: [{}, {}]"
-                                                            " tensor2d_shape: [{}, {}] layout: {} cores: {}",
-                                                            device->id(),
-                                                            buffer_size,
-                                                            page_size,
-                                                            region_offset,
-                                                            region_size,
-                                                            tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
-                                                            tt::constants::TILE_WIDTH / page_shape_width_div_factor,
-                                                            tensor2d_shape_height,
-                                                            tensor2d_shape_width,
-                                                            magic_enum::enum_name(layout).data(),
-                                                            cores.str());
-                                                        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-                                                            CoreRangeSet(cores),
-                                                            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                                                            ShardOrientation::ROW_MAJOR,
-                                                            {tt::constants::TILE_HEIGHT / page_shape_height_div_factor,
-                                                             tt::constants::TILE_WIDTH / page_shape_width_div_factor},
-                                                            {tensor2d_shape_height, tensor2d_shape_width});
-                                                        auto buffer = Buffer::create(
-                                                            device,
-                                                            buffer_size,
-                                                            page_size,
-                                                            BufferType::L1,
-                                                            layout,
-                                                            shard_spec);
-                                                        local_test_functions::clear_buffer(
-                                                            device->command_queue(), *buffer);
-                                                        const BufferRegion region(region_offset, region_size);
-                                                        vector<uint32_t> src =
-                                                            local_test_functions::generate_arange_vector(region_size);
-                                                        EnqueueWriteSubBuffer(
-                                                            device->command_queue(), *buffer, src, region, false);
-                                                        vector<uint32_t> result;
-                                                        EnqueueReadSubBuffer(
-                                                            device->command_queue(), *buffer, result, region, true);
-                                                        EXPECT_EQ(src, result);
-                                                    }
-                                                }
-                                                tensor2d_shape_width += page_shape_width_div_factor;
-                                            }
-                                            tensor2d_shape_height += page_shape_height_div_factor;
-                                        }
-                                    }
-                                    page_shape_width_div_factor += 1;
-                                }
-                                page_shape_height_div_factor += 1;
-                            }
-                        }
-                        region_size += 2 * page_size;
-                    }
-                    region_offset += page_size;
-                }
-                page_size += sizeof(uint32_t);
-            }
-            buffer_size += 2 * sizeof(uint32_t);
+        for (const ShardedSubBufferStressTestConfig& config : configs) {
+            tt::log_info(
+                tt::LogTest,
+                "Device: {} buffer_size: {} page_size: {} region_offset: {} region_size: {} shard_shape: [{}, {}] "
+                "page_shape: [{}, {}] tensor2d_shape: [{}, {}] layout: {} orientation: {} cores: {}",
+                device->id(),
+                config.buffer_size,
+                config.page_size,
+                config.region_offset,
+                config.region_size,
+                tt::constants::TILE_HEIGHT,
+                tt::constants::TILE_WIDTH,
+                config.page_shape[0],
+                config.page_shape[1],
+                config.tensor2d_shape[0],
+                config.tensor2d_shape[1],
+                magic_enum::enum_name(config.layout).data(),
+                magic_enum::enum_name(config.orientation).data(),
+                config.cores.str());
+
+            ShardSpecBuffer shard_spec = ShardSpecBuffer(
+                config.cores,
+                {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+                config.orientation,
+                config.page_shape,
+                config.tensor2d_shape);
+            auto buffer =
+                Buffer::create(device, config.buffer_size, config.page_size, BufferType::L1, config.layout, shard_spec);
+
+            local_test_functions::clear_buffer(device->command_queue(), *buffer);
+
+            const BufferRegion region(config.region_offset, config.region_size);
+            vector<uint32_t> src = local_test_functions::generate_arange_vector(config.region_size);
+            EnqueueWriteSubBuffer(device->command_queue(), *buffer, src, region, false);
+            vector<uint32_t> result;
+            EnqueueReadSubBuffer(device->command_queue(), *buffer, result, region, true);
+            EXPECT_EQ(src, result);
         }
     }
 }

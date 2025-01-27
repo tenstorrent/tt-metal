@@ -399,30 +399,30 @@ std::pair<uint32_t, uint32_t> calculate_pages_to_process_in_shard(
     // at the end of it either
     TT_ASSERT((core_start_host_page_it == core_host_pages.end()) == (core_end_host_page_it == core_host_pages.rend()));
 
-    uint32_t start_host_page;
-    uint32_t num_dev_pages_to_process;
     const bool all_core_host_pages_outside_of_region = core_start_host_page_it == core_host_pages.end();
     if (all_core_host_pages_outside_of_region) {
-        start_host_page = 0;
-        num_dev_pages_to_process = 0;
-    } else {
-        start_host_page = *(core_start_host_page_it);
-        const uint32_t end_host_page = *(core_end_host_page_it);
-        TT_ASSERT(end_host_page >= start_host_page);
-        const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
-        if (is_core_end_host_page_last_page_in_shard) {
-            const uint32_t num_dev_pages_in_shard =
-                buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
-            num_dev_pages_to_process =
-                num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
-        } else {
-            const uint32_t host_page_after_end_host_page = *(core_end_host_page_it - 1);
-            num_dev_pages_to_process =
-                buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page_after_end_host_page] -
-                buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
-        }
-        TT_ASSERT(num_dev_pages_to_process > 0);
+        return {0, 0};
     }
+
+    const uint32_t start_host_page = *(core_start_host_page_it);
+    const uint32_t end_host_page = *(core_end_host_page_it);
+    TT_ASSERT(end_host_page >= start_host_page);
+
+    uint32_t num_dev_pages_to_process;
+
+    const bool is_core_end_host_page_last_page_in_shard = core_end_host_page_it == core_host_pages.rbegin();
+    if (is_core_end_host_page_last_page_in_shard) {
+        const uint32_t num_dev_pages_in_shard =
+            buffer_page_mapping->core_shard_shape_[core_id][0] * buffer.shard_spec().shape_in_pages()[1];
+        num_dev_pages_to_process =
+            num_dev_pages_in_shard - buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
+    } else {
+        const uint32_t host_page_after_end_host_page = *(core_end_host_page_it - 1);
+        num_dev_pages_to_process =
+            buffer_page_mapping->host_page_to_local_shard_page_mapping_[host_page_after_end_host_page] -
+            buffer_page_mapping->host_page_to_local_shard_page_mapping_[start_host_page];
+    }
+    TT_ASSERT(num_dev_pages_to_process > 0);
 
     return {start_host_page, num_dev_pages_to_process};
 }
@@ -688,7 +688,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     CoreType dispatch_core_type) {
     uint32_t pages_per_txn = 0;
     uint32_t curr_page_idx_in_shard = 0;
-    uint32_t host_page;
+    uint32_t host_page = 0;
     uint32_t address = buffer.address();
 
     if (dispatch_params.width_split) {
