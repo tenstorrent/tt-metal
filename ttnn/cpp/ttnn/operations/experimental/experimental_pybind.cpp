@@ -38,7 +38,7 @@
 #include "ttnn/operations/experimental/dropout/dropout_pybind.hpp"
 #include "ttnn/operations/experimental/speculative_execution/speculative_sdpa_decode/speculative_sdpa_decode_pybind.hpp"
 #include "ttnn/operations/experimental/speculative_execution/swap_tensor/swap_tensor_pybind.hpp"
-
+#include "ttnn/operations/experimental/speculative_execution/consolidate_cache/consolidate_cache_pybind.hpp"
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 
 namespace ttnn::operations::experimental {
@@ -90,6 +90,7 @@ void py_module(py::module& module) {
 
     speculative_execution::py_bind_speculative_sdpa_decode(module);
     speculative_execution::py_bind_swap_tensor(module);
+    speculative_execution::py_bind_consolidate_cache(module);
 }
 
 }  // namespace ttnn::operations::experimental
