@@ -465,7 +465,7 @@ def DetectionModel(device, x, parameters):
 
     c2f_4, out_h, out_w = C2f(device, conv_3, parameters, "model.4", out_h, out_w, n=4, shortcut=True, bfloat8=True)
     c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
-    four = ttnn.clone(c2f_4, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    four = ttnn.clone(c2f_4, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     conv_5, out_h, out_w = Conv(
         device, c2f_4, parameters, "model.5", out_h, out_w, 3, 2, 1, block_shard=True, bfloat8=False
     )
@@ -475,7 +475,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(conv_5)
 
     c2f_6 = ttnn.sharded_to_interleaved(c2f_6, ttnn.L1_MEMORY_CONFIG)
-    six = ttnn.clone(c2f_6, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    six = ttnn.clone(c2f_6, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     conv_7, out_h, out_w = Conv(device, c2f_6, parameters, "model.7", out_h, out_w, 3, 2, 1, block_shard=True)
     ttnn.deallocate(c2f_6)
 
@@ -484,7 +484,7 @@ def DetectionModel(device, x, parameters):
 
     spppf_9, out_h, out_w = SPPF(device, c2f_8, parameters, "model.9", out_h, out_w)
     spppf_9 = ttnn.sharded_to_interleaved(spppf_9, ttnn.L1_MEMORY_CONFIG)
-    nine = ttnn.clone(spppf_9, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    nine = ttnn.clone(spppf_9, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     spppf_9 = ttnn.to_layout(spppf_9, ttnn.ROW_MAJOR_LAYOUT)
     spppf_9 = ttnn.reshape(spppf_9, (1, out_h, out_w, spppf_9.shape[-1]))
     up = ttnn.upsample(spppf_9, scale_factor=(2, 2))
@@ -500,7 +500,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(x)
 
     c2f_12 = ttnn.sharded_to_interleaved(c2f_12, ttnn.L1_MEMORY_CONFIG)
-    twelve = ttnn.clone(c2f_12, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    twelve = ttnn.clone(c2f_12, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     c2f_12 = ttnn.to_layout(c2f_12, ttnn.ROW_MAJOR_LAYOUT)
     c2f_12 = ttnn.reshape(c2f_12, (1, out_h, out_w, c2f_12.shape[-1]))
     up = ttnn.upsample(c2f_12, scale_factor=(2, 2))
@@ -514,7 +514,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(x)
 
     c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
-    fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     conv_16, out_h, out_w = Conv(device, c2f_15, parameters, "model.16", out_h, out_w, 3, 2, 1)
     ttnn.deallocate(c2f_15)
 
@@ -526,7 +526,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(conv_16)
     c2f_18 = ttnn.sharded_to_interleaved(c2f_18, ttnn.L1_MEMORY_CONFIG)
 
-    eighteen = ttnn.clone(c2f_18, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    eighteen = ttnn.clone(c2f_18, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     conv_19, out_h, out_w = Conv(device, c2f_18, parameters, "model.19", out_h, out_w, 3, 2, 1, block_shard=True)
     ttnn.deallocate(c2f_18)
 
@@ -538,7 +538,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(conv_19)
     c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.L1_MEMORY_CONFIG)
 
-    twentyone = ttnn.clone(c2f_21, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    twentyone = ttnn.clone(c2f_21, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(c2f_21)
     x = [fifteen, eighteen, twentyone]
 
