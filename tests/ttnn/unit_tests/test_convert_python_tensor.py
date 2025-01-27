@@ -1,18 +1,23 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import pathlib
 import pytest
 
+
 import torch
 
+
 import ttnn
+import ttnn.ttnn
 
 
 @pytest.mark.parametrize("size", [64])
 @pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
-@pytest.mark.parametrize("dtype", [torch.int32, torch.float, torch.bfloat16])
+@pytest.mark.parametrize("dtype", [torch.int32, torch.float, torch.bfloat16, torch.uint8])
 def test_convert_python_tensor(device, size, mode, dtype):
     torch.manual_seed(0)
 
@@ -24,6 +29,10 @@ def test_convert_python_tensor(device, size, mode, dtype):
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
     assert output_tensor == input_tensor
+
+    # note: change this test case if force_disable_borrow is exposed to user
+    assert output_tensor.storage_type() == ttnn.StorageType.BORROWED
+
     assert "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
@@ -46,6 +55,8 @@ def test_convert_python_tensor_bfp_b(device, size, mode, dtype):
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
     assert output_tensor == input_tensor
+    assert output_tensor.storage_type() != ttnn.StorageType.BORROWED
+
     assert "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"

@@ -8,8 +8,10 @@
 #include <cstdint>
 
 #include "assert.hpp"
+#include "buffer_constants.hpp"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "shape2d.hpp"
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <vector>
@@ -44,6 +46,23 @@ const std::vector<ttnn::Shape>& get_shapes_for_test() {
     return *shapes;
 }
 
+TensorSpec get_tensor_spec_with_memory(
+    const ttnn::Shape& shape,
+    DataType dtype,
+    Layout layout = Layout::ROW_MAJOR,
+    TensorMemoryLayout mem_layout = TensorMemoryLayout::SINGLE_BANK) {
+    return TensorSpec(
+        shape,
+        TensorLayout(
+            dtype,
+            layout,
+            MemoryConfig{
+                .memory_layout = mem_layout,
+                .buffer_type = BufferType::DRAM,
+                .shard_spec =
+                    ShardSpec{ttnn::CoreRangeSet{}, {32, 64}, ShardOrientation::ROW_MAJOR, ShardMode::LOGICAL}}));
+}
+
 TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype, Layout layout = Layout::ROW_MAJOR) {
     return TensorSpec(shape, TensorLayout(dtype, layout, MemoryConfig{}));
 }
@@ -63,70 +82,9 @@ std::vector<T> arange(int64_t start, int64_t end, int64_t step, std::optional<in
 }
 
 template <typename T>
-class SpanConversionTest : public ::testing::Test {};
+class VectorConversionTest : public ::testing::Test {};
 
 using TestTypes = ::testing::Types<float, bfloat16, uint8_t, uint16_t, uint32_t, int32_t>;
-TYPED_TEST_SUITE(SpanConversionTest, TestTypes);
-
-TYPED_TEST(SpanConversionTest, TensorShape) {
-    for (const auto& shape : get_shapes_for_test()) {
-        auto input = arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
-        Tensor output = Tensor::from_span(
-            tt::stl::Span<const TypeParam>(input.data(), input.size()),
-            get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
-
-        EXPECT_THAT(output.get_tensor_spec().shape(), Eq(shape)) << "for shape: " << shape;
-    }
-}
-
-TYPED_TEST(SpanConversionTest, Roundtrip) {
-    for (const auto& shape : get_shapes_for_test()) {
-        auto input = arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
-        auto output = Tensor::from_span(
-                          tt::stl::Span<const TypeParam>(input.data(), input.size()),
-                          get_tensor_spec(shape, convert_to_data_type<TypeParam>()))
-                          .template to_vector<TypeParam>();
-        EXPECT_THAT(output, Pointwise(Eq(), input)) << "for shape: " << shape;
-    }
-}
-
-TYPED_TEST(SpanConversionTest, InvalidSize) {
-    ttnn::SimpleShape shape{32, 32};
-    auto input = arange<TypeParam>(0, 42, 1);
-
-    ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(Tensor::from_span(
-        tt::stl::Span<const TypeParam>(input.data(), input.size()),
-        get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
-}
-
-TYPED_TEST(SpanConversionTest, RoundtripTilezedLayout) {
-    ttnn::SimpleShape shape{128, 128};
-
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    auto output = Tensor::from_span(
-                      tt::stl::Span<const TypeParam>(input.data(), input.size()),
-                      get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE))
-                      .template to_vector<TypeParam>();
-
-    EXPECT_THAT(output, Pointwise(Eq(), input));
-}
-
-TYPED_TEST(SpanConversionTest, InvalidDtype) {
-    ttnn::SimpleShape shape{32, 32};
-    auto input = arange<TypeParam>(0, shape.volume(), 1);
-
-    EXPECT_ANY_THROW(Tensor::from_span(
-        tt::stl::Span<const TypeParam>(input.data(), input.size()),
-        get_tensor_spec(
-            shape,
-            // Use INT32 for verification, except for when the actual type is int32_t.
-            (std::is_same_v<TypeParam, int32_t> ? DataType::FLOAT32 : DataType::INT32))));
-}
-
-template <typename T>
-class VectorConversionTest : public ::testing::Test {};
 TYPED_TEST_SUITE(VectorConversionTest, TestTypes);
 
 TYPED_TEST(VectorConversionTest, TensorShape) {
@@ -141,8 +99,15 @@ TYPED_TEST(VectorConversionTest, TensorShape) {
 TYPED_TEST(VectorConversionTest, Roundtrip) {
     for (const auto& shape : get_shapes_for_test()) {
         auto input = arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
-        auto output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()))
-                          .template to_vector<TypeParam>();
+        auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
+
+        TensorSpec tensor_spec = tensor.get_tensor_spec();
+
+        EXPECT_THAT(tensor_spec.shape(), Eq(shape)) << "for shape: " << shape;
+        EXPECT_THAT(tensor_spec.data_type(), Eq(convert_to_data_type<TypeParam>()));
+
+        auto output = tensor.template to_vector<TypeParam>();
+
         EXPECT_THAT(output, Pointwise(Eq(), input)) << "for shape: " << shape;
     }
 }
@@ -153,6 +118,23 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
 
     ASSERT_NE(input.size(), shape.volume());
     EXPECT_ANY_THROW(Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+}
+
+TYPED_TEST(VectorConversionTest, OddshapeRoundtripTilizedLayout) {
+    ttnn::Shape shape{1, 40, 3, 121};
+
+    auto input = arange<TypeParam>(0, shape.volume(), 1);
+
+    auto tensor = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>(), Layout::TILE));
+
+    ASSERT_NE(tensor.tensor_spec().padded_shape(), tensor.tensor_spec().logical_shape());
+
+    EXPECT_THAT(tensor.tensor_spec().logical_shape(), ShapeIs(1, 40, 3, 121));
+    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(1, 40, 32, 128));
+
+    auto output = tensor.template to_vector<TypeParam>();
+
+    EXPECT_THAT(output, Pointwise(Eq(), input));
 }
 
 TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
@@ -197,14 +179,6 @@ TEST(FloatVectorConversionTest, RoundtripBfloat16) {
 }
 
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
-
-TEST_P(BlockFloatVectorConversionTest, ValidStorage) {
-    ttnn::SimpleShape shape{32, 32};
-    std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
-
-    Tensor output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
-    EXPECT_NE(output.storage_type(), StorageType::BORROWED);
-}
 
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
     ttnn::Shape shape{32, 32};
@@ -268,5 +242,154 @@ TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
     EXPECT_THAT(output.to_vector<float>(), Pointwise(Eq(), input));
 }
 
+// TODO: simplify into two layered class TYPED_TEST_P
+class ShardVectorConversionTest : public ::testing::TestWithParam<TensorMemoryLayout> {};
+
+TEST_P(ShardVectorConversionTest, UInt32RoundtripRowMajShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<uint32_t>(0, shape.volume(), 1);
+
+    auto tensor =
+        Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::UINT32, Layout::ROW_MAJOR, GetParam()));
+
+    auto output = tensor.template to_vector<uint32_t>();
+
+    EXPECT_THAT(output, Pointwise(Eq(), input));
+}
+
+TEST_P(ShardVectorConversionTest, UInt32RoundtripTilizedShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<uint32_t>(0, shape.volume(), 1);
+
+    auto tensor =
+        Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::UINT32, Layout::TILE, GetParam()));
+
+    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
+
+    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
+    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
+
+    auto output = tensor.template to_vector<uint32_t>();
+
+    EXPECT_THAT(output, Pointwise(Eq(), input));
+}
+
+TEST_P(ShardVectorConversionTest, FloatRoundtripRowMajShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto tensor = Tensor::from_vector(
+        input, get_tensor_spec_with_memory(shape, DataType::FLOAT32, Layout::ROW_MAJOR, GetParam()));
+
+    auto output = tensor.template to_vector<float>();
+
+    EXPECT_THAT(output, Pointwise(Eq(), input));
+}
+
+TEST_P(ShardVectorConversionTest, FloatRoundtripTilizedShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<float>(0, shape.volume(), 1);
+
+    auto tensor =
+        Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::FLOAT32, Layout::TILE, GetParam()));
+
+    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
+
+    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
+    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
+
+    auto output = tensor.template to_vector<float>();
+
+    EXPECT_THAT(output, Pointwise(Eq(), input));
+}
+
+TEST_P(ShardVectorConversionTest, Bfloat16RoundtripRowMajShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input_bf16 = arange<bfloat16>(0, static_cast<int64_t>(shape.volume()), 1);
+
+    std::vector<float> input_ft;
+    input_ft.reserve(input_bf16.size());
+    std::transform(
+        input_bf16.begin(), input_bf16.end(), std::back_inserter(input_ft), [](bfloat16 bf) { return bf.to_float(); });
+
+    auto tensor_bf = Tensor::from_vector(
+        input_ft, get_tensor_spec_with_memory(shape, DataType::BFLOAT16, Layout::ROW_MAJOR, GetParam()));
+
+    auto output_ft = tensor_bf.to_vector<float>();
+
+    EXPECT_THAT(output_ft, Pointwise(Eq(), input_ft));
+}
+
+TEST_P(ShardVectorConversionTest, Bfloat16RoundtripTilizedShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input_bf16 = arange<bfloat16>(0, static_cast<int64_t>(shape.volume()), 1);
+
+    std::vector<float> input_ft;
+    input_ft.reserve(input_bf16.size());
+    std::transform(
+        input_bf16.begin(), input_bf16.end(), std::back_inserter(input_ft), [](bfloat16 bf) { return bf.to_float(); });
+
+    auto tensor_bf =
+        Tensor::from_vector(input_ft, get_tensor_spec_with_memory(shape, DataType::BFLOAT16, Layout::TILE, GetParam()));
+
+    ASSERT_NE(tensor_bf.tensor_spec().logical_2d_shape(), tensor_bf.tensor_spec().physical_shape());
+
+    EXPECT_THAT(tensor_bf.get_logical_shape(), ShapeIs(121, 128));
+    EXPECT_THAT(tensor_bf.get_padded_shape(), ShapeIs(128, 128));
+
+    auto output_ft = tensor_bf.to_vector<float>();
+
+    EXPECT_THAT(output_ft, Pointwise(FloatNear(4.0f), input_ft));
+}
+
+TEST_P(ShardVectorConversionTest, BlockfloatRoundtripRowMajShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<float>(0, shape.volume(), 1, 32);
+
+    auto tensor =
+        Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::BFLOAT8_B, Layout::TILE, GetParam()));
+
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
+}
+
+TEST_P(ShardVectorConversionTest, BlockfloatRoundtripTilizedShardMapping) {
+    ttnn::Shape shape{121, 128};
+
+    auto input = arange<float>(0, shape.volume(), 1, 32);
+
+    auto tensor =
+        Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::BFLOAT8_B, Layout::TILE, GetParam()));
+
+    std::cout << tensor.get_tensor_spec().logical_2d_shape().height() << " "
+              << tensor.get_tensor_spec().logical_2d_shape().width() << std::endl;
+    std::cout << tensor.get_tensor_spec().physical_shape().height() << " "
+              << tensor.get_tensor_spec().physical_shape().width() << std::endl;
+
+    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
+
+    EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
+    EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
+
+    EXPECT_THAT(tensor.to_vector<float>(), Pointwise(FloatNear(4.0f), input));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardVectorConversionTests,
+    ShardVectorConversionTest,
+    ::testing::Values(
+        TensorMemoryLayout::INTERLEAVED,
+        TensorMemoryLayout::SINGLE_BANK,
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        TensorMemoryLayout::WIDTH_SHARDED,
+        TensorMemoryLayout::BLOCK_SHARDED));
+
 }  // namespace
+
 }  // namespace ttnn
