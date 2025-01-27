@@ -1,0 +1,49 @@
+name: "Build TT-Metalium across all configs"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pages: write
+  id-token: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    strategy:
+      matrix:
+        config:
+          - os: "ubuntu-20.04-amd64"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Debug"
+            publish-artifact: false
+          - os: "ubuntu-20.04-amd64"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "RelWithDebInfo"
+            publish-artifact: false
+          - os: "ubuntu-22.04-amd64"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+          - os: "ubuntu-22.04-amd64"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+          - os: "ubuntu-22.04-amd64"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+    with:
+      os: ${{ matrix.config.os }}
+      toolchain: ${{ matrix.config.toolchain }}
+      build-type: ${{ matrix.config.build-type }}
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}
