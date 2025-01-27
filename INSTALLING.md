@@ -142,7 +142,7 @@ To verify your installation, try the executing an example:
 python3 -m ttnn.examples.usage.run_op_on_device
 ```
 
-You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 ---
 
