@@ -3,18 +3,7 @@
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
 [shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
 
-The following commands will build and execute the code for this example.
-Environment variables may be modified based on the latest
-specifications.
-Run the appropriate command for the Tenstorrent card you have installed:
-
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-Then run the following:
+To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
