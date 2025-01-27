@@ -19,6 +19,7 @@ int32_t get_nearest_power_of_2(int32_t k) {
     }
     int32_t nearest_power_of_2 = 1;
     while (nearest_power_of_2 < k) {
+        TT_FATAL(nearest_power_of_2 < (std::numeric_limits<int32_t>::max() / 2), "K value is too large");
         nearest_power_of_2 *= 2;
     }
     return nearest_power_of_2;
