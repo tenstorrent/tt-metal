@@ -35,7 +35,7 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     anchor_points, stride_tensor = [], []
     assert feats is not None
     for i, stride in enumerate(strides):
-        h, w = feats[i], feats[i]
+        h, w = feats[i]
         sx = torch.arange(end=w) + grid_cell_offset
         sy = torch.arange(end=h) + grid_cell_offset
         sy, sx = torch.meshgrid(sy, sx)
@@ -88,10 +88,10 @@ def preprocess_parameters(state_dict, path, bias=True, bfloat8=True):
         else:
             conv_weight = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
 
-        return conv_weight
+        return (conv_weight, None)
 
 
-def custom_preprocessor(device, state_dict):
+def custom_preprocessor(device, state_dict, inp_h=640, inp_w=640):
     pairs = [
         ("model.0", True),
         ("model.1", True),
@@ -212,8 +212,9 @@ def custom_preprocessor(device, state_dict):
 
     parameters["model.22.dfl"] = preprocess_parameters(state_dict, "model.22.dfl", bias=False, bfloat8=True)
 
-    feats = [80, 40, 20]  # Values depends on input resolution. Current: 640*640
-    strides = [8.0, 16.0, 32.0]
+    strides = [8, 16, 32]
+
+    feats = [(inp_h // 8, inp_w // 8), (inp_h // 16, inp_w // 16), (inp_h // 32, inp_w // 32)]  # value depend on res
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
 
