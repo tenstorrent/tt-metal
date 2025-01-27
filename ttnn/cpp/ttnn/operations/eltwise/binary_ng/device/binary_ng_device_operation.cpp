@@ -143,6 +143,9 @@ void validate_sharding(
                 shard_spec_x.shape[0] == shard_spec_y.shape[0],
                 "Operands to eltwise binary need to have the same"
                 "shard height when broadcasting on W");
+            TT_FATAL(
+                shard_spec_x.orientation == shard_spec_y.orientation,
+                "Operands to eltwise binary must have same shard orientation");
             break;
         default: TT_THROW("Invalid subtile broadcast type for sharding validation");
     }
@@ -213,16 +216,22 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
                 input_tensor_a.memory_config().memory_layout,
                 *input_tensor_a.shard_spec(),
                 attributes.memory_config.memory_layout,
-                *attributes.memory_config.shard_spec,
+                attributes.memory_config.shard_spec.value_or(*input_tensor_a.shard_spec()),
                 attributes.subtile_broadcast_type);
         }
-    } else if (tensor_b_sharded and output_sharded) {
-        validate_sharding(
-            input_tensor_b->memory_config().memory_layout,
-            *input_tensor_b->shard_spec(),
-            attributes.memory_config.memory_layout,
-            *attributes.memory_config.shard_spec,
-            attributes.subtile_broadcast_type);
+    } else if (tensor_b_sharded) {
+        if (output_sharded) {
+            validate_sharding(
+                input_tensor_b->memory_config().memory_layout,
+                *input_tensor_b->shard_spec(),
+                attributes.memory_config.memory_layout,
+                attributes.memory_config.shard_spec.value_or(*input_tensor_b->shard_spec()),
+                attributes.subtile_broadcast_type);
+        }
+    } else if (output_sharded) {
+        TT_FATAL(
+            attributes.memory_config.shard_spec.has_value(),
+            "Sharded output memory config must have shard spec if neither input is sharded");
     }
 }
 
@@ -241,7 +250,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape({1, 1});
+    const auto& input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : input_shape_a;
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -303,9 +312,26 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
+        auto shapes_equal = [=](const auto& shape_a, const auto& shape_b) {
+            const auto smaller_rank = std::min(shape_a.rank(), shape_b.rank());
+            for (int i = 0; i < smaller_rank; ++i) {
+                auto dim = -1 - i;
+                if (shape_a[dim] != shape_b[dim]) {
+                    return false;
+                }
+            }
+            const auto& larger_shape = shape_a.rank() > shape_b.rank() ? shape_a : shape_b;
+            for (int i = smaller_rank; i < larger_rank; ++i) {
+                auto dim = -1 - i;
+                if (larger_shape[dim] != 1) {
+                    return false;
+                }
+            }
+            return true;
+        };
         auto shape = output_tensor.value().logical_shape();
         TT_FATAL(
-            shape == output_shape,
+            shapes_equal(shape, output_shape),
             "Shape of Output tensor {} provided does not match the broadcasted output shape {}",
             shape,
             output_shape);
@@ -313,8 +339,16 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     if (attributes.memory_config.is_sharded()) {
+        const auto& [memory_layout, buffer_type, shard_spec] = attributes.memory_config;
+        const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec;
+        const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec : std::nullopt;
+        const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
+                                        : input_a_shard_spec.has_value() ? *input_a_shard_spec
+                                                                         : *input_b_shard_spec;
         return TensorSpec(
-            output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
+            output_shape,
+            TensorLayout(
+                attributes.get_dtype(), PageConfig(Layout::TILE), {memory_layout, buffer_type, output_shard_spec}));
     }
 
     return TensorSpec(
@@ -379,7 +413,7 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor,
+    const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
@@ -401,7 +435,8 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             std::nullopt,
-            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
+            memory_config.value_or(
+                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
@@ -418,7 +453,7 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor,
+    const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
@@ -432,7 +467,8 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
-            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
+            memory_config.value_or(
+                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, nullptr, output_tensor),
