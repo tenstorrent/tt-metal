@@ -44,9 +44,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_0_buffer_index_address + field_size;
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_connection_info_address + field_size;
+    std::size_t sender_channel_0_producer_terminate_connection_address =
+        sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_connection_semaphore_address =
-        sender_channel_0_local_flow_control_semaphore_address + field_size;
+        sender_channel_0_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
@@ -60,9 +62,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_1_buffer_index_address + field_size;
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_connection_info_address + field_size;
+    std::size_t sender_channel_1_producer_terminate_connection_address =
+        sender_channel_1_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_connection_semaphore_address =
-        sender_channel_1_local_flow_control_semaphore_address + field_size;
+        sender_channel_1_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
@@ -120,7 +124,12 @@ struct edm_termination_info_t {
 };
 
 void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out);
-void append_worker_to_fabric_edm_sender_rt_args(SenderWorkerAdapterSpec const& connection, size_t sender_worker_flow_control_semaphore_id, size_t sender_worker_buffer_index_semaphore_id, std::vector<uint32_t>& args_out);
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args, size_t starting_arg_idx = 0);
 
 class FabricEriscDatamoverBuilder {
@@ -135,6 +144,7 @@ class FabricEriscDatamoverBuilder {
            size_t peer_chip_id,
 
            std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id,
+           std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id,
            size_t sender_channel_0_flow_control_semaphore_id,
            size_t sender_channel_1_flow_control_semaphore_id,
            size_t sender_channel_0_connection_semaphore_id,
@@ -201,6 +211,7 @@ class FabricEriscDatamoverBuilder {
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
+    std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id;
     size_t sender_channel_0_flow_control_semaphore_id = 0;
     size_t sender_channel_1_flow_control_semaphore_id = 0;
     size_t sender_channel_0_connection_semaphore_id = 0;

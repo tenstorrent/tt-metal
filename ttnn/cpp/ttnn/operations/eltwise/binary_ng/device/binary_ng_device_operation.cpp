@@ -274,7 +274,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
-        auto shape = output_tensor.value().get_shape();
+        auto shape = output_tensor.value().logical_shape();
         TT_FATAL(
             shape == output_shape,
             "Shape of Output tensor {} provided does not match the broadcasted output shape {}",
