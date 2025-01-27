@@ -60,6 +60,7 @@ target_link_libraries(
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
+        Metalium::Metal::LLRT
 )
 
 target_include_directories(
