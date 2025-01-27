@@ -370,7 +370,6 @@ class CrossAttentionTransformer(torch.nn.Module):
         )
         rot_mats = get_prefill_rot_mat(
             self.configuration.head_dim,
-            self.configuration.max_seq_len,
             self.mesh_device,
             seq_len=S,
             theta=self.configuration.rope_theta,

@@ -120,7 +120,6 @@ class TtTransformer(LightweightModule):
 
         tt_rot_mats_prefill = get_prefill_rot_mat(
             self.args.head_dim,
-            self.args.max_seq_len,
             self.mesh_device,
             S,
             self.args.rope_theta,

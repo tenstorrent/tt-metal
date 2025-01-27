@@ -24,7 +24,6 @@ from models.demos.llama3.tt.generator import LlamaGenerator
 from models.demos.llama3.tt.model_config import LlamaOptimizations
 from models.demos.llama3.tt.llama_common import (
     preprocess_inputs_prefill,
-    get_prefill_rot_mat,
     get_rot_transformation_mat,
     encode_prompt_llama_instruct,
     PagedAttentionConfig,
