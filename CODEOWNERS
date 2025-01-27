@@ -54,10 +54,10 @@ tt_fabric/ @ubcheema @aliuTT @aagarwalTT @eelkozahTT
 tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
 
 # metal - base
-tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema
-tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap
-tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu
-tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt
+tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
+tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt
+tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @cfjchu @omilyutin-tt
+tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @omilyutin-tt @cfjchu @omilyutin-tt
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # metal - dispatch
