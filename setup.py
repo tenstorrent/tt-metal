@@ -17,27 +17,6 @@ from setuptools import setup, Extension, find_namespace_packages
 from setuptools.command.build_ext import build_ext
 
 
-def find_files_in_kernels_subdir(base_dir):
-    """
-    Finds all .cc/.cpp/.h/.hpp files located beneath any 'kernels' directory at any depth within the base directory.
-
-    Args:
-        base_dir (str): The base directory to search within.
-
-    Returns:
-        list: A list of matching file paths.
-    """
-    matching_files = []
-    for root, dirs, files in os.walk(base_dir):
-        # Check if 'kernels' is in the current path
-        if "kernels" in root.split(os.sep):
-            # Find all .cpp files in this directory
-            matching_files.extend(
-                os.path.join(root, file) for file in files if file.endswith((".cc", ".cpp", ".h", ".hpp"))
-            )
-    return matching_files
-
-
 class EnvVarNotFoundException(Exception):
     pass
 
@@ -193,14 +172,13 @@ class CMakeBuild(build_ext):
 
 
 packages = find_namespace_packages(where="ttnn")
-
+packages = [item for item in packages if not item.startswith("cpp")]
 packages.append("tt_metal")
 packages.append("ttnn.cpp")
 
 print(("packaging: ", packages))
 
 kernel_files = find_files_in_kernels_subdir("ttnn")
-
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
 
@@ -218,13 +196,12 @@ setup(
     packages=packages,
     package_dir={
         "": "ttnn",  # only this is relevant in case of editable install mode
-        "tracy": "ttnn/tracy",
         "tt_metal": "tt_metal",  # kernels depend on headers here
         "ttnn.cpp": "ttnn/cpp",
         "tt_lib.models": "models",  # make sure ttnn does not depend on model and remove!!!
     },
     package_data={
-        "ttnn.cpp": kernel_files,
+        "ttnn.cpp": ["*.cpp", "*.hpp", "*.cc", "*.h"],
     },
     include_package_data=True,
     long_description_content_type="text/markdown",
