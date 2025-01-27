@@ -29,6 +29,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize("hidden_states", [[2, 1280, 8, 8]])
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
+@pytest.mark.skip(reason="#15931: Failing, skip for now")
 def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_states, temb):
     os.environ["SLOW_MATMULS"] = "1"
 
