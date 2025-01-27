@@ -19,10 +19,10 @@ void MorehCumsumDeviceOperation::validate_inputs(
     }
 
     const auto input_shape_padded = input.get_padded_shape();
-    const auto output_shape_padded = output->get_padded_shape();
+    const auto output_shape_padded = output.value().get_padded_shape();
 
     const auto input_shape = input.get_logical_shape();
-    const auto output_shape = input.get_logical_shape();
+    const auto output_shape = output.value().get_logical_shape();
     for (int i = 0; i < input_shape_padded.rank(); ++i) {
         TT_FATAL(
             input_shape_padded[i] == output_shape_padded[i],
