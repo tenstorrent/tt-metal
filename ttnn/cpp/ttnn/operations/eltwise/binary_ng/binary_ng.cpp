@@ -5,13 +5,14 @@
 
 #include "binary_ng.hpp"
 #include "device/binary_ng_device_operation.hpp"
+#include <optional>
 
 inline Tensor typecast_to(DataType dtype, const Tensor& input) {
     return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
 }
 
-inline bool needs_typecast_to_bfloat16(const Tensor& input) {
-    return (input.get_dtype() == DataType::BFLOAT8_B || input.get_dtype() == DataType::BFLOAT4_B);
+inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
+    return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
 }
 
 namespace ttnn::operations::binary_ng {
@@ -27,22 +28,65 @@ Tensor BinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
-    bool typecast_b = needs_typecast_to_bfloat16(input_tensor_b);
-    Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor_a) : input_tensor_a;
-    Tensor input_b = typecast_b ? typecast_to(DataType::BFLOAT16, input_tensor_b) : input_tensor_b;
+    const ttnn::DataType a_dtype = input_tensor_a.get_dtype();
+    const ttnn::DataType b_dtype = input_tensor_b.get_dtype();
+    ttnn::DataType out_dtype = a_dtype;
+    const bool output_preallocated = optional_output_tensor.has_value();
 
-    return ttnn::prim::binary_ng(
-        queue_id,
-        input_a,
-        input_b,
-        binary_op_type,
-        output_dtype,
-        memory_config,
-        optional_output_tensor,
-        lhs_activations,
-        rhs_activations,
-        post_activations);
+    if (output_preallocated) {
+        out_dtype = optional_output_tensor.value().get_dtype();
+        TT_FATAL(out_dtype == a_dtype, "Output tensor datatype does not match input tensor datatype");
+    }
+
+    bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
+    bool typecast_b = needs_typecast_to_bfloat16(b_dtype);
+
+    if (!typecast_a && !typecast_b) {
+        return ttnn::prim::binary_ng(
+            queue_id,
+            input_tensor_a,
+            input_tensor_b,
+            binary_op_type,
+            input_tensor_a.get_dtype(),
+            optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
+                                               : memory_config.value_or(input_tensor_a.memory_config()),
+            optional_output_tensor,
+            lhs_activations,
+            rhs_activations,
+            post_activations);
+
+    } else {
+        Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
+        Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
+
+        Tensor result = ttnn::prim::binary_ng(
+            queue_id,
+            input_a,
+            input_b,
+            binary_op_type,
+            input_a.get_dtype(),
+            input_a.memory_config(),
+            (output_preallocated && !typecast_a) ? optional_output_tensor.value() : input_a,
+            lhs_activations,
+            rhs_activations,
+            post_activations);
+
+        if (output_preallocated && typecast_a) {
+            copy::detail::copy_impl(
+                queue_id,
+                input_a,
+                {ttnn::operations::unary::UnaryWithParam(
+                    ttnn::operations::unary::UnaryOpType::TYPECAST,
+                    {static_cast<float>(input_a.get_dtype()), static_cast<float>(a_dtype)})},
+                std::nullopt,
+                optional_output_tensor);
+
+            return optional_output_tensor.value();
+        } else if (typecast_a) {
+            return ttnn::typecast(result, a_dtype);
+        }
+        return (output_preallocated && !typecast_a) ? optional_output_tensor.value() : result;
+    }
 }
 
 template <BinaryOpType binary_op_type>
@@ -68,6 +112,45 @@ Tensor BinaryNg<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    uint8_t queue_id,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
+    return BinaryNg<binary_op_type>::invoke(
+        queue_id,
+        input_tensor_a,
+        input_tensor_b,
+        input_tensor_a.get_dtype(),
+        input_tensor_a.memory_config(),
+        input_tensor_a,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor InplaceBinaryNg<binary_op_type>::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
+    return BinaryNg<binary_op_type>::invoke(
+        DefaultQueueId,
+        input_tensor_a,
+        input_tensor_b,
+        input_tensor_a.get_dtype(),
+        input_tensor_a.memory_config(),
+        input_tensor_a,
+        lhs_activations,
+        rhs_activations,
+        post_activations);
+}
+
+template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
     uint8_t queue_id,
     const Tensor& input_tensor_a,
@@ -78,7 +161,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
+    const ttnn::DataType a_dtype = input_tensor_a.get_dtype();
+    bool typecast_a = needs_typecast_to_bfloat16(a_dtype);
+    // bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
     Tensor input_a = typecast_a ? typecast_to(DataType::BFLOAT16, input_tensor_a) : input_tensor_a;
 
     return ttnn::prim::binary_ng(
@@ -189,132 +274,6 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
     std::optional<Tensor> optional_output_tensor) {
     return BinaryNgBitwise<binary_op_type>::invoke(
         DefaultQueueId, input_tensor_a, scalar, memory_config, optional_output_tensor);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
-    bool typecast_b = needs_typecast_to_bfloat16(input_tensor_b);
-
-    if (!typecast_a && !typecast_b) {
-        return ttnn::prim::binary_ng(
-            queue_id,
-            input_tensor_a,
-            input_tensor_b,
-            binary_op_type,
-            input_tensor_a.get_dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_a,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-    } else {
-        Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
-        Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
-
-        ttnn::prim::binary_ng(
-            queue_id,
-            input_a,
-            input_b,
-            binary_op_type,
-            input_a.get_dtype(),
-            input_a.memory_config(),
-            input_a,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-
-        if (typecast_a) {
-            copy::detail::copy_impl(
-                queue_id,
-                input_a,
-                {ttnn::operations::unary::UnaryWithParam(
-                    ttnn::operations::unary::UnaryOpType::TYPECAST,
-                    {static_cast<float>(input_a.get_dtype()), static_cast<float>(input_tensor_a.get_dtype())})},
-                input_tensor_a.memory_config(),
-                input_tensor_a);
-
-            return input_tensor_a;
-        }
-        return input_tensor_a;
-    }
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return InplaceBinaryNg<binary_op_type>::invoke(
-        DefaultQueueId, input_tensor_a, input_tensor_b, lhs_activations, rhs_activations, post_activations);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
-    const Tensor& input_tensor_a,
-    float scalar,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    bool typecast_a = needs_typecast_to_bfloat16(input_tensor_a);
-
-    if (!typecast_a) {
-        return ttnn::prim::binary_ng(
-            queue_id,
-            input_tensor_a,
-            scalar,
-            binary_op_type,
-            input_tensor_a.get_dtype(),
-            input_tensor_a.memory_config(),
-            input_tensor_a,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-    } else {
-        Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
-        ttnn::prim::binary_ng(
-            queue_id,
-            input_a,
-            scalar,
-            binary_op_type,
-            input_a.get_dtype(),
-            input_a.memory_config(),
-            input_a,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-
-        copy::detail::copy_impl(
-            queue_id,
-            input_a,
-            {ttnn::operations::unary::UnaryWithParam(
-                ttnn::operations::unary::UnaryOpType::TYPECAST,
-                {static_cast<float>(input_a.get_dtype()), static_cast<float>(input_tensor_a.get_dtype())})},
-            input_tensor_a.memory_config(),
-            input_tensor_a);
-
-        return input_tensor_a;
-    }
-}
-
-template <BinaryOpType binary_op_type>
-Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    float scalar,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
-    return InplaceBinaryNg<binary_op_type>::invoke(
-        DefaultQueueId, input_tensor_a, scalar, lhs_activations, rhs_activations, post_activations);
 }
 
 template struct BinaryNg<BinaryOpType::ADD>;
