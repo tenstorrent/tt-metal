@@ -34,8 +34,8 @@ import ttnn
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
-        ttnn.experimental.add,
-        ttnn.experimental.sub,
+        ttnn.add,
+        ttnn.sub,
         ttnn.experimental.mul,
         ttnn.experimental.div,
         ttnn.experimental.rsub,
@@ -101,8 +101,8 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
-        ttnn.experimental.add,
-        ttnn.experimental.sub,
+        ttnn.add,
+        ttnn.sub,
         ttnn.experimental.mul,
         ttnn.experimental.div,
         ttnn.experimental.rsub,

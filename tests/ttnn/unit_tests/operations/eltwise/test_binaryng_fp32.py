@@ -13,7 +13,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.sub,
+        ttnn.sub,
     ],
 )
 def test_sub_fp32(device, ttnn_function):
@@ -23,7 +23,7 @@ def test_sub_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.experimental.sub(x_tt, y_tt)
+    z_tt_sub = ttnn.sub(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_sub)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -55,7 +55,7 @@ def test_rsub_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.add,
+        ttnn.add,
     ],
 )
 def test_add_fp32(device, ttnn_function):
@@ -65,7 +65,7 @@ def test_add_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.experimental.add(x_tt, y_tt)
+    z_tt_add = ttnn.add(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -76,7 +76,7 @@ def test_add_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.add,
+        ttnn.add,
     ],
 )
 def test_add_int32(device, ttnn_function):
@@ -86,7 +86,7 @@ def test_add_int32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.experimental.add(x_tt, y_tt)
+    z_tt_add = ttnn.add(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -97,7 +97,7 @@ def test_add_int32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.mul,
+        ttnn.multiply,
     ],
 )
 def test_mul_fp32(device, ttnn_function):
@@ -107,7 +107,7 @@ def test_mul_fp32(device, ttnn_function):
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.experimental.mul(x_tt, y_tt)
+    z_tt_out = ttnn.multiply(x_tt, y_tt)
     tt_out = ttnn.to_torch(z_tt_out)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -224,7 +224,7 @@ def test_pow_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.add,
+        ttnn.add,
     ],
 )
 def test_add_fp32_activ(device, ttnn_function):
@@ -233,7 +233,7 @@ def test_add_fp32_activ(device, ttnn_function):
     z_torch = torch.square(x_torch + y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.experimental.add(x_tt, y_tt, post_activations=[ttnn.UnaryOpType.SQUARE])
+    z_tt_add = ttnn.add(x_tt, y_tt, post_activations=[ttnn.UnaryOpType.SQUARE])
     tt_out = ttnn.to_torch(z_tt_add)
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
@@ -244,7 +244,7 @@ def test_add_fp32_activ(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.add,
+        ttnn.add,
     ],
 )
 @pytest.mark.parametrize(
@@ -262,7 +262,7 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
     z_torch = torch.square(torch.nn.functional.silu(x_torch) + y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.experimental.add(
+    z_tt_add = ttnn.add(
         x_tt,
         y_tt,
         lhs_activations=[ttnn.UnaryOpType.SILU],
@@ -577,8 +577,8 @@ def test_bitwise_right_shift(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.experimental.sub,
-        ttnn.experimental.add,
+        ttnn.sub,
+        ttnn.add,
         ttnn.experimental.rsub,
         ttnn.experimental.mul,
         ttnn.experimental.div,

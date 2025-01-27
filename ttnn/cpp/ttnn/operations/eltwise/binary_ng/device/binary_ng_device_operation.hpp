@@ -91,7 +91,7 @@ struct BinaryNgDeviceOperation {
         BinaryOpType binary_op_type,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor,
+        const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> post_activations);
@@ -103,7 +103,7 @@ struct BinaryNgDeviceOperation {
         BinaryOpType binary_op_type,
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<Tensor> optional_output_tensor,
+        const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> post_activations);
