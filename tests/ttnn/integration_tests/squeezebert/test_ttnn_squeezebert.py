@@ -341,6 +341,9 @@ def test_squeezebert_for_question_answering(device, model_name, batch_size, sequ
         torch_attention_mask,
         device=device,
     )
+    print(
+        f"ttnn_squeezebert_inputs : {ttnn_squeezebert_inputs[0].shape}, {ttnn_squeezebert_inputs[1].shape}, {ttnn_squeezebert_inputs[2].shape}, {ttnn_squeezebert_inputs[3].shape}"
+    )
 
     tt_output = ttnn_functional_squeezebert.squeezebert_for_question_answering(
         config,
