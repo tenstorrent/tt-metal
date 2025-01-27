@@ -28,7 +28,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     tile_regs_commit();
     tile_regs_release();
 
-    pack_untilize_uninit();
+    pack_untilize_uninit(cb_out);
 
     cb_push_back(cb_out, ONE_TILE);
     cb_pop_front(cb_in, ONE_TILE);
@@ -42,7 +42,7 @@ void MAIN {
     constexpr uint32_t cb_transpose_in = get_compile_time_arg_val(1);
     constexpr uint32_t cb_out = get_compile_time_arg_val(2);
 
-    transpose_wh_init(cb_in);
+    transpose_wh_init(cb_in, cb_transpose_in);
     pack_untilize_init(cb_in, cb_transpose_in);
 
     for (uint32_t idx = 0; idx < total_tiles; idx++) {

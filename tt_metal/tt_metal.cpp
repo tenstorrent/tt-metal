@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt_metal.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -12,28 +12,28 @@
 #include <unordered_set>
 #include <utility>
 
-#include "dev_msgs.h"
-#include "llrt/hal.hpp"
-#include "impl/allocator/allocator.hpp"
-#include "impl/debug/dprint_server.hpp"
-#include "impl/dispatch/command_queue.hpp"
-#include "tools/profiler/profiler.hpp"
+#include <dev_msgs.h>
+#include <hal.hpp>
+#include <allocator.hpp>
+#include <dprint_server.hpp>
+#include <command_queue.hpp>
+#include <profiler.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <host_api.hpp>
+#include <circular_buffer_constants.h>
+#include <trace.hpp>
+#include <device_impl.hpp>
+#include <device_pool.hpp>
+#include <kernel.hpp>
+#include <circular_buffer.hpp>
+#include <global_circular_buffer_impl.hpp>
+#include <global_semaphore.hpp>
+#include <sub_device_types.hpp>
+#include <global_circular_buffer.hpp>
 #include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <graph_tracking.hpp>
 
 namespace tt {
 
@@ -1152,7 +1152,8 @@ uint32_t CreateSemaphore(
             if constexpr (std::is_same_v<T, CoreRange>) {
                 crs = CoreRangeSet(c);
             } else {
-                crs = c;
+                // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
+                crs = c.merge_ranges();
             }
             std::optional<uint32_t> semaphore_id;
             TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
@@ -1176,21 +1177,13 @@ uint32_t CreateSemaphore(
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    const CoreRangeSet& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalSemaphore(device, cores, initial_value, buffer_type, sub_device_ids);
+    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(device, cores, initial_value, buffer_type);
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
-    IDevice* device,
-    CoreRangeSet&& cores,
-    uint32_t initial_value,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type, sub_device_ids);
+    IDevice* device, CoreRangeSet&& cores, uint32_t initial_value, BufferType buffer_type) {
+    return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
@@ -1391,11 +1384,10 @@ namespace experimental {
 
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     IDevice* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
+    BufferType buffer_type) {
+    return GlobalCircularBuffer(device, sender_receiver_core_mapping, size, buffer_type);
 }
 
 CBHandle CreateCircularBuffer(

@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.reduction_common import run_prod
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -72,12 +73,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     ):
         return True, "Row major is only supported for fp32 & fp16"
 
-    device = ttnn.open_device(device_id=0)
-    if test_vector["input_a_dtype"] == ttnn.float32 and ttnn.device.is_grayskull(device):
-        return True, "Dest Fp32 mode is not supported for arch grayskull"
-    ttnn.close_device(device)
-    del device
-
     return False, None
 
 
@@ -96,32 +91,38 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-
-    dim = dim % len(input_shape)
-
-    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
+    return run_prod(
+        input_shape,
+        dim,
+        keepdim,
+        input_a_dtype,
+        input_a_layout,
+        input_a_memory_config,
+        output_memory_config,
+        device,
     )
 
-    start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
-    e2e_perf = stop_measuring_time(start_time)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    assert len(output_tensor.shape) == len(torch_output_tensor.shape)
-    assert output_tensor.shape == torch_output_tensor.shape
-    # print(f"input_shape {input_shape} pcc {pcc}")
-    return [pcc, e2e_perf]
+import pytest
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, keepdim",
+    [
+        # 0-D/1-D support is not available yet
+        # ([7, 32], 1, False),
+        # ([7], 0, False),
+        # ([7], 1, True),
+        ([7, 32], 0, True),
+        ([7, 32], 3, True),
+        ([5, 7, 32], 1, False),
+        ([5, 7, 32], 0, True),
+        ([5, 7, 32], 3, True),
+        ([5, 7, 32, 66], 1, True),
+        ([5, 7, 32, 66], 2, False),
+    ],
+)
+def test_reduction_prod_localrun_fail_only(device, input_shape, dim, keepdim):
+    run_prod(
+        input_shape, dim, keepdim, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, device
+    )

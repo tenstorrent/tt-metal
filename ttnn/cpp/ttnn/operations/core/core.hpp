@@ -13,7 +13,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -28,41 +28,35 @@ ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     IDevice* device,
     const std::optional<MemoryConfig>& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    const std::vector<SubDeviceId>& = {});
+    uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    const std::vector<SubDeviceId>& = {});
+    uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
     const std::optional<MemoryConfig>& memory_config);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config);
 
-void copy_host_to_device_tensor(
-    const ttnn::Tensor& host_tensor,
-    ttnn::Tensor device_tensor,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    const std::vector<SubDeviceId>& sub_device_ids = {});
+ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device);
+ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* device);
 
-ttnn::Tensor from_device(
-    const ttnn::Tensor& tensor,
-    bool blocking = true,
-    uint8_t cq_id = ttnn::DefaultQueueId,
-    const std::vector<SubDeviceId>& sub_device_ids = {});
+void copy_host_to_device_tensor(
+    const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 
 void deallocate(Tensor& tensor, bool force = true);
 

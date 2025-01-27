@@ -8,13 +8,14 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 
-#include "tt_metal/impl/device/program_cache.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_stl/reflection.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/program_cache.hpp>
+#include <tracy/Tracy.hpp>
+#include "tools/profiler/op_profiler.hpp"
+#include <tt-metalium/reflection.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
 
@@ -30,13 +31,6 @@ concept ProgramFactoryConcept = requires {
         program_factory_t::override_runtime_arguments(
             cached_program, operation_attributes, tensor_args, tensor_return_value);
     };
-};
-
-template <typename device_operation_t>
-concept HasComputeOutputShapes = requires(device_operation_t op,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    {op.compute_output_shapes(operation_attributes, tensor_args)} -> std::same_as<typename device_operation_t::shape_return_value_t>;
 };
 
 template <typename device_operation_t>
@@ -66,7 +60,7 @@ concept DeviceOperationConcept = requires {
             },
             program_factory);
     };
-} && (HasComputeOutputSpecs<device_operation_t> || HasComputeOutputShapes<device_operation_t>);
+} && HasComputeOutputSpecs<device_operation_t>;
 
 template <typename device_operation_t>
 concept DeviceOperationWithCustomProgramCacheConcept =
@@ -76,6 +70,17 @@ concept DeviceOperationWithCustomProgramCacheConcept =
         const typename device_operation_t::tensor_args_t& tensor_args) {
         { device_operation_t::compute_program_hash(operation_attributes, tensor_args)} -> std::convertible_to<tt::stl::hash::hash_t>;
     };
+
+template <typename device_operation_t>
+concept HasSkipLaunch = requires(
+    device_operation_t op,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+    {
+        device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)
+    } -> std::convertible_to<bool>;
+};
 
 namespace detail {
 template <typename... Ts>
@@ -238,6 +243,12 @@ template <DeviceOperationConcept device_operation_t>
 void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& operation_attributes, const auto& tensor_args, auto &tensor_return_value, auto& device) {
     ZoneScopedN("TT_DNN_DEVICE_OP");
 
+    if constexpr (HasSkipLaunch<device_operation_t>) {
+        if (device_operation_t::skip_launch(operation_attributes, tensor_args, tensor_return_value)) {
+            return;
+        }
+    }
+
     auto& program_cache = device->get_program_cache();
 
     auto program_hash = 0;
@@ -351,11 +362,7 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
     auto get_shard = [device](const auto& tensor) {
         auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{
-            DeviceStorage{storage.get_buffer_for_device(device)},
-            storage.get_tensor_shape_for_device(device),
-            tensor.get_dtype(),
-            tensor.get_layout()};
+        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
     };
     return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
 }
@@ -425,33 +432,10 @@ typename device_operation_t::tensor_return_value_t launch_on_multi_device(
     std::vector<tensor_return_value_t> outputs;
     outputs.reserve(num_shards);
 
-    bool launch_shards_in_parallel = false;
-    if (launch_shards_in_parallel) {
-        std::vector<std::future<tensor_return_value_t>> shard_futures;
-        shard_futures.reserve(num_shards);
-
-        // Launch each shard
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            shard_futures.emplace_back(
-                std::async(
-                    std::launch::async,
-                    [cq_id, operation_attributes, tensor_args, shard_index, storage]() mutable {
-                        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-                        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-                        return launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args);
-                    }));
-        }
-
-        // Combine shards into a multi-device storage
-        for (auto& shard_future : shard_futures) {
-            outputs.push_back(shard_future.get());
-        }
-    } else {
-        for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-            auto device = storage.get_buffer_for_device_id(shard_index)->device();
-            auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-            outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
-        }
+    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
+        auto device = storage.get_buffer_for_device_id(shard_index)->device();
+        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
+        outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
     }
 
     return make_tensor_return_value_from_shards(storage, outputs);

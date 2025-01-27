@@ -4,9 +4,9 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using namespace tt::tt_metal;
@@ -33,7 +33,6 @@ struct L1Config {
             {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
              (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
-            false,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {1 * num_cores_height * num_tiles_per_core_height * num_cores_height,
              num_tiles_per_core_width * num_cores_width});
@@ -131,7 +130,6 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         CoreRangeSet(core_ranges),
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         ShardOrientation::ROW_MAJOR,
-        false,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {(uint32_t)cores.size(), 1});
     for (unsigned int id = 0; id < num_devices_; id++) {

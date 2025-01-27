@@ -3,7 +3,9 @@ CommandQueue
 
 .. toctree::
   EnqueueWriteBuffer
+  EnqueueWriteSubBuffer
   EnqueueReadBuffer
+  EnqueueReadSubBuffer
   EnqueueProgram
   EnqueueRecordEvent
   EnqueueWaitForEvent

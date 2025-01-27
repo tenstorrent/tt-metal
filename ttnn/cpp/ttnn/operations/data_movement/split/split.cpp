@@ -6,7 +6,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
@@ -20,11 +20,11 @@ std::vector<Tensor> split_dim_n_chunks_rm(
     const Tensor& input_tensor, int dim, int num_splits, const MemoryConfig& mem_config) {
     TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.split only supports row major tensors.");
     TT_FATAL(
-        input_tensor.get_shape()[dim] % num_splits == 0,
+        input_tensor.get_logical_shape()[dim] % num_splits == 0,
         "Split dimension {} must be divisible by num_splits {}.",
-        input_tensor.get_shape()[dim],
+        input_tensor.get_logical_shape()[dim],
         num_splits);
-    auto input_shape = input_tensor.get_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
     auto input_rank = input_shape.size();
 
     const bool on_host =
@@ -38,7 +38,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
         preprocessed = preprocessed.cpu();  // bf16 tensors must be handled on host due to limitations in slice
     }
 
-    auto preproc_shape = preprocessed.get_shape();
+    const auto& preproc_shape = preprocessed.get_logical_shape();
 
     auto chunk_len = preproc_shape[dim] / num_splits;
 
@@ -88,7 +88,7 @@ std::vector<Tensor> split_dim_n_chunks_rm(
 }
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
@@ -97,7 +97,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_padded_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {

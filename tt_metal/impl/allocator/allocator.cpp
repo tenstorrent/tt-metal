@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/allocator/allocator.hpp"
+#include <allocator.hpp>
 
 #include <magic_enum/magic_enum.hpp>
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <math.hpp>
+#include <util.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
 
 namespace tt {
 
@@ -201,6 +201,15 @@ void BankManager::dump_blocks(std::ofstream& out) const {
     }
 }
 
+MemoryBlockTable BankManager::get_memory_block_table() const {
+    if (this->allocator_) {
+        return this->allocator_->get_memory_block_table();
+    }
+
+    log_warning("allocator is not initialized, cannot get block table for memory");
+    return {};
+}
+
 void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up) {
     if (this->allocator_) {
         this->allocator_->shrink_size(shrink_size, bottom_up);
@@ -369,6 +378,18 @@ void dump_memory_blocks(const Allocator& allocator, const BufferType& buffer_typ
         case BufferType::L1: allocator.l1_manager.dump_blocks(out); break;
         case BufferType::L1_SMALL: allocator.l1_small_manager.dump_blocks(out); break;
         case BufferType::TRACE: allocator.trace_buffer_manager.dump_blocks(out); break;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
+
+MemoryBlockTable get_memory_block_table(const Allocator& allocator, const BufferType& buffer_type) {
+    switch (buffer_type) {
+        case BufferType::DRAM: return allocator.dram_manager.get_memory_block_table();
+        case BufferType::L1: return allocator.l1_manager.get_memory_block_table();
+        case BufferType::L1_SMALL: return allocator.l1_small_manager.get_memory_block_table();
+        case BufferType::TRACE: return allocator.trace_buffer_manager.get_memory_block_table();
         default: {
             TT_THROW("Unsupported buffer type!");
         }

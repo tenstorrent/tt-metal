@@ -610,7 +610,9 @@ class resnet50:
             if type(device) == ttnn.MeshDevice and device.get_num_devices() > 8:
                 self.conv1_config.act_block_h_override = 64
             else:
-                self.conv1_config.act_block_h_override = 49 * 32
+                # Todo: restore after issue #16895 is fixed
+                # self.conv1_config.act_block_h_override = 49 * 32
+                self.conv1_config.act_block_h_override = 2 * 32
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -1146,7 +1148,7 @@ class resnet50:
             x.volume() // x.shape.with_tile_padding()[-1],
             x.shape.with_tile_padding()[-1] // (grid_size[0] * grid_size[1]),
         ]
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )

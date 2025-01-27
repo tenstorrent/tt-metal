@@ -31,7 +31,7 @@ struct NlpCreateHeadsDeviceOperation {
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 
-    using shape_return_value_t = std::tuple<ttnn::Shape, ttnn::Shape, ttnn::Shape>;
+    using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ttnn::TensorSpec>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor, Tensor>;
 
     struct Interleaved {
@@ -107,7 +107,7 @@ struct NlpCreateHeadsDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

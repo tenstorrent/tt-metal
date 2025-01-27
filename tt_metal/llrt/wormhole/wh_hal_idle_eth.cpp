@@ -11,7 +11,7 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 
 #include "hal.hpp"
@@ -75,6 +75,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = MEM_IERISC_FIRMWARE_BASE,
             .local_init_addr = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+            .fw_launch_addr = 0x0,
+            .fw_launch_addr_value = generate_risc_startup_addr(MEM_IERISC_FIRMWARE_BASE),
         };
         processor_classes[processor_class_idx] = processor_types;
     }

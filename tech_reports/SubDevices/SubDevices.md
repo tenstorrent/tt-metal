@@ -136,17 +136,17 @@ Note that global semaphores can only created on tensix cores, as only tensix cor
 
 The following are APIs for creating and interacting with the global semaphores.
 
-* `global_semaphore = ttnn.create_global_semaphore(device=device, cores=tensix_cores0, initial_value=1, buffer_type=ttnn.BufferType.L1, sub_device_ids=[])`
+* `global_semaphore = ttnn.create_global_semaphore(device=device, cores=tensix_cores0, initial_value=1, buffer_type=ttnn.BufferType.L1)`
 
-  This will create a global semaphore object on the specified device and cores using the specified L1 buffer type. It will issue a device stall on the specified sub-device ids before writing the initial semaphore value. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  This will create a global semaphore object on the specified device and cores using the specified L1 buffer type.
 
 * `address = ttnn.get_global_semaphore_address(global_semaphore=global_semaphore)`
 
   This will query the address of the global semaphore.
 
-* `ttnn.reset_global_semaphore_value(global_semaphore=global_semaphore, reset_value=1, sub_device_ids=[])`
+* `ttnn.reset_global_semaphore_value(global_semaphore=global_semaphore, reset_value=1)`
 
-  This will issue a write from host of the specified value to global semaphore's address on device. It will issue a device stall on the specified sub-device ids before writing the initial semaphore value. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
+  This will issue a write from host of the specified value to global semaphore's address on device.
 
 ## 3. Global Circular Buffers
 
@@ -161,7 +161,7 @@ These can be configured as remote circular buffers which provides access to APIs
 
 The following is the python API for creating a global circular buffer.
 
-* `ttnn.create_global_circular_buffer(device=device, sender_receiver_core_mapping={sender_core : receiver_cores}, size=2048, buffer_type=ttnn.BufferType.L1, sub_device_ids=[])`
+* `ttnn.create_global_circular_buffer(device=device, sender_receiver_core_mapping=[(sender_core, receiver_cores)], size=2048, buffer_type=ttnn.BufferType.L1, sub_device_ids=[])`
 
   This will create a global circular buffer object on the specified device with the specified mapping of sender cores to receiver cores using the specified L1 buffer type. The size specified is the amount of memory allocated on each core for the circular buffer. It will issue a device stall on the specified sub-device ids before writing the circular buffer configurations to device. Not specifying any sub-device ids means we will stall waiting for all sub-devices to complete.
 
@@ -217,7 +217,9 @@ Sender APIs:
 
 * `remote_cb_push_back_and_write_pages(cb_id, local_cb_addr, num_pages, num_rows, coalesced_num_pages_per_row, coalesced_page_size, noc)`
 
-  Used by a sender core to write data to each of its associated receiver cores. This is a combined write and signalling function, where the signalling is similar to `cb_push_back`
+  Used by a sender core to write data to each of its associated receiver cores. This is a combined write and signalling function, where the signalling is similar to `cb_push_back`.
+  `num_pages` refers to the number of pages to send, `num_rows` refers to the number of rows (in tile) of the tensor / block. `coalesced_page_size` refers to the maximum coalesced page size for
+  a single NoC transfer, it can group one or several page size into one `coalesced_page_size`. `coalesced_num_pages_per_row` refers to the number of coalesced pages for a single tensor / block row.
 
 * `resize_remote_receiver_cb_interface(cb_id, page_size, noc)`
 

@@ -11,7 +11,7 @@
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt;
 using namespace tt_metal;
@@ -23,7 +23,7 @@ using namespace constants;
 
 Tensor perform_transpose_wh(Tensor& input_tensor) {
     TT_FATAL(input_tensor.storage_type() == StorageType::OWNED, "Error");
-    auto ashape = input_tensor.get_legacy_shape();
+    auto ashape = input_tensor.get_padded_shape();
     TT_FATAL(ashape.rank() == 4, "Error");
     auto bshape = ashape;
     bshape[2] = ashape[3];
@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt::tt_metal::LegacyShape shape = {1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH};
+        ttnn::SimpleShape shape({1, 1, 10 * TILE_HEIGHT, 12 * TILE_WIDTH});
         // Allocates a DRAM buffer on device populated with values specified by initialize
         Tensor a = ttnn::random::random(shape).to(Layout::TILE).to(device);
 

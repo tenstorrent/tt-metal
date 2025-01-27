@@ -7,10 +7,11 @@
 #include <random>
 
 #include "logger.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/cq_commands.hpp>
 #include "common.h"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -437,7 +438,7 @@ int main(int argc, char** argv) {
         uint32_t dispatch_l1_unreserved_base =
             dispatch_constants::get(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        uint32_t l1_buf_base = align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
+        uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
         // Make sure user doesn't exceed available L1 space with cmd line arguments.

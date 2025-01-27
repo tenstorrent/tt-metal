@@ -21,11 +21,10 @@
 #include <vector>
 
 #include "fmt/base.h"
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/metal_soc_descriptor.h"
-#include "tt_metal/common/test_common.hpp"
-#include "tt_metal/common/tt_backend_api_types.hpp"
+#include <logger.hpp>
+#include <metal_soc_descriptor.h>
+#include <test_common.hpp>
+#include <tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/tt_cluster_descriptor.h"
 #include "umd/device/types/cluster_descriptor_types.h"
@@ -35,26 +34,60 @@
 #include "umd/device/types/xy_pair.h"
 #include "umd/device/hugepage.h"
 
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <dev_msgs.h>
 
-#include "dev_msgs.h"
-
-#include "llrt/hal.hpp"
+#include <hal.hpp>
 
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
-#include "tt_metal/impl/debug/sanitize_noc_host.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
+#include <debug/sanitize_noc_host.hpp>
+#include <rtoptions.hpp>
 #include "tt_metal/llrt/tlb_config.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <core_coord.hpp>
 
 #include "get_platform_architecture.hpp"
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
 
+namespace {
+
+inline std::string get_soc_description_file(
+    const tt::ARCH& arch, tt::TargetDevice target_device, const std::string& output_dir = "") {
+    // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
+    std::string tt_metal_home;
+    if (getenv("TT_METAL_HOME")) {
+        tt_metal_home = getenv("TT_METAL_HOME");
+    } else {
+        tt_metal_home = "./";
+    }
+    if (tt_metal_home.back() != '/') {
+        tt_metal_home += "/";
+    }
+    if (target_device == tt::TargetDevice::Simulator) {
+        switch (arch) {
+            case tt::ARCH::Invalid: throw std::runtime_error("Invalid arch not supported");
+            case tt::ARCH::GRAYSKULL: throw std::runtime_error("GRAYSKULL arch not supported");
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_versim.yaml";
+            case tt::ARCH::BLACKHOLE:
+                return tt_metal_home + "tt_metal/soc_descriptors/blackhole_simulation_1x2_arch.yaml";
+            default: throw std::runtime_error("Unsupported device arch");
+        };
+    } else {
+        switch (arch) {
+            case tt::ARCH::Invalid:
+                throw std::runtime_error(
+                    "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
+            case tt::ARCH::GRAYSKULL: return tt_metal_home + "tt_metal/soc_descriptors/grayskull_120_arch.yaml";
+            case tt::ARCH::WORMHOLE_B0: return tt_metal_home + "tt_metal/soc_descriptors/wormhole_b0_80_arch.yaml";
+            case tt::ARCH::BLACKHOLE: return tt_metal_home + "tt_metal/soc_descriptors/blackhole_140_arch.yaml";
+            default: throw std::runtime_error("Unsupported device arch");
+        };
+    }
+    return "";
+}
+}  // namespace
 namespace tt {
 
 const Cluster &Cluster::instance() {
@@ -67,6 +100,10 @@ Cluster::Cluster() {
     log_info(tt::LogDevice, "Opening user mode device driver");
 
     this->detect_arch_and_target();
+
+    if (arch_ != ARCH::GRAYSKULL) {
+        routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
+    }
 
     this->generate_cluster_descriptor();
 
@@ -83,28 +120,9 @@ Cluster::Cluster() {
 
 void Cluster::detect_arch_and_target() {
 
-    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR_EN")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR")) ? TargetDevice::Simulator : TargetDevice::Silicon;
 
     this->arch_ = tt_metal::get_platform_architecture();
-
-#ifdef ARCH_GRAYSKULL
-    TT_FATAL(
-        this->arch_ == tt::ARCH::GRAYSKULL,
-        "Arch={} doesn't match compile-time build for GRAYSKULL",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_WORMHOLE
-    TT_FATAL(
-        (this->arch_ == tt::ARCH::WORMHOLE_B0) || (this->arch_ == tt::ARCH::WORMHOLE),
-        "Arch={} doesn't match compile-time build for WORMHOLE",
-        get_string(this->arch_));
-#endif
-#ifdef ARCH_BLACKHOLE
-    TT_FATAL(
-        this->arch_ == tt::ARCH::BLACKHOLE,
-        "Arch={} doesn't match compile-time build for BLACKHOLE",
-        get_string(this->arch_));
-#endif
 
     TT_FATAL(
         this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
@@ -219,10 +237,9 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 }
 
 void Cluster::open_driver(const bool &skip_driver_allocs) {
-    const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
+        const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
         std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
@@ -250,7 +267,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        device_driver = std::make_unique<tt_SimulationDevice>(sdesc_path);
+        auto simulator_directory = std::getenv("TT_METAL_SIMULATOR");
+        device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
     }
 
     barrier_address_params barrier_params;
@@ -520,8 +538,12 @@ void Cluster::write_core(
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, sz_in_bytes);
 
     }
-
+    TT_FATAL(
+        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
+        "Cannot find UMD core for virtual core {}",
+        core.str());
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+
     this->driver_->write_to_device(mem_ptr, sz_in_bytes, umd_core, addr, "LARGE_WRITE_TLB");
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
@@ -536,8 +558,12 @@ void Cluster::read_core(
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, size_in_bytes);
     }
-
+    TT_FATAL(
+        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
+        "Cannot find UMD core for virtual core {}",
+        core.str());
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+
     this->driver_->read_from_device(mem_ptr, umd_core, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
@@ -798,7 +824,6 @@ void Cluster::initialize_ethernet_sockets() {
 
 void Cluster::reserve_ethernet_cores_for_tunneling() {
     const char *TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     for (const auto &[assoc_mmio_device, devices] : this->devices_grouped_by_assoc_mmio_device_) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -943,6 +968,11 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
     return soc_desc.get_physical_ethernet_core_from_logical(logical_core);
 }
 
+CoreCoord Cluster::get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const {
+    CoreCoord logical_coord = this->get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(channel);
+    return this->get_virtual_coordinate_from_logical_coordinates(chip_id, logical_coord, CoreType::ETH);
+}
+
 tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
     tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
     const auto &local_chip_id = logical_dispatch_core.chip;
@@ -975,7 +1005,6 @@ std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t> &target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
-    const uint32_t routing_info_addr = eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
     // TODO: initialize devices if user does not
     // Must initialize remote chips first, then mmio chips since once mmio chips are doing fd routing
     // we do not always context switch to base FW
@@ -1004,7 +1033,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for non-mmio devices
                 write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
         for (const auto &chip_id : mmio_devices) {
@@ -1012,7 +1041,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Enable internal ethernet routing for mmio devices
                 write_core(
-                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_enabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
     } else {
@@ -1026,7 +1055,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for mmio devices
                 write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
         for (const auto &chip_id : non_mmio_devices) {
@@ -1034,7 +1063,7 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
                 tt_cxy_pair virtual_eth_core(chip_id, get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
                 // Disable internal ethernet routing for non-mmio devices
                 write_core(
-                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr, false);
+                    (void *)&routing_info_disabled, sizeof(routing_info_t), virtual_eth_core, routing_info_addr_, false);
             }
         }
     }

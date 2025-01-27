@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "sub_device/sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 struct ReduceScatterAsync {
@@ -79,8 +79,7 @@ struct ReduceScatterAsync {
     }
 
     void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<ttnn::SimpleShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
@@ -107,6 +106,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     std::optional<size_t> num_links_preferred,
     const std::shared_ptr<const GlobalSemaphore>& from_remote_sem,
     const std::shared_ptr<const GlobalSemaphore>& to_remote_sem,
+    const std::optional<SubDeviceId>& sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }
 };  // namespace ccl
@@ -125,7 +125,7 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<size_t> num_links_preferred,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
     const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
-    std::unordered_map<chip_id_t, SubDeviceId>& sub_device_id_map,
+    std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }  // namespace reduce_scatter_detail
 }  // namespace ccl

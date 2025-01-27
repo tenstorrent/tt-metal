@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/algorithms.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 namespace ttnn::ccl {
 
@@ -24,12 +24,14 @@ void generate_noc_transfer_burst_for_tensor_slice(
     size_t packet_space_in_bytes_left = packet_size_bytes;
     noc_transfer_burst_out.transfer_burst_groupings.push_back({});
     bool closed_out_last_group = false;
+    bool empty_last_group = false;
     for (size_t w = 0; w < tensor_slice.tensor_slice_shape.w; w++) {
         for (size_t z = 0; z < tensor_slice.tensor_slice_shape.z; z++) {
             for (size_t y = 0; y < tensor_slice.tensor_slice_shape.y; y++) {
                 size_t pages_read = 0;
                 for (size_t x = 0; x < tensor_slice.tensor_slice_shape.x; x += pages_read) {
                     closed_out_last_group = false;
+                    empty_last_group = false;
                     auto offset = ttnn::ccl::Shape4D<uint32_t>{w, z, y, x} + tensor_slice.tensor_slice_offset;
                     auto& transfer_burst_grouping = noc_transfer_burst_out.transfer_burst_groupings.back();
                     const size_t curr_page_idx = get_flat_index_from_shape(tensor_slice.tensor_shape, offset);
@@ -57,7 +59,11 @@ void generate_noc_transfer_burst_for_tensor_slice(
                         bool last_z = z == tensor_slice.tensor_slice_shape.z - 1;
                         bool last_y = y == tensor_slice.tensor_slice_shape.y - 1;
                         bool last_x = x + pages_read == tensor_slice.tensor_slice_shape.x;
+                        TT_FATAL(
+                            x + pages_read <= tensor_slice.tensor_slice_shape.x,
+                            "Internal error: Last x is out of bounds");
                         if (!(last_w && last_z && last_y && last_x)) {
+                            empty_last_group = true;
                             noc_transfer_burst_out.transfer_burst_groupings.push_back({});
                         }
                     }
@@ -65,6 +71,10 @@ void generate_noc_transfer_burst_for_tensor_slice(
             }
         }
     }
+    TT_FATAL(!empty_last_group, "Internal error: Empty last group");
+    TT_FATAL(
+        noc_transfer_burst_out.transfer_burst_groupings.back().num_transfers_per_packet > 0,
+        "Internal error: No transfers per packet");
 }
 
 void validate_lowered_noc_commands(const ttnn::ccl::cmd::HostCclCommandNocTransferBurst& noc_transfer_burst) {

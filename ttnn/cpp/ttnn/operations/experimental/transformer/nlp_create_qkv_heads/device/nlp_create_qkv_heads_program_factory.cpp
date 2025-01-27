@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -27,7 +27,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     auto& output = tensor_return_value;
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 
@@ -55,7 +55,7 @@ NlpCreateHeadsDeviceOperation::Interleaved::cached_program_t NlpCreateHeadsDevic
     uint32_t in0_w_tiles = input_shape[3] / TILE_WIDTH;
     uint32_t in1_w_tiles = 0;
     if (read_from_input_tensor_kv) {
-        in1_w_tiles = input_tensor_kv.value().get_legacy_shape()[3] / TILE_WIDTH;
+        in1_w_tiles = input_tensor_kv.value().get_padded_shape()[3] / TILE_WIDTH;
     }
 
     // Per output tensor args
@@ -336,7 +336,7 @@ NlpCreateHeadsDeviceOperation::Sharded::cached_program_t NlpCreateHeadsDeviceOpe
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     tt_metal::IDevice* device = input_tensor.device();
 

@@ -531,7 +531,7 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
     # Save benchmark data for CI dashboard
     if is_ci_env and is_n300:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-        benchmark_data.prep_csvs(
+        benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"demo_with_prefill",
             ml_model_name="Mistral7B",

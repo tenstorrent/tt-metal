@@ -5,11 +5,11 @@
 #include <algorithm>
 
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 
@@ -27,10 +27,10 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         tt::tt_metal::num_cores_to_corerangeset(num_cores_x * num_cores_y, compute_with_storage_grid_size);
     CoreRangeSet all_cores(set_of_core_ranges);
 
-    uint32_t B = input_a.get_legacy_shape()[0];
-    uint32_t b = input_b.get_legacy_shape()[0];
+    uint32_t B = input_a.get_padded_shape()[0];
+    uint32_t b = input_b.get_padded_shape()[0];
 
-    TT_ASSERT(batch_ids.get_legacy_shape()[-1] == b);
+    TT_ASSERT(batch_ids.get_padded_shape()[-1] == b);
 
     // parallelize across batch
     uint32_t num_units = B;
@@ -39,7 +39,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.get_dtype());
 
-    uint32_t page_size = input_a.get_legacy_shape()[-1] * input_a.element_size();
+    uint32_t page_size = input_a.get_padded_shape()[-1] * input_a.element_size();
     uint32_t rounded_page_size = round_up_to_mul32(page_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_page_size, {{cb_index, cb_data_format}})
@@ -91,7 +91,7 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     auto cores = grid_to_cores(num_cores_x * num_cores_y, num_cores_x, num_cores_y, false);
 
-    uint32_t batch_size_in_sticks = input_a.get_legacy_shape()[1] * input_a.get_legacy_shape()[2];
+    uint32_t batch_size_in_sticks = input_a.get_padded_shape()[1] * input_a.get_padded_shape()[2];
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -122,9 +122,9 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         auto input_b = input_tensors.at(2);
         auto batch_ids = input_tensors.at(0);
         uint32_t core_id = 0;
-        uint32_t B = input_a.get_legacy_shape()[0];
-        uint32_t b = input_b.get_legacy_shape()[0];
-        uint32_t batch_size_in_sticks = input_a.get_legacy_shape()[1] * input_a.get_legacy_shape()[2];
+        uint32_t B = input_a.get_padded_shape()[0];
+        uint32_t b = input_b.get_padded_shape()[0];
+        uint32_t batch_size_in_sticks = input_a.get_padded_shape()[1] * input_a.get_padded_shape()[2];
         for (const auto& core : cores) {
             uint32_t local_b = (core_id < B) ? b : 0;
             uint32_t local_batch_size_in_sticks = (core_id < B) ? batch_size_in_sticks : 0;

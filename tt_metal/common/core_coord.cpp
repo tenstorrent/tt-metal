@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/core_coord.hpp"
+#include <core_coord.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -14,10 +14,10 @@
 #include <vector>
 
 #include "umd/device/tt_xy_pair.h"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include "tracy/Tracy.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <reflection.hpp>
+#include <span.hpp>
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {
@@ -225,13 +225,12 @@ CoreRangeSet CoreRangeSet::merge(const T& other) const {
     // By overallocating by one x entry, we can avoid needing to check for
     // boundary conditions when iterating, since there'll always be one
     // last false entry
-    bool grid[max_y + 1][max_x + 2];
-    memset(grid, 0, sizeof(grid));
+    std::vector<std::vector<uint8_t>> grid(max_y + 1, std::vector<uint8_t>(max_x + 2, 0));
 
     for (const auto& cr : crs) {
         for (unsigned y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
             for (unsigned x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
-                grid[y][x] = true;
+                grid[y][x] = 1;
             }
         }
     }
@@ -402,6 +401,14 @@ CoreRange CoreRangeSet::bounding_box() const {
         max_y = std::max(max_y, cr.end_coord.y);
     }
     return {{min_x, min_y}, {max_x, max_y}};
+}
+
+CoreRangeSet CoreRangeSet::merge_ranges() const {
+    if (this->ranges_.size() <= 1) {
+        return *this;
+    }
+    // Merging incidentally optimizes the resulting CoreRangeSet.
+    return CoreRangeSet().merge(*this);
 }
 
 void CoreRangeSet::validate_no_overlap() {

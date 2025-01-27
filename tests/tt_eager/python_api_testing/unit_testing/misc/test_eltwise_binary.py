@@ -90,7 +90,7 @@ def test_run_elt_binary_add_with_sub_devices(device):
         ]
     )
     shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, core_grid, row_wise=True)
-    shard_spec = ttnn.ShardSpec(shard_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -142,7 +142,7 @@ def test_run_elt_binary_mul_with_sub_devices(device):
         ]
     )
     shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 28, core_grid, row_wise=True)
-    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,

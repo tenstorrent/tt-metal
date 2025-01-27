@@ -4,9 +4,9 @@
 
 #include "rotate_half_program_factory.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 
@@ -27,8 +27,8 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
     uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
 
     uint32_t num_tiles = input.volume() / TILE_HW;
-    uint32_t num_rows = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t half_row_size = input.get_legacy_shape()[-1] / TILE_WIDTH / 2;
+    uint32_t num_rows = input.volume() / input.get_padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t half_row_size = input.get_padded_shape()[-1] / TILE_WIDTH / 2;
 
     tt_metal::IDevice* device = input.device();
 

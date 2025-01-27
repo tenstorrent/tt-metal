@@ -11,18 +11,18 @@
 #include <string>
 #include <vector>
 
-#include "common/bfloat8.hpp"
-#include "common/bfloat16.hpp"
-#include "common/tt_backend_api_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 #include "tt_metal/include/tt_metal/program.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
@@ -100,7 +100,7 @@ create_programs(
     tt_metal::IDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     const uint32_t& single_tile_size,
     const tt::DataFormat& tile_format,
     uint32_t m,
@@ -552,7 +552,6 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         cores,
         {ht * tt::constants::TILE_HEIGHT, wt * tt::constants::TILE_WIDTH / num_receivers},
         ShardOrientation::ROW_MAJOR,
-        false,
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
@@ -700,13 +699,14 @@ int main(int argc, char** argv) {
             l1_receiver_core_coord_range = CoreRange{CoreCoord{1, 0}, CoreCoord{num_receivers, 0}};
         }
         CoreRangeSet l1_receiver_core{std::set<CoreRange>{l1_receiver_core_coord_range}};
-        std::unordered_map<CoreCoord, CoreRangeSet> sender_receiver_core_mapping;
-        sender_receiver_core_mapping[dram_reader_core_coord] = l1_receiver_core;
+        std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = { { dram_reader_core_coord, l1_receiver_core } };
+        std::vector<SubDeviceId> receiver_sub_device_ids = {};
         if (use_sub_devices) {
             SubDevice sender_sub_device = SubDevice(std::array{dram_reader_core});
             SubDevice receiver_sub_device = SubDevice(std::array{l1_receiver_core});
             SubDeviceManagerId sdm_id = device->create_sub_device_manager({sender_sub_device, receiver_sub_device}, 0);
             device->load_sub_device_manager(sdm_id);
+            receiver_sub_device_ids.push_back(SubDeviceId{1});
         }
 
         ////////////////////////////////////////////////////////////////////////////
@@ -865,8 +865,18 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
-            for (auto& program : programs) {
-                EnqueueProgram(device->command_queue(), program, false);
+            if (use_sub_devices) {
+                // Enqueue the sender program
+                EnqueueProgram(device->command_queue(), programs[0], false);
+                device->set_sub_device_stall_group(receiver_sub_device_ids);
+                for (uint32_t j = 1; j < programs.size(); ++j) {
+                    EnqueueProgram(device->command_queue(), programs[j], false);
+                }
+                device->reset_sub_device_stall_group();
+            } else {
+                for (auto& program : programs) {
+                    EnqueueProgram(device->command_queue(), program, false);
+                }
             }
             Finish(device->command_queue());
             for (auto& program : programs) {

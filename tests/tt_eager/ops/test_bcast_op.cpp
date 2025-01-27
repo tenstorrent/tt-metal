@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <ttnn/operations/functions.hpp>
 
@@ -30,13 +30,13 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto shapes = std::vector<tt::tt_metal::LegacyShape>{
-            {1, 1, TILE_HEIGHT, TILE_WIDTH},
-            {1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2},
-            {1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4}};
+        auto shapes = std::vector<ttnn::SimpleShape>{
+            ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}),
+            ttnn::SimpleShape({1, 1, TILE_HEIGHT * 2, TILE_WIDTH * 2}),
+            ttnn::SimpleShape({1, 1, TILE_HEIGHT * 3, TILE_WIDTH * 4})};
 
         auto run_operations = [&shapes, device] {
-            for (const auto shape : shapes) {
+            for (const auto& shape : shapes) {
                 for (auto bcast_dim : magic_enum::enum_values<ttnn::BcastOpDim>()) {
                     auto input_shape_a = shape;
                     if (bcast_dim == ttnn::BcastOpDim::H) {
@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
 
                     Tensor a = ttnn::random::random(input_shape_a).to(Layout::TILE).to(device);
                     Tensor b = ttnn::zeros(
-                        ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), DataType::BFLOAT16, Layout::TILE, *device);
+                        ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), DataType::BFLOAT16, Layout::TILE, *device);
 
                     for (auto bcast_math : magic_enum::enum_values<ttnn::BcastOpMath>()) {
                         Tensor c = ttnn::bcast(0, a, b, bcast_math, bcast_dim);
@@ -67,29 +67,29 @@ int main(int argc, char** argv) {
             }
 
             {
-                Tensor a = ttnn::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
+                Tensor a = ttnn::random::random(SimpleShape({1, 1, 32, 4544})).to(Layout::TILE).to(device);
+                Tensor b = ttnn::zeros(ttnn::SimpleShape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
                 Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = ttnn::random::random({1, 1, 32, 4544}).to(Layout::TILE).to(device);
-                Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
+                Tensor a = ttnn::random::random(SimpleShape({1, 1, 32, 4544})).to(Layout::TILE).to(device);
+                Tensor b = ttnn::zeros(ttnn::SimpleShape({1, 1, 32, 4544}), DataType::BFLOAT16, Layout::TILE, *device);
                 Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::ADD, ttnn::BcastOpDim::H);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = ttnn::random::random({1, 71, 32, 32}).to(Layout::TILE).to(device);
-                Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
+                Tensor a = ttnn::random::random(SimpleShape({1, 71, 32, 32})).to(Layout::TILE).to(device);
+                Tensor b = ttnn::zeros(ttnn::SimpleShape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
                 Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }
 
             {
-                Tensor a = ttnn::random::random({1, 71, 32, 64}).to(Layout::TILE).to(device);
-                Tensor b = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
+                Tensor a = ttnn::random::random(SimpleShape({1, 71, 32, 64})).to(Layout::TILE).to(device);
+                Tensor b = ttnn::zeros(ttnn::SimpleShape({1, 1, 32, 32}), DataType::BFLOAT16, Layout::TILE, *device);
                 Tensor c = ttnn::bcast(0, a, b, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::HW);
                 Tensor d = c.cpu();
             }

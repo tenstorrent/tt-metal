@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include "tt_metal/impl/kernels/runtime_args_data.hpp"
-#include "common/assert.hpp"
+#include <tt-metalium/runtime_args_data.hpp>
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::ccl {
 size_t tensor_address_runtime_args_overrider::add_tensor() {
@@ -33,6 +33,9 @@ void tensor_address_runtime_args_overrider::add_runtime_arg_index(size_t tensor_
 
 void tensor_address_runtime_args_overrider::override_runtime_args(
     size_t tensor_idx, uint32_t new_value, tt::tt_metal::RuntimeArgsData& runtime_args_to_modify) const {
+    if (tensor_idx >= tensor_address_runtime_arg_indices.size()) {
+        log_trace(tt::LogOp, "Tensor index {} is out of bounds. Skipping override", tensor_idx);
+    }
     TT_FATAL(
         tensor_idx < tensor_address_runtime_arg_indices.size(), "Invalid tensor index when overriding runtime args");
 

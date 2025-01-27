@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/functions.hpp"
 
 using namespace tt;
@@ -35,12 +35,12 @@ int main(int argc, char** argv) {
         uint32_t Kt = 2;
         uint32_t Nt = 4;
         uint32_t B = 5;
-        ttnn::Shape shapea({B, 1, Mt * TILE_HEIGHT, Kt * TILE_WIDTH});
-        ttnn::Shape shapeb({B, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
-        ttnn::Shape shapeb1({1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
+        ttnn::SimpleShape shapea({B, 1, Mt * TILE_HEIGHT, Kt * TILE_WIDTH});
+        ttnn::SimpleShape shapeb({B, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
+        ttnn::SimpleShape shapeb1({1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
 
         // Allocates a DRAM buffer on device populated with values specified by initialize
-        Tensor a = ttnn::random::random(shapea.value).to(Layout::TILE).to(device);
+        Tensor a = ttnn::random::random(shapea).to(Layout::TILE).to(device);
         Tensor b = ttnn::zeros(shapeb, DataType::BFLOAT16, Layout::TILE, *device);
         Tensor b1 = ttnn::zeros(shapeb1, DataType::BFLOAT16, Layout::TILE, *device);
 

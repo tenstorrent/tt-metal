@@ -153,9 +153,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
     # Compile
     profiler.start("compile")
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
     ttnn.dump_device_profiler(device)
@@ -173,13 +171,7 @@ def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_me
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
-    tt_image_res = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(tt_image_res)
     ttnn.dump_device_profiler(device)
@@ -223,9 +215,7 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     ttnn.record_event(0, op_event)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
@@ -257,13 +247,7 @@ def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, nu
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
-    input_tensor = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(input_tensor)
     ttnn.dump_device_profiler(device)

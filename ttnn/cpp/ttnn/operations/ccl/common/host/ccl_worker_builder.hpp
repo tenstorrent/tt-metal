@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -149,9 +149,11 @@ struct CCLWorkerArgBuilder {
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
         const size_t sender_worker_forward_flow_control_semaphore_id,
+        const size_t sender_worker_forward_teardown_semaphore_id,
         const size_t sender_worker_forward_buffer_index_semaphore_id,
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
         const size_t sender_worker_backward_flow_control_semaphore_id,
+        const size_t sender_worker_backward_teardown_semaphore_id,
         const size_t sender_worker_backward_buffer_index_semaphore_id,
         const size_t forward_direction_distance_to_end_of_line,
         const size_t backward_direction_distance_to_end_of_line,
@@ -173,6 +175,8 @@ struct CCLWorkerArgBuilder {
     bool src_is_dram;
     bool dst_is_dram;
 };
+
+bool can_command_stream_be_lowered_to_noc_commands(const Tensor& input_tensor);
 
 }  // namespace worker_detail
 }  // namespace ttnn::ccl

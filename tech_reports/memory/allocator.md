@@ -75,6 +75,9 @@ These reports can be enabled from C++ and Python.
 // API to dump state of memory for a given device. Optional prefix will be prepended to the report.
 DumpDeviceMemoryState(const Device *device, std::string prefix="");
 
+// API to get dram memory view for a given device
+GetMemoryView(const IDevice* device, const BufferType& buffer_type);
+
 // APIs to enable/disable memory reports for each Program's compile
 EnableMemoryReports();
 DisableMemoryReports();

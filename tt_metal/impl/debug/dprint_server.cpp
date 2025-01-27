@@ -16,16 +16,16 @@
 #include <set>
 #include <filesystem>
 #include <tuple>
-#include "llrt/llrt.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <llrt.hpp>
+#include <logger.hpp>
 
 #include "dprint_server.hpp"
 #include "debug_helpers.hpp"
-#include "llrt/rtoptions.hpp"
-#include "common/bfloat8.hpp"
+#include <rtoptions.hpp>
+#include <bfloat8.hpp>
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 using std::cout;
 using std::endl;
@@ -60,8 +60,9 @@ static inline float bfloat16_to_float(uint16_t bfloat_val) {
 static string GetRiscName(CoreType core_type, int hart_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (hart_id) {
-            case DPRINT_RISCV_INDEX_ER:
-                return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER: return abbreviated ? "ER" : "ERISC";
+            case DPRINT_RISCV_INDEX_ER1:
+                return abbreviated ? "ER1" : "ERISC1";
                 // Default case falls through and handled at end.
         }
     } else {
@@ -89,7 +90,7 @@ static void AssertSize(uint8_t sz, uint8_t expected_sz) {
 // A null stream for when the print server is muted.
 class NullBuffer : public std::streambuf {
 public:
-    int overflow(int c) { return c; }
+    int overflow(int c) override { return c; }
 };
 NullBuffer null_buffer;
 std::ostream null_stream(&null_buffer);
@@ -443,15 +444,15 @@ static void PrintTypedUint32Array(
 
 // Writes a magic value at wpos ptr address for dprint buffer for a specific hart/core/chip
 // Used for debug print server startup sequence.
-void WriteInitMagic(IDevice* device, const CoreCoord& phys_core, int hart_id, bool enabled) {
+void WriteInitMagic(IDevice* device, const CoreCoord& virtual_core, int hart_id, bool enabled) {
     // compute the buffer address for the requested hart
-    uint64_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
+    uint64_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
 
     // TODO(AP): this could use a cleanup - need a different mechanism to know if a kernel is running on device.
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
-    tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, base_addr);
+    tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, initbuf, base_addr);
 
     // Prevent race conditions during runtime by waiting until the init value is actually written
     // DPrint is only used for debug purposes so this delay should not be a big issue.
@@ -461,7 +462,7 @@ void WriteInitMagic(IDevice* device, const CoreCoord& phys_core, int hart_id, bo
     // 4. now we will access wpos at the starting magic which is incorrect
     uint32_t num_tries = 100000;
     while (num_tries-- > 0) {
-        auto result = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, 4);
+        auto result = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, base_addr, 4);
         if (result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) {
             return;
         } else if (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled) {
@@ -475,11 +476,11 @@ void WriteInitMagic(IDevice* device, const CoreCoord& phys_core, int hart_id, bo
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(IDevice* device, const CoreCoord& phys_core, int hart_id) {
+bool CheckInitMagicCleared(IDevice* device, const CoreCoord& virtual_core, int hart_id) {
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
+    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
 
-    auto result = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, 4);
+    auto result = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
 }  // CheckInitMagicCleared
 
@@ -581,7 +582,7 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     chip_id_t device_id = device->id();
 
     // A set of all valid printable cores, used for checking the user input. Note that the coords
-    // here are physical.
+    // here are virtual.
     CoreDescriptorSet all_cores = GetAllCores(device);
     CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
 
@@ -591,9 +592,9 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     // skip prints entirely to prevent kernel code from hanging waiting for the print buffer to be
     // flushed from the host.
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+        CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
-            WriteInitMagic(device, phys_core, hart_index, false);
+            WriteInitMagic(device, virtual_core, hart_index, false);
         }
     }
 
@@ -659,12 +660,12 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
 
             // We should also validate that the cores the user specified are valid worker cores.
             for (auto& logical_core : print_cores) {
-                // Need to convert user-specified logical cores to physical cores, this can throw
+                // Need to convert user-specified logical cores to virtual cores, this can throw
                 // if the user gave bad coords.
-                CoreCoord phys_core;
+                CoreCoord virtual_core;
                 bool valid_logical_core = true;
                 try {
-                    phys_core = device->virtual_core_from_logical_core(logical_core, core_type);
+                    virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -672,19 +673,19 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
                     print_cores_sanitized.push_back({logical_core, core_type});
                     log_info(
                         tt::LogMetal,
-                        "DPRINT enabled on device {}, {} core {} (physical {}).",
+                        "DPRINT enabled on device {}, {} core {} (virtual {}).",
                         device->id(),
                         tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
-                        phys_core.str());
+                        virtual_core.str());
                 } else {
                     log_warning(
                         tt::LogMetal,
-                        "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (physical coordinates {}), "
+                        "TT_METAL_DPRINT_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                         "which is not a valid core on device {}. This coordinate will be ignored by the dprint server.",
                         tt::llrt::get_core_type_name(core_type),
                         logical_core.str(),
-                        valid_logical_core ? phys_core.str() : "INVALID",
+                        valid_logical_core ? virtual_core.str() : "INVALID",
                         device->id());
                 }
             }
@@ -695,10 +696,10 @@ void DebugPrintServerContext::AttachDevice(IDevice* device) {
     uint32_t hart_mask =
         tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDprint);
     for (auto& logical_core : print_cores_sanitized) {
-        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+        CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
             if (hart_mask & (1 << hart_index)) {
-                WriteInitMagic(device, phys_core, hart_index, true);
+                WriteInitMagic(device, virtual_core, hart_index, true);
             }
         }
         if (dispatch_cores.count(logical_core)) {
@@ -744,18 +745,18 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
         // Check all dprint-enabled cores on this device for outstanding prints.
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device)) {
-            CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+            CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
             for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
                 if (risc_mask & (1 << risc_id)) {
                     // No need to check if risc is not dprint-enabled.
-                    if (!CheckInitMagicCleared(device, phys_core, risc_id)) {
+                    if (!CheckInitMagicCleared(device, virtual_core, risc_id)) {
                         continue;
                     }
 
                     // Check if rpos < wpos, indicating unprocessed prints.
                     constexpr int eightbytes = 8;
-                    uint32_t base_addr = GetDprintBufAddr(device, phys_core, risc_id);
-                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, phys_core, base_addr, eightbytes);
+                    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, risc_id);
+                    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, eightbytes);
                     uint32_t wpos = from_dev[0], rpos = from_dev[1];
                     if (rpos < wpos) {
                         outstanding_prints = true;
@@ -806,9 +807,9 @@ void DebugPrintServerContext::DetachDevice(IDevice* device) {
     // When detaching a device, disable prints on it.
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (auto& logical_core : all_cores) {
-        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+        CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
         for (int hart_index = 0; hart_index < GetNumRiscs(logical_core); hart_index++) {
-            WriteInitMagic(device, phys_core, hart_index, false);
+            WriteInitMagic(device, virtual_core, hart_index, false);
         }
     }
     device_to_core_range_lock_.unlock();
@@ -836,28 +837,14 @@ void DebugPrintServerContext::ClearSignals() {
 bool DebugPrintServerContext::PeekOneHartNonBlocking(
     IDevice* device, const CoreDescriptor& logical_core, int hart_id, bool new_data_this_iter) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
-    CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-    if (!CheckInitMagicCleared(device, phys_core, hart_id)) {
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+    if (!CheckInitMagicCleared(device, virtual_core, hart_id)) {
         return false;
     }
 
     // compute the buffer address for the requested hart
-    uint32_t base_addr = GetDprintBufAddr(device, phys_core, hart_id);
+    uint32_t base_addr = GetDprintBufAddr(device, virtual_core, hart_id);
     chip_id_t chip_id = device->id();
-
-    // Device is incrementing wpos
-    // Host is reading wpos and incrementing local rpos up to wpos
-    // Device is filling the buffer and in the end waits on host to write rpos
-
-    // TODO(AP) - compare 8-bytes transfer and full buffer transfer latency
-    // First probe only 8 bytes to see if there's anything to read
-    constexpr int eightbytes = 8;
-    auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, base_addr, eightbytes);
-    uint32_t wpos = from_dev[0], rpos = from_dev[1];
-    uint32_t counter = 0;
-    uint32_t sigval = 0;
-    char val = 0;
-
     HartKey hart_key{chip_id, logical_core, hart_id};
 
     if (!risc_to_prev_type_[hart_key]) {
@@ -910,9 +897,14 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
     }
     raise_wait_lock_.unlock();
 
+    // Device is incrementing wpos
+    // Host is reading wpos and incrementing local rpos up to wpos
+    // Device is filling the buffer and in the end waits on host to write rpos
+    auto from_dev = tt::llrt::read_hex_vec_from_core(chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
+    DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
+    uint32_t rpos = l->aux.rpos;
+    uint32_t wpos = l->aux.wpos;
     if (rpos < wpos) {
-        // Now read the entire buffer
-        from_dev = tt::llrt::read_hex_vec_from_core(chip_id, phys_core, base_addr, DPRINT_BUFFER_SIZE);
         // at this point rpos,wpos can be stale but not reset to 0 by the producer
         // it's ok for the consumer to be behind the latest wpos+rpos from producer
         // since the corresponding data in buffer for stale rpos+wpos will not be overwritten
@@ -920,9 +912,9 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         // The producer only updates rpos in case of buffer overflow.
         // Then it waits for rpos to first catch up to wpos (rpos update by the consumer) before proceeding
 
-        DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         constexpr uint32_t bufsize = sizeof(DebugPrintMemLayout::data);
         // parse the input codes
+        uint32_t sigval = 0;
         while (rpos < wpos) {
             DPrintTypeID code = static_cast<DPrintTypeID>(l->data[rpos++]);
             TT_ASSERT(rpos <= bufsize);
@@ -975,12 +967,13 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                     TransferToAndFlushOutputStream(hart_key, intermediate_stream);
                     AssertSize(sz, 1);
                     break;
-                case DPrintSETW:
-                    val = CAST_U8P(ptr)[0];
+                case DPrintSETW: {
+                    char val = CAST_U8P(ptr)[0];
                     *intermediate_stream << setw(val);
                     most_recent_setw = val;
                     AssertSize(sz, 1);
                     break;
+                }
                 case DPrintSETPRECISION:
                     *intermediate_stream << std::setprecision(*ptr);
                     AssertSize(sz, 1);
@@ -1108,8 +1101,8 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
                         rpos,
                         (uint32_t)code,
                         chip_id,
-                        phys_core.x,
-                        phys_core.y);
+                        virtual_core.x,
+                        virtual_core.y);
             }
 
             risc_to_prev_type_[hart_key] = code;
@@ -1131,7 +1124,7 @@ bool DebugPrintServerContext::PeekOneHartNonBlocking(
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout().rpos_offs();
-        tt::llrt::write_hex_vec_to_core(chip_id, phys_core, rposbuf, base_addr + offs);
+        tt::llrt::write_hex_vec_to_core(chip_id, virtual_core, rposbuf, base_addr + offs);
 
         // Return true to signal that some print data was read
         return true;

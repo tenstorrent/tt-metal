@@ -7,7 +7,7 @@
 #include <set>
 
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
@@ -56,8 +56,9 @@ static CoreDescriptorSet GetDispatchCores(tt::tt_metal::IDevice* device) {
     return dispatch_cores;
 }
 
-inline uint64_t GetDprintBufAddr(tt::tt_metal::IDevice* device, const CoreCoord& phys_core, int risc_id) {
-    dprint_buf_msg_t* buf = device->get_dev_addr<dprint_buf_msg_t*>(phys_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
+inline uint64_t GetDprintBufAddr(tt::tt_metal::IDevice* device, const CoreCoord& virtual_core, int risc_id) {
+    dprint_buf_msg_t* buf =
+        device->get_dev_addr<dprint_buf_msg_t*>(virtual_core, tt::tt_metal::HalL1MemAddrType::DPRINT);
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 

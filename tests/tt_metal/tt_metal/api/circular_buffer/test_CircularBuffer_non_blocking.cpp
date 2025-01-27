@@ -5,11 +5,11 @@
 #include "circular_buffer_test_utils.hpp"
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 #include "gtest/gtest.h"
 
@@ -40,7 +40,6 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, IDe
                 CoreRangeSet(CoreRange(worker_core)),
                 {cb_n_pages, cb_n_pages},
                 ShardOrientation::ROW_MAJOR,
-                false,
                 {cb_n_pages, cb_n_pages},
                 {1, 1}),
         };

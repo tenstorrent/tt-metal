@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include "ttnn/types.hpp"
 
@@ -24,7 +24,8 @@ void bind_ternary_backward(
     py::module& module,
     const ternary_backward_operation_t& operation,
     const std::string_view description,
-    const std::string& supported_dtype = "BFLOAT16") {
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -56,6 +57,8 @@ void bind_ternary_backward(
                  - TILE
                  - 2, 3, 4
 
+            {4}
+
         Example:
             >>> value = 1.0
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -67,7 +70,8 @@ void bind_ternary_backward(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        supported_dtype);
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -302,7 +306,9 @@ void py_module(py::module& module) {
     detail::bind_ternary_backward(
         module,
         ttnn::addcdiv_bw,
-        R"doc(Performs backward operations for addcdiv of :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc");
+        R"doc(Performs backward operations for addcdiv of :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` with given :attr:`grad_tensor`.)doc",
+        "",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_ternary_backward_optional_output(
         module,

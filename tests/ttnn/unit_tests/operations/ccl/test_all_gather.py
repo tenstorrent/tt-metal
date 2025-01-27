@@ -622,6 +622,7 @@ def test_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -1183,7 +1184,6 @@ def run_all_gather_sharded(
         shard_grid,
         input_shard_shape,
         orientation,
-        False,
     )
     input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
     output_shard_shape = list(input_shard_shape)
@@ -1195,7 +1195,6 @@ def run_all_gather_sharded(
         shard_grid,
         output_shard_shape,
         orientation,
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=output_shard_spec

@@ -27,8 +27,8 @@ from models.experimental.functional_unet.tests.common import (
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        # ("upblock3", 32, 264, 40, 16),
-        # ("upblock4", 16, 528, 80, 16),
+        ("upblock3", 32, 264, 40, 16),
+        ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
@@ -43,7 +43,7 @@ def test_unet_upblock(
     device: ttnn.Device,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
@@ -52,7 +52,6 @@ def test_unet_upblock(
     torch_input, ttnn_input = create_unet_input_tensors(
         batch,
         groups,
-        pad_input=False,
         input_channels=input_channels,
         input_height=input_height,
         input_width=input_width,
@@ -60,7 +59,6 @@ def test_unet_upblock(
     torch_residual, ttnn_residual = create_unet_input_tensors(
         batch,
         groups,
-        pad_input=False,
         input_channels=residual_channels,
         input_height=input_height * 2,
         input_width=input_width * 2,
@@ -70,7 +68,7 @@ def test_unet_upblock(
     ttnn_input, ttnn_residual = ttnn.to_device(ttnn_input, device), ttnn.to_device(ttnn_residual, device)
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.998)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.999)
 
 
 @pytest.mark.parametrize("batch, groups", [(1, 2)])
@@ -79,8 +77,8 @@ def test_unet_upblock(
     [
         ("upblock1", 64, 66, 10, 32),
         ("upblock2", 32, 132, 20, 32),
-        # ("upblock3", 32, 264, 40, 16),
-        # ("upblock4", 16, 528, 80, 16),
+        ("upblock3", 32, 264, 40, 16),
+        ("upblock4", 16, 528, 80, 16),
     ],
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
@@ -104,7 +102,7 @@ def test_unet_upblock_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=False)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -114,7 +112,6 @@ def test_unet_upblock_multi_device(
     torch_input, ttnn_input = create_unet_input_tensors(
         num_devices * batch,
         groups,
-        pad_input=False,
         input_channels=input_channels,
         input_height=input_height,
         input_width=input_width,
@@ -127,7 +124,6 @@ def test_unet_upblock_multi_device(
     torch_residual, ttnn_residual = create_unet_input_tensors(
         num_devices * batch,
         groups,
-        pad_input=False,
         input_channels=residual_channels,
         input_height=input_height * 2,
         input_width=input_width * 2,
@@ -143,4 +139,4 @@ def test_unet_upblock_multi_device(
     ttnn_output = getattr(ttnn_model, block_name)(ttnn_input, ttnn_residual)
 
     assert len(ttnn_output.devices()) == 2, "Expected output tensor to be sharded across 2 devices"
-    check_pcc_conv(torch_output, ttnn_output, pcc=0.998, mesh_composer=output_mesh_composer)
+    check_pcc_conv(torch_output, ttnn_output, pcc=0.999, mesh_composer=output_mesh_composer)

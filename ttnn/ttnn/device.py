@@ -21,9 +21,6 @@ DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
 DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
-EPS_GS = ttnn._ttnn.device.EPS_GS
-EPS_WHB0 = ttnn._ttnn.device.EPS_WHB0
-EPS_BH = ttnn._ttnn.device.EPS_BH
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 
@@ -90,8 +87,8 @@ CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
 
 
-def DumpDeviceProfiler(device, last_dump: bool = False):
-    ttnn._ttnn.device.DumpDeviceProfiler(device, last_dump)
+def DumpDeviceProfiler(device):
+    ttnn._ttnn.device.DumpDeviceProfiler(device)
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
@@ -101,7 +98,6 @@ EnableCompilationReports = ttnn._ttnn.device.EnableCompilationReports
 DisableCompilationReports = ttnn._ttnn.device.DisableCompilationReports
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
-SetLazyCommandQueueMode = ttnn._ttnn.device.SetLazyCommandQueueMode
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 
 
@@ -134,24 +130,28 @@ def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
+def get_memory_view(device, buffer_type):
+    return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
+
+
 def is_wormhole_b0(device=None):
     if device is not None:
         return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "wormhole_b0" in ARCH_NAME
 
 
 def is_grayskull(device=None):
     if device is not None:
         return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "grayskull" in ARCH_NAME
 
 
 def is_blackhole(device=None):
     if device is not None:
         return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
 
 

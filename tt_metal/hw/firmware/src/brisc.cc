@@ -40,7 +40,11 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
+#ifdef NCRISC_HAS_IRAM
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
+#else
+constexpr uint32_t num_cbs_to_early_init = 0;
+#endif
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 uint32_t ncrisc_kernel_start_offset16;
@@ -331,8 +335,10 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 
         l1_to_ncrisc_iram_copy_wait();
 
+#ifdef NCRISC_HAS_IRAM
         // Note: only ncrisc is in reset, so just deasserts ncrisc
         deassert_all_reset();
+#endif
     }
 }
 
@@ -385,7 +391,14 @@ int main() {
 
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        // kernel_configs.preload is last in the launch message. so other data is
+        // valid by the time it's set. All multicast data from the dispatcher is
+        // written in order, so it will arrive in order. We also have a barrier
+        // before mcasting the launch message (as a hang workaround), which
+        // ensures that the unicast data will also have been received.
+        while (
+            ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) &&
+            !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
@@ -436,7 +449,8 @@ int main() {
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
             run_triscs(enables);
 
@@ -493,6 +507,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 }
+                wait_for_go_message();
             }
             WAYPOINT("D");
 
@@ -517,6 +532,7 @@ int main() {
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
+                launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = NOC_XY_ADDR(
                     NOC_X(mailboxes->go_message.master_x),
                     NOC_Y(mailboxes->go_message.master_y),

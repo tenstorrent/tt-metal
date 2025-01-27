@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
-#include "sub_device/sub_device_types.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/global_semaphore.hpp"
 
 #include <ranges>
 #include <algorithm>
@@ -81,30 +81,26 @@ ReduceScatterAsync create_reduce_scatter_struct(
 void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }
 }
 
-std::vector<ttnn::SimpleShape> ReduceScatterAsync::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
+std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    auto shape = input_tensor.get_logical_shape();
     TT_FATAL(
         shape[this->scatter_dim] % this->ring_size == 0,
         "The size of the scatter dimension must be a multiple of the ring size. Dimension size: {}, ring Size: {}",
         shape[this->scatter_dim],
         this->ring_size);
     shape[this->scatter_dim] /= this->ring_size;
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
 
-std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
     // output tensors
     // 0. final (real) output_tensor
     // 1. input_tensor_from_remote_forward_direction (shape of input tensor)
@@ -116,48 +112,22 @@ std::vector<Tensor> ReduceScatterAsync::create_output_tensors(const std::vector<
     std::optional<tt::tt_metal::Tile> tile =
         is_tile_layout ? input_tensor.get_tensor_spec().tile() : std::optional<tt::tt_metal::Tile>(std::nullopt);
 
-    std::vector<Tensor> output_tensors;
+    std::vector<TensorSpec> output_tensors;
     output_tensors.reserve(5);
     // real_output_tensor
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
     // temporary_input_from_remote_tensor_for_forward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile));
+    output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_input_from_remote_tensor_for_backward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        input_tensor.shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        input_tensor.memory_config(),
-        tile));
+    output_tensors.emplace_back(input_tensor.get_tensor_spec());
     // temporary_partial_output_tensor_for_forward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), output_mem_config)));
     // temporary_partial_output_tensor_for_backward_direction
-    output_tensors.emplace_back(create_device_tensor(
-        this->compute_output_shapes(input_tensors).at(0),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        this->output_mem_config,
-        tile));
+    output_tensors.emplace_back(TensorSpec(
+        shape,
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout(), tile), this->output_mem_config)));
 
     return output_tensors;
 }
@@ -185,18 +155,13 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
         this->num_links_preferred,
         this->from_remote_sem,
         this->to_remote_sem,
+        this->sub_device_id,
         this->fabric_handle);
 }
 
 operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     return operation::hash_operation<ReduceScatterAsync>(
-        this->binary_op_type,
-        this->scatter_dim,
-        this->ring_size,
-        this->ring_index,
-        this->topology,
-        this->from_remote_sem,
-        this->to_remote_sem);
+        this->binary_op_type, this->scatter_dim, this->ring_size, this->ring_index, this->topology);
 }
 
 namespace {

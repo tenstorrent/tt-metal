@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_common.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -47,25 +48,25 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_legacy_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = input.get_padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
-        num_units = (input.volume() / input.get_legacy_shape()[-1] / shard_spec.shape[0]) *
-                    (input.get_legacy_shape()[-1] / shard_spec.shape[1]);
+        num_units = (input.volume() / input.get_padded_shape()[-1] / shard_spec.shape[0]) *
+                    (input.get_padded_shape()[-1] / shard_spec.shape[1]);
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_legacy_shape()[-1] * input.element_size();
+        num_units_per_row = input.get_padded_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1];
+        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
@@ -73,10 +74,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         //Adjust accordingly to l1 alignment, do it for all archs
         if(keep_l1_aligned){
-            padded_offset_bytes = align(input_unit_size, hal.get_alignment(HalMemType::L1));
+            padded_offset_bytes = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
-            padded_offset_bytes = align(input_unit_size, input.buffer()->alignment());
+            padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
         }
     }
 
@@ -86,10 +87,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = align(output_unit_size, dst_buffer->alignment());
+    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
     if (convert_df) {
         out_cb_index = tt::CBIndex::c_16;
-        uint32_t input_page_size = align(input_unit_size, src_buffer->alignment());
+        uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
@@ -105,10 +106,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
         if (is_blackhole) {
-            scratch_cb_page_size = align(input_unit_size, hal.get_alignment(HalMemType::L1));
+            scratch_cb_page_size = tt::align(input_unit_size, hal.get_alignment(HalMemType::L1));
         }
         else {
-            scratch_cb_page_size = align(input_unit_size, dram_alignment);
+            scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
         }
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})

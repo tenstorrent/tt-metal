@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 #include "sub_device_test_utils.hpp"
@@ -28,8 +28,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceSynchronization) {
 
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
-        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
         nullptr,

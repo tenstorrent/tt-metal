@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_fill_cache_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -27,15 +27,15 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]
     // page_table_tensor: [b, max_num_blocks_per_seq]
-    const uint32_t num_heads = input_tensor.get_legacy_shape()[1];
-    const uint32_t input_seq_len = input_tensor.get_legacy_shape()[2];
+    const uint32_t num_heads = input_tensor.get_padded_shape()[1];
+    const uint32_t input_seq_len = input_tensor.get_padded_shape()[2];
 
-    const uint32_t max_num_blocks = cache_tensor.get_legacy_shape()[0];
-    const uint32_t block_size = cache_tensor.get_legacy_shape()[2];
-    const uint32_t head_dim = cache_tensor.get_legacy_shape()[3];
+    const uint32_t max_num_blocks = cache_tensor.get_padded_shape()[0];
+    const uint32_t block_size = cache_tensor.get_padded_shape()[2];
+    const uint32_t head_dim = cache_tensor.get_padded_shape()[3];
 
-    const uint32_t batch = page_table_tensor.get_legacy_shape()[0];
-    const uint32_t max_num_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
+    const uint32_t batch = page_table_tensor.get_padded_shape()[0];
+    const uint32_t max_num_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
 
     const uint32_t input_seq_len_t = input_seq_len / TILE_HEIGHT;
     const uint32_t Wt = head_dim / TILE_WIDTH;

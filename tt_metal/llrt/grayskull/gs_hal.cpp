@@ -10,7 +10,7 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 #include "noc/noc_overlay_parameters.h"
 #include "tensix.h"
@@ -32,6 +32,10 @@
 constexpr static std::uint32_t DRAM_BARRIER_BASE = 0;
 constexpr static std::uint32_t DRAM_BARRIER_SIZE =
     ((sizeof(uint32_t) + DRAM_ALIGNMENT - 1) / DRAM_ALIGNMENT) * DRAM_ALIGNMENT;
+
+static constexpr float EPS_GS = 0.001953125f;
+static constexpr float NAN_GS = 6.9752e19;
+static constexpr float INF_GS = 1.6948e38;
 
 namespace tt {
 
@@ -86,37 +90,57 @@ void Hal::initialize_gs() {
         uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base, local_init;
+            DeviceAddr fw_base, local_init, fw_launch;
+            uint32_t fw_launch_value;
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
                     local_init = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                } break;
+                    fw_launch = 0x0; // BRISC is hardcoded to have reset PC of 0
+                    fw_launch_value = generate_risc_startup_addr(fw_base);
+                }
+                break;
                 case 1: {
                     fw_base = MEM_NCRISC_FIRMWARE_BASE;
                     local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                } break;
+                    fw_launch = 0; // fix me
+                    fw_launch_value = fw_base;
+                }
+                break;
                 case 2: {
                     switch (processor_type_idx) {
                         case 0: {
                             fw_base = MEM_TRISC0_FIRMWARE_BASE;
                             local_init = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0; // fix me
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                         case 1: {
                             fw_base = MEM_TRISC1_FIRMWARE_BASE;
                             local_init = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0; // fix me
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                         case 2: {
                             fw_base = MEM_TRISC2_FIRMWARE_BASE;
                             local_init = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0; // fix me
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                     }
                 } break;
                 default: TT_THROW("Unexpected processor class {} for Blackhole Tensix", processor_class_idx);
             }
 
-            processor_types[processor_type_idx] =
-                HalJitBuildConfig{.fw_base_addr = fw_base, .local_init_addr = local_init};
+            processor_types[processor_type_idx] = HalJitBuildConfig{
+                .fw_base_addr = fw_base,
+                .local_init_addr = local_init,
+                .fw_launch_addr = fw_launch,
+                .fw_launch_addr_value = fw_launch_value
+            };
         }
         processor_classes[processor_class_idx] = processor_types;
     }
@@ -160,11 +184,42 @@ void Hal::initialize_gs() {
     this->noc_multicast_encoding_func_ = [](uint32_t x_start, uint32_t y_start, uint32_t x_end, uint32_t y_end) {
         return NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end);
     };
+    this->noc_mcast_addr_start_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_X(addr); };
+    this->noc_mcast_addr_start_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_START_Y(addr); };
+    this->noc_mcast_addr_end_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_X(addr); };
+    this->noc_mcast_addr_end_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_MCAST_ADDR_END_Y(addr); };
+    this->noc_ucast_addr_x_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_X(addr); };
+    this->noc_ucast_addr_y_func_ = [](uint64_t addr) -> uint64_t { return NOC_UNICAST_ADDR_Y(addr); };
+    this->noc_local_addr_func_ = [](uint64_t addr) -> uint64_t { return NOC_LOCAL_ADDR(addr); };
+
+    this->stack_size_func_ = [](uint32_t type) -> uint32_t {
+        switch (type) {
+            case DebugBrisc: return MEM_BRISC_STACK_SIZE;
+            case DebugNCrisc: return MEM_NCRISC_STACK_SIZE;
+            case DebugErisc: return 0;  // Not managed/checked by us.
+            case DebugIErisc: return MEM_IERISC_STACK_SIZE;
+            case DebugSlaveIErisc: return MEM_BRISC_STACK_SIZE;
+            case DebugTrisc0: return MEM_TRISC0_STACK_SIZE;
+            case DebugTrisc1: return MEM_TRISC1_STACK_SIZE;
+            case DebugTrisc2: return MEM_TRISC2_STACK_SIZE;
+        }
+        return 0xdeadbeef;
+    };
 
     this->num_nocs_ = NUM_NOCS;
+    this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
+    this->noc_coord_reg_offset_ = NOC_COORD_REG_OFFSET;
+    this->noc_overlay_start_addr_ = NOC_OVERLAY_START_ADDR;
+    this->noc_stream_reg_space_size_ = NOC_STREAM_REG_SPACE_SIZE;
+    this->noc_stream_remote_dest_buf_size_reg_index_ = STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX;
+    this->noc_stream_remote_dest_buf_start_reg_index_ = STREAM_REMOTE_DEST_BUF_START_REG_INDEX;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+
+    this->eps_ = EPS_GS;
+    this->nan_ = NAN_GS;
+    this->inf_ = INF_GS;
 }
 
 }  // namespace tt_metal

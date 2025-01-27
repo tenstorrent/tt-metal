@@ -4,28 +4,35 @@
 
 #include <vector>
 
-#include "tt_metal/impl/sub_device/sub_device_manager.hpp"
+#include <sub_device_manager.hpp>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/kernels/data_types.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
-#include "tt_metal/impl/sub_device/sub_device_types.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
-#include "tt_metal/impl/trace/trace_buffer.hpp"
-#include "tt_metal/tt_stl/span.hpp"
+#include <assert.hpp>
+#include <host_api.hpp>
+#include <allocator.hpp>
+#include <device.hpp>
+#include <command_queue_interface.hpp>
+#include <data_types.hpp>
+#include <sub_device.hpp>
+#include <sub_device_types.hpp>
+#include <trace.hpp>
+#include <trace_buffer.hpp>
+#include <span.hpp>
+#include <tt_align.hpp>
 
 namespace tt::tt_metal {
 
-namespace detail {
+// assert here to avoid the need to include command_queue_interface.hpp in header
+static_assert(
+    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
+    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+
+std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
 SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
+    id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(align(local_l1_size, hal.get_alignment(HalMemType::L1))),
+    local_l1_size_(tt::align(local_l1_size, hal.get_alignment(HalMemType::L1))),
     device_(device) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
@@ -33,29 +40,21 @@ SubDeviceManager::SubDeviceManager(
     this->populate_num_cores();
     this->populate_sub_allocators();
     this->populate_noc_data();
-    this->populate_worker_launch_message_buffer_state();
 }
 
-SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) : device_(device) {
+SubDeviceManager::SubDeviceManager(
+    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    id_(next_sub_device_manager_id_++),
+    device_(device),
+    sub_devices_(sub_devices.begin(), sub_devices.end()),
+    local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
-    local_l1_size_ = 0;
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    const auto& active_eth_cores = device_->get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
 
-    sub_devices_ = {SubDevice(std::array{
-        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
-        CoreRangeSet(std::move(active_eth_core_ranges))})};
     this->populate_sub_device_ids();
     // No need to validate sub-devices since this constructs a sub-device of the entire grid
     this->populate_num_cores();
     this->sub_device_allocators_.push_back(std::move(global_allocator));
     this->populate_noc_data();
-    this->populate_worker_launch_message_buffer_state();
 }
 
 SubDeviceManager::~SubDeviceManager() {
@@ -72,6 +71,8 @@ SubDeviceManager::~SubDeviceManager() {
         }
     }
 }
+
+SubDeviceManagerId SubDeviceManager::id() const { return id_; }
 
 uint8_t SubDeviceManager::num_sub_devices() const { return sub_devices_.size(); }
 
@@ -133,18 +134,6 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
     return nullptr;
 }
 
-void SubDeviceManager::reset_worker_launch_message_buffer_state() {
-    std::for_each(
-        worker_launch_message_buffer_state_.begin(),
-        worker_launch_message_buffer_state_.end(),
-        std::mem_fn(&LaunchMessageRingBufferState::reset));
-}
-
-LaunchMessageRingBufferState& SubDeviceManager::get_worker_launch_message_buffer_state(SubDeviceId sub_device_id) {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return worker_launch_message_buffer_state_[sub_device_index];
-}
-
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator && allocator->allocated_buffers.size() > 0) {
@@ -172,16 +161,6 @@ void SubDeviceManager::set_sub_device_stall_group(tt::stl::Span<const SubDeviceI
 
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
-void SubDeviceManager::set_fabric_sub_device_id(SubDeviceId fabric_sub_device_id) {
-    const auto& fabric_sub_device = this->sub_device(fabric_sub_device_id);
-    TT_FATAL(
-        fabric_sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores() == 0,
-        "Fabric sub device must not have Tensix cores");
-    fabric_sub_device_id_ = fabric_sub_device_id;
-}
-
-std::optional<SubDeviceId> SubDeviceManager::fabric_sub_device_id() const { return fabric_sub_device_id_; }
-
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = sub_device_id.to_index();
     TT_FATAL(
@@ -197,25 +176,30 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
-    const auto& device_eth_cores = device_->get_active_ethernet_cores(true);
-    for (const auto& sub_device : sub_devices_) {
+
+    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(sub_device_id);
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
             "Tensix cores {} specified in sub device must be within device grid {}",
             worker_cores,
             device_worker_cores);
-        const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
-        uint32_t num_eth_cores = 0;
-        for (const auto& dev_eth_core : device_eth_cores) {
-            if (eth_cores.contains(dev_eth_core)) {
-                num_eth_cores++;
+
+        if (sub_device.has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
+            const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
+            uint32_t num_eth_cores = 0;
+            const auto& device_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_->id());
+            for (const auto& dev_eth_core : device_eth_cores) {
+                if (eth_cores.contains(dev_eth_core)) {
+                    num_eth_cores++;
+                }
             }
+            TT_FATAL(
+                num_eth_cores == eth_cores.num_cores(),
+                "Ethernet cores {} specified in sub device must be within device grid",
+                eth_cores);
         }
-        TT_FATAL(
-            num_eth_cores == eth_cores.num_cores(),
-            "Ethernet cores {} specified in sub device must be within device grid",
-            eth_cores);
     }
     if (sub_devices_.size() < 2) {
         return;
@@ -323,7 +307,7 @@ void SubDeviceManager::populate_noc_data() {
     NOC noc_index = device_->dispatch_go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX);
+        const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
         noc_mcast_data_start_index_[i] = idx;
@@ -355,12 +339,5 @@ void SubDeviceManager::populate_noc_data() {
             dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
-
-void SubDeviceManager::populate_worker_launch_message_buffer_state() {
-    worker_launch_message_buffer_state_.resize(this->num_sub_devices());
-    this->reset_worker_launch_message_buffer_state();
-}
-
-}  // namespace detail
 
 }  // namespace tt::tt_metal

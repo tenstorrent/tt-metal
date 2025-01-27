@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "debug_tools_fixture.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that we can handle an invalid WAIT command.
@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-// Some machines will run this test on different physical cores, so wildcard the exact coordinates.
+// Some machines will run this test on different virtual cores, so wildcard the exact coordinates.
 const std::string golden_output =
     R"(DPRINT server timed out on Device *, worker core (x=*,y=*), riscv 4, waiting on a RAISE signal: 1
 )";

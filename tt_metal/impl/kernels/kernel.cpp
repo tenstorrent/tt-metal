@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <kernel.hpp>
 
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
 #include <set>
 
-#include "jit_build/build.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <build.hpp>
+#include <llrt.hpp>
+#include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/kernel.hpp"
-#include "tt_metal/common/utils.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <utils.hpp>
+#include <core_coord.hpp>
 #include "tt_metal/jit_build/genfiles.hpp"
 namespace tt {
 
@@ -174,7 +174,10 @@ std::string DataMovementKernel::config_hash() const {
 
 // Add "eth_" to the hash to differentiate between erisc and brisc.
 std::string EthernetKernel::config_hash() const {
-    return fmt::format("eth_{}_{}", magic_enum::enum_name(this->config_.noc), this->config_.eth_mode);
+    return fmt::format("eth_{}_{}_{}",
+        magic_enum::enum_name(this->config_.noc),
+        this->config_.eth_mode,
+        this->config_.processor);
 }
 
 std::string ComputeKernel::config_hash() const {

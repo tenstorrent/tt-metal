@@ -10,13 +10,13 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include <vector>
 #include <unordered_map>
@@ -44,9 +44,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_0_buffer_index_address + field_size;
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_connection_info_address + field_size;
+    std::size_t sender_channel_0_producer_terminate_connection_address =
+        sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_connection_semaphore_address =
-        sender_channel_0_local_flow_control_semaphore_address + field_size;
+        sender_channel_0_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
@@ -60,9 +62,11 @@ struct FabricEriscDatamoverConfig {
         sender_channel_1_buffer_index_address + field_size;
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_connection_info_address + field_size;
+    std::size_t sender_channel_1_producer_terminate_connection_address =
+        sender_channel_1_local_flow_control_semaphore_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_connection_semaphore_address =
-        sender_channel_1_local_flow_control_semaphore_address + field_size;
+        sender_channel_1_producer_terminate_connection_address + field_size;
     // persistent mode field
     std::size_t sender_channel_1_buffer_index_semaphore_address =
         sender_channel_1_connection_semaphore_address + field_size;
@@ -120,57 +124,67 @@ struct edm_termination_info_t {
 };
 
 void get_runtime_args_for_edm_termination_infos(std::vector<edm_termination_info_t> const& edm_termination_infos, std::vector<uint32_t>& args_out);
-void append_worker_to_fabric_edm_sender_rt_args(SenderWorkerAdapterSpec const& connection, size_t sender_worker_flow_control_semaphore_id, size_t sender_worker_buffer_index_semaphore_id, std::vector<uint32_t>& args_out);
+void append_worker_to_fabric_edm_sender_rt_args(
+    const SenderWorkerAdapterSpec& connection,
+    size_t sender_worker_flow_control_semaphore_id,
+    size_t sender_worker_teardown_semaphore_id,
+    size_t sender_worker_buffer_index_semaphore_id,
+    std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args, size_t starting_arg_idx = 0);
 
 class FabricEriscDatamoverBuilder {
    public:
-    FabricEriscDatamoverBuilder(
-        CoreCoord const& my_eth_core_logical,
-        size_t my_noc_x,
-        size_t my_noc_y,
-        size_t my_chip_id,
-        size_t peer_chip_id,
+       static constexpr size_t default_firmware_context_switch_interval = 200000;
 
-        std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id,
-        size_t sender_channel_0_flow_control_semaphore_id,
-        size_t sender_channel_1_flow_control_semaphore_id,
-        size_t sender_channel_0_connection_semaphore_id,
-        size_t sender_channel_1_connection_semaphore_id,
-        size_t sender_channel_0_buffer_index_semaphore_id,
-        size_t sender_channel_1_buffer_index_semaphore_id,
+       FabricEriscDatamoverBuilder(
+           const CoreCoord& my_eth_core_logical,
+           size_t my_noc_x,
+           size_t my_noc_y,
+           size_t my_chip_id,
+           size_t peer_chip_id,
 
-        FabricEriscDatamoverConfig const& config,
-        bool enable_persistent_mode,
-        bool build_in_worker_connection_mode=false);
+           std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id,
+           std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id,
+           size_t sender_channel_0_flow_control_semaphore_id,
+           size_t sender_channel_1_flow_control_semaphore_id,
+           size_t sender_channel_0_connection_semaphore_id,
+           size_t sender_channel_1_connection_semaphore_id,
+           size_t sender_channel_0_buffer_index_semaphore_id,
+           size_t sender_channel_1_buffer_index_semaphore_id,
 
-    static FabricEriscDatamoverBuilder build(
-        tt::tt_metal::IDevice* device,
-        tt::tt_metal::Program& program,
-        CoreCoord const& ethernet_core,
-        chip_id_t local_chip_id,
-        chip_id_t peer_chip_id,
-        FabricEriscDatamoverConfig const& config,
-        bool enable_persistent_mode,
-        bool build_in_worker_connection_mode=false);
+           const FabricEriscDatamoverConfig& config,
+           bool enable_persistent_mode,
+           bool build_in_worker_connection_mode = false);
 
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
-    [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel() const;
+       static FabricEriscDatamoverBuilder build(
+           tt::tt_metal::IDevice* device,
+           tt::tt_metal::Program& program,
+           const CoreCoord& ethernet_core,
+           chip_id_t local_chip_id,
+           chip_id_t peer_chip_id,
+           const FabricEriscDatamoverConfig& config,
+           bool enable_persistent_mode,
+           bool build_in_worker_connection_mode = false);
 
-    [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
+       [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
+       [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel() const;
 
-    [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
+       [[nodiscard]] std::vector<uint32_t> get_compile_time_args() const;
 
-    void connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm);
+       [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void dump_to_log() const {
-        // TODO
-    }
+       void connect_to_downstream_edm(const FabricEriscDatamoverBuilder& downstream_edm);
+
+       void dump_to_log() const {
+           // TODO
+       }
 
     void teardown_from_host(IDevice*d, tt::fabric::TerminationSignal termination_signal = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE) const;
 
-//    protected:
-   friend class EdmLineFabricOpInterface;
+    void set_firmware_context_switch_interval(size_t interval);
+
+    //    protected:
+    friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
@@ -197,6 +211,7 @@ class FabricEriscDatamoverBuilder {
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     std::optional<size_t> receiver_channel_downstream_flow_control_semaphore_id;
+    std::optional<size_t> receiver_channel_downstream_teardown_semaphore_id;
     size_t sender_channel_0_flow_control_semaphore_id = 0;
     size_t sender_channel_1_flow_control_semaphore_id = 0;
     size_t sender_channel_0_connection_semaphore_id = 0;
@@ -214,6 +229,7 @@ class FabricEriscDatamoverBuilder {
     std::optional<size_t> downstream_sender_channel_buffer_index_semaphore_id;
     bool enable_persistent_mode = false;
     bool build_in_worker_connection_mode = false;
+    size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
 };
 
 
@@ -281,6 +297,8 @@ class EdmLineFabricOpInterface {
     static void launch_mesh_fabric(MeshDevice *mesh_device);
     static void teardown_edm_fabric(MeshDevice *mesh_device);
 
+    void set_firmware_context_switch_interval(size_t interval);
+
     // Device ID -> EDM Builders
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_forward_direction;
     std::unordered_map<size_t, std::vector<FabricEriscDatamoverBuilder>> edm_builders_backward_direction;
@@ -295,6 +313,7 @@ class EdmLineFabricOpInterface {
 
     size_t num_links;
     size_t buffer_size_bytes;
+    size_t firmware_context_switch_interval = FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
 void initialize_edm_fabric(distributed::MeshDevice* mesh_device);

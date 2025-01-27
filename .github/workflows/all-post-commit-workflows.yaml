@@ -40,11 +40,9 @@ jobs:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
         # The full 22.04 flow can be tested without precompiled
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: true
     secrets: inherit
   test-wheels:
@@ -53,30 +51,16 @@ jobs:
     with:
       from-precompiled: true
     secrets: inherit
-  build-docker-image-2004:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-20.04-amd64
-  build-docker-image-2204:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-22.04-amd64
   build-artifact:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      tracy: true
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: true
     secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -160,7 +144,6 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   code-analysis:
-    needs: build-docker-image-2204
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
@@ -189,7 +172,7 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
   build:
-    needs: [build-artifact, build-docker-image-2204]
+    needs: build-artifact
     uses: ./.github/workflows/build.yaml
     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners

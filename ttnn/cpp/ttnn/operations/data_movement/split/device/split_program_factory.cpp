@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -87,7 +87,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
 
     Program program{};
     tt::tt_metal::IDevice* device = input_tensor.device();

@@ -5,7 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {
 
@@ -19,7 +19,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     const uint32_t hidden_size,
     MathFidelity math_fidelity,
     CoreCoord compute_with_storage_grid_size) {
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
     tt::tt_metal::IDevice* device = a.device();
 

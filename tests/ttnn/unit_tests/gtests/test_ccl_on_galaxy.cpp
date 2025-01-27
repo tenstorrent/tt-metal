@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
@@ -31,14 +31,8 @@ std::vector<Tensor> run_operation(
     static_assert(
         operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
     // Create output tensor vector by examining the number of output shapes created by the device operation
-    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors, {});
-    size_t output_shapes_size = 0;
-    if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(output_shapes)) {
-        output_shapes_size = std::get<std::vector<ttnn::SimpleShape>>(output_shapes).size();
-    } else {
-        output_shapes_size = std::get<std::vector<tt::tt_metal::LegacyShape>>(output_shapes).size();
-    }
-    std::vector<Tensor> outputs(output_shapes_size);
+    auto output_specs = operation::DeviceOperation<operation::Tensors>(devop).compute_output_specs(input_tensors, {});
+    std::vector<Tensor> outputs(output_specs.size());
     // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
     for (int i = 0; i < outputs.size(); i++) {
         outputs[i] = Tensor(operation::get_workers_for_op_output(input_tensors, optional_input_tensors));
@@ -190,8 +184,8 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
             // Readback data and verify correctness.
             for (auto& tensor : output_tensors) {
                 ASSERT_EQ(
-                    tensor.get_shape(),
-                    ttnn::Shape(LegacyShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
+                    tensor.get_logical_shape(),
+                    SimpleShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())}));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -300,7 +294,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         }
         // Readback data and verify correctness.
         for (auto& tensor : output_tensors) {
-            ASSERT_EQ(tensor.get_shape(), ttnn::Shape(LegacyShape({1, 2, 256, 256})));
+            ASSERT_EQ(tensor.get_logical_shape(), SimpleShape({1, 2, 256, 256}));
             ttnn::read_buffer(0, tensor, {readback_data});
             for (int j = 0; j < 512 * 256; j++) {
                 ASSERT_EQ(readback_data[j].to_float(), ring_devices.size());

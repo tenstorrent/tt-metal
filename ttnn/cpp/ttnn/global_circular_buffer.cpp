@@ -5,8 +5,8 @@
 #include "global_circular_buffer.hpp"
 
 #include <memory>
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::global_circular_buffer {
 
@@ -19,27 +19,25 @@ MultiDeviceGlobalCircularBuffer::MultiDeviceGlobalCircularBuffer(MeshDevice* mes
 
 GlobalCircularBuffer create_global_circular_buffer(
     IDevice* device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    BufferType buffer_type) {
     return tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
-        device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids);
+        device, sender_receiver_core_mapping, size, buffer_type);
 }
 
 MultiDeviceGlobalCircularBuffer create_global_circular_buffer(
     MeshDevice* mesh_device,
-    const std::unordered_map<CoreCoord, CoreRangeSet>& sender_receiver_core_mapping,
+    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
-    BufferType buffer_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    BufferType buffer_type) {
     MultiDeviceGlobalCircularBuffer multi_device_global_cb(mesh_device);
     auto& global_circular_buffers = multi_device_global_cb.global_circular_buffers;
     const auto& devices = mesh_device->get_devices();
     for (uint32_t i = 0; i < devices.size(); ++i) {
         auto* device = devices[i];
         global_circular_buffers.push_back(
-            create_global_circular_buffer(device, sender_receiver_core_mapping, size, buffer_type, sub_device_ids));
+            create_global_circular_buffer(device, sender_receiver_core_mapping, size, buffer_type));
     }
     return multi_device_global_cb;
 }
