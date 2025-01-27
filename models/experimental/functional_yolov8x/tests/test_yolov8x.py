@@ -61,7 +61,7 @@ def attempt_load(weights, map_location=None):
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (157.83, 5.35)}
+    base = {"yolov8x": (177.47, 4.81)}
     return base[name]
 
 
@@ -112,7 +112,7 @@ def test_yolov8x(device, input_tensor, batch_size):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 16.10],
+        [1, 10.94],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
