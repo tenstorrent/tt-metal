@@ -19,7 +19,7 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 @pytest.mark.parametrize("enable_cache", [True])
-def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
     if enable_cache:
         ttnn.enable_program_cache(device)
 
