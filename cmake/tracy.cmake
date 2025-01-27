@@ -20,8 +20,6 @@ set_target_properties(
             "${PROJECT_BINARY_DIR}/lib"
         ARCHIVE_OUTPUT_DIRECTORY
             "${PROJECT_BINARY_DIR}/lib"
-        POSITION_INDEPENDENT_CODE
-            ON # this is equivalent to adding -fPIC
         OUTPUT_NAME
             "tracy"
 )
