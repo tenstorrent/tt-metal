@@ -303,8 +303,8 @@ add_custom_target(
     COMMENT "Cleaning `built` directory"
 )
 
-include(packaging)
-
 if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
+
+include(packaging)
