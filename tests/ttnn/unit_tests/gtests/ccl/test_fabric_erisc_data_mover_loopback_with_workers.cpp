@@ -1646,8 +1646,8 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource_Persiste
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& shape) {
-    auto logical_shape = shape.logical_shape();
+ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::SimpleShape& shape) {
+    auto logical_shape = shape;
     logical_shape[-2] /= tt::constants::TILE_HEIGHT;
     logical_shape[-1] /= tt::constants::TILE_WIDTH;
     EXPECT_TRUE(logical_shape.size() == 4);
@@ -2727,20 +2727,19 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         "Expected {} devices but got {}",
         test_expected_num_devices,
         num_devices);
-    const ttnn::Shape input_shape = ttnn::Shape{1, 1, 32, 32 * num_devices};
+    const ttnn::SimpleShape input_shape({1, 1, 32, 32 * num_devices});
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    auto const logical_shape = input_shape.logical_shape();
-    const auto num_elems = logical_shape.volume();
+    const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
-        // {logical_shape[0],logical_shape[1],logical_shape[2],logical_shape[3]}, layout).to(devices[i]));
+        // {input_shape[0],input_shape[1],input_shape[2],input_shape[3]}, layout).to(devices[i]));
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to(layout);
         t.set_tensor_spec(TensorSpec(
-            logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
+            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t.to(devices[i]));
     }
@@ -2814,7 +2813,8 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 }
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
+void run_all_gather_with_persistent_fabric(
+    const size_t dim, const size_t num_links, ttnn::SimpleShape const& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
@@ -2841,8 +2841,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         test_expected_num_devices,
         num_devices);
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
-    auto const logical_shape = input_shape.logical_shape();
-    const auto num_elems = logical_shape.volume();
+    const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
@@ -2851,7 +2850,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     for (size_t i = 0; i < num_devices; i++) {
         auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to(layout);
         t.set_tensor_spec(TensorSpec(
-            logical_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
+            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
         device_input_tensors.push_back(t.to(devices[i]));
     }
@@ -2915,16 +2914,16 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape{1, 1, 32, 128});
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::SimpleShape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape{1, 1, 32, 8192});
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::SimpleShape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape{1, 1, 32, 128});
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::SimpleShape({1, 1, 32, 128}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape{1, 1, 32, 8192});
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::SimpleShape({1, 1, 32, 8192}));
 }

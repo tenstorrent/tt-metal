@@ -261,7 +261,6 @@ void SubDeviceManager::populate_sub_allocators() {
              .dram_bank_size = 0,
              .dram_bank_offsets = global_allocator_config.dram_bank_offsets,
              .dram_unreserved_base = global_allocator_config.dram_unreserved_base,
-             .dram_alignment = global_allocator_config.dram_alignment,
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
@@ -273,7 +272,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .worker_log_to_virtual_routing_y = global_allocator_config.worker_log_to_virtual_routing_y,
              .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
-             .l1_alignment = global_allocator_config.l1_alignment,
+             .alignment = global_allocator_config.alignment,
              .disable_interleaved = true});
         TT_FATAL(
             config.l1_small_size < (config.storage_core_bank_size.has_value()
@@ -281,9 +280,9 @@ void SubDeviceManager::populate_sub_allocators() {
                                         : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
         TT_FATAL(
-            config.l1_small_size % config.l1_alignment == 0,
-            "Reserved size must be aligned to allocator L1 alignment {}",
-            config.l1_alignment);
+            config.l1_small_size % config.alignment == 0,
+            "Reserved size must be aligned to allocator alignment {}",
+            config.alignment);
 
         // sub_devices only have compute cores for allocation
         for (const CoreCoord& core : corerange_to_cores(compute_cores)) {

@@ -855,7 +855,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = tt::align(computed_addr, device->get_allocator_alignment(BufferType::DRAM));
+        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {

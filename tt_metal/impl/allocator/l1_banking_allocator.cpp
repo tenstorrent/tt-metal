@@ -189,7 +189,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
     // Storage only cores only need to reserve mailbox space to hold barriers
     uint32_t mem_mailbox_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     uint32_t storage_core_unreserved_base =
-        ((mem_mailbox_base + alloc_config.l1_alignment - 1) / alloc_config.l1_alignment) * alloc_config.l1_alignment;
+        ((mem_mailbox_base + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
     uint64_t l1_bank_size = alloc_config.storage_core_bank_size.has_value()
@@ -205,7 +205,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
         bank_id_to_bank_offset,
         allocatable_l1_size,
         interleaved_address_limit,
-        alloc_config.l1_alignment,
+        alloc_config.alignment,
         alloc_config.l1_unreserved_base,
         alloc_config.disable_interleaved);
 
@@ -219,7 +219,7 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
         small_bank_id_to_bank_offset,
         alloc_config.l1_small_size,
         small_interleaved_address_limit,
-        alloc_config.l1_alignment,
+        alloc_config.alignment,
         small_alloc_offset,
         alloc_config.disable_interleaved);
 }

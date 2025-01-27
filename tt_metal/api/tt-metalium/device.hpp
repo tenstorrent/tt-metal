@@ -55,11 +55,11 @@ public:
     IDevice() = default;
     virtual ~IDevice() = default;
 
-    IDevice(const IDevice& other) = delete;
-    IDevice& operator=(const IDevice& other) = delete;
+    IDevice(const IDevice &other) = delete;
+    IDevice& operator=(const IDevice &other) = delete;
 
-    IDevice(IDevice&& other) = default;
-    IDevice& operator=(IDevice&& other) = default;
+    IDevice(IDevice &&other) = default;
+    IDevice& operator=(IDevice &&other) = default;
 
     virtual tt::ARCH arch() const = 0;
 
@@ -84,22 +84,19 @@ public:
     // Given a coordinate in Virtual NOC0 Space, get the equivalent coordinate in Virtual noc_index space
     virtual CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const = 0;
 
-    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const = 0;
-    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const = 0;
+    virtual std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
+    virtual std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const = 0;
     virtual std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() = 0;
 
-    virtual CoreCoord virtual_core_from_logical_core(
-        const CoreCoord& logical_coord, const CoreType& core_type) const = 0;
-    virtual CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const = 0;
+    virtual CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const = 0;
+    virtual CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const = 0;
 
     // Ethernet API
-    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
-    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const = 0;
-    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const = 0;
+    virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord &logical_core) const = 0;
+    virtual CoreCoord logical_core_from_ethernet_core(const CoreCoord &ethernet_core) const = 0;
+    virtual std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const = 0;
     virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
-    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
+    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const = 0;
     virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
     virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const = 0;
     virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
@@ -109,16 +106,16 @@ public:
     virtual CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
     virtual uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
 
-    virtual const std::unique_ptr<Allocator>& get_initialized_allocator() const = 0;
-    virtual const std::unique_ptr<Allocator>& get_initialized_allocator(SubDeviceId sub_device_id) const = 0;
+    virtual const std::unique_ptr<Allocator> &get_initialized_allocator() const = 0;
+    virtual const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const = 0;
 
-    virtual DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const = 0;
-    virtual DeviceAddr get_base_allocator_addr(const HalMemType& mem_type, SubDeviceId sub_device_id) const = 0;
+    virtual DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const = 0;
+    virtual DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const = 0;
 
-    virtual uint32_t num_banks(const BufferType& buffer_type) const = 0;
-    virtual uint32_t num_banks(const BufferType& buffer_type, SubDeviceId sub_device_id) const = 0;
-    virtual uint32_t bank_size(const BufferType& buffer_type) const = 0;
-    virtual uint32_t bank_size(const BufferType& buffer_type, SubDeviceId sub_device_id) const = 0;
+    virtual uint32_t num_banks(const BufferType &buffer_type) const = 0;
+    virtual uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
+    virtual uint32_t bank_size(const BufferType &buffer_type) const = 0;
+    virtual uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
 
     virtual uint32_t dram_channel_from_bank_id(uint32_t bank_id) const = 0;
     virtual uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const = 0;
@@ -132,61 +129,50 @@ public:
     virtual CoreCoord logical_core_from_bank_id(uint32_t bank_id) const = 0;
     virtual CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const = 0;
 
-    virtual const std::vector<uint32_t>& bank_ids_from_dram_channel(uint32_t dram_channel) const = 0;
-    virtual const std::vector<uint32_t>& bank_ids_from_dram_channel(
-        uint32_t dram_channel, SubDeviceId sub_device_id) const = 0;
+    virtual const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const = 0;
+    virtual const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const = 0;
 
-    virtual const std::vector<uint32_t>& bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord& logical_core) const = 0;
-    virtual const std::vector<uint32_t>& bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const = 0;
+    virtual const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const = 0;
+    virtual const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const = 0;
 
-    virtual allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type) const = 0;
-    virtual allocator::Statistics get_memory_allocation_statistics(
-        const BufferType& buffer_type, SubDeviceId sub_device_id) const = 0;
+    virtual allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const = 0;
+    virtual allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
 
-    virtual uint32_t get_allocator_alignment(const BufferType& buffer_type) const = 0;
-    virtual uint32_t get_allocator_alignment(const BufferType& buffer_type, SubDeviceId sub_device_id) const = 0;
+    virtual uint32_t get_allocator_alignment() const = 0;
+    virtual uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const = 0;
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
-    virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
+    virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
 
     virtual size_t get_l1_small_size() const = 0;
     virtual size_t get_l1_small_size(SubDeviceId sub_device_id) const = 0;
 
-    virtual const std::unordered_set<Buffer*>& get_allocated_buffers() const = 0;
-    virtual const std::unordered_set<Buffer*>& get_allocated_buffers(SubDeviceId sub_device_id) const = 0;
+    virtual const std::unordered_set<Buffer *> &get_allocated_buffers() const = 0;
+    virtual const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const = 0;
 
     virtual void deallocate_buffers() = 0;
     virtual void deallocate_buffers(SubDeviceId sub_device_id) = 0;
 
-    virtual void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const = 0;
-    virtual void dump_memory_blocks(
-        const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const = 0;
+    virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const = 0;
+    virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const = 0;
 
     virtual MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const = 0;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
-    virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
-    virtual const std::set<CoreCoord>& storage_only_cores() const = 0;
+    virtual const std::set<CoreCoord> &ethernet_cores() const = 0;
+    virtual const std::set<CoreCoord> &storage_only_cores() const = 0;
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual const JitBuildEnv& build_env() const = 0;
-    virtual const string build_firmware_target_path(
-        uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const string build_kernel_target_path(
-        uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const = 0;
-    virtual const JitBuildState& build_firmware_state(
-        uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildState& build_kernel_state(
-        uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildStateSubset build_kernel_states(
-        uint32_t programmable_core, uint32_t processor_class) const = 0;
+    virtual const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
+    virtual const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const = 0;
+    virtual const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
+    virtual const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
+    virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
     virtual HWCommandQueue& hw_command_queue(size_t cq_id = 0) = 0;
@@ -207,12 +193,7 @@ public:
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    virtual bool initialize(
-        const uint8_t num_hw_cqs,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) = 0;
+    virtual bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) = 0;
     virtual void build_firmware() = 0;
     virtual void reset_cores() = 0;
     virtual void initialize_and_launch_firmware() = 0;
@@ -246,8 +227,7 @@ public:
     template <typename T = DeviceAddr>
     T get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
-    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
-        const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
+    virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
     virtual bool dispatch_s_enabled() const = 0;
     virtual bool distributed_dispatcher() const = 0;
@@ -256,19 +236,17 @@ public:
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t noc_data_start_index(
-        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const = 0;
+    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const = 0;
 
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
-    virtual SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+    virtual SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
-    virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
-    virtual const std::vector<SubDeviceId>& get_sub_device_stall_group() const = 0;
+    virtual const std::vector<SubDeviceId> &get_sub_device_ids() const = 0;
+    virtual const std::vector<SubDeviceId> &get_sub_device_stall_group() const = 0;
     virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
