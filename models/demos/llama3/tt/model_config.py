@@ -229,7 +229,9 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
         self.dummy_weights = dummy_weights
-        self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
+        self.tile_padded_batch_rows = self.tile_size * int(
+            math.ceil((self.max_batch_size / self.num_devices_dp) / self.tile_size)
+        )
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
@@ -471,29 +473,29 @@ class TtModelArgs:
             )
 
             # Useful core grid based on batch size
-            if self.max_batch_size == 32:
-                grid_by_batch = (8, 4)
-            elif self.max_batch_size == 16:
-                grid_by_batch = (8, 2)
-            elif self.max_batch_size == 8:
-                grid_by_batch = (8, 1)
-            elif self.max_batch_size == 4:
-                grid_by_batch = (4, 1)
-            elif self.max_batch_size == 2:
-                grid_by_batch = (2, 1)
-            elif self.max_batch_size == 1:
-                grid_by_batch = (1, 1)
-            else:
-                raise ValueError(f"Batch size {self.max_batch_size} not supported")
-            core_grid_by_batch = ttnn.CoreGrid(y=grid_by_batch[1], x=grid_by_batch[0])
-            core_range_set_by_batch = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
-                    ),
-                }
-            )
+            # if self.max_batch_size == 32:
+            #     grid_by_batch = (8, 4)
+            # elif self.max_batch_size == 16:
+            #     grid_by_batch = (8, 2)
+            # elif self.max_batch_size == 8:
+            #     grid_by_batch = (8, 1)
+            # elif self.max_batch_size == 4:
+            #     grid_by_batch = (4, 1)
+            # elif self.max_batch_size == 2:
+            #     grid_by_batch = (2, 1)
+            # elif self.max_batch_size == 1:
+            #     grid_by_batch = (1, 1)
+            # else:
+            #     raise ValueError(f"Batch size {self.max_batch_size} not supported")
+            # core_grid_by_batch = ttnn.CoreGrid(y=grid_by_batch[1], x=grid_by_batch[0])
+            # core_range_set_by_batch = ttnn.CoreRangeSet(
+            #     {
+            #         ttnn.CoreRange(
+            #             ttnn.CoreCoord(0, 0),
+            #             ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
+            #         ),
+            #     }
+            # )
 
             self.model_config[
                 "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
@@ -504,18 +506,18 @@ class TtModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    core_range_set_by_batch,
-                    [
-                        128,
-                        128,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
+            # self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
+            #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            #     ttnn.BufferType.L1,
+            #     ttnn.ShardSpec(
+            #         core_range_set_by_batch,
+            #         [
+            #             128,
+            #             128,
+            #         ],
+            #         ttnn.ShardOrientation.ROW_MAJOR,
+            #     ),
+            # )
 
             # MLP configs
             mlp_core_grid = (
@@ -894,13 +896,18 @@ class TtModelArgs:
             return ttnn.Topology.Linear
         return None
 
-    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False):
+    def prepare_residual_tensor_decode(self, x, input_mem_cfg, force_replicated=False, on_host=False, data_parallel=1):
         """
         Prepare inputs for decode mode.
         x: (batch, seq, dim)
         """
-        dims = (None, None) if force_replicated else (None, -1)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
+        if data_parallel > 1:
+            dims = (2, None)
+        else:
+            dims = (None, None) if force_replicated else (None, -1)
+        mesh_mapper = ttnn.ShardTensor2dMesh(
+            self.mesh_device, dims=dims, mesh_shape=self.cluster_shape
+        )  # DP: shard on batch
 
         if len(x.shape) == 3:
             batch = x.shape[0]
@@ -913,6 +920,7 @@ class TtModelArgs:
             assert x.shape[3] == self.dim
 
         assert seq_len == 1, "Only supporting decode mode"
+        assert batch % data_parallel == 0, "Only supporting data parallel with batch divisible by number of devices"
 
         # Support input on device
         if torch.is_tensor(x):  # Input on host -> Use torch
@@ -920,8 +928,15 @@ class TtModelArgs:
             # Pad small batches to 32
             if batch < 32:
                 zeros = torch.zeros(1, seq_len, 32, self.dim)
-                zeros[:, :, :batch, :] = x
-                x = zeros
+                if data_parallel > 1:
+                    padded_batch = []
+                    for chunk in torch.chunk(x, data_parallel, 2):
+                        zeros[:, :, : (batch // data_parallel), :] = chunk
+                        padded_batch.append(zeros.clone())
+                    x = torch.cat(padded_batch, dim=2)
+                else:
+                    zeros[:, :, :batch, :] = x
+                    x = zeros
         elif len(x.shape) == 3:  # Input on device -> Use ttnn
             x = ttnn.reshape(x, (batch, seq_len, 1, self.dim))  # [batch, seqlen, dim] -> [batch, seqlen, 1, dim]
             x = ttnn.permute(x, (1, 2, 0, 3))  # [seq_len, 1, batch, dim]
