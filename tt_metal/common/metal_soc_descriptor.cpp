@@ -114,15 +114,8 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const {
-    TT_FATAL(
-        (logical_coord.x < this->worker_grid_size.x) and (logical_coord.y < this->worker_grid_size.y),
-        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
-        logical_coord.str(),
-        this->worker_grid_size.str());
-
-    CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::VIRTUAL : CoordSystem::PHYSICAL;
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
+        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
     return {physical_coord.x, physical_coord.y};
 }
 
@@ -263,8 +256,11 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         }
         int physical_y_coord = *virtual_y_coord_it;
         virtual_y_coord_it++;
+        // This branch will never be executed for Grayskull, but for completeness keeping it in here.
+        // This will go away in the next PR anyway.
+        CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
         tt::umd::CoreCoord virtual_coord =
-            translate_coord_to({0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::VIRTUAL);
+            translate_coord_to({0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
         virtual_routing_to_physical_routing_y.insert({virtual_coord.y, physical_y_coord});
     }
 
