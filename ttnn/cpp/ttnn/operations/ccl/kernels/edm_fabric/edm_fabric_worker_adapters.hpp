@@ -35,6 +35,8 @@ struct WorkerToFabricEdmSender {
         auto const edm_buffer_index_addr = get_arg_val<uint32_t>(arg_idx++);
         auto writer_send_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
+        auto worker_teardown_sem_addr =
+            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         auto const worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         ASSERT(
             (my_core_type == ProgrammableCoreType::TENSIX && worker_buffer_index_semaphore_addr < 1499136) ||
@@ -55,6 +57,7 @@ struct WorkerToFabricEdmSender {
             buffer_size_bytes,
             edm_buffer_index_addr,
             writer_send_sem_addr,
+            worker_teardown_sem_addr,
             worker_buffer_index_semaphore_addr);
     }
 
@@ -70,6 +73,7 @@ struct WorkerToFabricEdmSender {
         uint16_t buffer_size_bytes,
         size_t edm_buffer_index_id,
         volatile uint32_t* const worker_sem_addr,
+        volatile uint32_t* const worker_teardown_addr,
         uint32_t local_buffer_index_addr) :
         edm_buffer_addr(edm_buffer_base_addr),
         edm_semaphore_addr(
@@ -84,6 +88,7 @@ struct WorkerToFabricEdmSender {
             connected_to_persistent_fabric ? edm_buffer_index_id
                                            : get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(edm_buffer_index_id)),
         worker_sem_addr(worker_sem_addr),
+        worker_teardown_addr(worker_teardown_addr),
         edm_buffer_base_addr(edm_buffer_base_addr),
         buffer_index_ptr(reinterpret_cast<size_t*>(local_buffer_index_addr)),
         buffer_size_bytes(buffer_size_bytes),
@@ -147,8 +152,9 @@ struct WorkerToFabricEdmSender {
         const uint64_t dest_edm_location_info_addr = dest_noc_addr_coord_only | edm_worker_location_info_addr;
         // TODO: Need to change byte enable to be word enable
         noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(worker_sem_addr));
+        noc_inline_dw_write(dest_edm_location_info_addr + sizeof(uint32_t), reinterpret_cast<size_t>(worker_teardown_addr));
         noc_inline_dw_write(
-            dest_edm_location_info_addr + sizeof(uint32_t), ttnn::ccl::WorkerXY(my_x[0], my_y[0]).to_uint32());
+            dest_edm_location_info_addr + 2 * sizeof(uint32_t), ttnn::ccl::WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
@@ -167,13 +173,8 @@ struct WorkerToFabricEdmSender {
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_index_ptr);
 
-        // Need to wait for the ack from edm
-        // We wait min because there is currently a race with worker <-> EDM teardown
-        // that will cause this to sometimes reach a value of 2 (because of the race)
-        // A proper fix requires for example adding an additional teardown semaphore on the
-        // worker side that the EDM writes to to acknowledge teardown. The problem here
-        // is that the flow control aliases the teardown.
-        noc_semaphore_wait_min(this->worker_sem_addr, 1);
+        // Need to wait for the ack to teardown notice, from edm
+        noc_semaphore_wait(this->worker_teardown_addr, 1);
 
         noc_async_write_barrier();
     }
@@ -184,6 +185,7 @@ struct WorkerToFabricEdmSender {
     size_t edm_worker_location_info_addr;
     size_t edm_buffer_index_addr;
     volatile uint32_t* worker_sem_addr;
+    volatile uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
     size_t* buffer_index_ptr;
     uint16_t buffer_size_bytes;
