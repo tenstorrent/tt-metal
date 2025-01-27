@@ -109,7 +109,8 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
                 continue;
             }
 
-            shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input.get_padded_shape()[i]));
+            shape.push_back(
+                (is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input.get_padded_shape()[i]));
             pad_dimensions.push_back(
                 (is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
         }
