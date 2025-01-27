@@ -14,6 +14,7 @@ on:
   workflow_run:
     workflows:
       - "All post-commit tests"
+      - "(Single-card) Tests for new models"
     types:
       - completed
 
