@@ -5,16 +5,7 @@ We'll build a program that will perform matmul operations on two tensors with eq
 The full example program is in
 [matmul_single_core.cpp](../../../tt_metal/programming_examples/matmul_single_core/matmul_single_core.cpp)
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
-Run the appropriate command for the Tenstorrent card you have installed:
-
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
+To build and execute, you may use the following commands:
 Then run the following:
 ```bash
     export TT_METAL_HOME=$(pwd)

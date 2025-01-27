@@ -5,17 +5,7 @@ We now build a program that will perform eltwise binary operations on a some equ
 
 We'll go through any new code section by section. This builds on top of previous examples. Note that we have this exact, full example program in [eltwise_binary.cpp](../../../tt_metal/programming_examples/eltwise_binary/eltwise_binary.cpp), so you can follow along.
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
-Run the appropriate command for the Tenstorrent card you have installed:
-
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-Then run the following:
+To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples

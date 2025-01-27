@@ -13,15 +13,7 @@ In this example, we will implement a basic TT-Metalium program for padding an in
 
 The code for this program can be found in [pad_multi_core.cpp](../../../tt_metal/programming_examples/pad/pad_multi_core.cpp).
 
-The following commands will build and execute the code for this example. Environment variables may be modified based on the latest specifications.
-Run the appropriate command for the Tenstorrent card you have installed:
-
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
+To build and execute, you may use the following commands:
 Then run the following:
 ```bash
     export TT_METAL_HOME=$(pwd)
