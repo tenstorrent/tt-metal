@@ -9,7 +9,7 @@
 
 2. Setup the host program:
 ```Device *device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+HWCommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```

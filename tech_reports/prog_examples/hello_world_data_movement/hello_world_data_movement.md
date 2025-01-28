@@ -26,11 +26,11 @@ The initial setup for this example follows the same pattern for the compute kern
 ## Program pre-compilation setup
 
 ``` cpp
-CommandQueue& cq = device->command_queue();
+HWCommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 ```
 
-Then, we obtain the device's `CommandQueue` in order to allow commands to be dispatched for execution. The `Program` is initialized to encapsulate the kernels and data.
+Then, we obtain the device's `HWCommandQueue` in order to allow commands to be dispatched for execution. The `Program` is initialized to encapsulate the kernels and data.
 
 ## Building data movement kernels
 
@@ -73,7 +73,7 @@ simply prints two statements from each of the RISC-V processors involved with da
 
 ## Configure and execute program on device
 
-We set the runtime arguments for each kernel separately, before dispatching the program to the `CommandQueue` for execution on the device using `EnqueueProgram()`. Both kernels will run on core `{0, 0}`, each utilizing different NoC systems.
+We set the runtime arguments for each kernel separately, before dispatching the program to the `HWCommandQueue` for execution on the device using `EnqueueProgram()`. Both kernels will run on core `{0, 0}`, each utilizing different NoC systems.
 
 ``` cpp
 SetRuntimeArgs(program, void_dataflow_kernel_noc0_id, core, {});

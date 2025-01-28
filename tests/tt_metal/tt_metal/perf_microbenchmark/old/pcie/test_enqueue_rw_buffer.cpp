@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
         // Device Setup
         log_info(LogTest, "Running test using device ID {}", device_id);
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-        CommandQueue& cq = device->command_queue();
+        HWCommandQueue& cq = device->command_queue();
 
         log_info(
             LogTest,

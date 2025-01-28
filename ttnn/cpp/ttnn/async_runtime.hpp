@@ -26,13 +26,13 @@ void read_buffer(
     size_t src_offset = 0,
     bool blocking = true);
 
-void queue_synchronize(CommandQueue& cq);
+void queue_synchronize(HWCommandQueue& cq);
 
 void event_synchronize(const std::shared_ptr<Event>& event);
 
 bool event_query(const std::shared_ptr<Event>& event);
 
-void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
+void wait_for_event(HWCommandQueue& cq, const std::shared_ptr<Event>& event);
 
-void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event);
+void record_event(HWCommandQueue& cq, const std::shared_ptr<Event>& event);
 }  // namespace ttnn

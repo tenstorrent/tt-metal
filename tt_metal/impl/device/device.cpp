@@ -954,11 +954,9 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
-    hw_command_queues_.reserve(num_hw_cqs());
-    sw_command_queues_.reserve(num_hw_cqs());
+    command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
-        sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
+        command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
     }
 }
 
@@ -989,7 +987,7 @@ void Device::init_command_queue_device() {
         }
     }
 
-    for (auto& hw_cq : this->hw_command_queues_) {
+    for (auto& hw_cq : this->command_queues_) {
         hw_cq->set_num_worker_sems_on_dispatch(
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices());
         hw_cq->set_go_signal_noc_data_on_dispatch(
@@ -998,13 +996,15 @@ void Device::init_command_queue_device() {
 }
 
 void Device::initialize_synchronous_sw_cmd_queue() {
+    TT_THROW("Slow Dispatch is not supported in this change. Help needed to make it right 😱");
+
     // Initialize a single Software Command Queue for SD, using passthrough mode.
     // This queue is used for all host bound functions using the Software CQ in SD mode.
-    sw_command_queues_.reserve(num_hw_cqs());
-    for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        sw_command_queues_.push_back(
-            std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
-    }
+    // sw_command_queues_.reserve(num_hw_cqs());
+    // for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
+    //     sw_command_queues_.push_back(
+    //         std::make_unique<HWCommandQueue>(this, cq_id, HWCommandQueue::CommandQueueMode::PASSTHROUGH));
+    // }
 }
 
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
@@ -1066,7 +1066,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<HWCommandQueue> &hw_command_queue : hw_command_queues_) {
+    for (const std::unique_ptr<HWCommandQueue>& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
@@ -1126,8 +1126,7 @@ bool Device::close() {
     this->ethernet_cores_.clear();
     this->disable_and_clear_program_cache();
     this->command_queue_programs_.clear();
-    this->sw_command_queues_.clear();
-    this->hw_command_queues_.clear();
+    this->command_queues_.clear();
     this->sysmem_manager_.reset();
     this->initialized_ = false;
 
@@ -1503,18 +1502,11 @@ const string Device::build_kernel_target_path(uint32_t programmable_core, uint32
     return bs.get_target_out_path(kernel_name);
 }
 
-HWCommandQueue& Device::hw_command_queue(size_t cq_id) {
-    detail::DispatchStateCheck(true);
-    TT_FATAL( cq_id < hw_command_queues_.size(), "cq_id {} is out of range", cq_id );
-    TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *hw_command_queues_[cq_id];
-}
-
-CommandQueue &Device::command_queue(size_t cq_id) {
+HWCommandQueue& Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
-    TT_FATAL( cq_id < sw_command_queues_.size(), "cq_id {} is out of range", cq_id );
+    TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");
-    return *sw_command_queues_[cq_id];
+    return *command_queues_[cq_id];
 }
 
 bool Device::can_use_passthrough_scheduling() const {
@@ -1558,7 +1550,11 @@ bool Device::using_fast_dispatch() const {
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(!this->hw_command_queues_[cq_id]->get_tid().has_value(), "CQ {} is already being used for tracing tid {}", (uint32_t)cq_id, tid);
+    TT_FATAL(
+        !this->command_queues_[cq_id]->tid().has_value(),
+        "CQ {} is already being used for tracing tid {}",
+        (uint32_t)cq_id,
+        tid);
     this->mark_allocations_safe();
     // Create an empty trace buffer here. This will get initialized in end_trace
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
@@ -1569,13 +1565,14 @@ void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
         this->id_,
         active_sub_device_manager->id());
     auto& trace_buffer = active_sub_device_manager->create_trace(tid);
-    this->hw_command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
+    this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     ZoneScoped;
     TracyTTMetalEndTrace(this->id(), tid);
-    TT_FATAL(this->hw_command_queues_[cq_id]->get_tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
+    TT_FATAL(
+        this->command_queues_[cq_id]->tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     auto trace_buffer = active_sub_device_manager->get_trace(tid);
     TT_FATAL(
@@ -1584,7 +1581,7 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
         tid,
         this->id_,
         active_sub_device_manager->id());
-    this->hw_command_queues_[cq_id]->record_end();
+    this->command_queues_[cq_id]->record_end();
     Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
     this->mark_allocations_unsafe();
 }
@@ -1720,7 +1717,7 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return this->hw_command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
+    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
 }
 
 // Main source to get NOC idx for dispatch core

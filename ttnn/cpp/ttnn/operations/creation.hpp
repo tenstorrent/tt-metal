@@ -137,11 +137,7 @@ static Tensor full_impl(
         for (auto* buffer : buffers) {
             if (using_fast_dispatch) {
                 auto& cmd_queue = buffer->device()->command_queue(queue_id);
-                if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
-                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.get_ptr(), /*blocking=*/false);
-                } else {
-                    tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
-                }
+                tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
             } else {
                 tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
             }

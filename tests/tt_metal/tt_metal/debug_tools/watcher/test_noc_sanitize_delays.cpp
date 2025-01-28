@@ -108,7 +108,7 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
         std::vector<uint32_t> expected_vec = create_constant_vector_of_bfloat16(DRAM_BUFFER_SIZE, 0.0f);
         inc_populate(expected_vec, start_from + constant);
 
-        CommandQueue& cq = device->command_queue();
+        HWCommandQueue& cq = device->command_queue();
 
         EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
         EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);

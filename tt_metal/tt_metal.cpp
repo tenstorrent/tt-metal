@@ -240,7 +240,7 @@ inline void SetRuntimeArgsImpl(
 }
 
 inline void SetRuntimeArgsImpl(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     const std::shared_ptr<Kernel> kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::shared_ptr<RuntimeArgs> runtime_args,
@@ -271,7 +271,7 @@ inline void SetRuntimeArgsImpl(
 }
 
 inline void SetRuntimeArgsImpl(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     const std::shared_ptr<Kernel>& kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::shared_ptr<RuntimeArgs>>& runtime_args,
@@ -1267,10 +1267,6 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast "
-        "Dispatch.");
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
@@ -1280,10 +1276,6 @@ void SetRuntimeArgs(
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     ZoneScoped;
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "This variant of SetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast "
-        "Dispatch.");
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mistmatch between number of cores {} and number of runtime args {} getting updated",
@@ -1320,33 +1312,20 @@ void SetRuntimeArgs(
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "This variant of SetCommonRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for "
-        "Fast Dispatch.");
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
 }
 
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id) {
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->runtime_args_data();
 }
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
-    TT_FATAL(
-        not CommandQueue::async_mode_set(),
-        "GetRuntimeArgs can only be called when Asynchronous SW Command Queues are disabled for Fast Dispatch.");
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
 }
 

@@ -28,7 +28,7 @@ public:
 
     // Thread-safe accessors to manage trace instances
     static void validate_instance(const TraceBuffer& trace_buffer);
-    static void initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer);
+    static void initialize_buffer(HWCommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer);
     static std::shared_ptr<TraceBuffer> create_empty_trace_buffer();
 };
 

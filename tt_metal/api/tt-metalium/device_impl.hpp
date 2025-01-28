@@ -168,8 +168,7 @@ public:
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    HWCommandQueue& hw_command_queue(size_t cq_id = 0) override;
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    HWCommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
@@ -302,8 +301,7 @@ private:
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
-    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+    std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;

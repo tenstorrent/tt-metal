@@ -162,8 +162,7 @@ public:
     const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
     SystemMemoryManager& sysmem_manager() override;
-    HWCommandQueue& hw_command_queue(size_t cq_id = 0) override;
-    CommandQueue& command_queue(size_t cq_id = 0) override;
+    HWCommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;

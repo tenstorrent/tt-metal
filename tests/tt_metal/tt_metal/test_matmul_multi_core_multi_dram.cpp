@@ -297,7 +297,7 @@ std::vector<bfloat16> get_col_slice(
     return result;
 }
 
-bool move_tiles_to_dram(CommandQueue& cq, Buffer& buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
+bool move_tiles_to_dram(HWCommandQueue& cq, Buffer& buffer, std::vector<uint32_t> tensor, int tiles_r, int tiles_c) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int tile_size_bytes = 32 * 32 * 2;
@@ -391,7 +391,7 @@ int main(int argc, char** argv) {
             per_core_M,
             per_core_N);
 
-        CommandQueue& cq = device->command_queue();
+        HWCommandQueue& cq = device->command_queue();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application

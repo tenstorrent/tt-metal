@@ -1,4 +1,4 @@
-CommandQueue
+HWCommandQueue
 ============
 
 .. toctree::
