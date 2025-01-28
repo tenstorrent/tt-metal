@@ -31,17 +31,17 @@ BcastToKernelConfig::BcastToKernelConfig(SubtileBroadcastType subtile_broadcast_
 
         case SubtileBroadcastType::SCALAR:
             reader_kernel = KernelName::ReaderScalarBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterScalarBcast;
             break;
 
         case SubtileBroadcastType::ROW:
             reader_kernel = KernelName::ReaderRowBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterRowBcast;
             break;
 
         case SubtileBroadcastType::COL:
             reader_kernel = KernelName::ReaderColBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterColBcast;
             break;
     }
 }
