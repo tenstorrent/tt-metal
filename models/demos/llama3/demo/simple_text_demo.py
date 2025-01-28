@@ -174,7 +174,7 @@ def create_tt_model(
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -187,6 +187,7 @@ def create_tt_model(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
+            False,  # ci_only
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -199,6 +200,7 @@ def create_tt_model(
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
+            False,  # ci_only
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -211,12 +213,41 @@ def create_tt_model(
             {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
+            False,  # ci_only
+        ),
+        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            1,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
+        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            8192,  # max_seq_len
+            32,  # batch_size
+            4096,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
         ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context",  # max-length
+        "ci-1",  # CI batch 1
+        "ci-32",  # CI batch 32
     ],
 )
 @pytest.mark.parametrize(
@@ -251,12 +282,21 @@ def test_llama_demo_text(
     mesh_device,
     use_program_cache,
     is_ci_env,
+    ci_only,
     reset_seeds,
     request,
 ):
     """
     Simple Llama demo with limited dependence on reference code.
     """
+
+    if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
+        pytest.skip("CI only runs the CI-only tests")
+
+    # TODO: Remove this once all batch sizes are supported on TG
+    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
+        pytest.skip("TG only supports batch 1 and 32")
+
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
@@ -671,6 +711,18 @@ def test_llama_demo_text(
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
         bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
+
+        # Save the decode performance of every iteration for plotting in superset
+        for i in range(1, iteration):
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                f"time_to_token_{i}",
+                profiler.get_duration(f"inference_decode_time_{i}") * 1000,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
 
         benchmark_data.save_partial_run_json(
             profiler,
