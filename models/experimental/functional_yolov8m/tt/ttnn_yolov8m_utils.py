@@ -33,11 +33,13 @@ def autopad(k, p=None, d=1):
 
 def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
     lt, rb = ttnn.split(distance, 2, 1)
-    lt = ttnn.to_layout(lt, ttnn.TILE_LAYOUT)
-    rb = ttnn.to_layout(rb, ttnn.TILE_LAYOUT)
+    lt = ttnn.to_layout(lt, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    rb = ttnn.to_layout(rb, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     x1y1 = anchor_points - lt
     x2y2 = anchor_points + rb
+    ttnn.deallocate(lt)
+    ttnn.deallocate(rb)
     if xywh:
         c_xy = x1y1 + x2y2
         c_xy = ttnn.div(c_xy, 2)
