@@ -207,9 +207,18 @@ def bert(
     *,
     parameters,
 ):
+    if input_ids.is_sharded():
+        input_ids = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
     word_embeddings = ttnn.embedding(input_ids, parameters.embeddings.word_embeddings.weight)
+
+    if token_type_ids.is_sharded():
+        token_type_ids = ttnn.sharded_to_interleaved(token_type_ids, ttnn.L1_MEMORY_CONFIG)
     token_type_embeddings = ttnn.embedding(token_type_ids, parameters.embeddings.token_type_embeddings.weight)
+
+    if position_ids.is_sharded():
+        position_ids = ttnn.sharded_to_interleaved(position_ids, ttnn.L1_MEMORY_CONFIG)
     position_embeddings = ttnn.embedding(position_ids, parameters.embeddings.position_embeddings.weight)
+
     word_embeddings = ttnn.to_layout(word_embeddings, ttnn.TILE_LAYOUT)
     token_type_embeddings = ttnn.to_layout(token_type_embeddings, ttnn.TILE_LAYOUT)
     position_embeddings = ttnn.to_layout(position_embeddings, ttnn.TILE_LAYOUT)

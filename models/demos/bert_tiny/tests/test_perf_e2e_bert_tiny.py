@@ -16,7 +16,7 @@ from models.demos.bert_tiny.tests.perf_e2e_bert_tiny import run_perf_bert_tiny
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time, sequence_size",
-    ((8, 0.004, 30, 128),),
+    ((16, 0.004, 30, 128),),
 )
 def test_perf_trace_2cqs(
     device,

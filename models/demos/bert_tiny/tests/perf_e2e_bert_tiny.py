@@ -86,6 +86,7 @@ def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurem
     ttnn.dump_device_profiler(device)
 
 
+"""
 def run_trace_2cq_model(
     device,
     tt_inputs,
@@ -214,6 +215,7 @@ def run_trace_2cq_model(
     ttnn.dump_device_profiler(device)
 
     ttnn.release_trace(device, tid)
+"""
 
 
 def run_perf_bert_tiny(
@@ -231,12 +233,13 @@ def run_perf_bert_tiny(
     is_mesh_device = isinstance(device, ttnn.MeshDevice)
     num_devices = device.get_num_devices() if is_mesh_device else 1
     batch_size = device_batch_size * num_devices
-    first_key = f"first_iter_batchsize{batch_size}"
-    second_key = f"second_iter_batchsize{batch_size}"
-    cpu_key = f"ref_key_batchsize{batch_size}"
+    # first_key = f"first_iter_batchsize{batch_size}"
+    # second_key = f"second_iter_batchsize{batch_size}"
+    # cpu_key = f"ref_key_batchsize{batch_size}"
     model_name = "mrm8488/bert-tiny-finetuned-squadv2"
 
     config = BertConfig.from_pretrained(model_name)
+    """
     torch_bert_tiny = BertForQuestionAnswering.from_pretrained(model_name, config=config).eval()
 
     torch_input_ids = torch.randint(0, config.vocab_size, (batch_size, sequence_size)).to(torch.int32)
@@ -245,7 +248,7 @@ def run_perf_bert_tiny(
     torch_attention_mask = torch.zeros(1, sequence_size)
 
     comments = f"Bert-Tiny_{batch_size}_sequence_size_{sequence_size}"
-
+    """
     test_infra = create_test_infra(
         device,
         device_batch_size,
@@ -258,6 +261,281 @@ def run_perf_bert_tiny(
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.synchronize_devices(device)
+
+    (
+        inputs_host,
+        token_type_ids,
+        position_ids,
+        attention_mask,
+        sharded_mem_config_DRAM,
+        input_mem_config,
+    ) = test_infra.setup_dram_sharded_input(device)
+    print(sharded_mem_config_DRAM)
+    print("---------------------")
+    print(input_mem_config)
+    tt_inputs_host = inputs_host.to(device, sharded_mem_config_DRAM)
+    tt_token_type_ids = token_type_ids.to(device, sharded_mem_config_DRAM)
+    tt_position_ids = position_ids.to(device, sharded_mem_config_DRAM)
+    tt_attention_mask = attention_mask.to(device, sharded_mem_config_DRAM)
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
+    # Initialize the op event so we can write
+    ttnn.record_event(0, op_event)
+
+    # First run configures convs JIT
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(inputs_host, tt_inputs_host, 1)
+    ttnn.copy_host_to_device_tensor(token_type_ids, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(position_ids, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(attention_mask, tt_attention_mask, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input = ttnn.to_memory_config(tt_inputs_host, input_mem_config)
+    test_infra.token_type = ttnn.to_memory_config(tt_token_type_ids, input_mem_config)
+    test_infra.position = ttnn.to_memory_config(tt_position_ids, input_mem_config)
+    test_infra.attention = ttnn.to_memory_config(tt_attention_mask, input_mem_config)
+
+    shape = test_infra.input.shape
+    dtype = test_infra.input.dtype
+    layout = test_infra.input.layout
+    att_shape = test_infra.attention.shape
+    ttnn.record_event(0, op_event)
+    test_infra.run()
+    test_infra.validate()
+    test_infra.output_tensor.deallocate(force=True)
+
+    # Optimized run
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(inputs_host, tt_inputs_host, 1)
+    ttnn.copy_host_to_device_tensor(token_type_ids, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(position_ids, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(attention_mask, tt_attention_mask, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input = ttnn.to_memory_config(tt_inputs_host, input_mem_config)
+    test_infra.token_type = ttnn.to_memory_config(tt_token_type_ids, input_mem_config)
+    test_infra.position = ttnn.to_memory_config(tt_position_ids, input_mem_config)
+    test_infra.attention = ttnn.to_memory_config(tt_attention_mask, input_mem_config)
+    ttnn.record_event(0, op_event)
+    test_infra.run()
+    test_infra.validate()
+
+    # Capture
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(inputs_host, tt_inputs_host, 1)
+    ttnn.copy_host_to_device_tensor(token_type_ids, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(position_ids, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(attention_mask, tt_attention_mask, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input = ttnn.to_memory_config(tt_inputs_host, input_mem_config)
+    test_infra.token_type = ttnn.to_memory_config(tt_token_type_ids, input_mem_config)
+    test_infra.position = ttnn.to_memory_config(tt_position_ids, input_mem_config)
+    test_infra.attention = ttnn.to_memory_config(tt_attention_mask, input_mem_config)
+    ttnn.record_event(0, op_event)
+    test_infra.output_tensor.deallocate(force=True)
+    trace_input_addr = ttnn.buffer_address(test_infra.input)
+    trace_token_type_addr = ttnn.buffer_address(test_infra.token_type)
+    trace_position_ids_addr = ttnn.buffer_address(test_infra.position)
+    trace_attention_mask_addr = ttnn.buffer_address(test_infra.attention)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    test_infra.run()
+    input = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+
+    tok_type = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+
+    pos_id = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+
+    at_mask = ttnn.allocate_tensor_on_device(
+        att_shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    print("***********")
+    print(trace_input_addr, " ", ttnn.buffer_address(input))
+    print(trace_token_type_addr, " ", ttnn.buffer_address(tok_type))
+    print(trace_position_ids_addr, " ", ttnn.buffer_address(pos_id))
+    print(trace_attention_mask_addr, " ", ttnn.buffer_address(at_mask))
+    print("***********")
+    print()
+    assert trace_input_addr == ttnn.buffer_address(input)
+    assert trace_token_type_addr == ttnn.buffer_address(tok_type)
+    assert trace_position_ids_addr == ttnn.buffer_address(pos_id)
+    assert trace_attention_mask_addr == ttnn.buffer_address(at_mask)
+
+    if use_signpost:
+        signpost(header="start")
+    outputs = []
+
+    for iter in range(0, 2):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(inputs_host, tt_inputs_host, 1)
+        ttnn.copy_host_to_device_tensor(token_type_ids, tt_token_type_ids, 1)
+        ttnn.copy_host_to_device_tensor(position_ids, tt_position_ids, 1)
+        ttnn.copy_host_to_device_tensor(attention_mask, tt_attention_mask, 1)
+
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+
+        input = ttnn.reshard(tt_inputs_host, input_mem_config, input)
+        tok_type = ttnn.reshard(tt_token_type_ids, input_mem_config, tok_type)
+        pos_id = ttnn.reshard(tt_position_ids, input_mem_config, pos_id)
+        at_mask = ttnn.reshard(tt_attention_mask, input_mem_config, at_mask)
+
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        outputs.append(ttnn.from_device(test_infra.output_tensor, blocking=False))
+        ttnn.synchronize_devices(device)
+
+    if use_signpost:
+        signpost(header="stop")
+    for output in outputs:
+        test_infra.validate(output)
+
+    ttnn.release_trace(device, tid)
+    """
+
+   (
+        tt_inputs_host,
+        tt_token_type_ids_host,
+        tt_position_ids_host,
+        tt_attention_mask_host,
+    ) = test_infra.setup_inputs(device)
+    tt_input_ids = tt_inputs_host.to(device)
+    tt_token_type_ids = tt_token_type_ids_host.to(device)
+    tt_position_ids = tt_position_ids_host.to(device)
+    tt_attention_mask = tt_attention_mask_host.to(device)
+
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
+    # Initialize the op event so we can write
+    ttnn.record_event(0, op_event)
+
+    profiler.start("compile")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_token_type_ids_host, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_position_ids_host, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_attention_mask_host, tt_attention_mask, 1)
+
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = tt_input_ids
+    test_infra.token_type_ids = tt_token_type_ids
+    test_infra.position_ids = tt_position_ids
+    test_infra.attention_mask = tt_attention_mask
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
+    ttnn.record_event(0, op_event)
+    _ = ttnn.from_device(test_infra.run(), blocking=True)
+    profiler.end("compile")
+
+    ttnn.dump_device_profiler(device)
+
+    profiler.start("cache")
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_token_type_ids_host, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_position_ids_host, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_attention_mask_host, tt_attention_mask, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+
+    test_infra.input_tensor = tt_input_ids
+    test_infra.token_type_ids = tt_token_type_ids
+    test_infra.position_ids = tt_position_ids
+    test_infra.attention_mask = tt_attention_mask
+    ttnn.record_event(0, op_event)
+    # Deallocate the previous output tensor here to make allocation match capture setup
+    # This allows us to allocate the input tensor after at the same address
+    test_infra.output_tensor.deallocate(force=True)
+    _ = ttnn.from_device(test_infra.run(), blocking=True)
+    profiler.end("cache")
+    ttnn.dump_device_profiler(device)
+
+    # Capture
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_token_type_ids_host, tt_token_type_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_position_ids_host, tt_position_ids, 1)
+    ttnn.copy_host_to_device_tensor(tt_attention_mask_host, tt_attention_mask, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+
+    test_infra.input_tensor = tt_input_ids
+    test_infra.token_type_ids = tt_token_type_ids
+    test_infra.position_ids = tt_position_ids
+    test_infra.attention_mask = tt_attention_mask
+    ttnn.record_event(0, op_event)
+    test_infra.output_tensor.deallocate(force=True)
+    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    tt_output_res = test_infra.run()
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    ttnn.dump_device_profiler(device)
+
+    for iter in range(0, num_warmup_iterations):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_token_type_ids_host, tt_token_type_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_position_ids_host, tt_position_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_attention_mask_host, tt_attention_mask, 1)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+        ttnn.dump_device_profiler(device)
+
+    ttnn.synchronize_devices(device)
+    if use_signpost:
+        signpost(header="start")
+    outputs = []
+    profiler.start(f"run")
+    for iter in range(0, num_measurement_iterations):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_input_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_token_type_ids_host, tt_token_type_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_position_ids_host, tt_position_ids, 1)
+        ttnn.copy_host_to_device_tensor(tt_attention_mask_host, tt_attention_mask, 1)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+        # TODO: Add in place support to ttnn to_memory_config
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+        outputs.append(tt_output_res.cpu(blocking=False))
+    ttnn.synchronize_devices(device)
+    profiler.end(f"run")
+    if use_signpost:
+        signpost(header="stop")
+    ttnn.dump_device_profiler(device)
+
+    ttnn.release_trace(device, tid)
+
+
 
     num_warmup_iterations = 5
     num_measurement_iterations = 15
@@ -306,3 +584,4 @@ def run_perf_bert_tiny(
         f"{model_name} {comments} inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"{model_name} compile time: {compile_time}")
+    """
