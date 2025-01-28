@@ -1681,12 +1681,18 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                     current_storage_core += 1;        // Move to next storage core
                     current_storage_core_offset = 0;  // Reset offset on new storage core
 
-                    assert(
-                        current_storage_core <=
-                        num_storage_cores);  //  Sanity check: should not exceed number of storage cores
+                    TT_ASSERT(
+                        current_storage_core <= num_storage_cores,
+                        "current_storage_core {} is exceeding number of storage cores {}",
+                        current_storage_core,
+                        num_storage_cores);
                 }
             }
-            assert(worker_core_current_offset == block_wt);  // Sanity check: all worker core data should be written
+            TT_ASSERT(
+                worker_core_current_offset == block_wt,
+                "All worker core data should be written, but worker_core_current_offset {} != block_wt {}",
+                worker_core_current_offset,
+                block_wt);
 
             write_back_writer_args.insert(write_back_writer_args.begin(), current_worker_num_segments_to_write_back);
         }

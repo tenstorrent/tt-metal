@@ -250,12 +250,8 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     auto output_shard_spec = this->output_mem_config.shard_spec.value();
                     auto input_shard_spec = input_tensor.shard_spec().value();
                     if (output_shard_spec != input_shard_spec) {
-                        std::cout << "output_shard_spec != input_shard_spec: " << std::endl;
                         output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
                     }
-
-                    tt::log_info("input shard spec {}", input_shard_spec);
-                    tt::log_info("output shard spec {}", output_shard_spec);
                 }
 
                 if (program_config.inplace) {
