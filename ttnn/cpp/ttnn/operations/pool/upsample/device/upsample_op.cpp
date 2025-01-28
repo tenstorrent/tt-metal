@@ -11,7 +11,6 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::upsample {
 using namespace tt;

@@ -11,7 +11,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/overloaded.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/run_operation.hpp"
