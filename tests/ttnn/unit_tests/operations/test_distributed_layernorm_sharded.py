@@ -105,8 +105,6 @@ def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsn
         inplace=False,
     )
 
-    print(f"compute_pre_allgather_stats: {tt_input_tensor.memory_config()}")
-
     if is_rmsnorm:
         return ttnn.rms_norm_pre_all_gather(
             tt_input_tensor, residual_input_tensor=residual_input_tensor, program_config=SHARDED_NORM_PRGM_CFG
@@ -127,7 +125,6 @@ def compute_post_allgather_output(
         block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         inplace=False,
     )
-    print(f"compute_post_allgather_output: {tt_input_tensor.memory_config()}")
 
     if is_rmsnorm:
         return ttnn.rms_norm_post_all_gather(
@@ -504,7 +501,6 @@ def test_simulated_distributed_layernorm(
     if output_core_grid is None:
         output_core_grid = core_grid
     out_memory_config = create_output_memory_config(output_core_grid, torch_input_chunks[0].shape)
-    print(out_memory_config)
 
     # Compute reference output
     torch_output_tensor = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
