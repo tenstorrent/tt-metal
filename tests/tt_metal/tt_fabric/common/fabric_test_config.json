@@ -1,0 +1,73 @@
+{
+    "fabric_test_config": [
+        {
+            "test_group_name": "benchmark",
+            "tests": [
+                {
+                    "test_name": "bandwidth_benchmark_1p_1c",
+                    "test_file": "test_tt_fabric_sanity",
+                    "perf_type": "bandwidth",
+                    "perf_units": "Bytes/cycle",
+                    "perf_tolerance": 0.05,
+                    "test_params": {
+                        "fabric_command": 1,
+                        "prng_seed": 100,
+                        "num_devices": 2,
+                        "num_hops": 1,
+                        "num_links": 1,
+                        "tx_skip_pkt_content_gen": true,
+                        "tx_pkt_dest_size_choice": 1,
+                        "num_packets": 5000,
+                        "num_src_endpoints": 1,
+                        "num_dest_endpoints": 1
+                    },
+                    "paramterize": {
+                        "max_packet_size_words": [64, 128, 256, 512]
+                    },
+                    "perf_expectation": [0.45, 0.9, 1.7, 2.7]
+                },
+                {
+                    "test_name": "bandwidth_benchmark_2p_2c",
+                    "test_file": "test_tt_fabric_sanity",
+                    "perf_type": "bandwidth",
+                    "perf_units": "Bytes/cycle",
+                    "perf_tolerance": 0.05,
+                    "test_params": {
+                        "fabric_command": 1,
+                        "prng_seed": 100,
+                        "num_devices": 2,
+                        "num_hops": 1,
+                        "num_links": 1,
+                        "tx_skip_pkt_content_gen": true,
+                        "tx_pkt_dest_size_choice": 1,
+                        "num_packets": 5000,
+                        "num_src_endpoints": 2,
+                        "num_dest_endpoints": 2
+                    },
+                    "paramterize": {
+                        "max_packet_size_words": [64, 128, 256, 512]
+                    },
+                    "perf_expectation": [0.65, 1.25, 2.5, 2.95]
+                }
+            ]
+        },
+        {
+            "test_group_name": "sanity",
+            "tests": [
+                {
+                    "test_name": "unicast_sanity",
+                    "test_file": "test_tt_fabric_sanity",
+                    "test_params": {
+                        "data_kb_per_tx": 10,
+                        "num_src_endpoints": 20,
+                        "num_dest_endpoints": 8,
+                        "num_links": 16
+                    },
+                    "paramterize": {
+                        "fabric_command": [1, 64, 65]
+                    }
+                }
+            ]
+        }
+    ]
+}
