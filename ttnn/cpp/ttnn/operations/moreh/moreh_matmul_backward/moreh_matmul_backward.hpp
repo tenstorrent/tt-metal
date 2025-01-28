@@ -30,7 +30,7 @@ struct MorehMatmulBackward {
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward
 
 namespace ttnn {
-constexpr auto moreh_matmul_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_matmul_backward = ttnn::register_operation<
     "ttnn::moreh_matmul_backward",
     ttnn::operations::moreh::moreh_matmul_backward::MorehMatmulBackward>();
 }  // namespace ttnn

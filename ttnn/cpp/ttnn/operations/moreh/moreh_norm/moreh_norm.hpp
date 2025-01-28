@@ -22,5 +22,5 @@ struct MorehNorm {
 
 namespace ttnn {
 constexpr auto moreh_norm =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_norm", ttnn::operations::moreh::moreh_norm::MorehNorm>();
+    ttnn::register_operation<"ttnn::moreh_norm", ttnn::operations::moreh::moreh_norm::MorehNorm>();
 }

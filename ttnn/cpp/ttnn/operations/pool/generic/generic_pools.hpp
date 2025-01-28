@@ -35,8 +35,7 @@ struct Pool2DOp {
 
 }  // namespace operations::pool
 
-constexpr auto max_pool2d = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::max_pool2d",
-    operations::pool::Pool2DOp<operations::pool::Pool2DType::MAX_POOL2D>>();
+constexpr auto max_pool2d = ttnn::
+    register_operation<"ttnn::max_pool2d", operations::pool::Pool2DOp<operations::pool::Pool2DType::MAX_POOL2D>>();
 
 }  // namespace ttnn

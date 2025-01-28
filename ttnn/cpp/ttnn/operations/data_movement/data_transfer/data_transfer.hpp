@@ -19,10 +19,9 @@ struct DataTransferToDeviceOperation {
 
 }  // namespace operations::data_movement
 
-constexpr auto data_transfer_to_host = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::data_transfer_to_host",
-    ttnn::operations::data_movement::DataTransferToHostOperation>();
-constexpr auto data_transfer_to_device = ttnn::register_operation_with_auto_launch_op<
+constexpr auto data_transfer_to_host = ttnn::
+    register_operation<"ttnn::data_transfer_to_host", ttnn::operations::data_movement::DataTransferToHostOperation>();
+constexpr auto data_transfer_to_device = ttnn::register_operation<
     "ttnn::data_transfer_to_device",
     ttnn::operations::data_movement::DataTransferToDeviceOperation>();
 

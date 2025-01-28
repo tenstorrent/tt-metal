@@ -20,5 +20,5 @@ struct MorehMean {
 
 namespace ttnn {
 constexpr auto moreh_mean =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_mean", ttnn::operations::moreh::moreh_mean::MorehMean>();
+    ttnn::register_operation<"ttnn::moreh_mean", ttnn::operations::moreh::moreh_mean::MorehMean>();
 }

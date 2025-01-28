@@ -22,5 +22,5 @@ struct MorehFold {
 
 namespace ttnn {
 constexpr auto moreh_fold =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_fold", ttnn::operations::moreh::moreh_fold::MorehFold>();
+    ttnn::register_operation<"ttnn::moreh_fold", ttnn::operations::moreh::moreh_fold::MorehFold>();
 }

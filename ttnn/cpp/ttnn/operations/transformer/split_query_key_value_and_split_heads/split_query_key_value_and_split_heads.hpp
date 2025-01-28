@@ -22,7 +22,7 @@ struct SplitQueryKeyValueAndSplitHeadsOperation {
 }  // namespace operations::transformer
 
 namespace transformer {
-constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation_with_auto_launch_op<
+constexpr auto split_query_key_value_and_split_heads = ttnn::register_operation<
     "ttnn::transformer::split_query_key_value_and_split_heads",
     ttnn::operations::transformer::SplitQueryKeyValueAndSplitHeadsOperation>();
 

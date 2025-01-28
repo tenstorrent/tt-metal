@@ -21,6 +21,6 @@ struct MorehArange {
 }  // namespace ttnn::operations::moreh::moreh_arange
 
 namespace ttnn {
-constexpr auto moreh_arange = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_arange", ttnn::operations::moreh::moreh_arange::MorehArange>();
+constexpr auto moreh_arange =
+    ttnn::register_operation<"ttnn::moreh_arange", ttnn::operations::moreh::moreh_arange::MorehArange>();
 }

@@ -24,7 +24,7 @@ struct CompositeExampleMutipleReturnOperation {
 }  // namespace ttnn::operations::examples
 
 namespace ttnn {
-constexpr auto composite_example_multiple_return = ttnn::register_operation_with_auto_launch_op<
+constexpr auto composite_example_multiple_return = ttnn::register_operation<
     "ttnn::composite_example_multiple_return",
     operations::examples::CompositeExampleMutipleReturnOperation>();
 }  // namespace ttnn

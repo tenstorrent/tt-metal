@@ -27,7 +27,7 @@ struct NLPCreateHeadsVitOperation {
 
 namespace experimental {
 
-constexpr auto nlp_create_qkv_heads_vit = ttnn::register_operation_with_auto_launch_op<
+constexpr auto nlp_create_qkv_heads_vit = ttnn::register_operation<
     "ttnn::experimental::nlp_create_qkv_heads_vit",
     ttnn::operations::experimental::transformer::NLPCreateHeadsVitOperation>();
 

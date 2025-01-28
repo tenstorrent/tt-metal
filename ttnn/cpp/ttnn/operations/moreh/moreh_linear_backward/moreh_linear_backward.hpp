@@ -43,7 +43,7 @@ struct MorehLinearBackward {
 }  // namespace ttnn::operations::moreh::moreh_linear_backward
 
 namespace ttnn {
-constexpr auto moreh_linear_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_linear_backward = ttnn::register_operation<
     "ttnn::moreh_linear_backward",
     ttnn::operations::moreh::moreh_linear_backward::MorehLinearBackward>();
 }

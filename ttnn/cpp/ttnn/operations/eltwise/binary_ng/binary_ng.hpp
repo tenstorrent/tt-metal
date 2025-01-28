@@ -122,183 +122,183 @@ struct InplaceBinaryNg {
 }  // namespace ttnn::operations::binary_ng
 
 namespace ttnn::experimental {
-constexpr auto add = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add = ttnn::register_operation<
     "ttnn::experimental::add",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
 
-constexpr auto sub = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sub = ttnn::register_operation<
     "ttnn::experimental::sub",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
 
-constexpr auto rsub = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rsub = ttnn::register_operation<
     "ttnn::experimental::rsub",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::RSUB>>();
 
-constexpr auto mul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mul = ttnn::register_operation<
     "ttnn::experimental::mul",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
 
-constexpr auto div = ttnn::register_operation_with_auto_launch_op<
+constexpr auto div = ttnn::register_operation<
     "ttnn::experimental::div",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::DIV>>();
 
-constexpr auto eq = ttnn::register_operation_with_auto_launch_op<
+constexpr auto eq = ttnn::register_operation<
     "ttnn::experimental::eq",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::EQ>>();
 
-constexpr auto ne = ttnn::register_operation_with_auto_launch_op<
+constexpr auto ne = ttnn::register_operation<
     "ttnn::experimental::ne",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::NE>>();
 
-constexpr auto gt = ttnn::register_operation_with_auto_launch_op<
+constexpr auto gt = ttnn::register_operation<
     "ttnn::experimental::gt",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::GT>>();
 
-constexpr auto gte = ttnn::register_operation_with_auto_launch_op<
+constexpr auto gte = ttnn::register_operation<
     "ttnn::experimental::gte",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::GTE>>();
 
-constexpr auto lt = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lt = ttnn::register_operation<
     "ttnn::experimental::lt",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LT>>();
 
-constexpr auto lte = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lte = ttnn::register_operation<
     "ttnn::experimental::lte",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LTE>>();
 
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<
+constexpr auto pow = ttnn::register_operation<
     "ttnn::experimental::pow",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::POWER>>();
 
-constexpr auto squared_difference = ttnn::register_operation_with_auto_launch_op<
+constexpr auto squared_difference = ttnn::register_operation<
     "ttnn::experimental::squared_difference",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::SQUARED_DIFFERENCE>>();
 
-constexpr auto bias_gelu = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bias_gelu = ttnn::register_operation<
     "ttnn::experimental::bias_gelu",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::BIAS_GELU>>();
 
-constexpr auto logical_and = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_and = ttnn::register_operation<
     "ttnn::experimental::logical_and",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_AND>>();
 
-constexpr auto logical_or = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_or = ttnn::register_operation<
     "ttnn::experimental::logical_or",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_OR>>();
 
-constexpr auto logical_xor = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_xor = ttnn::register_operation<
     "ttnn::experimental::logical_xor",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_XOR>>();
 
-constexpr auto ldexp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto ldexp = ttnn::register_operation<
     "ttnn::experimental::ldexp",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LDEXP>>();
 
-constexpr auto logaddexp = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp = ttnn::register_operation<
     "ttnn::experimental::logaddexp",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP>>();
 
-constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp2 = ttnn::register_operation<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
 
-constexpr auto bitwise_and = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bitwise_and = ttnn::register_operation<
     "ttnn::experimental::bitwise_and",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::BITWISE_AND>>();
 
-constexpr auto bitwise_xor = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bitwise_xor = ttnn::register_operation<
     "ttnn::experimental::bitwise_xor",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::BITWISE_XOR>>();
 
-constexpr auto bitwise_or = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bitwise_or = ttnn::register_operation<
     "ttnn::experimental::bitwise_or",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::BITWISE_OR>>();
 
-constexpr auto bitwise_left_shift = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bitwise_left_shift = ttnn::register_operation<
     "ttnn::experimental::bitwise_left_shift",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::LEFT_SHIFT>>();
 
-constexpr auto bitwise_right_shift = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bitwise_right_shift = ttnn::register_operation<
     "ttnn::experimental::bitwise_right_shift",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::RIGHT_SHIFT>>();
 
-constexpr auto add_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto add_ = ttnn::register_operation<
     "ttnn::experimental::add_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::ADD>>();
 
-constexpr auto sub_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto sub_ = ttnn::register_operation<
     "ttnn::experimental::sub_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SUB>>();
 
-constexpr auto mul_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto mul_ = ttnn::register_operation<
     "ttnn::experimental::mul_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::MUL>>();
 
-constexpr auto div_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto div_ = ttnn::register_operation<
     "ttnn::experimental::div_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::DIV>>();
 
-constexpr auto rsub_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto rsub_ = ttnn::register_operation<
     "ttnn::experimental::rsub_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::RSUB>>();
 
-constexpr auto pow_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto pow_ = ttnn::register_operation<
     "ttnn::experimental::pow_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::POWER>>();
 
-constexpr auto gt_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto gt_ = ttnn::register_operation<
     "ttnn::experimental::gt_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GT>>();
 
-constexpr auto lt_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lt_ = ttnn::register_operation<
     "ttnn::experimental::lt_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LT>>();
 
-constexpr auto lte_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto lte_ = ttnn::register_operation<
     "ttnn::experimental::lte_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LTE>>();
 
-constexpr auto gte_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto gte_ = ttnn::register_operation<
     "ttnn::experimental::gte_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GTE>>();
 
-constexpr auto eq_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto eq_ = ttnn::register_operation<
     "ttnn::experimental::eq_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::EQ>>();
 
-constexpr auto ne_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto ne_ = ttnn::register_operation<
     "ttnn::experimental::ne_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::NE>>();
 
-constexpr auto squared_difference_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto squared_difference_ = ttnn::register_operation<
     "ttnn::experimental::squared_difference_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::SQUARED_DIFFERENCE>>();
 
-constexpr auto bias_gelu_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto bias_gelu_ = ttnn::register_operation<
     "ttnn::experimental::bias_gelu_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::BIAS_GELU>>();
 
-constexpr auto logical_and_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_and_ = ttnn::register_operation<
     "ttnn::experimental::logical_and_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_AND>>();
 
-constexpr auto logical_or_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_or_ = ttnn::register_operation<
     "ttnn::experimental::logical_or_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_OR>>();
 
-constexpr auto logical_xor_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logical_xor_ = ttnn::register_operation<
     "ttnn::experimental::logical_xor_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGICAL_XOR>>();
 
-constexpr auto ldexp_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto ldexp_ = ttnn::register_operation<
     "ttnn::experimental::ldexp_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LDEXP>>();
 
-constexpr auto logaddexp_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp_ = ttnn::register_operation<
     "ttnn::experimental::logaddexp_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP>>();
 
-constexpr auto logaddexp2_ = ttnn::register_operation_with_auto_launch_op<
+constexpr auto logaddexp2_ = ttnn::register_operation<
     "ttnn::experimental::logaddexp2_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
 

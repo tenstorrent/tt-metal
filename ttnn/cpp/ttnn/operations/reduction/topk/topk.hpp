@@ -55,7 +55,6 @@ struct ExecuteTopK {
 
 }  // namespace operations::reduction
 
-constexpr auto topk =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::topk", ttnn::operations::reduction::ExecuteTopK>();
+constexpr auto topk = ttnn::register_operation<"ttnn::topk", ttnn::operations::reduction::ExecuteTopK>();
 
 }  // namespace ttnn

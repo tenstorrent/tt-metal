@@ -32,7 +32,6 @@ struct MoeOperation {
 };
 }  // namespace operations::reduction
 
-constexpr auto moe =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moe", ttnn::operations::reduction::MoeOperation>();
+constexpr auto moe = ttnn::register_operation<"ttnn::moe", ttnn::operations::reduction::MoeOperation>();
 
 }  // namespace ttnn

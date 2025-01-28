@@ -37,7 +37,7 @@ struct GroupAttnMatmulOperation {
 
 namespace experimental {
 
-constexpr auto group_attn_matmul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto group_attn_matmul = ttnn::register_operation<
     "ttnn::experimental::group_attn_matmul",
     ttnn::operations::experimental::matmul::GroupAttnMatmulOperation>();
 

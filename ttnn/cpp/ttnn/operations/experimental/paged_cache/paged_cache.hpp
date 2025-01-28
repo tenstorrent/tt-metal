@@ -49,15 +49,15 @@ struct PagedFillCacheOperation {
 
 namespace experimental {
 
-constexpr auto paged_update_cache = ttnn::register_operation_with_auto_launch_op<
+constexpr auto paged_update_cache = ttnn::register_operation<
     "ttnn::experimental::paged_update_cache",
     ttnn::operations::experimental::paged_cache::PagedUpdateCacheOperation>();
 
-constexpr auto paged_fused_update_cache = ttnn::register_operation_with_auto_launch_op<
+constexpr auto paged_fused_update_cache = ttnn::register_operation<
     "ttnn::experimental::paged_fused_update_cache",
     ttnn::operations::experimental::paged_cache::PagedFusedUpdateCacheOperation>();
 
-constexpr auto paged_fill_cache = ttnn::register_operation_with_auto_launch_op<
+constexpr auto paged_fill_cache = ttnn::register_operation<
     "ttnn::experimental::paged_fill_cache",
     ttnn::operations::experimental::paged_cache::PagedFillCacheOperation>();
 

@@ -37,7 +37,6 @@ struct MorehLayerNorm {
 }  // namespace ttnn::operations::moreh::moreh_layer_norm
 
 namespace ttnn {
-constexpr auto moreh_layer_norm = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_layer_norm",
-    ttnn::operations::moreh::moreh_layer_norm::MorehLayerNorm>();
+constexpr auto moreh_layer_norm =
+    ttnn::register_operation<"ttnn::moreh_layer_norm", ttnn::operations::moreh::moreh_layer_norm::MorehLayerNorm>();
 }  // namespace ttnn
