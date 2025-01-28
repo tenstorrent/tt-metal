@@ -138,7 +138,7 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
     current_rot_mat, rot_matrix = get_single_rot_mat(
         tt_model.args.head_dim,
         tt_model.mesh_device,
-        tt_model.args.num_devices_tp,
+        tt_model.args.num_devices,
         start_pos=0,
     )
 
@@ -190,5 +190,5 @@ def run_inference(tt_model, tt_embd, embd, encoded_prompts, generation_start_pos
         profiler.end(f"model_run_for_inference_{i}")
 
     # Synchronize devices to ensure all profiling data is captured accurately
-    for i in range(tt_model.args.num_devices_tp):
+    for i in range(tt_model.args.num_devices):
         ttnn.synchronize_device(mesh_device.get_devices()[i])

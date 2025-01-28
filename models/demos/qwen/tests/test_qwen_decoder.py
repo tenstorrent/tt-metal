@@ -58,7 +58,7 @@ def test_qwen_decoder_inference(mesh_device, use_program_cache, reset_seeds, ens
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         mesh_device,
-        model_args.num_devices_tp,
+        model_args.num_devices,
         start_pos=0,
     )
 
