@@ -38,12 +38,13 @@ struct OwnedStorage {
     }
 };
 
+// TODO: #17215 - Replace `DeviceStorage` with "mesh storage".
 struct DeviceStorage {
     std::shared_ptr<Buffer> buffer;
     DeviceStorage() = default;
     DeviceStorage(std::shared_ptr<Buffer> buffer_) : buffer(std::move(buffer_)) {}
 
-    const MemoryConfig memory_config() const {
+    MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
         }
@@ -307,8 +308,9 @@ struct MultiDeviceStorage {
     std::vector<std::shared_ptr<Buffer>> get_buffers() const;
 
     inline void insert_buffer_and_spec_for_device(
-        IDevice* device, const std::shared_ptr<Buffer> buffer, TensorSpec spec) {
+        IDevice* device, const std::shared_ptr<Buffer>& buffer, TensorSpec spec) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
+        TT_FATAL(mesh_buffer == nullptr, "MeshBuffer backed storage does not support inserting individual buffers");
         TT_ASSERT(
             device == buffer->device(),
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");

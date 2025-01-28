@@ -187,6 +187,9 @@ void validate_on_device_dtype_and_layout(
 
 std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
 
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
+
 template <typename T>
 inline void read_data_from_device_buffer(
     CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {

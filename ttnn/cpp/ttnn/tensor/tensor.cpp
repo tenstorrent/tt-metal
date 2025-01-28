@@ -13,6 +13,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_constants.hpp>
 #include <tt-metalium/overloaded.hpp>
+#include "tt-metalium/mesh_device_view.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
@@ -349,6 +351,18 @@ void Tensor::deallocate(bool force) {
                     if (this->tensor_attributes.use_count() == 1) {
                         std::visit([](auto&& buffer) { buffer.reset(); }, storage.buffer);
                     }
+                } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
+                    if (force) {
+                        TT_THROW("Cannot deallocate tensor with borrowed storage!");
+                    }
+                } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                    if (this->tensor_attributes.use_count() == 1) {
+                        // Same logic as above for host tensors
+                        for (int i = 0; i < storage.num_buffers(); i++) {
+                            auto& current_buffer = storage.get_buffer(i);
+                            std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
+                        }
+                    }
                 } else if constexpr (std::is_same_v<T, DeviceStorage>) {
                     if (not this->workers.at(0)->is_initialized()) {
                         return;
@@ -413,10 +427,6 @@ void Tensor::deallocate(bool force) {
                             "Device tensors created in the main thread cannot be explictly deallocated in worker "
                             "threads.");
                     }
-                } else if constexpr (std::is_same_v<T, BorrowedStorage>) {
-                    if (force) {
-                        TT_THROW("Cannot deallocate tensor with borrowed storage!");
-                    }
                 } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                     if (not this->workers.at(0)->is_initialized()) {
                         return;
@@ -459,14 +469,6 @@ void Tensor::deallocate(bool force) {
                             this->deallocate_through_destructor,
                             "Device tensors created in the main thread cannot be explictly deallocated in worker "
                             "threads.");
-                    }
-                } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                    if (this->tensor_attributes.use_count() == 1) {
-                        // Same logic as above for host tensors
-                        for (int i = 0; i < storage.num_buffers(); i++) {
-                            auto& current_buffer = storage.get_buffer(i);
-                            std::visit([](auto&& buffer) { buffer.reset(); }, current_buffer);
-                        }
                     }
                 } else {
                     raise_unsupported_storage<T>();
@@ -1047,6 +1049,35 @@ Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vect
     }
     device_tensor.tensor_attributes->update_main_thread_ref_count(workers_in_use.at(0), device_tensor_ref_count);
     return device_tensor;
+}
+
+Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
+    // Allocate a mesh buffer synchronously.
+    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
+
+    const auto [num_rows, num_cols] = mesh_device->shape();
+    std::vector<int> ordered_device_ids;
+    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
+    std::unordered_map<int, TensorSpec> specs;
+
+    ordered_device_ids.reserve(num_rows * num_cols);
+    buffers.reserve(num_rows * num_cols);
+    specs.reserve(num_rows * num_cols);
+
+    for (int row = 0; row < num_rows; ++row) {
+        for (int col = 0; col < num_cols; ++col) {
+            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
+            const int device_id = buffer->device()->id();
+            ordered_device_ids.push_back(device_id);
+            buffers.emplace(device_id, std::move(buffer));
+            specs.emplace(device_id, tensor_spec);
+        }
+    }
+
+    MultiDeviceStorage multi_device_storage(
+        ReplicateTensor{}, std::move(ordered_device_ids), std::move(buffers), std::move(specs), std::move(mesh_buffer));
+
+    return Tensor(std::move(multi_device_storage), tensor_spec);
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {

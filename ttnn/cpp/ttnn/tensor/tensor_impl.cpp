@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include <optional>
 
+#include "tt-metalium/mesh_buffer.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -63,6 +64,22 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
         memory_config.buffer_type,
         memory_config.memory_layout,
         shard_spec_buffer);
+}
+
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
+    const distributed::DeviceLocalBufferConfig device_local_buffer_config{
+        .page_size = tensor_spec.compute_page_size_bytes(),
+        .buffer_type = memory_config.buffer_type,
+        .buffer_layout = memory_config.memory_layout,
+        .shard_parameters = tensor_spec.compute_shard_spec_buffer(),
+    };
+    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = tensor_spec.compute_packed_buffer_size_bytes(),
+    };
+
+    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
 void validate_on_device_dtype_and_layout(
