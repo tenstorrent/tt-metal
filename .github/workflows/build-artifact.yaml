@@ -109,14 +109,14 @@ jobs:
             --tmpfs /tmp
             -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
             --group-add 1457
-            -v ${{ github.workspace }}:${{ github.workspace }}
+            -v ${{ github.workspace }}:/work
             -v /etc/passwd:/etc/passwd:ro
             -v /etc/shadow:/etc/shadow:ro
             -v /etc/bashrc:/etc/bashrc:ro
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-            -e CARGO_HOME=${{ github.workspace }}/.cargo
-            -w ${{ github.workspace }}
+            -e CARGO_HOME=/work/.cargo
+            -w /work
           run: |
             set -eu # basic shell hygiene
 

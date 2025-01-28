@@ -79,16 +79,16 @@ runs:
           -v /etc/passwd:/etc/passwd:ro
           -v /etc/shadow:/etc/shadow:ro
           -v /etc/bashrc:/etc/bashrc:ro
-          -v ${{ github.workspace }}:${{ github.workspace }}
+          -v ${{ github.workspace }}:/work
           --net=host
           --log-driver local
           --log-opt max-size=50m
           ${{ inputs.docker_opts }}
           -e LOGURU_LEVEL=${{ env.LOGURU_LEVEL }}
-          -e PYTHONPATH=${{ github.workspace }}
-          -e HOME=${{ github.workspace }}
+          -e PYTHONPATH=/work
+          -e HOME=/work
           ${{ inputs.device }}
-          -w ${{ github.workspace }}
+          -w /work
         run: |
           set -eu
 
