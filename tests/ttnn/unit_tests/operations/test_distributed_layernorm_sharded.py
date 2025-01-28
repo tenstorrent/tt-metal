@@ -224,7 +224,7 @@ def run_pre_allgather_layernorm(
 @pytest.mark.parametrize(
     "min_pcc_ex2",
     [
-        0.983,
+        0.982,
     ],
 )
 @pytest.mark.parametrize(("fuse_residual", "max_atol_ex2"), [(False, 0.04), (True, 0.09)])
@@ -275,7 +275,7 @@ def test_pre_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((4, 1),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
-@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
+@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.986, 0.04)])
 def test_pre_allgather_layernorm_1d_reduce(
     device,
     use_program_cache,

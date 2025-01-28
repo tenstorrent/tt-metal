@@ -33,6 +33,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tilize_untilize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_worker_config_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_blockfloat_common.cpp
 )
 
 # Define the function to create test executables for each architecture

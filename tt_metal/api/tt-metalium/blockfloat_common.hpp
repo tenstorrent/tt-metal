@@ -130,7 +130,7 @@ inline uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_e
     // add hidden 1
     mantissa = (1 << 23) | mantissa;
 
-    if (shared_exp >= exp) {
+    if (shared_exp > exp) {
         int exp_diff = shared_exp - exp;
         // shift mantissa further down by exp diff
         // In bit-shift operation (A >> B), the result is undefined if B is greater than or equal to the number of bits
@@ -147,9 +147,26 @@ inline uint8_t convert_u32_to_bfp(uint32_t input, uint32_t shared_exp, bool is_e
         // Truncation: Round down
         mantissa = mantissa >> MANTISSA_BFP_SHIFT;
     } else {
-        // Round mantissa to nearest even
-        mantissa += 1 << (MANTISSA_BFP_SHIFT - 1);
+        // Round mantissa to nearest; ties round to even
+        // Implementation of rounding process (example is for bfp8):
+        // - We want to round 23 bit mantissa to 6 bits with extra hidden bit
+        // - Mantissa is broken down to: <5> bits | guard bit | <17> bits of round value
+        //   * If round value < 0x10000, round down (ie. mantissa is just <5> bits | guard bit)
+        //   * If round value > 0x10000, round up (ie. add 1 to <5> bits | guard bit)
+        //   * If round value = 0x10000, we have a tie and round to nearest even:
+        //     ** If guard bit = 0, mantissa is even so round down
+        //     ** If guard bit = 1, mantissa is odd so round up
+        constexpr uint32_t MANTISSA_ROUND_MASK = (1 << MANTISSA_BFP_SHIFT) - 1;
+        constexpr uint32_t TIE_VALUE = 1 << (MANTISSA_BFP_SHIFT - 1);
+        uint32_t round_value = mantissa & MANTISSA_ROUND_MASK;
         mantissa = mantissa >> MANTISSA_BFP_SHIFT;
+        uint32_t guard_bit = mantissa & 0x1;
+
+        if (round_value > TIE_VALUE or (round_value == TIE_VALUE and guard_bit == 1)) {
+            // Round up
+            mantissa += 1;
+        }
+
         if (mantissa > MANTISSA_BFP_MAX_VAL) {
             mantissa = MANTISSA_BFP_MAX_VAL;
         }

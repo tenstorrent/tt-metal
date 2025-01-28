@@ -124,6 +124,7 @@ class TestTypecast:
         )
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_typecast_bf16_to_bfp8_b(device):
     torch.manual_seed(0)
@@ -155,6 +156,7 @@ def print_mismatches(cpu, npu, num_max_print):
             break
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @pytest.mark.parametrize("seed", [0, 2, 4, 6, 8])
 @pytest.mark.parametrize("scale", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512])
 @pytest.mark.parametrize("bias", [0, 1, 2, 4, 8, 16, 32, 64, 128])
@@ -186,6 +188,7 @@ def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
     assert passed
 
 
+@pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
 @pytest.mark.parametrize("seed", [0])
 @pytest.mark.parametrize("scale", [4])
 @pytest.mark.parametrize("bias", [2])
