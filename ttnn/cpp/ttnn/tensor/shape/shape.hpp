@@ -65,28 +65,9 @@ class type_caster<ttnn::SimpleShape> {
 public:
     PYBIND11_TYPE_CASTER(ttnn::SimpleShape, _("SimpleShape"));
 
-    bool load(handle src, bool) {
-        if (!py::isinstance<py::iterable>(src)) {
-            return false;
-        }
-        ttnn::SmallVector<uint32_t> vec;
-        for (auto item : src.cast<py::iterable>()) {
-            if (!py::isinstance<py::int_>(item)) {
-                return false;
-            }
-            vec.push_back(item.cast<uint32_t>());
-        }
-        value = ttnn::SimpleShape(std::move(vec));
-        return true;
-    }
-
-    static handle cast(const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */) {
-        py::list py_list;
-        for (size_t i = 0; i < src.rank(); i++) {
-            py_list.append(src[i]);
-        }
-        return py_list.release();
-    }
+    PYBIND11_EXPORT bool load(handle src, bool);
+    PYBIND11_EXPORT static handle cast(
+        const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
 };
 }  // namespace detail
 }  // namespace PYBIND11_NAMESPACE
