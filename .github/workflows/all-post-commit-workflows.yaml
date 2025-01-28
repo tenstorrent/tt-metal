@@ -18,6 +18,10 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
   push:
     branches: ["main"]
 
@@ -29,6 +33,7 @@ permissions:
   id-token: write
   packages: write
 
+run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
