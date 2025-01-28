@@ -386,7 +386,7 @@ def test_pre_allgather_layernorm_1d_reduce(
 @pytest.mark.parametrize("output_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize("core_grid", ((2, 8),))
+@pytest.mark.parametrize("core_grid", ((8, 2),))
 def test_post_allgather_layernorm(
     device,
     use_program_cache,
