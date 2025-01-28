@@ -131,7 +131,7 @@ std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
     The above parameters are usually obtained using get_compile_time_arg_val.
     In the program factory you can create an vector containing the above parameters in order using the function
     shard_pf_builder:sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
-    defined in ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp
+    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
 
     It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::parse_map
 function ex. auto mapping = parse_map<NUMBER_OF_CORES>(rt_index); const uint32_t* const shard_array_map = mapping.first;
@@ -139,7 +139,7 @@ function ex. auto mapping = parse_map<NUMBER_OF_CORES>(rt_index); const uint32_t
 
 In the program factory you can create an vector containing the runtime arguments extracted by this function using the
 function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
-    defined in ttnn/cpp/ttnn/operations/sharding_pf_builder.hpp
+    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
 
 
 
