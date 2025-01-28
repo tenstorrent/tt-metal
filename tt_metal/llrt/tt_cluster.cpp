@@ -449,6 +449,18 @@ CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(chip_id_t ch
     return {translated_coord.x, translated_coord.y};
 }
 
+CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
+    chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn) const {
+    if (!no_warn) {
+        log_warning(
+            tt::LogDevice,
+            "Conversion requested to Physical Coordinates. Please note that Physical Coordinates are not expected to "
+            "be used in tt-metal APIs.");
+    }
+    auto& soc_desc = this->get_soc_desc(chip_id);
+    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+}
+
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
     auto phys_eth_core = this->virtual_to_umd_coord_mapping_.at(tt_cxy_pair(chip, core.x, core.y));

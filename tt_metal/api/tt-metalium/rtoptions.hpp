@@ -99,6 +99,7 @@ class RunTimeOptions {
     bool watcher_append = false;
     bool watcher_auto_unpause = false;
     bool watcher_noinline = false;
+    bool watcher_phys_coords = false;
     bool record_noc_transfer_data = false;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -166,6 +167,8 @@ public:
     inline void set_watcher_auto_unpause(bool auto_unpause) { watcher_auto_unpause = auto_unpause; }
     inline int get_watcher_noinline() { return watcher_noinline; }
     inline void set_watcher_noinline(bool noinline) { watcher_noinline = noinline; }
+    inline int get_watcher_phys_coords() { return watcher_phys_coords; }
+    inline void set_watcher_phys_coords(bool phys_coords) { watcher_phys_coords = phys_coords; }
     inline std::set<std::string>& get_watcher_disabled_features() { return watcher_disabled_features; }
     inline bool watcher_status_disabled() { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() { return watcher_feature_disabled(watcher_noc_sanitize_str); }
