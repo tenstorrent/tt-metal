@@ -91,7 +91,6 @@ def test_llama_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -142,7 +141,6 @@ def test_llama_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
     )
     freqs_cis = torch.complex(cos, sin)

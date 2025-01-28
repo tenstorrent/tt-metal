@@ -96,7 +96,6 @@ def test_llama_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
     )
 
@@ -145,7 +144,6 @@ def test_llama_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
     )
     freqs_cis = torch.complex(cos, sin)

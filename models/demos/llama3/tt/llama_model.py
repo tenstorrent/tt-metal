@@ -53,7 +53,6 @@ class TtTransformer(LightweightModule):
             args.head_dim,
             args.max_seq_len,
             args.rope_theta,
-            args.use_scaled_rope,
             args.rope_scaling_factor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -120,11 +119,8 @@ class TtTransformer(LightweightModule):
 
         tt_rot_mats_prefill = get_prefill_rot_mat(
             self.args.head_dim,
-           
             self.args.max_seq_len,
-           
             self.mesh_device,
-           
             S,
             self.args.rope_theta,
             scale_factor=self.args.rope_scaling_factor,

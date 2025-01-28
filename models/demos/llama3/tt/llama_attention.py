@@ -326,6 +326,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
+            topology=self.ccl_topology,
         )
 
         if self.TG:

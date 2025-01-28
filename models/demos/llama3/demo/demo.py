@@ -231,7 +231,7 @@ def run_llama3_demo(
         max_seq_len=max_seq_len,
     )
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
@@ -488,10 +488,15 @@ def run_llama3_demo(
         if tt_model.args.num_devices > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
-                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                    tt_out,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=model_args.ccl_topology(),
                 )
             else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=model_args.ccl_topology())
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out

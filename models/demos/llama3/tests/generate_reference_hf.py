@@ -22,8 +22,8 @@ def generate_reference_outputs(total_length, output_file, model_name):
     if "Qwen" in model_name:
         config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, config=config)
-    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float32, device_map="auto")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, config=config, device_map="auto")
     model.eval()
 
     # Load the book text

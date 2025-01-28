@@ -412,6 +412,9 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     :param size: The size to pad to
     :return: Padded PyTorch Tensor
     """
+    # handle negative dim
+    if dim < 0:
+        dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
     assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
     dim = x.dim() + dim if dim < 0 else dim
