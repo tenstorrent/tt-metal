@@ -357,6 +357,7 @@ on:
           - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.remainder.remainder_unary
           - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.remainder.remainder_shape
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.scatter.scatter_forge
@@ -372,6 +373,7 @@ on:
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
+          - eltwise.binary.floor_divide.floor_divide
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp
