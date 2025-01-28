@@ -106,7 +106,7 @@ Following are the conv2d operation configuration parameters:
 * `dtype = ttnn.bfloat16` input activations data type.
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
-* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels % 32 <= 16` when the alignment can be set to 16 instead of 32.
+* `input_channels_alignment = 32` _optional_ `uint32_t`. Alignment value for channels dimension in the input tensor. This is applicable when `in_channels <= 16` when the alignment can be set to 16 instead of 32.
 * `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
 * `reallocate_halo_output = False` _optional_ bool indicating if the intermediate tensor generated within the op should be reallocated to reduce memory fragmentation.
 * `act_block_h_override = 0` _optional_ `uint32_t` to override the `act_block_h` parameter, which determines the size of blocks used in computations -- smaller values require less memory, larger values require more memory but are more performant. This argument is ignored when `shard_layout = WIDTH_SHARDED`.
@@ -616,12 +616,11 @@ elements calculated on a specific core and to transfer that data to the core.**
 
 
 Halo op performs needed data movement on each core in the following manner:
-1. allocate a buffer large enough to fit the local input shard sticks,
-padding sticks and sticks of the remote shards needed to obtain the output shard;
-(this buffer will be the output of the halo op, and the input of the convolution)
+1. allocate buffer for the halo'd output shard, which consists of local input data sticks,
+padding sticks and remote input data sticks
 2. fill padding sticks in the allocated buffer with padding value
-3. copy input shard sticks from the input buffer to the allocated buffer
-4. send sticks of the local shard to the cores that need them to calculate their output shards*
+3. copy input shard sticks from the input buffer to the allocated output buffer
+4. remote copy sticks of the local shard to the cores that need them to calculate their output shards*
 
 \* If the `remote_read` argument of the halo_op is set to **true**, then each core
 will copy the needed sticks from remote cores instead. Default remote data movement
@@ -769,8 +768,17 @@ _Figure 20: Local config_
 
 ##### Remote config
 
-Remote config has the same structure as local config, only now for each chunk
-we also need core x,y info, since we are sending data to a remote core.
+Remote config describes chunks of local data needed by other cores.
+It is a vector similar to the local config vector, only now we have an extra level on top
+that describes each remote core that needs data. The vector consists of the following elements
+for each remote core:
+- remote core coordinates (first 2 vector elements)
+- number of elements describing chunks of local shard needed (3rd vector element)
+    - this is basically count of the remaining elements in the vector and equals 3 * number of chunks
+- for each chunk of consecutive sticks (rest of the vector elements)
+    1. index of the first stick in the local input shard (see Figure 17)
+    2. index in the first stick in the halo output shard (see Figure 18)
+    3. chunk length
 
 <img src="media/remoteconfig.png" style="height:200px;">\
 _Figure 21: Remote input shard chunks for core 1_
