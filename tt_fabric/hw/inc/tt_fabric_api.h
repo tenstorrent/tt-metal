@@ -38,8 +38,10 @@ inline void fabric_setup_pull_request(uint32_t src_addr, uint32_t size) {
     client_interface->local_pull_request.pull_request.size = size;
     client_interface->local_pull_request.pull_request.buffer_size = size_in_words;
     client_interface->local_pull_request.pull_request.buffer_start = xy_local_addr + src_addr;
+    client_interface->local_pull_request.pull_request.words_written = size_in_words;
+    client_interface->local_pull_request.pull_request.words_read = 0;
     client_interface->local_pull_request.pull_request.ack_addr =
-        xy_local_addr + (uint32_t)&client_interface->local_pull_request.pull_request.rd_ptr;
+        xy_local_addr + (uint32_t)&client_interface->local_pull_request.pull_request.words_read;
     client_interface->local_pull_request.pull_request.flags = FORWARD;
 }
 

@@ -180,7 +180,9 @@ typedef struct _pull_request {
     uint64_t buffer_start;  // Producer local buffer start. Used for wrapping rd/wr_ptr at the end of buffer.
     uint64_t ack_addr;  // Producer local address to send rd_ptr updates. fabric router pushes its rd_ptr to requestor
                         // at this address.
-    uint8_t padding[15];
+    uint32_t words_written;
+    uint32_t words_read;
+    uint8_t padding[7];
     uint8_t flags;  // Router command.
 } pull_request_t;
 

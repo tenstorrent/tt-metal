@@ -136,7 +136,7 @@ void kernel_main() {
     );
 
     while (true) {
-        client_interface->local_pull_request.pull_request.rd_ptr = 0;
+        client_interface->local_pull_request.pull_request.words_read = 0;
         fabric_async_write<ASYNC_WR_SEND>(
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
@@ -147,8 +147,8 @@ void kernel_main() {
         );
         data_words_sent += max_packet_size_words;
         packet_count++;
-        uint32_t wr_ptr = client_interface->local_pull_request.pull_request.wr_ptr;
-        while (client_interface->local_pull_request.pull_request.rd_ptr != wr_ptr) {
+        uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
+        while (client_interface->local_pull_request.pull_request.words_read != words_written) {
 #pragma GCC unroll 4
             for (int i = 0; i < 4; i++) {
                 asm("nop");
