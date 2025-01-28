@@ -169,11 +169,12 @@ def create_tt_model(
 # paged_attention (bool): Whether to use paged attention or default attention (vLLM requires paged attention)
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
+# stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -185,6 +186,7 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -196,6 +198,7 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
             "models/demos/llama3/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -207,6 +210,7 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
         ),
     ],
     ids=[
@@ -243,10 +247,12 @@ def test_llama_demo_text(
     page_params,
     sampling_params,
     optimizations,
+    stop_at_eos,
     mesh_device,
     use_program_cache,
     is_ci_env,
     reset_seeds,
+    request,
 ):
     """
     Simple Llama demo with limited dependence on reference code.
@@ -254,6 +260,29 @@ def test_llama_demo_text(
     mesh_device.enable_async(True)
     enable_trace = True  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
+
+    # Override parameters from command line if they are provided
+    input_prompts = request.config.getoption("--input_prompts") or input_prompts
+    if request.config.getoption("--instruct") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        instruct = request.config.getoption("--instruct")
+    repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
+    max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
+    batch_size = request.config.getoption("--batch_size") or batch_size
+    max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
+    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    page_params = request.config.getoption("--page_params") or page_params
+    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    if request.config.getoption("--stop_at_eos") in [
+        0,
+        1,
+    ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
+        stop_at_eos = request.config.getoption("--stop_at_eos")
+
+    if not stop_at_eos:
+        logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
     if print_to_file:
         # Creat batch output file
@@ -432,10 +461,13 @@ def test_llama_demo_text(
                 ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
                     all_outputs[user].append(user_tok)
                 else:
-                    user_done[user] = True
-                    logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                    if all(user_done):
-                        users_decoding = False
+                    if (
+                        stop_at_eos
+                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                        user_done[user] = True
+                        logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+                        if all(user_done):
+                            users_decoding = False
 
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
@@ -525,11 +557,37 @@ def test_llama_demo_text(
         "Full demo runtime": profiler.get_duration("run"),
     }
 
-    # Print some of the perf metrics
+    # Decode performance for some specific tokens
+    tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
+    tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < iteration else 0
+    tok_1024_perf = profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < iteration else 0
+    tok_4096_perf = profiler.get_duration(f"inference_decode_time_{4095}") if 4095 < iteration else 0
+
+    if not stop_at_eos:
+        logger.info(f"Please note that 'stop_at_eos' is disabled. Output repetition is expected.")
+
     logger.info("")
     logger.info(f"=== Performance metrics ===")
-    logger.info(f"Prefill compile time: {round(compile_prefill_time, 4)}s")
-    logger.info(f"Decode compile time: {round(compile_decode_time, 4)}s")
+    logger.info(
+        f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*batch_size, 2)} t/s]"
+    )
+    if tok_128_perf > 0:
+        logger.info(
+            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*batch_size, 2)} t/s]"
+        )
+    if tok_1024_perf > 0:
+        logger.info(
+            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*batch_size, 2)} t/s]"
+        )
+    if tok_4096_perf > 0:
+        logger.info(
+            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*batch_size, 2)} t/s]"
+        )
+
+    # Print some of the perf metrics
+    logger.info("==")
+    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
     logger.info("")
     logger.info(f"Average Time to First Token (TTFT): {round(avg_time_to_first_token*1000, 2)}ms")
     logger.info(
