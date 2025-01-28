@@ -121,6 +121,7 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
 
 }  // namespace interleaved_addr_gen
 
+// clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
  * SetRuntimeArgs() API.
@@ -131,6 +132,7 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
+// clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
     return (uint32_t)&rta_l1_base[arg_idx];
     ;
@@ -146,7 +148,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
  * |----------------|-------------------------------------------------------------------------|----------|-------------|----------|
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
- // clang-format on
+// clang-format on
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
 
 // clang-format off
@@ -161,7 +163,7 @@ static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t
  * | arg_idx               | Unique Runtime argument index                  | uint32_t              | 0 to 255    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
- // clang-format on
+// clang-format on
 template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
@@ -181,7 +183,7 @@ FORCE_INLINE T get_arg_val(int arg_idx) {
  * | arg_idx               | Common Runtime argument index                  | uint32_t              | 0 to 255    | True     |
  * | T (template argument) | Data type of the returned argument             | Any 4-byte sized type | N/A         | True     |
  */
- // clang-format on
+// clang-format on
 template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
@@ -200,7 +202,7 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * |-----------------------|------------------------------------|-----------------------|-------------|----------|
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
- // clang-format on
+// clang-format on
 #define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
 
 template <uint32_t tile_hw = 1024>
@@ -264,7 +266,7 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to be pushed      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void cb_push_back(const int32_t operand, const int32_t num_pages) {
     uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
@@ -306,7 +308,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to be popped      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void cb_pop_front(int32_t operand, int32_t num_pages) {
     volatile tt_reg_ptr uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -370,7 +372,7 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
  * |-----------|---------------------------------------|----------|-------------|----------|
  * | operand   | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 uint32_t get_write_ptr(uint32_t operand) {
     // return byte address (fifo_wr_ptr is 16B address)
@@ -390,8 +392,8 @@ uint32_t get_write_ptr(uint32_t operand) {
  * | Argument  | Description                           | Type     | Valid Range | Required |
  * |-----------|---------------------------------------|----------|-------------|----------|
  * | operand   | The index of the circular buffer (CB) | uint32_t | 0 to 31     | True     |
- */ 
- // clang-format on
+ */
+// clang-format on
 FORCE_INLINE
 uint32_t get_read_ptr(uint32_t operand) {
     // return byte address (fifo_rd_ptr is 16B address)
@@ -423,7 +425,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of free tiles to wait for  | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
@@ -459,7 +461,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of free tiles to wait for  | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
@@ -510,7 +512,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to check for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
@@ -543,7 +545,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
  * | cb_id     | The index of the circular buffer (CB) | uint32_t | 0 to 31                                                                                           | True     |
  * | num_tiles | The number of tiles to wait for       | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) |          |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
@@ -723,11 +725,11 @@ void noc_async_read_one_packet(
  *
  * | Argument          | Description                                        | Data type | Valid range                              | required |
  * |-------------------|----------------------------------------------------|-----------|------------------------------------------|----------|
- * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | Yes      | 
- * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      | 
+ * | src_noc_addr      | Encoding of the source NOC location (x,y)+address  | uint64_t  | DOX-TODO (ref to explain valid coords)   | Yes      |
+ * | dst_local_l1_addr | Address in local L1 memory                         | uint32_t  | 0..1MB                                   | Yes      |
  * | size              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | Yes      |
  */
- // clang-format on
+// clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_read(
     std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -1392,11 +1394,11 @@ FORCE_INLINE void noc_async_read_tile(
  *
  * | Argument          | Description                                             | Type     | Valid Range                                                    | Required |
  * |-------------------|---------------------------------------------------------|----------|----------------------------------------------------------------|----------|
- * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     | 
- * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     | 
+ * | src_local_l1_addr | Source address in local L1 memory                       | uint32_t | 0..1MB                                                         | True     |
+ * | dst_noc_addr      | Encoding of the destination NOC location (x,y)+address  | uint64_t | DOX-TODO (insert a reference to what constitutes valid coords) | True     |
  * | size              | Size of data transfer in bytes                          | uint32_t | 0..1MB                                                         | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
@@ -1471,12 +1473,12 @@ inline void noc_semaphore_set_remote(
  *
  * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     | 
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | size                   | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                                        | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                                       | True     |
  */
- // clang-format on
+// clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write_multicast(
     std::uint32_t src_local_l1_addr,
@@ -1528,11 +1530,11 @@ inline void noc_async_write_multicast(
  *
  * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     | 
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                                      | True     |
  */
- // clang-format on
+// clang-format on
 inline void noc_semaphore_set_multicast(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
@@ -1576,11 +1578,11 @@ inline void noc_semaphore_set_multicast(
  *
  * | Argument               | Description                                                              | Type     | Valid Range                                                   | Required |
  * |------------------------|--------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     | 
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
+ * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores)                                          | True     |
  */
- // clang-format on
+// clang-format on
 inline void noc_semaphore_set_multicast_loopback_src(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr_multicast,
@@ -1660,13 +1662,13 @@ inline void noc_async_write_multicast_loopback_src(
  *
  * | Argument               | Description                                                               | Type     | Valid Range                                                   | Required |
  * |------------------------|---------------------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | src_local_l1_addr      | Source address in local L1 memory                                         | uint32_t | 0..1MB                                                        | True     | 
- * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address  | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
+ * | src_local_l1_addr      | Source address in local L1 memory                                         | uint32_t | 0..1MB                                                        | True     |
+ * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address  | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | size                   | Size of data transfer in bytes                                            | uint32_t | 0..1MB                                                        | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting            | uint32_t | 0..(number of cores - 1)                                      | True     | 
+ * | num_dests              | Number of destinations that the multicast source is targetting            | uint32_t | 0..(number of cores - 1)                                      | True     |
  * | exclude_region         | Encoding of the excluded region (x_start,y_start,x_direction,y_direction) | uint32_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  */
- // clang-format on
+// clang-format on
 #ifdef ARCH_BLACKHOLE
 inline void noc_async_write_multicast_exclude_region(
     std::uint32_t src_local_l1_addr,
@@ -1795,7 +1797,7 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
  * | sem_addr  | Semaphore address in local L1 memory   | uint32_t | 0..1MB             | True     |
  * | val       | The target value of the semaphore      | uint32_t | Any uint32_t value | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     WAYPOINT("NSW");
@@ -1819,7 +1821,7 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | sem_addr  | Semaphore address in local L1 memory   | uint32_t | 0..1MB             | True     |
  * | val       | The target value of the semaphore      | uint32_t | Any uint32_t value | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     WAYPOINT("NSMW");
@@ -1843,7 +1845,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
  * | sem_addr  | Semaphore address in local L1 memory    | uint32_t | 0..1MB             | True    |
  * | val       | Value to set the semaphore to           | uint32_t | Any uint32_t value | True    |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     // set semaphore value to val
@@ -1867,11 +1869,11 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  *
  * | Argument  | Description                                            | Type     | Valid Range                                                   | Required |
  * |-----------|--------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
- * | val       | The value to be written                                | uint32_t | Any uint32_t value                                            | True     | 
+ * | addr      | Encoding of the destination location (x,y)+address     | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
+ * | val       | The value to be written                                | uint32_t | Any uint32_t value                                            | True     |
  * | be        | Byte-enable                                            | uint8_t  | 0x1-0xF                                                       | False    |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
@@ -1900,10 +1902,10 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
  *
  * | Argument  | Description                                                    | Type     | Valid Range                                                   | Required |
  * |-----------|----------------------------------------------------------------|----------|---------------------------------------------------------------|----------|
- * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     | 
+ * | addr      | Encoding of the destination location (x,y)+address             | uint64_t | DOX-TODO(insert a reference to what constitutes valid coords) | True     |
  * | incr      | The value to increment by                                      | uint32_t | Any uint32_t value                                            | True     |
  */
- // clang-format on
+// clang-format on
 FORCE_INLINE
 void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index) {
     /*
