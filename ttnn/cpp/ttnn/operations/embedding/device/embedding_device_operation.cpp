@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/embedding/device/embedding_program_factory.hpp"
 
 using namespace tt::constants;

@@ -6,7 +6,6 @@
 #include "prod_nc_op.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 

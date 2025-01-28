@@ -8,7 +8,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 using namespace tt::tt_metal;

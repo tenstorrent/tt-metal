@@ -4,7 +4,6 @@
 
 #include "move_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;

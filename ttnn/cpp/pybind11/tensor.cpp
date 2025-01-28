@@ -18,7 +18,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 

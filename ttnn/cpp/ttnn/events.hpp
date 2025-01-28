@@ -5,8 +5,11 @@
 #pragma once
 
 #include <memory>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/distributed/types.hpp"
+
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/event.hpp"
+#include "tt-metalium/sub_device_types.hpp"
 
 namespace ttnn::events {
 

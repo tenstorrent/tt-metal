@@ -20,7 +20,6 @@
 #include <tt-metalium/constants.hpp>
 #include "cpp/ttnn/common/constants.hpp"
 #include "ttnn/common/constants.hpp"
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"

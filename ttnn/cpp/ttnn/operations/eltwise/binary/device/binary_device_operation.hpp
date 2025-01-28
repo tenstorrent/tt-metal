@@ -9,7 +9,6 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/core.hpp"

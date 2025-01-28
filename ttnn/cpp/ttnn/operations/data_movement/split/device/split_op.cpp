@@ -4,7 +4,6 @@
 
 #include "split_op.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "split_program_factory.hpp"
