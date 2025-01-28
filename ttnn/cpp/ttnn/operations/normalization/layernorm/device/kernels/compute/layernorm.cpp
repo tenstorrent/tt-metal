@@ -81,7 +81,7 @@ void MAIN {
 #ifdef FUSE_PRE_ADD
         reconfig_data_format(cb_in, cb_inb);
         pack_reconfig_data_format(cb_x);
-        add_tiles_init();
+        add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
@@ -166,7 +166,7 @@ void MAIN {
         /* (x - E[x])^2
          * compute temp = xmm*xmm = (x-E[x])^2
          */
-        mul_tiles_init();
+        mul_tiles_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
             cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
@@ -219,7 +219,7 @@ void MAIN {
             reconfig_data_format(cb_ex2, cb_eps);
         }
         ACQ();
-        add_tiles_init();
+        add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1

@@ -22,7 +22,7 @@ void MAIN {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(9) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(10) == 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     constexpr auto cb_x = tt::CBIndex::c_0;       // input
     constexpr auto cb_scaler = tt::CBIndex::c_1;  // scaler

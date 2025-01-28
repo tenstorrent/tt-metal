@@ -145,7 +145,7 @@ void MAIN {
             cb_reserve_back(cb_ex_sqr, 1);
             cb_wait_front(cb_stats_reduced, 1);
             tile_regs_acquire();
-            mul_tiles_init();
+            mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
             mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
             tile_regs_commit();
             tile_regs_wait();
@@ -161,7 +161,7 @@ void MAIN {
             cb_wait_front(cb_ex_sqr, 1);
             cb_reserve_back(cb_var, 1);
             tile_regs_acquire();
-            sub_tiles_init();
+            sub_tiles_init(cb_ex2, cb_ex_sqr);
             sub_tiles(cb_ex2, cb_ex_sqr, 0, 0, dst0);
             tile_regs_commit();
             tile_regs_wait();
@@ -179,7 +179,7 @@ void MAIN {
             cb_wait_front(cb_eps, 1);
             cb_reserve_back(cb_stats_reduced, 1);
 
-            add_tiles_init();
+            add_tiles_init(cb_var, cb_eps);
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
             tile_regs_wait();

@@ -45,7 +45,7 @@ void MAIN {
     const auto ht = (origin_h + TILE_H - 1) / TILE_H;
     const auto wt = (origin_w + TILE_W - 1) / TILE_W;
 
-    binary_op_init_common(cb_logx, cb_decimal);
+    binary_op_init_common(cb_logx, cb_decimal, cb_y);
 
     cb_wait_front(cb_decimal, onetile);  // comes from the reader
     cb_wait_front(cb_one, onetile);      // comes from the reader
@@ -115,7 +115,7 @@ void MAIN {
             cb_wait_front(cb_xpowadd, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
-            add_tiles_init();
+            add_tiles_init(cb_correct_xpow, cb_xpowadd);
             add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
             tile_regs_commit();
 

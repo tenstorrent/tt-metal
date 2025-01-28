@@ -59,10 +59,10 @@ void MAIN {
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
 
-    binary_op_init_common(cb_bcast, cb_other, cb_output_0);
+    binary_op_init_common(cb_other, cb_bcast, cb_output_0);
 
     // input - batch_mean
-    sub_tiles_init();
+    sub_tiles_init(cb_other, cb_bcast);
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
