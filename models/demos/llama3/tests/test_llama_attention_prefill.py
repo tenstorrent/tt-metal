@@ -86,7 +86,6 @@ def test_llama_attention_inference(
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         mesh_device,
         seq_len=max_seq_len,
         scale_factor=model_args.rope_scaling_factor,
