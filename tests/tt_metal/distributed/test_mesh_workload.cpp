@@ -4,13 +4,13 @@
 
 #include <random>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_metal/distributed/distributed.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {

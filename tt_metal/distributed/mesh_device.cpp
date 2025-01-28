@@ -15,7 +15,7 @@
 #include <tt_metal.hpp>
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>
-#include "tt_metal/distributed/mesh_command_queue.hpp"
+#include <mesh_command_queue.hpp>
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
@@ -129,6 +129,8 @@ MeshDevice::MeshDevice(
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)) {
     work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
+    work_executor_->initialize();
+    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
@@ -800,11 +802,13 @@ std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
 
 // Allocator methods
 // Memory statistics and buffer management
-uint32_t MeshDevice::get_allocator_alignment(const BufferType& buffer_type) const {
-    return reference_device()->get_allocator_alignment(buffer_type);
+uint32_t MeshDevice::get_allocator_alignment() const {
+    const auto& allocator = this->get_initialized_allocator();
+    return allocator->config.alignment;
 }
-uint32_t MeshDevice::get_allocator_alignment(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
-    return reference_device()->get_allocator_alignment(buffer_type, sub_device_id);
+uint32_t MeshDevice::get_allocator_alignment(SubDeviceId sub_device_id) const {
+    const auto& allocator = this->get_initialized_allocator(sub_device_id);
+    return allocator->config.alignment;
 }
 
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {

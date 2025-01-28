@@ -169,25 +169,49 @@ class UNetConv2D:
 
         self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        self.conv_kwargs = {
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": self.kernel_size,
+            "stride": self.stride,
+            "padding": self.padding,
+            "dilation": [1, 1],
+            "groups": 2,
+            "device": self.device,
+            "conv_config": self.conv_config,
+        }
+        # if not ttnn.is_tensor_storage_on_device(self.weight):
+        #     self.weight = ttnn.prepare_conv_weights(
+        #         weight_tensor=self.weight,
+        #         weights_format="OIHW",
+        #         input_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        #         if self.use_1d_systolic_array
+        #         else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        #         input_layout=ttnn.TILE_LAYOUT,  # not used for sharded tensor
+        #         **self.conv_kwargs,
+        #     )
+        #     self.bias = ttnn.prepare_conv_bias(
+        #         bias_tensor=self.bias,
+        #         input_memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+        #         if self.use_1d_systolic_array
+        #         else ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+        #         input_layout=ttnn.TILE_LAYOUT,  # not used for sharded tensor
+        #         **self.conv_kwargs,
+        #     )
+        #     self.weight = ttnn.to_device(self.weight, self.device)
+        #     self.bias = ttnn.to_device(self.bias, self.device)
 
     def __call__(self, x):
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            input_height=self.input_height,
-            input_width=self.input_width,
-            batch_size=self.batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            conv_config=self.conv_config,
+            **self.conv_kwargs,
             compute_config=self.compute_config,
             conv_op_cache=self.cache,
-            groups=2,
             return_output_dim=False,
             return_weights_and_bias=True,
         )

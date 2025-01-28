@@ -80,7 +80,7 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -94,31 +94,47 @@ CPMAddPackage(
         range-v3.patch
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6)
+CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3)
+CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
 ############################################################################################################################
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtl
+    GITHUB_REPOSITORY xtensor-stack/xtl
+    GIT_TAG 0.7.7
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTL_ENABLE_TESTS OFF"
+)
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.25.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.21.0
     OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
@@ -131,6 +147,7 @@ CPMAddPackage(
     GITHUB_REPOSITORY google/benchmark
     GIT_TAG v1.9.1
     OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
 )
@@ -148,5 +165,11 @@ endif()
 # taskflow : https://github.com/taskflow/taskflow
 ############################################################################################################################
 
-CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0)
+CPMAddPackage(
+    NAME taskflow
+    GITHUB_REPOSITORY taskflow/taskflow
+    GIT_TAG v3.7.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+)
 add_library(Taskflow::Taskflow ALIAS Taskflow)

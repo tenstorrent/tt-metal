@@ -262,35 +262,33 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .dram_bank_offsets = {},
          .dram_unreserved_base =
              hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
-         .l1_unreserved_base = align(
-             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
-             hal.get_alignment(HalMemType::DRAM)),
+         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
          .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .l1_alignment = hal.get_alignment(HalMemType::L1),
+         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.l1_alignment == 0,
-        "Reserved size must be aligned to L1 allocator alignment {}",
-        config.l1_alignment);
+        config.l1_small_size % config.alignment == 0,
+        "Reserved size must be aligned to allocator alignment {}",
+        config.alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_channels(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({this->virtual_core_from_physical_core(core.first, core.second.type), AllocCoreType::Invalid});
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core(core.first), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -723,7 +721,7 @@ void Device::initialize_and_launch_firmware() {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const CoreCoord &core : eth_cores) {
-            auto virtual_core = this->virtual_core_from_physical_core(core, CoreType::ETH);
+            auto virtual_core = this->virtual_core_from_physical_core(core);
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
     }
@@ -1176,11 +1174,12 @@ CoreCoord Device::compute_with_storage_grid_size() const {
 }
 
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
-        TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
-
-    return soc_desc.physical_cores.at(physical_coord).type;
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    if (core_type == CoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    }
+    return core_type;
 }
 
 CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
@@ -1199,7 +1198,7 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     } else {
         const auto& grid_size = this->grid_size();
         // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        coord = this->virtual_core_from_physical_core(coord);
         // Derive virtual coord in noc_index space.
         CoreCoord virtual_coord = {
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
@@ -1222,7 +1221,7 @@ CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) con
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
-        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
+        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 
@@ -1251,8 +1250,8 @@ CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord,
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
 
-CoreCoord Device::virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const {
-    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
@@ -1405,14 +1404,14 @@ allocator::Statistics Device::get_memory_allocation_statistics(const BufferType 
     return allocator::get_statistics(*allocator, buffer_type);
 }
 
-uint32_t Device::get_allocator_alignment(const BufferType &buffer_type) const {
+uint32_t Device::get_allocator_alignment() const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_alignment(*allocator, buffer_type);
+    return allocator->config.alignment;
 }
 
-uint32_t Device::get_allocator_alignment(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
+uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_alignment(*allocator, buffer_type);
+    return allocator->config.alignment;
 }
 
 size_t Device::get_l1_small_size() const {
@@ -1890,7 +1889,9 @@ bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
 void v1::DeallocateBuffers(IDevice* device) { device->deallocate_buffers(); }
 
-void v1::DumpDeviceProfileResults(IDevice* device) { detail::DumpDeviceProfileResults(device); }
+void v1::DumpDeviceProfileResults(IDevice* device) {
+    detail::DumpDeviceProfileResults(device);
+}
 
 ARCH v1::GetArch(IDevice* device) { return device->arch(); }
 

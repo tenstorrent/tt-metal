@@ -96,7 +96,7 @@ run_t3000_llama3_vision_tests() {
   pip install -r models/demos/llama3/requirements.txt
 
   for fake_device in "$n300" "$t3k"; do
-    FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_vision_demo.py -k "batch1-trace" --timeout 600; fail+=$?
+    FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 vision tests for $fake_device completed"
   done
 

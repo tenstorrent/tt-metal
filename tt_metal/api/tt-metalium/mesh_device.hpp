@@ -99,18 +99,18 @@ public:
     CoreCoord virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
+
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
@@ -134,20 +134,15 @@ public:
     CoreCoord logical_core_from_bank_id(uint32_t bank_id) const override;
     CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
     const std::vector<uint32_t>& bank_ids_from_dram_channel(uint32_t dram_channel) const override;
-    const std::vector<uint32_t>& bank_ids_from_dram_channel(
-        uint32_t dram_channel, SubDeviceId sub_device_id) const override;
-    const std::vector<uint32_t>& bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord& logical_core) const override;
-    const std::vector<uint32_t>& bank_ids_from_logical_core(
-        BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const override;
+    const std::vector<uint32_t>& bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const override;
+    const std::vector<uint32_t>& bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core) const override;
+    const std::vector<uint32_t>& bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const override;
     allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type) const override;
-    allocator::Statistics get_memory_allocation_statistics(
-        const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t get_allocator_alignment(const BufferType& buffer_type) const override;
-    uint32_t get_allocator_alignment(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
+    allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
+    uint32_t get_allocator_alignment() const override;
+    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
     size_t get_l1_small_size() const override;
     size_t get_l1_small_size(SubDeviceId sub_device_id) const override;
     const std::unordered_set<Buffer*>& get_allocated_buffers() const override;
@@ -155,18 +150,15 @@ public:
     void deallocate_buffers() override;
     void deallocate_buffers(SubDeviceId sub_device_id) override;
     void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const override;
-    void dump_memory_blocks(
-        const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const override;
+    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     const JitBuildEnv& build_env() const override;
     const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const string build_kernel_target_path(
-        uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
-    const JitBuildState& build_firmware_state(
-        uint32_t programmable_core, uint32_t processor_class, int i) const override;
+    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
+    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
     const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
     SystemMemoryManager& sysmem_manager() override;
@@ -186,12 +178,7 @@ public:
     bool using_fast_dispatch() const override;
 
     // Initialization APIs
-    bool initialize(
-        const uint8_t num_hw_cqs,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) override;
     void build_firmware() override;
     void reset_cores() override;
     void initialize_and_launch_firmware() override;
@@ -213,20 +200,17 @@ public:
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
-        const std::vector<CoreRange>& ranges, const CoreType core_type) override;
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
     bool dispatch_s_enabled() const override;
     bool distributed_dispatcher() const override;
     NOC dispatch_go_signal_noc() const override;
     size_t get_device_kernel_defines_hash() override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(
-        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const override;
+    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;

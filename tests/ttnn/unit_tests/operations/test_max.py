@@ -129,5 +129,4 @@ def test_max_dim(device, input_shape_and_dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc = 0.9999
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+    assert_with_pcc(torch_output_tensor, output_tensor)
