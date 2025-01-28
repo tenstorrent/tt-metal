@@ -991,6 +991,7 @@ void pytensor_module(py::module& m_tensor) {
         .def_property_readonly("spec", [](const Tensor& self) { return self.get_tensor_spec(); })
         .def_property_readonly("shape", [](const Tensor& self) { return self.get_logical_shape(); })
         .def_property_readonly("logical_shape", [](const Tensor& self) { return self.get_logical_shape(); })
+        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.get_padded_shape(); })
         .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
         .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
         .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })

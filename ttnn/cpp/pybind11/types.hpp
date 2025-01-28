@@ -79,7 +79,7 @@ void py_module(py::module& module) {
 
             return ttnn::SimpleShape(std::move(new_shape));
         });
-    // py::implicitly_convertible<py::iterable, SimpleShape>();
+    py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::SimpleShape>();
 }
 
 }  // namespace types

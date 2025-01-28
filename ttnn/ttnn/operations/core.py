@@ -195,14 +195,16 @@ def from_torch(
         if memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
             return ttnn.Tensor(tensor, dtype, device, layout, memory_config, tile)
 
-    shape_with_padding = None
+    logical_shape = None
+    padded_shape = None
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
-        shape_with_padding = tensor.shape
-        tensor = tensor.reshape(tensor.shape.with_tile_padding())
+        logical_shape = tensor.shape
+        padded_shape = tensor.padded_shape
+        tensor = tensor.reshape(tensor.padded_shape)
         tensor = ttnn.to_torch(tensor)
 
     if memory_config is not None:
@@ -235,8 +237,8 @@ def from_torch(
             memory_config = ttnn.DRAM_MEMORY_CONFIG
         tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
-    if shape_with_padding is not None and shape_with_padding != tensor.shape and mesh_mapper is None:
-        tensor = ttnn.reshape(tensor, shape_with_padding)
+    if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
+        tensor = ttnn.reshape(tensor, logical_shape, padded_shape)
 
     return tensor
 
@@ -320,6 +322,9 @@ def to_torch(
 
         shape_without_tile_padding = tuple(tensor.shape)
         logical_shape_rank = len(tensor.logical_shape)
+
+        while len(shape_without_tile_padding) < len(tensor.padded_shape):
+            shape_without_tile_padding = (1,) + shape_without_tile_padding
 
         tensor = tensor.to_torch()
         slices = [slice(None, x) for x in shape_without_tile_padding]
