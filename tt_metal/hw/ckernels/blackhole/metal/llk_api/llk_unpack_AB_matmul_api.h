@@ -84,17 +84,20 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const uint32_t unpB_num_faces =
         partial_face_b ? 1 : get_operand_num_faces(operandB_id);  // if partial face -> unpack face by face
 
-    _llk_unpack_AB_matmul_init_(
-        transpose,
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
-        partial_face_a,
-        partial_face_b);
+    {
+        DeviceZoneScopedN("UNPACK MATMUL INIT");
+        _llk_unpack_AB_matmul_init_(
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            unpA_num_faces,
+            unpB_num_faces,
+            partial_face_a,
+            partial_face_b);
+    }
 }
 
 inline void llk_unpack_AB_matmul(
@@ -126,19 +129,22 @@ inline void llk_unpack_AB_matmul(
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;
 
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_(
-        base_address_a,
-        base_address_b,
-        tile_index_a,
-        tile_index_b,
-        tile_size_a,
-        tile_size_b,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        partial_face_a,
-        partial_face_b,
-        ct_dim,
-        rt_dim,
-        kt_dim);
+    {
+        DeviceZoneScopedN("UNPACK MATMUL");
+        _llk_unpack_AB_matmul_(
+            base_address_a,
+            base_address_b,
+            tile_index_a,
+            tile_index_b,
+            tile_size_a,
+            tile_size_b,
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            partial_face_a,
+            partial_face_b,
+            ct_dim,
+            rt_dim,
+            kt_dim);
+    }
     WAYPOINT("UPMD");
 }
