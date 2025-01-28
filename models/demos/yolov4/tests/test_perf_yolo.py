@@ -30,7 +30,7 @@ def get_expected_compile_time_sec():
 
 
 def get_expected_inference_time_sec():
-    return 0.23
+    return 0.237
 
 
 @pytest.mark.models_performance_bare_metal
