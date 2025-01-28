@@ -36,7 +36,8 @@ namespace distributed {
 class MeshDevice;
 }
 
-struct Tensor {
+class Tensor {
+public:
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         TensorSpec tensor_spec;
@@ -81,7 +82,6 @@ struct Tensor {
 
     // Tensor gets worker queue handle through the device
     std::vector<IDevice*> workers = {};
-    bool deallocate_through_destructor = false;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -123,7 +123,6 @@ struct Tensor {
             perform_cleanup_for_async_mode();
             this->workers = std::move(other.workers);
             this->tensor_attributes = std::move(other.tensor_attributes);
-            this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);
         }
         return *this;
     }
@@ -351,6 +350,7 @@ struct Tensor {
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
+    void deallocate_impl(bool force, bool deallocation_through_destructor);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

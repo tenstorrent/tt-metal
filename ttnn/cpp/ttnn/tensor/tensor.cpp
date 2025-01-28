@@ -203,11 +203,9 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                     tensor_attributes->tensor_spec.layout());
                 // Increment main thread ref count for all tensors on device
                 tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
-                // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
-                // deallocated inside the worker (composite ops do this).
-                if (tt::tt_metal::detail::InWorkerThread()) {
-                    tensor_attributes->main_thread_tensor = false;
-                }
+                // Track if this tensor is being created from scratch in a worker, to allow it to be deallocated inside
+                // the worker (composite ops do this).
+                tensor_attributes->main_thread_tensor = tt::tt_metal::detail::InMainThread();
                 tensor_attributes->num_shards_to_be_populated = 1;
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 tensor_attributes->num_shards_to_be_populated = 1;
@@ -227,11 +225,9 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                 }
                 // Increment main thread ref count for all tensors on cluster
                 tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
-                // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
-                // deallocated inside the worker (composite ops do this).
-                if (tt::tt_metal::detail::InWorkerThread()) {
-                    tensor_attributes->main_thread_tensor = false;
-                }
+                // Track if this tensor is being created from scratch in a worker, to allow it to be deallocated inside
+                // the worker (composite ops do this).
+                tensor_attributes->main_thread_tensor = tt::tt_metal::detail::InMainThread();
                 tensor_attributes->num_shards_to_be_populated = storage.num_buffers();
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 tensor_attributes->num_shards_to_be_populated = storage.num_buffers();
@@ -255,13 +251,14 @@ Tensor::Tensor(const std::vector<IDevice*>& workers) :
         }
         MultiDeviceStorage storage;
         std::transform(
-            workers.cbegin(), workers.cend(), std::back_inserter(storage.ordered_device_ids), [](const IDevice* worker) {
-                return worker->id();
-            });
+            workers.cbegin(),
+            workers.cend(),
+            std::back_inserter(storage.ordered_device_ids),
+            [](const IDevice* worker) { return worker->id(); });
         return Storage(std::move(storage));
     }();
     tensor_attributes->num_shards_to_be_populated = workers.size();
-    if (!tt::tt_metal::detail::InWorkerThread()) {
+    if (tt::tt_metal::detail::InMainThread()) {
         tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
     } else {
         // This tensor is being created from scratch in a worker. Track this and allow it to be explicitly
@@ -301,7 +298,6 @@ Tensor& Tensor::operator=(const Tensor& other) {
         perform_cleanup_for_async_mode();
         this->workers = other.workers;
         this->tensor_attributes = other.tensor_attributes;
-        this->deallocate_through_destructor = other.deallocate_through_destructor;
         if (this->workers.size()) {
             if (not tt::tt_metal::detail::InWorkerThread()) {
                 this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -312,10 +308,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 }
 
 Tensor::Tensor(const Tensor& other) :
-    tensor_id(other.tensor_id),
-    workers(other.workers),
-    tensor_attributes(other.tensor_attributes),
-    deallocate_through_destructor(other.deallocate_through_destructor) {
+    tensor_id(other.tensor_id), workers(other.workers), tensor_attributes(other.tensor_attributes) {
     if (this->workers.size()) {
         if (not tt::tt_metal::detail::InWorkerThread()) {
             this->tensor_attributes->increment_main_thread_ref_count(this->workers.at(0));
@@ -325,8 +318,7 @@ Tensor::Tensor(const Tensor& other) :
 
 Tensor::~Tensor() {
     ZoneScoped;
-    this->deallocate_through_destructor = true;
-    this->deallocate();
+    this->deallocate_impl(/*force=*/false, /*deallocation_through_destructor=*/true);
     // Decrement main thread ref count for all tensors on device
     if (this->workers.size() and this->tensor_attributes) {
         this->tensor_attributes->decrement_main_thread_ref_count(this->workers.at(0));
@@ -338,7 +330,9 @@ Tensor::Tensor(
     Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
     Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
-void Tensor::deallocate(bool force) {
+void Tensor::deallocate(bool force) { deallocate_impl(force, /*deallocation_through_destructor=*/false); }
+
+void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
     ZoneScopedN("TensorDeallocate");
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     // Check if the attributes didn't get moved to another tensor.
@@ -346,6 +340,16 @@ void Tensor::deallocate(bool force) {
     if (tensor_attributes.use_count() == 0) {
         return;
     }
+
+    auto get_tensor_ref_count = [](const Tensor& tensor) {
+        // If owned by the main thread, deallocate this tensor only from the main thread. If owned by worker thread,
+        // allow deallocation in worker and use shared_ptr ref count, since this is a thread_local tensor
+        return (tensor.workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
+                not tensor.tensor_attributes->main_thread_tensor)
+                   ? tensor.tensor_attributes.use_count()
+                   : tensor.tensor_attributes->main_thread_ref_count;
+    };
+
     std::visit(
         tt::stl::overloaded{
             [this](OwnedStorage& storage) {
@@ -363,90 +367,88 @@ void Tensor::deallocate(bool force) {
                     }
                 }
             },
-            [force, this](DeviceStorage& storage) {
+            [force, this, &get_tensor_ref_count, deallocation_through_destructor](DeviceStorage& storage) {
                 if (not this->workers.at(0)->is_initialized()) {
                     return;
                 }
-                if ((not tt::tt_metal::detail::InWorkerThread()) or not this->tensor_attributes->main_thread_tensor) {
-                    if (not this->tensor_attributes->main_thread_tensor) {
-                        TT_ASSERT(
-                            not this->tensor_attributes->main_thread_ref_count,
-                            "main_thread_ref_count for tensors created inside a worker thread must be 0");
-                    }
-                    // If owned by the main thread, deallocate this tensor only from the main thread. If owned by
-                    // worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a
-                    // thread_local tensor
-                    uint32_t ref_count_to_use =
-                        (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-                         not this->tensor_attributes->main_thread_tensor)
-                            ? this->tensor_attributes.use_count()
-                            : this->tensor_attributes->main_thread_ref_count;
-                    if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
-                        this->tensor_attributes->deallocated = true;
-                        this->workers.at(0)->push_work([force, attr = this->tensor_attributes]() mutable {
-                            // Cross worker synchronization: If the tensor being deallocated is shared across
-                            // workers (ex: all_gather op), wait until all workers are done with this tensor
-                            // before deallocating.
-                            bool num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
-                            if (num_threads_sharing_tensor) {
-                                while (num_threads_sharing_tensor) {
-                                    num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
-                                }
-                            }
-                            std::visit(
-                                [force, attr](auto&& s) {
-                                    using type = std::decay_t<decltype(s)>;
-                                    if constexpr (std::is_same_v<type, DeviceStorage>) {
-                                        if (force or s.buffer.use_count() == 1) {
-                                            DeallocateBuffer(*(s.buffer));
-                                        }
-                                        // Safe to reset this buf object since this is the last reference (in
-                                        // the main thread) to the tensor attr object holding this buffer. If
-                                        // any other tensor handles hold this buffer, it will not be deleted,
-                                        // until the last handle goes out of scope or is deallocated.
-                                        s.buffer.reset();
-                                    } else if constexpr (std::is_same_v<type, OwnedStorage>) {
-                                        // Manage Dynamic Storage (due to autoformat in async mode): Main thread
-                                        // sees this tensor as a device tensor, since worker has not updated
-                                        // storage time. When the worker executes the dealloc request, the
-                                        // storage type has been appropriately updated to Owned.
-                                        TT_ASSERT(
-                                            attr->dynamic_storage,
-                                            "Tensor storage type changed during runtime (device -> host), but "
-                                            "dynamic storage was not marked.");
-                                        std::visit([](auto&& buffer) { buffer.reset(); }, s.buffer);
-                                    }
-                                },
-                                attr->storage);
-                        });
-                    }
-                } else {
+                if (tt::tt_metal::detail::InWorkerThread() and this->tensor_attributes->main_thread_tensor) {
                     TT_FATAL(
-                        this->deallocate_through_destructor,
+                        deallocation_through_destructor,
                         "Device tensors created in the main thread cannot be explictly deallocated in worker "
                         "threads.");
+                    return;
+                }
+
+                TT_ASSERT(
+                    not this->tensor_attributes->main_thread_tensor and
+                        not this->tensor_attributes->main_thread_ref_count,
+                    "main_thread_ref_count for tensors created inside a worker thread must be 0");
+                const uint32_t ref_count_to_use = get_tensor_ref_count(*this);
+                if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
+                    this->tensor_attributes->deallocated = true;
+                    this->workers.at(0)->push_work([force, attr = this->tensor_attributes]() mutable {
+                        // Cross worker synchronization: If the tensor being deallocated is shared across
+                        // workers (ex: all_gather op), wait until all workers are done with this tensor
+                        // before deallocating.
+                        bool num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
+                        if (num_threads_sharing_tensor) {
+                            while (num_threads_sharing_tensor) {
+                                num_threads_sharing_tensor = attr->num_sibling_workers_sharing_tensor;
+                            }
+                        }
+                        std::visit(
+                            [force, attr](auto&& s) {
+                                using type = std::decay_t<decltype(s)>;
+                                if constexpr (std::is_same_v<type, DeviceStorage>) {
+                                    if (force or s.buffer.use_count() == 1) {
+                                        DeallocateBuffer(*(s.buffer));
+                                    }
+                                    // Safe to reset this buf object since this is the last reference (in
+                                    // the main thread) to the tensor attr object holding this buffer. If
+                                    // any other tensor handles hold this buffer, it will not be deleted,
+                                    // until the last handle goes out of scope or is deallocated.
+                                    s.buffer.reset();
+                                } else if constexpr (std::is_same_v<type, OwnedStorage>) {
+                                    // Manage Dynamic Storage (due to autoformat in async mode): Main thread
+                                    // sees this tensor as a device tensor, since worker has not updated
+                                    // storage time. When the worker executes the dealloc request, the
+                                    // storage type has been appropriately updated to Owned.
+                                    TT_ASSERT(
+                                        attr->dynamic_storage,
+                                        "Tensor storage type changed during runtime (device -> host), but "
+                                        "dynamic storage was not marked.");
+                                    std::visit([](auto&& buffer) { buffer.reset(); }, s.buffer);
+                                }
+                            },
+                            attr->storage);
+                    });
                 }
             },
-            [force, this](MultiDeviceStorage& storage) {
+            [force, this, &get_tensor_ref_count, deallocation_through_destructor](MultiDeviceStorage& storage) {
                 if (not this->workers.at(0)->is_initialized()) {
                     return;
                 }
-                if ((not tt::tt_metal::detail::InWorkerThread()) or not this->tensor_attributes->main_thread_tensor) {
-                    // If owned by the main thread, deallocate this tensor only from the main thread. If owned by
-                    // worker thread, allow deallocation in worker and use shared_ptr ref count, since this is a
-                    // thread_local tensor
-                    uint32_t ref_count_to_use =
-                        (this->workers.at(0)->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-                         not this->tensor_attributes->main_thread_tensor)
-                            ? this->tensor_attributes.use_count()
-                            : this->tensor_attributes->main_thread_ref_count;
-                    if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
-                        this->tensor_attributes->deallocated = true;
+                if (tt::tt_metal::detail::InWorkerThread() and this->tensor_attributes->main_thread_tensor) {
+                    TT_FATAL(
+                        deallocation_through_destructor,
+                        "Device tensors created in the main thread cannot be explictly deallocated in worker "
+                        "threads.");
+                    return;
+                }
+                const uint32_t ref_count_to_use = get_tensor_ref_count(*this);
+                if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
+                    this->tensor_attributes->deallocated = true;
+
+                    if (storage.mesh_buffer != nullptr) {
+                        // TODO: #17215 - Consider if it is possible to retain references to individual device buffers
+                        // after mesh buffer was deallocated.
+                        storage.mesh_buffer.reset();
+                    } else {
                         auto dealloc_lambda = std::make_shared<std::function<void(IDevice*)>>(
                             [force, attr = this->tensor_attributes](IDevice* worker) mutable {
                                 ZoneScopedN("ShardDeallocate");
                                 TT_ASSERT(
-                                    std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(attr->storage),
+                                    std::holds_alternative<MultiDeviceStorage>(attr->storage),
                                     "Unexpected type {}",
                                     tt::stl::get_active_type_name_in_variant(attr->storage));
                                 auto& s = std::get<MultiDeviceStorage>(attr->storage);
@@ -459,18 +461,12 @@ void Tensor::deallocate(bool force) {
                                 }
                             });
 
-                        for (auto worker : this->workers) {
+                        for (auto* worker : this->workers) {
                             worker->push_work([worker, dealloc_lambda]() mutable { (*dealloc_lambda)(worker); });
                         }
                     }
-                } else {
-                    TT_FATAL(
-                        this->deallocate_through_destructor,
-                        "Device tensors created in the main thread cannot be explictly deallocated in worker "
-                        "threads.");
                 }
             },
-
         },
         this->tensor_attributes->storage);
     // GraphTracker::instance().track_function_end();
@@ -481,7 +477,7 @@ void Tensor::perform_cleanup_for_async_mode() {
     // or move assignment operator
     if (this->tensor_attributes) {
         // Object has tensor_attributes that will be reassigned
-        if (this->workers.size() and (not tt::tt_metal::detail::InWorkerThread()) and
+        if (this->workers.size() and tt::tt_metal::detail::InMainThread() and
             this->workers.at(0)->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
             // Operator called in main thread with async mode. Main thread Ref Count must be decremented.
             // This is the last tensor in the main thread holding these attributes. Deallocate the buffer
@@ -1050,6 +1046,8 @@ Tensor allocate_tensor_on_devices(const TensorSpec& tensor_spec, const std::vect
 
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device) {
     // Allocate a mesh buffer synchronously.
+    TT_FATAL(
+        tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
 
     const auto [num_rows, num_cols] = mesh_device->shape();
