@@ -102,13 +102,12 @@ args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::
     TT_ASSERT(false);
 }
 
-args_list_t emit_address_generator_compile_time_args(
-    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
+args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
-            return shard_pf_builder::sharding_ct_table_builder(d, t);
+            return shard_pf_builder::sharding_ct_table_builder(t.device(), t);
             break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
