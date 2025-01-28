@@ -161,7 +161,10 @@ autograd::TensorPtr sum(const autograd::TensorPtr& tensor) {
     autograd::GradFunction grad = [tensor, out]() {
         // Distribute the gradient to each element in the original tensor
         auto in_shape = tensor->get_value().get_logical_shape();
-        auto grad_broadcast = ttnn::repeat(out->get_grad(), in_shape);
+        auto grad_shape = out->get_grad().get_logical_shape();
+
+        auto unsqueezed_grad = ttml::core::unsqueeze_to_rank(out->get_grad(), in_shape.rank());
+        auto grad_broadcast = ttnn::repeat(unsqueezed_grad, in_shape);
         tensor->add_grad(grad_broadcast);
     };
 
