@@ -46,12 +46,14 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw, ++num_tiles_read) {
+                    // DPRINT << "broadcast_to reader row start, number of tile read " << num_tiles_read << ENDL();
                     cb_reserve_back(cb_id_src, onetile);
                     uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
                     noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
                     noc_async_read_barrier();
                     fill_tile_with_first_row_bfloat16(cb_id_src);
                     cb_push_back(cb_id_src, onetile);
+                    // DPRINT << "broadcast_to reader row end, number of tile read " << num_tiles_read + 1 << ENDL();
                 }
             }
             tile_offset += c_stride;

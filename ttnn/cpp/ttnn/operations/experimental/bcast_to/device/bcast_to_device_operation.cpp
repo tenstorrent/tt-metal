@@ -14,13 +14,13 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     if (a_h == b_h && a_w == b_w) {
         return SubtileBroadcastType::NONE;
     }
-    if (a_h == 1 && a_w == 1) {
+    if (a_h == 1 && a_w == 1 && b_h > 1 && b_w > 1) {
         return SubtileBroadcastType::SCALAR;
     }
-    if (a_h == 1) {
+    if (a_h == 1 && b_h > 1) {
         return SubtileBroadcastType::ROW;
     }
-    if (a_w == 1) {
+    if (a_w == 1 && b_w > 1) {
         return SubtileBroadcastType::COL;
     }
 
@@ -99,6 +99,7 @@ std::tuple<BcastToOperation::operation_attributes_t, BcastToOperation::tensor_ar
         input.get_logical_shape()[-1],
         output_shape[output_shape.size() - 2],
         output_shape[output_shape.size() - 1]);
+    tt::log_debug(tt::LogOp, "get_subtile_broadcast_type: {}\n", subtile_broadcast_type);
     return {
         operation_attributes_t{output_shape, memory_config.value_or(input.memory_config()), subtile_broadcast_type},
         tensor_args_t{input, output}};

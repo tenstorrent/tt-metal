@@ -50,7 +50,7 @@ auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
 #ifdef DEBUG
     tt::log_debug("inferred output shape: ");
     for (int i = 0; i < output_shape.size(); ++i) {
-        tt::log_debug(tt::LogOp, "%d ", output_shape[i]);
+        tt::log_debug(tt::LogOp, "{} ", output_shape[i]);
     }
     tt::log_debug("\n");
 #endif
