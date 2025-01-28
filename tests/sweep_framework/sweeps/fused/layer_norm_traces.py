@@ -4,8 +4,8 @@
 
 from typing import Optional, Tuple
 
+import pytest
 import torch
-
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -108,11 +108,7 @@ parameters = {
 }
 
 
-def run(
-    params,
-    *,
-    device,
-) -> list:
+def run_layer_norm(device, params):
     [input_shape, normalized_shape, eps] = params
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
     torch_weight_tensor = torch.rand(normalized_shape, dtype=torch.float32)
@@ -131,3 +127,16 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
     return [check_with_pcc(torch_output_tensor, output_tensor, expected_pcc), e2e_perf]
+
+
+@pytest.mark.parametrize("params", parameters["default"]["params"])
+def test_layer_norm(device, params):
+    run_layer_norm(device, params)
+
+
+def run(
+    params,
+    *,
+    device,
+) -> list:
+    return run_layer_norm(device, params)
