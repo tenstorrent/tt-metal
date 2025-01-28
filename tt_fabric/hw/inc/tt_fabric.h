@@ -556,7 +556,7 @@ typedef struct fvc_producer_state {
         uint32_t words_processed = 0;
         if (packet_is_for_local_chip()) {
             if (current_packet_header.routing.flags == FORWARD) {
-                if (current_packet_header.session.command == ASYNC_WR) {
+                if (current_packet_header.session.command & ASYNC_WR) {
                     if (packet_in_progress == 0) {
                         packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
                                       current_packet_header.session.target_offset_l;
@@ -573,6 +573,21 @@ typedef struct fvc_producer_state {
                         if (packet_words_remaining) {
                             words_processed = issue_async_write();
                         } else {
+                            // for fused command issue the atomic inc before invalidating the current packet
+                            if (current_packet_header.session.command & ATOMIC_INC) {
+                                uint64_t noc_addr =
+                                    ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
+                                     << 32) |
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                                noc_fast_atomic_increment(
+                                    noc_index,
+                                    NCRISC_AT_CMD_BUF,
+                                    noc_addr,
+                                    NOC_UNICAST_WRITE_VC,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.increment,
+                                    31,
+                                    false);
+                            }
                             packet_in_progress = 0;
                             curr_packet_valid = false;
                             packet_timestamp = get_timestamp();
