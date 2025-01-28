@@ -274,9 +274,26 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
+        auto shapes_equal = [=](const auto& shape_a, const auto& shape_b) {
+            const auto smaller_rank = std::min(shape_a.rank(), shape_b.rank());
+            for (int i = 0; i < smaller_rank; ++i) {
+                auto dim = -1 - i;
+                if (shape_a[dim] != shape_b[dim]) {
+                    return false;
+                }
+            }
+            const auto& larger_shape = shape_a.rank() > shape_b.rank() ? shape_a : shape_b;
+            for (int i = smaller_rank; i < larger_rank; ++i) {
+                auto dim = -1 - i;
+                if (larger_shape[dim] != 1) {
+                    return false;
+                }
+            }
+            return true;
+        };
         auto shape = output_tensor.value().logical_shape();
         TT_FATAL(
-            shape == output_shape,
+            shapes_equal(shape, output_shape),
             "Shape of Output tensor {} provided does not match the broadcasted output shape {}",
             shape,
             output_shape);
@@ -359,7 +376,7 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor,
+    const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
@@ -399,7 +416,7 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> output_tensor,
+    const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
