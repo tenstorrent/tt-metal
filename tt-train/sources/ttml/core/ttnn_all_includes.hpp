@@ -9,18 +9,18 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-volatile"
 #pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
 
-#include <tt-metalium/bfloat16.hpp>                                                                     // NOLINT
-#include <tt-metalium/mesh_device_view.hpp>                                                        // NOLINT
+#include <cpp/ttnn/operations/copy.hpp>                                                            // NOLINT
+#include <cpp/ttnn/operations/core/core.hpp>                                                       // NOLINT
+#include <cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                               // NOLINT
+#include <cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>             // NOLINT
 #include <hostdevcommon/common_values.hpp>                                                         // NOLINT
-#include <tt-metalium/base_types.hpp>                                                          // NOLINT
-#include <tt-metalium/math.hpp>                                                                // NOLINT
-#include <tt-metalium/host_api.hpp>                                                                   // NOLINT
-#include <tt-metalium/device_impl.hpp>                                                         // NOLINT
+#include <tt-metalium/base_types.hpp>                                                              // NOLINT
+#include <tt-metalium/bfloat16.hpp>                                                                // NOLINT
+#include <tt-metalium/device_impl.hpp>                                                             // NOLINT
+#include <tt-metalium/host_api.hpp>                                                                // NOLINT
+#include <tt-metalium/math.hpp>                                                                    // NOLINT
+#include <tt-metalium/mesh_device_view.hpp>                                                        // NOLINT
 #include <ttnn/core.hpp>                                                                           // NOLINT
-#include <cpp/ttnn/operations/copy.hpp>                                                       // NOLINT
-#include <cpp/ttnn/operations/core/core.hpp>                                                  // NOLINT
-#include <cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp>                          // NOLINT
-#include <cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp>        // NOLINT
 #include <ttnn/device.hpp>                                                                         // NOLINT
 #include <ttnn/distributed/api.hpp>                                                                // NOLINT
 #include <ttnn/distributed/types.hpp>                                                              // NOLINT
@@ -33,6 +33,7 @@
 #include <ttnn/operations/data_movement/permute/permute.hpp>                                       // NOLINT
 #include <ttnn/operations/data_movement/repeat/repeat.hpp>                                         // NOLINT
 #include <ttnn/operations/data_movement/slice/slice.hpp>                                           // NOLINT
+#include <ttnn/operations/data_movement/squeeze/squeeze.hpp>                                       // NOLINT
 #include <ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp>       // NOLINT
 #include <ttnn/operations/data_movement/transpose/transpose.hpp>                                   // NOLINT
 #include <ttnn/operations/data_movement/untilize/untilize.hpp>                                     // NOLINT
