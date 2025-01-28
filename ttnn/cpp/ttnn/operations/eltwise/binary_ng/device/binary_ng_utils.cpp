@@ -275,30 +275,9 @@ std::map<std::string, std::string> output_typecast(DataType input_dtype, DataTyp
     std::map<std::string, std::string> type_defines;
     if (input_dtype != output_dtype && ((input_dtype == DataType::BFLOAT16 && output_dtype == DataType::UINT16) ||
                                         (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::INT32) ||
-                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT16) ||
-                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT16) ||
-                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::BFLOAT16) ||
-                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::UINT16) ||
-                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::FLOAT32) ||
-                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::INT32) ||
-                                        (input_dtype == DataType::INT32 && output_dtype == DataType::FLOAT32) ||
-                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::UINT16) ||
-                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT8_B) ||
-                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::INT32) ||
-                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT8_B) ||
                                         (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::UINT32) ||
-                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT16) ||
-                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::UINT32) ||
-                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::FLOAT32) ||
-                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::UINT32) ||
-                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT8_B) ||
-                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::UINT32) ||
-                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::UINT32) ||
-                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT4_B) ||
-                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::UINT16) ||
-                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT4_B) ||
-                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::INT32) ||
-                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT4_B))) {
+                                        (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT8_B) ||
+                                        (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT4_B))) {
         TT_ASSERT(defines.count("TYPE_CHAIN") == 0, "TYPE_CHAIN already defined");
 
         auto in_dataformat = (uint32_t)datatype_to_dataformat_converter(input_dtype);
