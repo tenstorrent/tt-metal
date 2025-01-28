@@ -259,9 +259,11 @@ ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, c
     if (tensor.get_shape() == shape) {
         return tensor;
     }
-    if (tensor.get_layout() == ttnn::TILE_LAYOUT &&
-        (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
-    {
+    if (shape.rank() == 1) {
+        return ttnn::experimental::view(tensor, ttnn::SimpleShape(shape.logical_shape()));
+    } else if (
+        tensor.get_layout() == ttnn::TILE_LAYOUT &&
+        (shape[-1] % tile_first_dim != 0 || shape[-2] % tile_second_dim != 0)) {
         //Correct the output shape to add padding metadata before reshape (view)
         return ttnn::experimental::view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
     }
