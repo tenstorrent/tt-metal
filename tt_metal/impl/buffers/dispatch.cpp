@@ -4,6 +4,7 @@
 
 #include <device_command.hpp>
 #include <device.hpp>
+#include "assert.hpp"
 #include "dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -499,6 +500,11 @@ void write_sharded_buffer_to_core(
 }
 
 void validate_buffer_region_conditions(const Buffer& buffer, const BufferRegion& region) {
+    TT_FATAL(
+        buffer.is_valid_region(region),
+        "Buffer region with offset {} and size {} is invalid.",
+        region.offset,
+        region.size);
     if (buffer.is_valid_partial_region(region)) {
         TT_FATAL(
             region.offset % buffer.page_size() == 0,
