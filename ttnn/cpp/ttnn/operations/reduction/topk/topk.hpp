@@ -51,14 +51,6 @@ struct ExecuteTopK {
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
         return invoke(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
     }
-
-    static inline std::vector<Tensor> create_async_output_tensors(
-        const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
-        const auto& input_tensor = input_tensors.at(0);
-        return {
-            Tensor(operation::get_workers_for_op_output({input_tensor})),
-            Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    }
 };
 
 }  // namespace operations::reduction
