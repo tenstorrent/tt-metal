@@ -69,7 +69,7 @@ FORCE_INLINE void sender_side_start(
     std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     initialize_edm_common_datastructures(handshake_register_address);
     eth_wait_receiver_done(HS_CONTEXT_SWITCH_TIMEOUT);
-    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy()) {
         asm volatile("nop");
     }
     eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -101,7 +101,7 @@ FORCE_INLINE bool receiver_side_can_finish() { return eth_bytes_are_available_on
 FORCE_INLINE void receiver_side_finish(
     std::uint32_t handshake_register_address, size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     eth_wait_for_bytes(16, HS_CONTEXT_SWITCH_TIMEOUT);
-    while (eth_txq_reg_read(0, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy()) {
         asm volatile("nop");
     }
     eth_receiver_channel_done(0);
