@@ -53,6 +53,8 @@ def train_bpe_tokenizer(text_file, output_tokenizer="tokenizer.json", vocab_size
     # 3. Byte-level pre-tokenizer + Byte-level decoder
     tokenizer.pre_tokenizer = ByteLevel()
     tokenizer.decoder = ByteLevelDecoder()
+    tokenizer.pre_tokenizer.add_prefix_space = False
+    tokenizer.decoder.add_prefix_space = False
     # tokenizer.pre_tokenizer = Whitespace()
 
     # 3. Setup BPE trainer with desired vocab size + special tokens

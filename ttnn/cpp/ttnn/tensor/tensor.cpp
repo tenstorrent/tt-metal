@@ -570,11 +570,6 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-tt::tt_metal::LegacyShape Tensor::get_legacy_shape() const {
-    wait_for_tensor_metadata_populated();
-    return legacy_shape();
-}
-
 ttnn::Shape Tensor::get_shape() const {
     wait_for_tensor_metadata_populated();
     return shape();
@@ -603,7 +598,10 @@ const ttnn::SimpleShape& Tensor::get_padded_shape() const {
     return padded_shape();
 }
 
-tt::tt_metal::Padding Tensor::get_padding() const { return get_legacy_shape().padding(); }
+tt::tt_metal::Padding Tensor::get_padding() const {
+    wait_for_tensor_metadata_populated();
+    return tensor_attributes->tensor_spec.shape().value.padding();
+}
 
 const Storage& Tensor::get_storage() const {
     this->wait_for_tensor_data_populated();
@@ -1072,7 +1070,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                 device_tensor.storage_type() == StorageType::DEVICE or
                     device_tensor.storage_type() == StorageType::MULTI_DEVICE,
                 "write_tensor only supports host_tensor to device_tensor data transfer");
-            TT_FATAL(async_safe_tensor.get_shape() == device_tensor.get_shape(), "Error");
+            TT_FATAL(async_safe_tensor.get_logical_shape() == device_tensor.get_logical_shape(), "Error");
             TT_FATAL(async_safe_tensor.get_dtype() == device_tensor.get_dtype(), "Error");
             TT_FATAL(
                 async_safe_tensor.get_tensor_spec().page_config() == device_tensor.get_tensor_spec().page_config(),

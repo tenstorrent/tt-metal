@@ -36,14 +36,7 @@ run_tg_llama3_tests() {
 
 run_tg_tests() {
 
-  if [[ "$1" == "llama3-70b-old" ]]; then
-    echo "LOG_METAL: running llama3_70b (old) run_tg_frequent_tests"
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_mlp_galaxy.py --timeout=300 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_attention_galaxy.py --timeout=480 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_decoder_galaxy.py --timeout=600 ; fail+=$?
-    pytest -n auto models/demos/tg/llama3_70b/tests/test_llama_model_galaxy_ci.py --timeout=800 ; fail+=$?
-
-  elif [[ "$1" == "llama3" ]]; then
+  if [[ "$1" == "llama3" ]]; then
     echo "LOG_METAL: running Llama3 run_tg_frequent_tests"
     run_tg_llama3_tests
 

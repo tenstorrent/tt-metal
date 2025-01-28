@@ -20,9 +20,9 @@ inline void calculate_bitonic_topk_phases_steps(
         idir, i_end_phase, i_start_phase, i_end_step, i_start_step);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool idir = false, int ITERATIONS = 8>
 inline void calculate_bitonic_topk_merge(uint m_iter, uint k) {
-    _bitonic_topk_merge<APPROXIMATION_MODE, ITERATIONS>(m_iter, k);
+    _bitonic_topk_merge<APPROXIMATION_MODE, idir, ITERATIONS>(m_iter, k);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>

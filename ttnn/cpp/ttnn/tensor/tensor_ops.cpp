@@ -308,7 +308,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
 
     for (auto index = -3; index >= -static_cast<int>(input_tensor.get_padded_shape().rank()); index--) {
         TT_ASSERT(
-            input_tensor.get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
+            input_tensor.get_logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(

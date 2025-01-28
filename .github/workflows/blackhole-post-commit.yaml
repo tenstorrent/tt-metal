@@ -33,18 +33,11 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: "ubuntu-22.04-amd64"
   build-artifact:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       os: "ubuntu-22.04-amd64"
-      build-docker: false
   build-wheels:
     needs: build-artifact
     uses: ./.github/workflows/_build-wheels-impl.yaml
@@ -56,14 +49,14 @@ jobs:
     uses: ./.github/workflows/umd-unit-tests.yaml
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
   sd-unit-tests:
     needs: build-artifact
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 30
       os: "ubuntu-22.04"
   fd-unit-tests:
@@ -72,7 +65,7 @@ jobs:
     secrets: inherit
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       os: "ubuntu-22.04"
   # FD C++ Unit Tests
   cpp-unit-tests:
@@ -81,7 +74,7 @@ jobs:
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label }}
+      runner-label: ${{ inputs.runner-label || 'BH' }}
       timeout: 60
       os: "ubuntu-22.04"
 
@@ -95,9 +88,6 @@ jobs:
 #   build-docs:
 #     needs: build-artifact
 #     uses: ./.github/workflows/docs-latest-public.yaml
-#     secrets: inherit
-#   build:
-#     uses: ./.github/workflows/build.yaml
 #     secrets: inherit
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

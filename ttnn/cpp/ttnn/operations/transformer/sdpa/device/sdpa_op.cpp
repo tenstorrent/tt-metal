@@ -34,7 +34,7 @@ void ScaledDotProductAttention::validate(
 
     auto validate_padding = [&](const Tensor& tensor) {
         auto logical_shape = tensor.get_logical_shape();
-        auto legacy_shape = tensor.get_legacy_shape();
+        auto legacy_shape = tensor.get_padded_shape();
         TT_FATAL(logical_shape[0] == legacy_shape[0], "Padding is not supported on the batch dimension");
         TT_FATAL(logical_shape[1] == legacy_shape[1], "Padding is not supported on the num_heads dimension");
         TT_FATAL(logical_shape[3] == legacy_shape[3], "Padding is not supported on the head_dim dimension");
@@ -275,7 +275,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
 
     auto scale = this->scale;
     if (not scale.has_value()) {
-        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_legacy_shape()[-1]));
+        scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.get_padded_shape()[-1]));
     }
 
     std::size_t q_chunk_size = this->get_q_chunk_size();

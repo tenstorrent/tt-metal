@@ -219,7 +219,13 @@ struct EdmChannelWorkerInterface {
 
     // Connection management methods
     //
-    FORCE_INLINE void teardown_connection() const { increment_worker_semaphore(); }
+    FORCE_INLINE void teardown_connection() const {
+        auto const &worker_info = *worker_location_info_ptr;
+        uint64_t worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_teardown_semaphore_address);
+
+        noc_semaphore_inc(worker_semaphore_address, 1);
+    }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == 0; }
 

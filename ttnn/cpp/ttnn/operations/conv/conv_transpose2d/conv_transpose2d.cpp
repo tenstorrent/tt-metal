@@ -23,7 +23,7 @@ namespace conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    auto in_w_shape = conv_weight_tensor.get_legacy_shape();
+    auto in_w_shape = conv_weight_tensor.get_padded_shape();
     auto dtype = conv_weight_tensor.dtype();
     // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
     // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}
@@ -241,8 +241,7 @@ Result conv_transpose2d(
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(
-            std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::SimpleShape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         output_parallel_config,
         round_up_size);
 

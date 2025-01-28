@@ -88,7 +88,7 @@ def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsn
 
 
 def compute_post_allgather_output(
-    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width
+    tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width, output_df
 ):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
         compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
@@ -105,6 +105,7 @@ def compute_post_allgather_output(
             weight=tt_weights,
             program_config=SHARDED_NORM_PRGM_CFG,
             stats=tt_stats_tensor,
+            dtype=output_df,
         )
     else:
         return ttnn.layer_norm_post_all_gather(
@@ -113,6 +114,7 @@ def compute_post_allgather_output(
             weight=tt_weights,
             program_config=SHARDED_NORM_PRGM_CFG,
             stats=tt_stats_tensor,
+            dtype=output_df,
         )
 
 
@@ -316,9 +318,10 @@ def test_pre_allgather_layernorm_1d_reduce(
 @pytest.mark.parametrize("input_width", [2048])
 @pytest.mark.parametrize("num_devices", [4, 8])
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("output_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize("core_grid", ((4, 8),))
+@pytest.mark.parametrize("core_grid", ((2, 8),))
 def test_post_allgather_layernorm(
     device,
     use_program_cache,
@@ -326,6 +329,7 @@ def test_post_allgather_layernorm(
     num_devices,
     is_rmsnorm,
     input_df,
+    output_df,
     weights_df,
     seed,
     eps,
@@ -377,7 +381,7 @@ def test_post_allgather_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width
+            tt_input_tensor, tt_weights, tt_device_stats, eps, is_rmsnorm, core_grid, input_width, output_df
         )
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
@@ -462,7 +466,7 @@ def test_simulated_distributed_layernorm(
             torch_weight_chunks[d], device, weights_df, core_grid, input_width, is_weight=True
         )
         tt_output_tensor = compute_post_allgather_output(
-            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width
+            tt_input_tensor, tt_weights, tt_global_stats, eps, is_rmsnorm, core_grid, input_width, input_df
         )
         tt_output_chunks.append(ttnn.to_torch(tt_output_tensor).to(torch.bfloat16))
 

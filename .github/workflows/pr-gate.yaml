@@ -1,0 +1,34 @@
+name: PR Gate
+# This pipeline is the minimum bar a PR must pass before it can be merged.
+# It is intended to be fast and lightweight to trigger automatically on every
+# change in every PR and provide quick feedback without overloading the CI.
+
+# Requirements for all jobs in this workflow:
+# - A new job must cancel a previously scheduled/running job.
+#   PRs only care about the latest commit and multiple pushes may happen in quick succession.
+# - End-to-end (excluding wait times for runners) must be less than 5mins.
+#   This includes the cost of checking out the code, preparing a runner, etc.
+# - Individual test cases must be less than 1s.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "main"
+
+concurrency:
+  # Use github.run_id on main branch (or any protected branch)
+  # This ensure that no runs get cancelled on main
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # and will cancel obsolete runs
+  # Use github.ref on other branches, so it's unique per branch
+  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
+  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      os: "ubuntu-22.04-amd64"

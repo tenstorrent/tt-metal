@@ -54,8 +54,8 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
         this->num_kv_heads,
         num_w_cores);
 
-    const auto q_input_shape = q_input_tensor.get_legacy_shape();
-    const auto kv_input_shape = kv_input_tensor.get_legacy_shape();
+    const auto q_input_shape = q_input_tensor.get_padded_shape();
+    const auto kv_input_shape = kv_input_tensor.get_padded_shape();
     TT_FATAL(q_input_shape[1] == 1 && kv_input_shape[1] == 1, "Unsupported input shape");
     TT_FATAL(
         q_input_shape[0] == kv_input_shape[0],
