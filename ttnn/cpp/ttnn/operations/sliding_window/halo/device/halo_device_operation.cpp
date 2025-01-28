@@ -69,6 +69,11 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         TT_FATAL(input_core_w == output_core_w, "Error");
     }
 
+    if (this->in_place_) {
+        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        DeallocateBuffer(*input_tensor.buffer());
+    }
+
     auto out_mem_config = output_memory_config_;
     std::array<uint32_t, 2> shard_shape = {
         tt::div_up(output_shape[0] * output_shape[2], config_.num_cores_nhw),
@@ -141,7 +146,8 @@ Tensor halo_op(
     bool transpose_mcast,
     uint32_t reshard_num_cores_nhw,
     const MemoryConfig& output_memory_config,
-    bool is_out_tiled) {
+    bool is_out_tiled,
+    bool in_place) {
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Halo expects sharded input tensor");
     TT_FATAL(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -159,7 +165,8 @@ Tensor halo_op(
          transpose_mcast,
          reshard_num_cores_nhw,
          output_memory_config,
-         is_out_tiled](
+         is_out_tiled,
+         in_place](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -192,7 +199,8 @@ Tensor halo_op(
                 .reshard_num_cores_nhw_ = reshard_num_cores_nhw,
                 .max_out_nsticks_per_core_ = max_out_nsticks_per_core,
                 .output_memory_config_ = output_memory_config,
-                .is_out_tiled_ = is_out_tiled},
+                .is_out_tiled_ = is_out_tiled,
+                .in_place_ = in_place},
             {input_tensor});
     };
 
