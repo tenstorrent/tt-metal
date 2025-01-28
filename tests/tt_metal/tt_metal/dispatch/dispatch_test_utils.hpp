@@ -24,7 +24,7 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
 }
 
 inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(
-    tt::tt_metal::IDevice* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
+    tt::tt_metal::IDevice* device, tt::tt_metal::HWCommandQueue& cq, const TestBufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;

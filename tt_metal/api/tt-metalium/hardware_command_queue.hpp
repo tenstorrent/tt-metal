@@ -17,8 +17,6 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-// Forward declarations for defining friend relations.
-class CommandQueue;
 class Event;
 
 }  // namespace v0
@@ -92,14 +90,14 @@ public:
         uint32_t num_sub_devices,
         const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
 
-    uint32_t get_id() const;
-    std::optional<uint32_t> get_tid() const;
+    uint32_t id() const;
+    std::optional<uint32_t> tid() const;
 
     SystemMemoryManager& sysmem_manager();
 
     void terminate();
 
-    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
+    // These functions are temporarily needed since MeshCommandQueue relies on the HWCommandQueue object
     uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const;
     void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers);
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
@@ -140,10 +138,12 @@ public:
 
     void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
 
+    IDevice* device();
+
 private:
-    uint32_t id;
+    uint32_t id_;
     uint32_t size_B;
-    std::optional<uint32_t> tid;
+    std::optional<uint32_t> tid_;
     std::shared_ptr<detail::TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
@@ -171,7 +171,7 @@ private:
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_reset;
     std::array<tt::tt_metal::WorkerConfigBufferMgr, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>
         config_buffer_mgr_reset;
-    IDevice* device;
+    IDevice* device_;
 
     std::condition_variable reader_thread_cv;
     std::mutex reader_thread_cv_mutex;

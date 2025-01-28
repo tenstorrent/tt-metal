@@ -18,7 +18,7 @@ namespace v1 {
  *
  * @param device The device to query.
  * @param cq_id The command queue ID.
- * @return CommandQueue handle.
+ * @return HWCommandQueue handle.
  */
 CommandQueueHandle GetCommandQueue(IDevice* device, std::uint8_t cq_id);
 
@@ -26,7 +26,7 @@ CommandQueueHandle GetCommandQueue(IDevice* device, std::uint8_t cq_id);
  * @brief Retrieves the default command queue for the given device.
  *
  * @param device The device to query.
- * @return CommandQueue handle.
+ * @return HWCommandQueue handle.
  */
 CommandQueueHandle GetDefaultCommandQueue(IDevice* device);
 

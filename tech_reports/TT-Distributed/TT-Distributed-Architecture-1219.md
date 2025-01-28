@@ -230,7 +230,7 @@ struct MeshConfig {
 };
 
 // Class exposing host and device dispatch state
-// Similar to the CommandQueue object in TT-Metal, however
+// Similar to the HWCommandQueue object in TT-Metal, however
 // this has additional functionality and allows users to
 // communicate with a cluster of Physical Devices
 struct MeshCommandQueue {
@@ -360,7 +360,7 @@ User APIs accepting the DeviceHandle object will be portable across the TT-Metal
 
 ### 3.2.1 Overview
 
-TT-Metal infrastructure enables users to schedule the dispatch of data-movement and compute operations on a CommandQueue (CQ). Two CQs are exposed at the user-level to interface with a device and each CQ can only be tied to a single device.
+TT-Metal infrastructure enables users to schedule the dispatch of data-movement and compute operations on a HWCommandQueue (CQ). Two CQs are exposed at the user-level to interface with a device and each CQ can only be tied to a single device.
 
 TT-Mesh infrastructure exposes the concept of a Virtual Command Queue (VCQ). This data structure virtualizes the dispatch interfaces on a MeshDevice. Each VCQ allows users to schedule data-movement and compute primitives to the entire Virtual Mesh, or a subset of physical devices in the Mesh. The VCQ is analogous to the TT-Metal CQ. As such, two VCQs are exposed per Virtual Mesh.
 
@@ -370,7 +370,7 @@ From a functional perspective, the main difference between a CQ on a single devi
 
 ### 3.2.2 API Interface
 
-VCQs are exposed as handles using the *CommandQueueHandle* data-structure. This is the interface that enables users to request a *CommandQueue* handle for both a single-device context and mesh-device context:
+VCQs are exposed as handles using the *CommandQueueHandle* data-structure. This is the interface that enables users to request a *HWCommandQueue* handle for both a single-device context and mesh-device context:
 
 ```cpp
 CommandQueueHandle GetCommandQueue(DeviceHandle device, size_t cq_id);
@@ -869,10 +869,10 @@ In the single device context, the Event data-structure is primarily used for suc
 
 ```cpp
 // Record an event notification on a CQ tied to a specific device. Signals completion // of all previously enqueued work.
-void EnqueueRecordEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
+void EnqueueRecordEvent(HWCommandQueue &cq, const std::shared_ptr<Event> &event);
 
 // Wait for an event notification on the specified CQ.
-void EnqueueWaitForEvent(CommandQueue &cq, const std::shared_ptr<Event> &event);
+void EnqueueWaitForEvent(HWCommandQueue &cq, const std::shared_ptr<Event> &event);
 
 // Have Host wait until the CQ responsible for acknowledging an event has completed
 void EventSynchronize(const std::shared_ptr<Event> &event);

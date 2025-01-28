@@ -247,7 +247,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     if (fixture->IsSlowDispatch()) {
         tt_metal::detail::WriteToBuffer(src_dram_buffer, u32_vec);
     } else {
-        CommandQueue& cq = device->command_queue();
+        HWCommandQueue& cq = device->command_queue();
         EnqueueWriteBuffer(cq, src_dram_buffer, u32_vec, true);
     }
 

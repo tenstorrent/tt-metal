@@ -339,7 +339,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         DispatchCoreType dispatch_core_type = info.dispatch_from_eth ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         tt_metal::IDevice* device = tt_metal::CreateDevice(
             device_id, 1, DEFAULT_L1_SMALL_SIZE, 900000000, DispatchCoreConfig{dispatch_core_type});
-        CommandQueue& cq = device->command_queue();
+        HWCommandQueue& cq = device->command_queue();
 
         tt_metal::Program program[2];
         if (!initialize_program(info, device, program[0], info.slow_kernel_cycles)) {

@@ -13,7 +13,7 @@ namespace tt::tt_metal::distributed {
 namespace experimental {
 
 void write_program_commands(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     ProgramCommandSequence& program_cmd_seq,
     uint32_t num_active_cores_in_program,
     SubDeviceId sub_device_id,
@@ -26,9 +26,8 @@ void write_program_commands(
     // supports all runtime features, this will be removed, and program dispatch commands will be written
     // directly through dedicated interfaces.
 
-    uint32_t num_workers_in_cq =
-        cq.hw_command_queue().get_expected_num_workers_completed_for_sub_device(sub_device_index);
-    cq.hw_command_queue().set_expected_num_workers_completed_for_sub_device(
+    uint32_t num_workers_in_cq = cq.get_expected_num_workers_completed_for_sub_device(sub_device_index);
+    cq.set_expected_num_workers_completed_for_sub_device(
         sub_device_index, num_workers_in_cq + num_active_cores_in_program);
     // Write program command stream to device
     program_dispatch::write_program_command_sequence(
@@ -44,7 +43,7 @@ void write_program_commands(
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
 void write_go_signal(
-    CommandQueue& cq,
+    HWCommandQueue& cq,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,

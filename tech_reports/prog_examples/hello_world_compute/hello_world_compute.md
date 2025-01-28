@@ -23,13 +23,13 @@ We instantiate a device object that will be used to interface with the designate
 ## Program pre-compilation setup
 
 ``` cpp
-CommandQueue& cq = device->command_queue();
+HWCommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 ```
 
-We first obtain the global `CommandQueue` associated with the device in order to use the fast dispatch capabilities of the software. Thism mechanism enables commands to be run asynchronously between the host and device.
+We first obtain the global `HWCommandQueue` associated with the device in order to use the fast dispatch capabilities of the software. Thism mechanism enables commands to be run asynchronously between the host and device.
 
-Next, we create a `Program` to be run on our Grayskull accelerator. This object will encapsulate our data and kernels, and be dispatched through the `CommandQueue` to execute on the device.
+Next, we create a `Program` to be run on our Grayskull accelerator. This object will encapsulate our data and kernels, and be dispatched through the `HWCommandQueue` to execute on the device.
 
 ## Building a compute kernel
 

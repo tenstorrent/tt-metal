@@ -17,7 +17,7 @@ using namespace tt::tt_metal;
 
 namespace local_test_functions {
 
-void FinishAllCqs(vector<std::reference_wrapper<CommandQueue>>& cqs) {
+void FinishAllCqs(vector<std::reference_wrapper<HWCommandQueue>>& cqs) {
     for (uint i = 0; i < cqs.size(); i++) {
         Finish(cqs[i]);
     }
@@ -31,7 +31,7 @@ namespace basic_tests {
 TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
-        vector<std::reference_wrapper<CommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
+        vector<std::reference_wrapper<HWCommandQueue>> cqs = {device->command_queue(0), device->command_queue(1)};
         vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
         TT_ASSERT(cqs.size() == 2);
@@ -71,7 +71,7 @@ TEST_F(MultiCommandQueueMultiDeviceEventFixture, TestEventsEventSynchronizeSanit
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events,
 // wrap issue queue)
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEventSynchronizeSanity) {
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -109,7 +109,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEventSynchronizeSani
 
 // Simplest test to record and wait-for-events on same CQ.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventSanity) {
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> events_issued_per_cq = {0, 0};
     size_t num_events = 10;
@@ -138,7 +138,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventS
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
 // syncs from Host per CQ, and verify completion queues per CQ are correct.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventCrossCQs) {
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
     const size_t num_events_per_cq = 10;
@@ -214,7 +214,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsEnqueueWaitForEventC
 // the write, record-event, wait-event, read-event are all on the same CQ, but cover both CQ's.
 TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitForEventSameCQ) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 256, .buftype = BufferType::DRAM};
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -273,7 +273,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
     }
 
     TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     vector<uint32_t> cmds_issued_per_cq = {0, 0};
 
@@ -345,7 +345,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
     }
 
     TestBufferConfig config = {.num_pages = 1, .page_size = 16, .buftype = BufferType::DRAM};
-    vector<std::reference_wrapper<CommandQueue>> cqs = {
+    vector<std::reference_wrapper<HWCommandQueue>> cqs = {
         this->device_->command_queue(0), this->device_->command_queue(1)};
     size_t buf_size = config.num_pages * config.page_size;
 

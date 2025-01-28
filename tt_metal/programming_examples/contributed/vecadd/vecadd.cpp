@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
     // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
     constexpr CoreCoord core = {0, 0};
 
-    CommandQueue& cq = device->command_queue();
+    HWCommandQueue& cq = device->command_queue();
     const uint32_t n_tiles = 64;
     const uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
     // Create 3 buffers on DRAM. These will hold the input and output data. A and B are the input buffers, C is the

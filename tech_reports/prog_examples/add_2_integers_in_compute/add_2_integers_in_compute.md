@@ -15,7 +15,7 @@ To build and execute, you may use the following commands:
 
 ``` cpp
 Device *device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+HWCommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```

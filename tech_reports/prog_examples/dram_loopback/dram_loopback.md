@@ -24,11 +24,11 @@ We instantiate a device to control our `GRAYSKULL` type accelerator.
 ## Program pre-compilation setup
 
 ``` cpp
-CommandQueue& cq = detail::GetCommandQueue(device);
+HWCommandQueue& cq = detail::GetCommandQueue(device);
 Program program = CreateProgram();
 ```
 
-We first obtain the global `CommandQueue` in order to use the fast dispatch capabilities of the software. This will be used when issuing commands for asynchronous reads/writes/program management.
+We first obtain the global `HWCommandQueue` in order to use the fast dispatch capabilities of the software. This will be used when issuing commands for asynchronous reads/writes/program management.
 
 Next, we create a `Program` to be run on our Grayskull accelerator. This is how we'll be keeping track of things in our session with the device.
 

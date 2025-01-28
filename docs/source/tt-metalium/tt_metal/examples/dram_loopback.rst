@@ -39,10 +39,10 @@ Program pre-compilation setup
 
 .. code-block:: cpp
 
-   CommandQueue& cq = detail::GetCommandQueue(device);
+   HWCommandQueue& cq = detail::GetCommandQueue(device);
    Program program = CreateProgram();
 
-We first obtain the global ``CommandQueue`` in order to use the fast dispatch
+We first obtain the global ``HWCommandQueue`` in order to use the fast dispatch
 capabilities of the software. This will be used when issuing commands for
 asynchronous reads/writes/program management.
 

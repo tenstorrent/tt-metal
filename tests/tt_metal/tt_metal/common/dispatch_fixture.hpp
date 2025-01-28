@@ -23,7 +23,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::HWCommandQueue& cq = device->command_queue();
             tt::tt_metal::EnqueueProgram(cq, program, false);
             if (!skip_finish) {
                 tt::tt_metal::Finish(cq);
@@ -32,7 +32,7 @@ public:
     }
     void FinishCommands(tt::tt_metal::IDevice* device) {
         if (!this->IsSlowDispatch()) {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::HWCommandQueue& cq = device->command_queue();
             tt::tt_metal::Finish(cq);
         }
     }
@@ -41,7 +41,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::HWCommandQueue& cq = device->command_queue();
             tt::tt_metal::EnqueueWriteBuffer(cq, in_buffer, src_vec, false);
         }
     }
@@ -52,7 +52,7 @@ public:
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
         } else {
-            tt::tt_metal::CommandQueue& cq = device->command_queue();
+            tt::tt_metal::HWCommandQueue& cq = device->command_queue();
             tt::tt_metal::EnqueueReadBuffer(cq, out_buffer, dst_vec, true);
         }
     }

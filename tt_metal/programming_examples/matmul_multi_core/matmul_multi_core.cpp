@@ -64,7 +64,7 @@ void matmul_multi_core(
     /*
      * Setup program to execute along with its buffers and kernels to use
      */
-    CommandQueue& cq = device->command_queue();
+    HWCommandQueue& cq = device->command_queue();
     Program program{};
 
     /*
