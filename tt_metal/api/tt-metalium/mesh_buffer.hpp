@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include <buffer.hpp>
-#include <buffer_constants.hpp>
-#include <mesh_device.hpp>
-#include <mesh_device_view.hpp>
-#include <tt-metalium/shape2d.hpp>
+#include "buffer.hpp"
+#include "buffer_constants.hpp"
+#include "mesh_device.hpp"
+#include "mesh_device_view.hpp"
+#include "shape2d.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -37,6 +37,8 @@ struct ReplicatedBufferConfig {
 
 // Specifies sharded MeshBuffer.
 struct ShardedBufferConfig {
+    // Note: Only 2D sharding and replication is supported by the APIs exposed through this struct.
+    // This interface will likely change over time depending on the status of native ND sharding.
     // Global buffer size. Each device will get a fraction of this size.
     DeviceAddr global_size = 0;
 
@@ -50,9 +52,11 @@ struct ShardedBufferConfig {
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
     // Computes the number of bytes per datum in the sharded buffer.
-    uint32_t compute_datum_size_bytes() const {
-        return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
-    }
+    uint32_t compute_datum_size_bytes() const;
+
+    std::pair<bool, bool> replicated_dims() const;
+
+    Shape2D physical_shard_shape() const;
 };
 
 enum class MeshBufferLayout : uint8_t { REPLICATED, SHARDED };
@@ -75,12 +79,16 @@ public:
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }
+    // ND Sharding is not supported today. MeshBuffer only supports 2D sharding and
+    // replication. Tensor sharding schemes that can be lowered to 2D configurations
+    // are thus supported by the MeshCommandQueue.
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord);
+    std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
+    std::pair<bool, bool> replicated_dims() const;
 
 private:
     MeshBuffer(

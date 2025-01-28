@@ -88,23 +88,6 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_
     return worker_slices_streams;
 };
 
-Shape4D<uint32_t> from_tensor_shape(ttnn::Shape const& shape) {
-    constexpr size_t max_rank = 4;
-    TT_FATAL(
-        shape.size() <= max_rank,
-        "Reduce scatter device code only supports tensors up to rank 4. Current tensor rank is {}. The host code "
-        "calling the program factory must reduce the dimensionality",
-        shape.size());
-
-    Shape4D<uint32_t> shape4d = {1, 1, 1, 1};
-    size_t output_index = max_rank - 1;
-    for (int i = shape.size() - 1; i >= 0; --i) {
-        shape4d[output_index] = shape[i];
-        output_index--;
-    }
-    return shape4d;
-}
-
 static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const SimpleShape& shape) {
     TT_FATAL(shape.rank() == 4, "Expected 4D shape but got {}", shape.rank());
     ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
