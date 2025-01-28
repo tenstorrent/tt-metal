@@ -60,63 +60,63 @@ constexpr uint32_t cb1_id = get_compile_time_arg_val(9);
 #ifdef TENSOR0_SHARDED_MEM_LAYOUT
 #ifdef SINGLE_TENSOR
 // SINGLE INPUT MODE - SHARDED
-    using Tensor0ShardInfo = ShardedInfo<
+    typedef Sharded_Info<
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
         get_compile_time_arg_val(9),
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12)>;
+        get_compile_time_arg_val(12)> tensor0_shard_info;
 #else
 // TWO INPUT MODE
-    using Tensor0ShardInfo = ShardedInfo<
+    typedef Sharded_Info<
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
         get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16)>;
+        get_compile_time_arg_val(16)> tensor0_shard_info;
 
 #endif
-constexpr Tensor0ShardInfo test_object {};
+constexpr tensor0_shard_info test_object {};
 static_assert(test_object.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
 static_assert(test_object.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-using Tensor0ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
+typedef Sharded_Info<0,0,0,0,0,0,0> tensor0_shard_info;
 #endif
 
 #ifndef SINGLE_TENSOR
 #if defined(TENSOR1_SHARDED_MEM_LAYOUT)
 #if defined(TENSOR0_SHARDED_MEM_LAYOUT)
-  using Tensor1ShardInfo = ShardedInfo<
+  typedef Sharded_Info<
         get_compile_time_arg_val(17),
         get_compile_time_arg_val(18),
         get_compile_time_arg_val(19),
         get_compile_time_arg_val(20),
         get_compile_time_arg_val(21),
         get_compile_time_arg_val(22),
-        get_compile_time_arg_val(23)>;
+        get_compile_time_arg_val(23)> tensor1_shard_info;
 #else
 // Then we are only consuming ct args for second operand and we resume from operation 8
-    using Tensor1ShardInfo = ShardedInfo<
+    typedef Sharded_Info<
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
         get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16)>;
+        get_compile_time_arg_val(16)> tensor1_shard_info;
 #endif
 
-constexpr Tensor1ShardInfo test_object2 {};
+constexpr tensor1_shard_info test_object2 {};
 static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
+typedef Sharded_Info<0,0,0,0,0,0,0> tensor1_shard_info;
 #endif
 #endif
 
@@ -124,11 +124,12 @@ template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
     tt::tt_metal::BufferType buffer_type,
     tt::tt_metal::Layout page_layout,
-    typename ShardingInfoType>
+    typename SHARDING_INFO_OBJECT>
 FORCE_INLINE auto build_source_address_generator(
     std::size_t& arg_idx,
     address_t tensor_address,
     std::size_t page_size,
+    uint32_t cb_id_in) {
     uint32_t cb_id_in) {
     constexpr bool is_sharded = is_sharded_tensor_layout(tensor_layout);
     constexpr bool is_interleaved = tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
@@ -145,25 +146,32 @@ FORCE_INLINE auto build_source_address_generator(
             InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
                 .bank_base_address = tensor_address, .page_size = page_size};
             return ret_val;
+            InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
+                .bank_base_address = tensor_address, .page_size = page_size};
+            return ret_val;
         } else {
             InterleavedAddrGenFast<buffer_type ==BufferType::DRAM> ret_val = {
+            InterleavedAddrGenFast<buffer_type ==BufferType::DRAM> ret_val = {
                 .bank_base_address = tensor_address, .page_size = page_size, .data_format = get_dataformat(cb_id_in)};
+            return ret_val;
             return ret_val;
         }
     } else if constexpr (
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        const auto [mapping_table, rt_increment] = experimental::shard_addr_gen_utils::get_shard_map<ShardingInfoType>(get_arg_addr(arg_idx));
-        if (addrgen_enabled)
-        {
-            arg_idx += rt_increment;
-        }
-        experimental::ShardedAddrGen<ShardingInfoType> ret_val = {
-            .bank_base_address = tensor_address, .shard_array=mapping_table};
+        constexpr SHARDING_INFO_OBJECT test_object {};
+        std::pair<const uint32_t* const, uint32_t> map = experimental::shard_addr_gen_utils::parse_map<test_object.number_of_cores>(arg_idx);
+        arg_idx = map.second;
+
+        experimental::ShardedAddrGen<SHARDING_INFO_OBJECT> ret_val = {
+            .bank_base_address = tensor_address, .shard_array=map.first};
         return ret_val;
     } else {
         ASSERT(false);
+        InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
+                .bank_base_address = tensor_address, .page_size = page_size};
+        return ret_val;
         InterleavedAddrGen<buffer_type ==BufferType::DRAM > ret_val = {
                 .bank_base_address = tensor_address, .page_size = page_size};
         return ret_val;
@@ -533,12 +541,9 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     uint32_t l1_write_addr = l1_write_addr_base;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
-        const auto [noc_addr, contig_pages_] = legacy_get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT>(
+        auto const [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages(
             cmd_specific_ctx.curr_tile_id,
-            cmd_specific_ctx.offset_into_worker_slice,
-            cmd_ctx.command_tensor.worker_start_offset_in_slice,
-            cmd_ctx.tensor_addrgen,
-            cmd_ctx.command_tensor.tensor_slice_shape);
+            cmd_ctx.tensor_addrgen);
 
         {
             contig_pages_advanced = std::min<uint16_t>(max_pages_readable, contig_pages_);
@@ -693,13 +698,10 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
-        const auto [noc0_dest_noc_addr, contig_pages_] =
-            legacy_get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
+        auto const [noc0_dest_noc_addr, contig_pages_] =
+            get_noc_addr_and_contiguous_pages_for_fabric_write(
                 cmd_specific_ctx.curr_tile_id,
-            cmd_specific_ctx.offset_into_worker_slice,
-            cmd_ctx.command_tensor.worker_start_offset_in_slice,
-            cmd_ctx.tensor_addrgen,
-            cmd_ctx.command_tensor.tensor_slice_shape);
+                cmd_ctx.tensor_addrgen);
         contig_pages_advanced = std::min<uint16_t>(contig_pages_, max_pages_writable);
         contig_pages_advanced = std::min<uint16_t>(cmd_ctx.packet_size_in_pages - i, contig_pages_);
 
@@ -928,9 +930,8 @@ void kernel_main() {
 
     auto tensor0_addrgen =
 #ifndef NO_TENSOR_MODE
-        build_source_address_generator
-            <tensor0_layout, buffer0_type, tensor0_page_layout,Tensor0ShardInfo>
-            (arg_idx, tensor_address0, tensor0_page_size, cb0_id);
+        build_source_address_generator<tensor0_layout, buffer0_type, tensor0_page_layout,tensor0_shard_info>(
+            arg_idx, tensor_address0, tensor0_page_size, cb0_id);
 #else
         no_addrgen{};
 #endif
@@ -938,9 +939,8 @@ void kernel_main() {
 #if !defined(SINGLE_INPUT_MODE)
     auto tensor1_addrgen =
 #if !defined(NO_TENSOR_MODE) && !defined(SINGLE_TENSOR)
-        build_source_address_generator
-            <tensor1_layout, buffer1_type, tensor1_page_layout, Tensor1ShardInfo>
-            (arg_idx, tensor_address1, tensor1_page_size, cb1_id);
+        build_source_address_generator<tensor1_layout, buffer1_type, tensor1_page_layout,tensor1_shard_info>(
+            arg_idx, tensor_address1, tensor1_page_size, cb1_id);
 #else
         no_addrgen{};
 #endif
