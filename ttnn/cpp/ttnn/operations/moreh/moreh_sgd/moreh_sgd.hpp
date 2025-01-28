@@ -44,6 +44,5 @@ struct MorehSgd {
 }  // namespace ttnn::operations::moreh::moreh_sgd
 
 namespace ttnn {
-constexpr auto moreh_sgd =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::moreh_sgd", ttnn::operations::moreh::moreh_sgd::MorehSgd>();
+constexpr auto moreh_sgd = ttnn::register_operation<"ttnn::moreh_sgd", ttnn::operations::moreh::moreh_sgd::MorehSgd>();
 }

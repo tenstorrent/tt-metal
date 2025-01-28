@@ -18,5 +18,5 @@ struct ExecuteDownsample {
 }  // namespace operations
 
 constexpr auto downsample =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::downsample", ttnn::operations::downsample::ExecuteDownsample>();
+    ttnn::register_operation<"ttnn::downsample", ttnn::operations::downsample::ExecuteDownsample>();
 }  // namespace ttnn

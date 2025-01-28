@@ -39,7 +39,7 @@ struct MorehLayerNormBackward {
 }  // namespace ttnn::operations::moreh::moreh_layer_norm_backward
 
 namespace ttnn {
-constexpr auto moreh_layer_norm_backward = ttnn::register_operation_with_auto_launch_op<
+constexpr auto moreh_layer_norm_backward = ttnn::register_operation<
     "ttnn::moreh_layer_norm_backward",
     ttnn::operations::moreh::moreh_layer_norm_backward::MorehLayerNormBackward>();
 }  // namespace ttnn

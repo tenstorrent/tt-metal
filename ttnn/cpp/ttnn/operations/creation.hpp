@@ -477,7 +477,6 @@ constexpr auto ones_like =
 constexpr auto empty_like =
     ttnn::decorators::register_operation<"ttnn::empty_like", ttnn::operations::creation::EmptyLike>();
 
-constexpr auto arange =
-    ttnn::decorators::register_operation_with_auto_launch_op<"ttnn::arange", ttnn::operations::creation::Arange>();
+constexpr auto arange = ttnn::decorators::register_operation<"ttnn::arange", ttnn::operations::creation::Arange>();
 
 }  // namespace ttnn

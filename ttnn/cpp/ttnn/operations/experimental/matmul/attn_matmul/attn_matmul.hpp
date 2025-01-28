@@ -62,11 +62,11 @@ struct AttnMatmulFromCacheOperation {
 
 namespace experimental {
 
-constexpr auto attn_matmul = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attn_matmul = ttnn::register_operation<
     "ttnn::experimental::attn_matmul",
     ttnn::operations::experimental::matmul::AttnMatmulOperation>();
 
-constexpr auto attn_matmul_from_cache = ttnn::register_operation_with_auto_launch_op<
+constexpr auto attn_matmul_from_cache = ttnn::register_operation<
     "ttnn::experimental::attn_matmul_from_cache",
     ttnn::operations::experimental::matmul::AttnMatmulFromCacheOperation>();
 
