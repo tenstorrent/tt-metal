@@ -142,7 +142,7 @@ void kernel_main() {
                     output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
                                           output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-                write_chunk(
+                write_chunk_legacy(
                     output_page_idx,
                     col_idx,
                     row_idx,
@@ -165,7 +165,7 @@ void kernel_main() {
                 output_page_idx < output_tensor_shard_pages_per_shard_y * output_tensor_shard_pages_per_shard_x *
                                       output_tensor_shard_grid_height * output_tensor_shard_grid_width);
 #endif
-            write_chunk(
+            write_chunk_legacy(
                 output_page_idx,
                 col_idx,
                 row_idx,
