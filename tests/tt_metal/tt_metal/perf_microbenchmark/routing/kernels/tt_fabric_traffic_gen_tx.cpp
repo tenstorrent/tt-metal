@@ -393,6 +393,7 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
     zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
+    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
     client_interface->gk_msg_buf_addr =
         (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 
@@ -439,6 +440,9 @@ void kernel_main() {
     uint32_t curr_packet_size = 0;
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
+
+    // make sure fabric node gatekeeper is available.
+    fabric_endpoint_init();
 
     while (true) {
         iter++;

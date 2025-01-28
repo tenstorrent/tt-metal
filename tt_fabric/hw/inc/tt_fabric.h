@@ -629,7 +629,7 @@ typedef struct fvc_producer_state {
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline void flush_async_writes() {
-        noc_async_write_barrier();
+        noc_async_writes_flushed();
         fvc_pull_rdptr = fvc_out_rdptr;
         update_remote_rdptr_cleared<fvc_mode>();
     }
