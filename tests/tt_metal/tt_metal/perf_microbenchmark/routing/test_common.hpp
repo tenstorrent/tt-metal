@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 static inline std::string to_string(pkt_dest_size_choices_t choice) {
     switch (choice) {

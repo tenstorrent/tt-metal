@@ -4,7 +4,6 @@
 
 #include <string>
 #include <tt_cluster.hpp>
-#include <llrt.hpp>
 #include <device.hpp>
 
 namespace tt_gdb {

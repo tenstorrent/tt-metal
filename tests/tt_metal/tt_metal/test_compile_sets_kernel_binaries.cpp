@@ -9,7 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_memory.h>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>

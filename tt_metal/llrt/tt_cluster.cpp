@@ -41,7 +41,7 @@
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
-#include <debug/sanitize_noc_host.hpp>
+#include "sanitize_noc_host.hpp"
 #include <rtoptions.hpp>
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <core_coord.hpp>

@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 class DeviceFixture : public DispatchFixture {
 protected:

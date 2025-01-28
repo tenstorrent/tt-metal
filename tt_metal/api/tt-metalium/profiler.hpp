@@ -12,7 +12,6 @@
 
 #include "buffer.hpp"
 #include "program_impl.hpp"
-#include "llrt.hpp"
 #include "profiler_state.hpp"
 #include "common.hpp"
 #include "tracy/TracyTTDevice.hpp"

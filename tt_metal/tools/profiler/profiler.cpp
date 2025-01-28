@@ -18,6 +18,8 @@
 #include "tracy/Tracy.hpp"
 #include <device.hpp>
 
+#include "llrt.hpp"
+
 namespace tt {
 
 namespace tt_metal {

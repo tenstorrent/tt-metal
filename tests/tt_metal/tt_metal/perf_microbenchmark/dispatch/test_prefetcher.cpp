@@ -18,7 +18,7 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
 

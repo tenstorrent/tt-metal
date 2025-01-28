@@ -8,7 +8,7 @@
 
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"

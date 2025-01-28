@@ -14,7 +14,7 @@
 #include "noc/noc_parameters.h"
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 extern bool debug_g;

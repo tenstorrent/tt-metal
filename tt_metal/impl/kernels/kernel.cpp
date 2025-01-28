@@ -10,7 +10,7 @@
 #include <set>
 
 #include <build.hpp>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/kernel.hpp"

@@ -19,6 +19,8 @@
 #include <device_pool.hpp>
 #include <tt_cluster.hpp>
 
+#include "llrt.hpp"
+
 namespace tt {
 
 namespace tt_metal {

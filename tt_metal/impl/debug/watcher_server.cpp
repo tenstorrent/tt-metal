@@ -16,7 +16,7 @@
 
 #include <hal.hpp>
 #include <dev_msgs.h>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <rtoptions.hpp>
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
