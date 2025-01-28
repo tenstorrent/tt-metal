@@ -206,10 +206,10 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @skip_for_grayskull()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    "expected_perf",
+    "expected_kernel_samples_per_second",
     ((9.5),),
 )
-def test_stable_diffusion_device_perf_new_conv(expected_perf):
+def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
     margin = 0.01
     batch = 1
@@ -218,7 +218,7 @@ def test_stable_diffusion_device_perf_new_conv(expected_perf):
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
-    expected_perf_cols = {inference_time_key: expected_perf}
+    expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
 
     # back-up the value of WH_ARCH_YAML if exist
     wh_arch_yaml_backup = None
