@@ -16,20 +16,23 @@ namespace buffer_dispatch {
 
 struct BufferReadDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    uint32_t cq_id;
-    IDevice* device;
-    uint32_t padded_page_size;
-    uint32_t src_page_index;
-    uint32_t unpadded_dst_offset;
-    uint32_t pages_per_txn;
-    uint32_t address;
+    uint32_t cq_id = 0;
+    IDevice* device = nullptr;
+    uint32_t padded_page_size = 0;
+    uint32_t src_page_index = 0;
+    uint32_t unpadded_dst_offset = 0;
+    uint32_t pages_per_txn = 0;
+    uint32_t address = 0;
 };
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
-    bool width_split;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    uint32_t num_total_pages;
-    uint32_t max_pages_per_shard;
+    bool width_split = false;
+    uint32_t initial_pages_skipped = 0;
+    uint32_t starting_src_host_page_index = 0;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
+    uint32_t total_pages_to_read = 0;
+    uint32_t total_pages_read = 0;
+    uint32_t max_pages_per_shard = 0;
     CoreCoord core;
 };
 
@@ -43,7 +46,10 @@ void write_to_device_buffer(
     tt::stl::Span<const SubDeviceId> sub_device_ids);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
-    Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);
+    Buffer& buffer,
+    uint32_t cq_id,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed,
+    const BufferRegion& region);
 
 BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     Buffer& buffer,

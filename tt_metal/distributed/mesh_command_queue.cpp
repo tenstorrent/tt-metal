@@ -203,7 +203,7 @@ void MeshCommandQueue::read_shard_from_device(
 
     if (is_sharded(shard_view->buffer_layout())) {
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            *shard_view, id_, expected_num_workers_completed);
+            *shard_view, id_, expected_num_workers_completed, region);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
             dispatch_params.width_split, dispatch_params.buffer_page_mapping, *shard_view);
         for (uint32_t core_id = 0; core_id < shard_view->num_cores(); ++core_id) {
