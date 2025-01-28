@@ -118,6 +118,7 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
+// clang-format off
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
     const MeshShape& mesh_shape,
@@ -127,11 +128,13 @@ MeshDevice::MeshDevice(
     mesh_shape_(mesh_shape),
     type_(type),
     mesh_id_(generate_unique_mesh_id()),
-    parent_mesh_(std::move(parent_mesh)) {
+    parent_mesh_(std::move(parent_mesh))
+{
     work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
     work_executor_->initialize();
     work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
+// clang-format on
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -787,10 +790,7 @@ void MeshDevice::reset_sub_device_stall_group() {
 uint32_t MeshDevice::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
 }
-uint32_t MeshDevice::get_completion_queue_reader_core() const {
-    TT_THROW("get_completion_queue_reader_core() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_completion_queue_reader_core();
-}
+
 bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();

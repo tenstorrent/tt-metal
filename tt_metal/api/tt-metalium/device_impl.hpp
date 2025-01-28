@@ -41,8 +41,7 @@ public:
         std::size_t trace_region_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
-        uint32_t worker_core = 0,
-        uint32_t completion_queue_reader_core = 0);
+        uint32_t worker_core = 0);
 
     ~Device() override;
 
@@ -244,8 +243,6 @@ public:
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
-    uint32_t get_completion_queue_reader_core() const override { return completion_queue_reader_core_; }
-
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
@@ -297,7 +294,6 @@ private:
     // all tasks scheduled on this device
     WorkExecutor work_executor_;
     uint32_t worker_thread_core_ = 0;
-    uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 

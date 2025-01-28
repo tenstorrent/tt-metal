@@ -37,12 +37,21 @@ namespace tt {
 
 namespace tt_metal {
 
+// clang-format off
 Device::Device(
-    chip_id_t device_id, const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal, uint32_t worker_core, uint32_t completion_queue_reader_core) :
-    id_(device_id), worker_thread_core_(worker_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_core, device_id) {
+    chip_id_t device_id,
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal,
+    uint32_t worker_core) :
+    id_(device_id), worker_thread_core_(worker_core), work_executor_(worker_core, device_id)
+{
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
+// clang-format on
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
     return tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);
