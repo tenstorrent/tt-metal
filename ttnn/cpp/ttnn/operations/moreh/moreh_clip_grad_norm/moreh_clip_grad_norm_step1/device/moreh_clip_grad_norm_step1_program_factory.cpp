@@ -46,8 +46,8 @@ MorehClipGradNormStep1Operation::ProgramFactory::create(
     origin_hw_vec.reserve(num_inputs);
 
     for (uint32_t j = 0; j < num_inputs; ++j) {
-        const auto& input_shape_without_padding = inputs.at(j).get_logical_shape();
-        origin_hw_vec.emplace_back(input_shape_without_padding[2], input_shape_without_padding[3]);
+        const auto& input_shape = inputs.at(j).get_logical_shape();
+        origin_hw_vec.emplace_back(input_shape[2], input_shape[3]);
     }
 
     auto [p, decimal, p_is_negative] = get_p_decimal_p_is_negative(norm_type);

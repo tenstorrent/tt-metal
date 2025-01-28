@@ -33,26 +33,26 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     check_tensor(beta_grad, "moreh_group_norm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
-    auto C = output_grad.get_shape().value[1];
+    auto C = output_grad.get_padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
-    C = input.get_shape().value[1];
+    C = input.get_logical_shape()[1];
     TT_FATAL(C % num_groups == 0, "input_shape[1] must be divisible by num_groups.");
     // gamma_grad (1, 1, 1, C)
     if (gamma_grad.has_value()) {
-        C = gamma_grad.value().get_shape().value.without_padding()[-1];
+        C = gamma_grad.value().get_logical_shape()[-1];
         TT_FATAL(C % num_groups == 0, "gamma_grad_shape[-1] must be divisible by num_groups.");
     }
     // beta_grad (1, 1, 1, C)
     if (beta_grad.has_value()) {
-        C = beta_grad.value().get_shape().value.without_padding()[-1];
+        C = beta_grad.value().get_logical_shape()[-1];
         TT_FATAL(C % num_groups == 0, "beta_grad_shape[-1] must be divisible by num_groups.");
     }
 
     // mean (1, 1, N, num_groups)
-    TT_FATAL(mean.get_shape().value.without_padding()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
+    TT_FATAL(mean.get_logical_shape()[-1] == num_groups, "mean_shape[-1] must match num_groups.");
     // rstd (1, 1, N, num_groups)
-    TT_FATAL(rstd.get_shape().value.without_padding()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
+    TT_FATAL(rstd.get_logical_shape()[-1] == num_groups, "rstd_shape[-1] must match num_groups.");
 }
 
 MorehGroupNormBackwardGammaBetaGradOperation::program_factory_t

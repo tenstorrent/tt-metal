@@ -295,9 +295,9 @@ auto create_override_addresses_callback(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank);
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_inner(ttnn::SimpleShape shape, uint32_t dim);
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_outer(ttnn::SimpleShape shape, uint32_t dim);
 
 void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape);
 

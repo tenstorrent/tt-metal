@@ -72,13 +72,13 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_shape().value;
-    auto input_shape_without_padding = input_shape.without_padding();
-    auto input_rank = input_shape.rank();
+    const auto& input_shape_padded = input_tensor.get_padded_shape();
+    const auto& input_shape = input_tensor.get_logical_shape();
+    auto input_rank = input_shape_padded.rank();
     auto dtype = tensor_args.input_tensor.get_dtype();
     Layout layout{Layout::TILE};
 
-    auto C = input_shape[1];
+    auto C = input_shape_padded[1];
 
     ttnn::SmallVector<uint32_t> output_shape_vec;
 
@@ -93,7 +93,7 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
             continue;
         }
 
-        output_shape_vec.push_back(input_shape_without_padding[dim]);
+        output_shape_vec.push_back(input_shape[dim]);
     }
 
     auto output_shape = SimpleShape{output_shape_vec};

@@ -23,14 +23,14 @@ void MorehGetItemOperation::validate_inputs(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
 
     // validate index tensors
-    uint32_t index_size = index_tensors[0].get_shape()[-1];
+    uint32_t index_size = index_tensors[0].get_logical_shape()[-1];
     for (uint32_t i = 0; i < index_tensors.size(); i++) {
         auto& index_tensor = index_tensors[i];
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
         TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.get_dtype() == DataType::INT32, "Index tensor must be of type INT32!");
 
-        auto index_shape = index_tensor.get_shape();
+        const auto& index_shape = index_tensor.get_logical_shape();
         auto index_layout = index_tensor.get_layout();
         if (index_layout == Layout::ROW_MAJOR) {
             TT_FATAL(index_shape.rank() == 1, "Index tensor must be 1D for ROW_MAJOR layout!");
@@ -153,11 +153,11 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         // output: (10, 100, 40)
         SmallVector<uint32_t> output_size_vec;
 
-        auto input_shape = input_tensor.get_shape();
+        const auto& input_shape = input_tensor.get_logical_shape();
         uint32_t input_rank = input_shape.rank();
 
         auto index = index_tensors[0];
-        uint32_t index_size = index.get_shape()[0];
+        const uint32_t& index_size = index.get_logical_shape()[0];
 
         uint32_t start_dim = operation_attributes.index_dims.front();
         uint32_t last_dim = operation_attributes.index_dims.back();
@@ -170,7 +170,6 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
                 output_size_vec.push_back(input_shape[input_dim]);
             }
         }
-
         output_shape = Shape(output_size_vec);
     }
     return TensorSpec(

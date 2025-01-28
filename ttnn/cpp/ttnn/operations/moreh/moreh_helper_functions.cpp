@@ -299,7 +299,7 @@ void check_tensor(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank) { return (dim >= rank - 2); }
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_inner(tt::tt_metal::SimpleShape shape, uint32_t dim) {
     uint32_t num_inner = 1;
     auto rank = shape.rank();
 
@@ -314,7 +314,7 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_inner;
 }
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_outer(tt::tt_metal::SimpleShape shape, uint32_t dim) {
     uint32_t num_outer = 1;
     auto rank = shape.rank();
 

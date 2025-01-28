@@ -36,15 +36,15 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape().value;
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
-    const auto output_grad_rank = output_grad_shape.rank();
+    const auto& output_grad_shape_padded = output_grad.get_padded_shape();
+    const auto& output_grad_shape = output_grad.get_logical_shape();
+    const auto& output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    const auto origin_H = output_grad_shape_without_padding[-2];
-    const auto origin_W = output_grad_shape_without_padding[-1];
+    const auto origin_H = output_grad_shape[-2];
+    const auto origin_W = output_grad_shape[-1];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && !is_lastdim_layer_norm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
@@ -52,22 +52,21 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    const auto mean_rstd_shape = mean.get_shape().value;
-    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
-    auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
-    auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
+    const auto& mean_rstd_shape = mean.get_logical_shape();
+    auto mean_rstd_height = mean_rstd_shape[-2];
+    auto mean_rstd_width = mean_rstd_shape[-1];
 
     auto normalized_numel = 1.0f;
     for (uint32_t i = output_grad_rank - normalized_dims; i < output_grad_rank; i++) {
-        auto size = output_grad_shape_without_padding[i];
+        auto size = output_grad_shape[i];
         normalized_numel *= size;
     }
 
     auto n = static_cast<float>(normalized_numel);
     auto recip_n = 1.0f / n;
 
-    auto num_inner = compute_inner(output_grad_shape, normalized_dims);
-    auto num_outer = compute_outer(output_grad_shape, normalized_dims);
+    auto num_inner = compute_inner(output_grad_shape_padded, normalized_dims);
+    auto num_outer = compute_outer(output_grad_shape_padded, normalized_dims);
 
     const bool gamma_has_value = gamma.has_value();
 

@@ -51,26 +51,26 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape().value;
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
-    const auto output_grad_rank = output_grad_shape.rank();
+
+    const auto& output_grad_shape_padded = output_grad.get_padded_shape();
+    const auto& output_grad_shape = output_grad.get_logical_shape();
+    const auto output_grad_rank = output_grad_shape_padded.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
 
-    const auto origin_H = output_grad_shape_without_padding[-2];
-    const auto origin_W = output_grad_shape_without_padding[-1];
+    const auto origin_H = output_grad_shape[-2];
+    const auto origin_W = output_grad_shape[-1];
 
     const bool do_mask_h = (origin_H % TILE_HEIGHT) != 0 && is_lastdim_layer_norm;
     const uint32_t mask_h = do_mask_h ? origin_H % TILE_HEIGHT : TILE_HEIGHT;
 
-    const auto mean_rstd_shape = mean.get_shape().value;
-    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
-    auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
-    auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
+    const auto& mean_rstd_shape = mean.get_logical_shape();
+    auto mean_rstd_height = mean_rstd_shape[-2];
+    auto mean_rstd_width = mean_rstd_shape[-1];
 
-    auto num_inner = compute_inner(output_grad_shape, normalized_dims);
-    auto num_outer = compute_outer(output_grad_shape, normalized_dims);
+    auto num_inner = compute_inner(output_grad_shape_padded, normalized_dims);
+    auto num_outer = compute_outer(output_grad_shape_padded, normalized_dims);
 
     const bool gamma_grad_has_value = gamma_grad.has_value();
     const bool beta_grad_has_value = beta_grad.has_value();

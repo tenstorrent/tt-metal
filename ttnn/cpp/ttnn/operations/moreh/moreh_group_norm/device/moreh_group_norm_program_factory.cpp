@@ -45,14 +45,14 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_shape();
+    const auto& input_shape = input.get_padded_shape();
 
-    const auto n = input_shape.value[0];
-    const auto c = input_shape.value[1];
-    const auto h = input_shape.value[2];
-    const auto w = input_shape.value[3];
+    const auto n = input_shape[0];
+    const auto c = input_shape[1];
+    const auto h = input_shape[2];
+    const auto w = input_shape[3];
 
-    const auto origin_input_shape = input_shape.value.without_padding();
+    const auto origin_input_shape = input.get_logical_shape();
 
     const auto origin_h = origin_input_shape[2];
     const auto origin_w = origin_input_shape[3];

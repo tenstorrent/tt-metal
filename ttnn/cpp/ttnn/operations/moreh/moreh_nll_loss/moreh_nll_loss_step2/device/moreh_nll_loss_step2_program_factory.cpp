@@ -25,16 +25,16 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
-    auto rank = input_shape.rank();
+    const auto& input_shape_padded = input.get_padded_shape();
+    auto rank = input_shape_padded.rank();
 
-    auto N = input_shape[0];
+    auto N = input_shape_padded[0];
 
     // copy 32 Btyes per core
     uint32_t units_to_divide = N / tt::constants::TILE_HEIGHT;
-    const auto input_shape_without_padding = input_shape.without_padding();
-    const auto origin_N = input_shape_without_padding[0];
-    const auto origin_C = input_shape_without_padding[1];
+    const auto input_shape = input.get_logical_shape();
+    const auto origin_N = input_shape[0];
+    const auto origin_C = input_shape[1];
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -202,14 +202,14 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
-    auto rank = input_shape.rank();
-    auto N = input_shape[0];
+    const auto& input_shape_padded = input.get_padded_shape();
+    auto rank = input_shape_padded.rank();
+    auto N = input_shape_padded[0];
 
-    const auto input_shape_without_padding = input_shape.without_padding();
-    const auto origin_N = input_shape_without_padding[0];
-    const auto origin_C = input_shape_without_padding[1];
-    const auto origin_W = input_shape_without_padding[2];
+    const auto input_shape = input.get_logical_shape();
+    const auto origin_N = input_shape[0];
+    const auto origin_C = input_shape[1];
+    const auto origin_W = input_shape[2];
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -382,21 +382,21 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_shape = input.get_shape().value;
-    auto target_shape = target.get_shape().value;
-    auto rank = input_shape.rank();
-    auto N = input_shape[0];
-    auto channel_size = input_shape[1];
+    const auto& input_shape_padded = input.get_padded_shape();
+    const auto& target_shape_padded = target.get_padded_shape();
+    auto rank = input_shape_padded.rank();
+    auto N = input_shape_padded[0];
+    auto channel_size = input_shape_padded[1];
 
-    auto H = target_shape[-2];
-    auto W = target_shape[-1];
+    auto H = target_shape_padded[-2];
+    auto W = target_shape_padded[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
     auto num_inner_tile = target.volume() / N / tt::constants::TILE_HEIGHT / tt::constants::TILE_WIDTH;
 
-    const auto input_shape_without_padding = input_shape.without_padding();
-    const auto origin_N = input_shape_without_padding[0];
-    const auto origin_C = input_shape_without_padding[1];
+    const auto input_shape = input.get_logical_shape();
+    const auto origin_N = input_shape[0];
+    const auto origin_C = input_shape[1];
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -577,8 +577,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t MorehNllLossStep2Dev
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     // split work
-    auto input_shape = input.get_shape().value;
-    auto rank = input_shape.rank();
+    const auto& input_shape_padded = input.get_padded_shape();
+    auto rank = input_shape_padded.rank();
 
     if (rank == 2) {
         return moreh_nll_loss_step2_impl_2d(

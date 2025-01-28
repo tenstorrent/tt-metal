@@ -33,7 +33,7 @@ MorehMeanOperation::program_factory_t MorehMeanOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto& input = tensor_args.input;
 
-    auto rank = input.get_shape().rank();
+    const auto& rank = input.get_logical_shape().rank();
 
     if (operation_attributes.dim + 1 == rank) {
         return MorehMeanWFactory{};
@@ -59,7 +59,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
         return {tensor_args.output->get_tensor_spec()};
     }
 
-    auto input_shape = tensor_args.input.get_shape();
+    const auto& input_shape = tensor_args.input.get_shape();
     auto output_shape = input_shape;
     auto input_rank = input_shape.rank();
 

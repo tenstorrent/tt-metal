@@ -26,16 +26,16 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto target_shape = target.get_shape().value;
-    auto N = target_shape[1];
+    const auto& target_shape_padded = target.get_padded_shape();
+    auto N = target_shape_padded[1];
 
-    const auto target_shape_without_padding = target_shape.without_padding();
-    const auto origin_N = target_shape_without_padding[1];
+    const auto& target_shape = target.get_logical_shape();
+    const auto origin_N = target_shape[1];
 
     const bool weight_has_value = weight.has_value();
 
-    auto H = target_shape[-2];
-    auto W = target_shape[-1];
+    auto H = target_shape_padded[-2];
+    auto W = target_shape_padded[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 

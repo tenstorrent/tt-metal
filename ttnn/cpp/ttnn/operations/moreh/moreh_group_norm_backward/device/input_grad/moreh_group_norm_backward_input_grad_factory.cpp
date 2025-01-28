@@ -34,14 +34,14 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape();
+    const auto& output_grad_shape = output_grad.get_padded_shape();
 
-    const auto n = output_grad_shape.value[0];
-    const auto c = output_grad_shape.value[1];
-    const auto h = output_grad_shape.value[2];
-    const auto w = output_grad_shape.value[3];
+    const auto n = output_grad_shape[0];
+    const auto c = output_grad_shape[1];
+    const auto h = output_grad_shape[2];
+    const auto w = output_grad_shape[3];
 
-    const auto origin_output_grad_shape = output_grad_shape.value.without_padding();
+    const auto& origin_output_grad_shape = output_grad.get_logical_shape();
 
     const auto origin_h = origin_output_grad_shape[2];
     const auto origin_w = origin_output_grad_shape[3];
