@@ -254,7 +254,8 @@ void SubDeviceManager::populate_sub_allocators() {
         l1_bank_remap.reserve(compute_cores_vec.size());
         for (const auto& core : compute_cores_vec) {
             // These are compute cores, so they should have a single bank
-            l1_bank_remap.push_back(device_->bank_ids_from_logical_core(BufferType::L1, core)[0]);
+            l1_bank_remap.push_back(
+                device_->get_initialized_allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,

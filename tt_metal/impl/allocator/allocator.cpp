@@ -428,7 +428,7 @@ const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
 
 const AllocatorConfig& Allocator::get_config() const { return config_; }
 
-DeviceAddr Allocator::get_unreserved_base_address(const HalMemType& mem_type) const {
+DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
     switch (mem_type) {
         case HalMemType::DRAM: return config_.dram_unreserved_base;
         case HalMemType::L1: return config_.l1_unreserved_base;

@@ -361,7 +361,8 @@ int main(int argc, char** argv) {
                 uint32_t offset = 0;
                 uint32_t page = 0;
                 uint32_t* pcie_base = (uint32_t*)host_pcie_base + pcie_offset / sizeof(uint32_t);
-                uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base =
+                    device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
                 while (!done) {
                     if (hammer_write_reg_g) {
                         tt::Cluster::instance().write_reg(&addr, tt_cxy_pair(device->id(), w), l1_unreserved_base);
