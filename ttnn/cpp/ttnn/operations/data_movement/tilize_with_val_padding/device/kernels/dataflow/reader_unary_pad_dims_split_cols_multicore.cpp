@@ -94,14 +94,7 @@ void kernel_main() {
     for (uint32_t dim3 = 0; dim3 < third_dim; dim3++) {
         uint32_t start_id = 0;
         for (uint32_t b = 0; b < blocks_per_core; b++) {
-            read_block(
-                total_num_rows,
-                core_number,
-                size_per_row_per_block,
-                // padded_size_per_row,
-                start_id,
-                width_size,
-                size_2d);
+            read_block(total_num_rows, core_number, size_per_row_per_block, start_id, width_size, size_2d);
             start_id += width_size;
         }
         size_2d += total_num_rows;
