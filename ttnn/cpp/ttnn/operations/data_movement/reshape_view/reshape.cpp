@@ -229,44 +229,11 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 
 }
 
-ttnn::Shape tiling_reshape_corrector(const ttnn::Shape& shape, const uint32_t tile_first_dim, const uint32_t tile_second_dim) {
-    //Apply the correct padding metadata to the target shape
-    ttnn::Shape padded = shape.with_tile_padding();
-    int64_t rank = shape.rank();
-    const int8_t correction_1 =(tile_first_dim - (int)padded[-1] % tile_first_dim) % tile_first_dim;
-    if(rank == 1)
-    {
-        return ttnn::Shape({1, shape[0]}, {32, padded[0] + correction_1});
-    }
-    const int8_t correction_2 =(tile_second_dim - (int)padded[-2] % tile_second_dim) % tile_second_dim;
-    switch(rank)
-    {
-        case 2:
-            return ttnn::Shape({shape[0],shape[1]},{padded[0]+correction_2,padded[1]+correction_1});
-            break;
-        case 3:
-            return ttnn::Shape({shape[0],shape[1],shape[2]},{padded[0],padded[1]+correction_2,padded[2]+correction_1});
-            break;
-        case 4:
-            return ttnn::Shape({shape[0],shape[1],shape[2],shape[3]},{padded[0],padded[1],padded[2]+correction_2,padded[3]+correction_1});
-            break;
-
-    }
-    return shape;
-}
-
 ttnn::Tensor PerformView(const ttnn::Tensor& tensor, const ttnn::Shape& shape, const uint32_t tile_first_dim, const uint32_t tile_second_dim) {
     if (tensor.get_shape() == shape) {
         return tensor;
     }
-    if (tensor.get_layout() == ttnn::TILE_LAYOUT &&
-        (shape[-1]%tile_first_dim!=0 || shape.rank()==1 || shape[-2]%tile_second_dim!=0 ))
-    {
-        //Correct the output shape to add padding metadata before reshape (view)
-        return ttnn::experimental::view(tensor, tiling_reshape_corrector(shape, tile_first_dim, tile_second_dim));
-    }
-    //Perform a reshape (view)
-    return ttnn::experimental::view(tensor, shape);
+    return ttnn::experimental::view(tensor, ttnn::SimpleShape(shape.logical_shape()));
 }
 
 ttnn::Shape shape_corrector(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
