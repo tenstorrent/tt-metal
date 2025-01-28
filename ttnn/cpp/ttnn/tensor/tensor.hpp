@@ -302,7 +302,7 @@ struct Tensor {
             storage_type);
         return std::get<DeviceStorage>(this->get_storage()).get_buffer().get();
     }
-    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
+    std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     IDevice* device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {

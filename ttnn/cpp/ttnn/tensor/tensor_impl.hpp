@@ -185,16 +185,16 @@ void validate_on_device_dtype_and_layout(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
 
 template <typename T>
 inline void read_data_from_device_buffer(
-    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
+inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 

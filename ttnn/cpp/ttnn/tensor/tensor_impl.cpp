@@ -50,7 +50,7 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
     auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
@@ -556,7 +556,8 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
 // ======================================================================================
 
 template <typename T, template <typename> typename BufferType>
-void write_data_to_device_buffer(CommandQueue& cq, const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
+void write_data_to_device_buffer(
+    CommandQueue& cq, const BufferType<T>& host_buffer, std::shared_ptr<Buffer> device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
@@ -573,7 +574,7 @@ void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& devic
 }
 
 template <typename T, template <typename> typename BufferType>
-DeviceBuffer initialize_data_on_device(
+std::shared_ptr<Buffer> initialize_data_on_device(
     BufferType<T>& data_to_write,
     IDevice* device,
     const TensorSpec& tensor_spec,
@@ -593,9 +594,10 @@ DeviceBuffer initialize_data_on_device(
 }
 
 template <typename T>
-DeviceBuffer to_device_buffer(const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, uint8_t cq_id) {
+std::shared_ptr<Buffer> to_device_buffer(
+    const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, uint8_t cq_id) {
     return std::visit(
-        [&device, &tensor_spec, cq_id](auto&& storage) -> DeviceBuffer {
+        [&device, &tensor_spec, cq_id](auto&& storage) -> std::shared_ptr<Buffer> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
