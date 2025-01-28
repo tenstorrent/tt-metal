@@ -21,6 +21,11 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.unary.asin.asin
+          - eltwise.unary.clamp.clamp_binary
+          - eltwise.unary.clamp.clamp_ternary
+          - eltwise.unary.celu.celu
+          - eltwise.unary.fill.fill
           - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh_sharded
           - eltwise.unary.deg2rad.deg2rad_sharded
