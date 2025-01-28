@@ -266,7 +266,7 @@ def test_llama_demo_text(
     # Start profiler
     logger.info(f"Start profiler")
     profiler = BenchmarkProfiler()
-    profiler.start("full_run")
+    profiler.start("run")
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
@@ -334,18 +334,18 @@ def test_llama_demo_text(
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
         logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill_time", iteration=batch_idx)
+        profiler.start(f"compile_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
-        profiler.end(f"compile_prefill_time", iteration=batch_idx)
+        profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
 
         logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill_time", iteration=batch_idx)
+        profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=page_table,
@@ -353,7 +353,7 @@ def test_llama_demo_text(
             prompt_lens=decoding_pos,
         )
         prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill_time", iteration=batch_idx)
+        profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
         # Keep track of generated outputs to print out every iteration
@@ -378,9 +378,11 @@ def test_llama_demo_text(
 
         logger.info(f"Starting decode loop...")
 
+        # Log total inference (accounting for compile_decode as well)
+        profiler.start(f"inference_decode", iteration=batch_idx)
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
-                profiler.start(f"compile_decode_time", iteration=batch_idx)
+                profiler.start(f"compile_decode", iteration=batch_idx)
             else:
                 profiler.start(f"inference_decode_time_{iteration}", iteration=batch_idx)
 
@@ -408,8 +410,8 @@ def test_llama_demo_text(
                 )
 
             if iteration == 0:  # First iteration will account the compile time
-                profiler.end(f"compile_decode_time", iteration=batch_idx)
-                decode_iteration_time = profiler.get_duration("compile_decode_time", iteration=batch_idx)
+                profiler.end(f"compile_decode", iteration=batch_idx)
+                decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
             else:
                 profiler.end(f"inference_decode_time_{iteration}", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration(f"inference_decode_time_{iteration}", iteration=batch_idx)
@@ -483,14 +485,16 @@ def test_llama_demo_text(
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
 
+    profiler.end(f"inference_decode", iteration=batch_idx)
+
     # Finish profiling at the end of inference for all repeated batches
-    profiler.end("full_run")
+    profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill_time")
-    compile_decode_time = profiler.get_duration("compile_decode_time")
+    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_decode_time = profiler.get_duration("compile_decode")
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill_time")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill")
     total_inference_decode_time = 0
     for i in range(1, iteration):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
@@ -518,7 +522,7 @@ def test_llama_demo_text(
         "decode_t/s": decode_tok_s,  # tokens/s
         # Optional measurements
         "Total compile time": compile_prefill_time + compile_decode_time,
-        "Full demo runtime": profiler.get_duration("full_run"),
+        "Full demo runtime": profiler.get_duration("run"),
     }
 
     # Print some of the perf metrics
@@ -607,7 +611,7 @@ def test_llama_demo_text(
     # Save benchmark data for CI dashboard
     if is_ci_env:
         # Instead of running warmup iterations, the demo profiles the initial compile iteration
-        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
+        bench_n_warmup_iter = {"inference_prefill": 0, "inference_decode": 1}
         benchmark_data = create_benchmark_data(profiler, measurements, bench_n_warmup_iter, targets)
 
         benchmark_data.save_partial_run_json(
@@ -617,6 +621,6 @@ def test_llama_demo_text(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
-            input_sequence_length=prefill_seq_len,
-            output_sequence_length=1,
+            input_sequence_length=max(prefill_lens),
+            output_sequence_length=num_tokens_generated_decode[0],
         )
