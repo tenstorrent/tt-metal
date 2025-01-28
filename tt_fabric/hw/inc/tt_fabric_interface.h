@@ -22,19 +22,17 @@ constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NOC_MAX_BURST_WORDS * NOC_WORD_
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
 constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
 
-enum SessionCommand : uint32_t {
-    ASYNC_WR = (0x1 << 0),
-    ASYNC_WR_RESP = (0x1 << 1),
-    ASYNC_RD = (0x1 << 2),
-    ASYNC_RD_RESP = (0x1 << 3),
-    DSOCKET_WR = (0x1 << 4),
-    SSOCKET_WR = (0x1 << 5),
-    ATOMIC_INC = (0x1 << 6),
-    ATOMIC_READ_INC = (0x1 << 7),
-    SOCKET_OPEN = (0x1 << 8),
-    SOCKET_CLOSE = (0x1 << 9),
-    SOCKET_CONNECT = (0x1 << 10),
-};
+#define ASYNC_WR (0x1 << 0)
+#define ASYNC_WR_RESP (0x1 << 1)
+#define ASYNC_RD (0x1 << 2)
+#define ASYNC_RD_RESP (0x1 << 3)
+#define DSOCKET_WR (0x1 << 4)
+#define SSOCKET_WR (0x1 << 5)
+#define ATOMIC_INC (0x1 << 6)
+#define ATOMIC_READ_INC (0x1 << 7)
+#define SOCKET_OPEN (0x1 << 8)
+#define SOCKET_CLOSE (0x1 << 9)
+#define SOCKET_CONNECT (0x1 << 10)
 
 #define INVALID 0x0
 #define DATA 0x1
@@ -60,7 +58,7 @@ typedef struct _tt_routing {
 static_assert(sizeof(tt_routing) == 16);
 
 typedef struct _tt_session {
-    SessionCommand command;
+    uint32_t command;
     uint32_t target_offset_l;  // RDMA address
     uint32_t target_offset_h;
     uint32_t ack_offset_l;  // fabric client local address for session command acknowledgement.
@@ -97,6 +95,13 @@ typedef struct _atomic_params {
     uint32_t wrap_boundary : 8;
 } atomic_params;
 
+typedef struct _async_wr_atomic_params {
+    uint32_t padding;
+    uint32_t l1_offset;
+    uint32_t noc_xy : 24;
+    uint32_t increment : 8;
+} async_wr_atomic_params;
+
 typedef struct _read_params {
     uint32_t return_offset_l;  // address where read data should be copied
     uint32_t return_offset_h;
@@ -111,6 +116,7 @@ typedef union _packet_params {
     mcast_params mcast_parameters;
     socket_params socket_parameters;
     atomic_params atomic_parameters;
+    async_wr_atomic_params async_wr_atomic_parameters;
     read_params read_parameters;
     misc_params misc_parameters;
     uint8_t bytes[12];
