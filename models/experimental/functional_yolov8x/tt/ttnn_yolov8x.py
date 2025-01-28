@@ -4,7 +4,6 @@
 
 import ttnn
 import math
-import torch.nn as nn
 
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     autopad,
@@ -253,30 +252,33 @@ def C2f(
 def SPPF(device, x, parameters, path, in_h, in_w, k=5):
     cv1, out_h, out_w = Conv(device, x, parameters, f"{path}.cv1", in_h, in_w, 1, 1)
 
+    p = k // 2
+
     cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
-    cv1 = ttnn.reshape(cv1, (1, out_h, out_w, cv1.shape[-1]))
-    cv1 = ttnn.permute(cv1, (0, 3, 1, 2))
-
-    # tt maxpool2d low pcc case : submitted unit test.
-
-    cv1 = ttnn.to_torch(cv1)
-    m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
 
     y = [cv1]
-    y.extend(m(y[-1]) for _ in range(3))
+    for i in range(3):
+        output = ttnn.max_pool2d(
+            input_tensor=y[-1],
+            batch_size=y[-1].shape[0],
+            input_h=out_h,
+            input_w=out_w,
+            channels=y[-1].shape[-1],
+            kernel_size=[5, 5],
+            stride=[1, 1],
+            padding=[p, p],
+            dilation=[1, 1],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        y.append(output)
 
-    tt_y = []
+    x = ttnn.concat(y, 3)
+
     for i in range(len(y)):
-        y[i] = ttnn.from_torch(y[i], device=device)
-        y[i] = ttnn.permute(y[i], (0, 2, 3, 1))
-        tt_y.append(y[i])
+        ttnn.deallocate(y[i])
 
-    x = ttnn.concat(tt_y, 3)
-
-    for i in range(len(y)):
-        ttnn.deallocate(tt_y[i])
-
-    x, out_h, out_w = Conv(device, x, parameters, f"{path}.cv2", x.shape[1], x.shape[2], 1, 1, change_shard=True)
+    x, out_h, out_w = Conv(device, x, parameters, f"{path}.cv2", out_h, out_w, 1, 1, change_shard=True)
 
     return x, out_h, out_w
 
