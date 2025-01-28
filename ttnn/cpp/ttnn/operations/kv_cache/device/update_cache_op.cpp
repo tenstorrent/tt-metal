@@ -5,7 +5,6 @@
 #include "cpp/ttnn/operations/kv_cache/device/update_cache_op.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 
 using namespace tt::tt_metal;
 

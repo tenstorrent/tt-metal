@@ -5,8 +5,6 @@
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/host_api.hpp>
-
 namespace ttnn::operations::experimental::transformer {
 
 void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
