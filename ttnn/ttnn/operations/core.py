@@ -26,7 +26,7 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     golden_function=_golden_function,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
-    input_rank = len(input_tensor.shape)
+    input_rank = len(input_tensor.logical_shape)
 
     if isinstance(slices, int):
         slices = (slice(None, slices, None),)
@@ -66,7 +66,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
     slice_end = [_slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)]
     slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
-
     output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
 
     return output

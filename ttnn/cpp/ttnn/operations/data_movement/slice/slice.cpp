@@ -28,9 +28,10 @@ ttnn::Tensor SliceOperation::invoke(
 
     const auto& input_shape = input_tensor.get_logical_shape();
     uint32_t input_rank = input_shape.rank();
+
     auto input_layout = input_tensor.get_layout();
-    if (input_rank < 2) {
-        TT_FATAL(input_layout == Layout::ROW_MAJOR, "Slice is not supported for non-row-major tensors with rank < 2");
+    if (input_rank == 0) {
+        return input_tensor;
     }
     TT_FATAL(
         input_rank == begins.size(), "Input rank {} and begins {} must have the same size", input_rank, begins.size());
@@ -91,15 +92,18 @@ ttnn::Tensor SliceOperation::invoke(
     bool unaligned_begins = false;
     bool unaligned_ends = false;
     bool rm_only = false;
+    bool one_dimensional = input_rank == 1;
 
     Tensor input = input_tensor;
     if (input_tensor.get_layout() == Layout::TILE) {
-        unaligned_begins |= (modified_begins[input_rank - 2] % tile_shape[0] != 0) ||
-                            (modified_begins[input_rank - 1] % tile_shape[1] != 0);
-        // TODO: if only the ends are unaligned, we can use fill_pad to pad the tensor
-        unaligned_ends |= (modified_ends[input_rank - 2] % tile_shape[0] != 0) ||
-                          (modified_ends[input_rank - 1] % tile_shape[1] != 0);
-        rm_only = !no_step || unaligned_begins || unaligned_ends;
+        if (!one_dimensional) {
+            unaligned_begins |= (modified_begins[input_rank - 2] % tile_shape[0] != 0) ||
+                                (modified_begins[input_rank - 1] % tile_shape[1] != 0);
+            // TODO: if only the ends are unaligned, we can use fill_pad to pad the tensor
+            unaligned_ends |= (modified_ends[input_rank - 2] % tile_shape[0] != 0) ||
+                              (modified_ends[input_rank - 1] % tile_shape[1] != 0);
+        }
+        rm_only = !no_step || unaligned_begins || unaligned_ends || one_dimensional;
         if (rm_only) {
             TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Strided slice is not supported for BFLOAT8 tensors");
             input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
@@ -148,7 +152,6 @@ ttnn::Tensor SliceOperation::invoke(
                    {optional_output_tensor},
                    queue_id)
                    .at(0);
-
     return ret_adjustment(res);
 }
 
