@@ -35,6 +35,8 @@
 
 #include <graph_tracking.hpp>
 
+#include "llrt.hpp"
+
 namespace tt {
 
 namespace tt_metal {
