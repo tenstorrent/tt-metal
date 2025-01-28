@@ -5,7 +5,6 @@
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
