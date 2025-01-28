@@ -168,6 +168,9 @@ void RunTimeOptions::ParseWatcherEnv() {
     const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
     watcher_noinline = (watcher_noinline_str != nullptr);
 
+    const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
+    watcher_phys_coords = (watcher_phys_str != nullptr);
+
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;
 
