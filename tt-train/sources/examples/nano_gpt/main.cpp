@@ -8,6 +8,7 @@
 #include <csignal>
 #include <cstdint>
 #include <ttnn/tensor/tensor.hpp>
+#include <variant>
 #include <wandbcpp.hpp>
 
 #include "autograd/tensor.hpp"
@@ -26,6 +27,10 @@
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
+
+namespace {
+constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
+}
 
 /* WANDB BLocks this signal.
  Control+C didn't work.
@@ -49,7 +54,7 @@ using DataLoader = ttml::datasets::DataLoader<
 uint32_t sample(std::span<const float> log_softmax) {
     auto probabilities_vector = std::vector<float>(log_softmax.size());
     std::transform(log_softmax.begin(), log_softmax.end(), probabilities_vector.begin(), [](float value) {
-        return std::exp(value);
+        return std::exp(value / 0.8F);
     });
     auto distribution = std::discrete_distribution<uint32_t>(probabilities_vector.begin(), probabilities_vector.end());
     return distribution(ttml::autograd::ctx().get_generator());
@@ -331,6 +336,7 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
+    std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
@@ -355,6 +361,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
+    config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
@@ -401,39 +408,46 @@ int main(int argc, char **argv) {
 
     if (enable_wandb) {
         wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
-        wandbcpp::update_config({
-            {"model", "transformer"},
-            {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
-            {"embedding_dim", static_cast<int>(config.transformer_config.embedding_dim)},
-            {"num_blocks", static_cast<int>(config.transformer_config.num_blocks)},
-            {"dropout_prob", config.transformer_config.dropout_prob},
-            {"learning_rate", config.learning_rate},
-            {"weight_decay", config.weight_decay},
-            {"batch_size", static_cast<int>(config.batch_size)},
-            {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
-            {"max_steps", static_cast<int>(config.max_steps)},
-            {"seed", static_cast<int>(config.seed)},
-            {"tokenizer_type", config.tokenizer_type},
-            {"use_kahan_summation", config.use_kahan_summation},
-            {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
-            {"positional_embedding_type",
-             config.transformer_config.positional_embedding_type ==
-                     ttml::models::gpt2::PositionalEmbeddingType::Trainable
-                 ? "trainable"
-                 : "fixed"},
-            {"scheduler_type", config.scheduler_type},
-            {"using_clip_grad_norm", config.use_clip_grad_norm},
-            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
-        });
+        wandbcpp::update_config(
+            {{"model", "transformer"},
+             {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
+             {"embedding_dim", static_cast<int>(config.transformer_config.embedding_dim)},
+             {"num_blocks", static_cast<int>(config.transformer_config.num_blocks)},
+             {"dropout_prob", config.transformer_config.dropout_prob},
+             {"learning_rate", config.learning_rate},
+             {"weight_decay", config.weight_decay},
+             {"batch_size", static_cast<int>(config.batch_size)},
+             {"sequence_length", static_cast<int>(config.transformer_config.max_sequence_length)},
+             {"max_steps", static_cast<int>(config.max_steps)},
+             {"seed", static_cast<int>(config.seed)},
+             {"tokenizer_type", config.tokenizer_type},
+             {"use_kahan_summation", config.use_kahan_summation},
+             {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
+             {"positional_embedding_type",
+              config.transformer_config.positional_embedding_type ==
+                      ttml::models::gpt2::PositionalEmbeddingType::Trainable
+                  ? "trainable"
+                  : "fixed"},
+             {"scheduler_type", config.scheduler_type},
+             {"using_clip_grad_norm", config.use_clip_grad_norm},
+             {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
+             {"weight_tying",
+              config.transformer_config.weight_tying == ttml::models::gpt2::WeightTyingType::Enabled ? "enabled"
+                                                                                                     : "disabled"}});
     }
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     auto schedule_func = schedulers.at(config.scheduler_type);
 
-    std::string text;
+    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
     try {
-        text = read_file_to_str(config.data_path);
+        // check file extension:
+        if (config.data_path.ends_with(".txt")) {
+            text_or_tokens = read_file_to_str(config.data_path);
+        } else {
+            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+        }
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         return -1;
@@ -446,19 +460,25 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = config.transformer_config.max_sequence_length;
 
-    auto create_dataset_and_tokenizer = [](const auto &text, const auto sequence_length, const auto &tokenizer_type) {
-        if (tokenizer_type == "char") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                text, sequence_length);
-        } else if (tokenizer_type == "bpe") {
-            return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                text, sequence_length);
-        } else {
-            throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-        }
-    };
+    auto create_dataset_and_tokenizer =
+        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
+            if (tokenizer_type == "char") {
+                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                    std::get<0>(text), sequence_length);
+            } else if (tokenizer_type == "bpe") {
+                return std::visit(
+                    [&](const auto &tokens) {
+                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
+                            tokens, sequence_length, tokenizer_path);
+                    },
+                    text);
+            } else {
+                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
+            }
+        };
 
-    auto [dataset, tokenizer] = create_dataset_and_tokenizer(text, sequence_length, config.tokenizer_type);
+    auto [dataset, tokenizer] =
+        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
     fmt::print("Dataset size: {}\n", dataset.get_size());
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
@@ -649,7 +669,7 @@ int main(int argc, char **argv) {
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (enable_wandb && global_step % 10 == 0) {
+                if (enable_wandb && global_step % 1 == 0) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
