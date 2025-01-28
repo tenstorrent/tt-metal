@@ -37,7 +37,7 @@ ALWI void reduce_init_short(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 }
 
 template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void reduce_init_delta(uint32_t ocb, uint32_t icb0, uint32_t icb1) {
+ALWI void reduce_init_delta(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb0, icb1)));
 

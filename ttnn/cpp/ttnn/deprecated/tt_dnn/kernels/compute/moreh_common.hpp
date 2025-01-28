@@ -138,7 +138,7 @@ ALWI void reduce_init_delta_with_dt(uint32_t ocb = 16, uint32_t icb0 = 0, uint32
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    reduce_init_delta<at_start, reduce_type, reduce_dim>(ocb, icb0, icb1);
+    reduce_init_delta<at_start, reduce_type, reduce_dim>(icb0, icb1, ocb);
 }
 
 class ArgFetcher {
