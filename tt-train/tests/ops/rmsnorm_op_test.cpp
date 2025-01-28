@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,6 +64,9 @@ TEST_F(RMSNormOpTest, RMSNormOp_Forward) {
 
            {{0.4003F, 0.1393F, 1.4143F, 0.7576F, 1.4987F}, {1.2719F, 0.8061F, 0.3466F, -1.2056F, 1.0765F}}}}});
 
+    std::cout << "result_xtensor: " << result_xtensor << "\n";
+    std::cout << "expected_result: " << expected_result << "\n";
+
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-4F));
 
     // Take grad of sum of result with respect to example_tensor
@@ -80,4 +83,34 @@ TEST_F(RMSNormOpTest, RMSNormOp_Forward) {
 
            {{1.1684, 1.5554, -0.3364, 0.6381, -0.4617}, {0.3445, 0.5216, 0.6962, 1.2863, 0.4188}}}}});
     EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1e-4F));
+}
+
+TEST_F(RMSNormOpTest, RMSNormOp_Forward_Small) {
+    using namespace ttml;
+
+    xt::xarray<float> example_xtensor = {{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}};
+    auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
+
+    uint32_t H = 1, W = 8;
+
+    uint32_t size = H * W;
+
+    auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto result = ops::rmsnorm(example_tensor, gamma, 0.0F);
+
+    // Compare result with torch
+    auto result_xtensor = core::to_xtensor(result->get_value());
+
+    xt::xarray<float> expected_result = {{0.3651F, 0.7303F, 1.0954F, 1.4606F, 0.3651F, 0.7303F, 1.0954F, 1.4606F}};
+    std::cout << "result_xtensor: " << result_xtensor << "\n";
+    std::cout << "expected_result: " << expected_result << "\n";
+
+    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
+
+    auto sum_result = ttml::ops::sum(result);
+    sum_result->backward();
+    auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
+    auto expected_example_tensor_grad = xt::xarray<float>(
+        {{2.4343e-01F, 1.2172e-01F, 2.9802e-08F, -1.2172e-01F, 2.4343e-01F, 1.2172e-01F, 2.9802e-08F, -1.2172e-01F}});
+    EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 3e-2F));
 }
