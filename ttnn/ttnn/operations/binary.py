@@ -330,10 +330,15 @@ def _golden_function_floor_div(input_tensor_a, input_tensor_b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.floor_div, golden_function=_golden_function_floor_div)
 
 
-def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function_remainder(input_tensor_a, input_tensor_b, *args, device, **kwargs):
     import torch
 
-    return torch.remainder(input_tensor_a, input_tensor_b)
+    return torch.nan_to_num(
+        torch.remainder(input_tensor_a, input_tensor_b),
+        nan=device.sfpu_nan(),
+        posinf=device.sfpu_inf(),
+        neginf=-device.sfpu_inf(),
+    )
 
 
 ttnn.attach_golden_function(ttnn.remainder, golden_function=_golden_function_remainder)
