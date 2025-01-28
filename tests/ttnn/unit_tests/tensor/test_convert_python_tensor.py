@@ -12,7 +12,6 @@ import torch
 
 
 import ttnn
-import ttnn.ttnn
 
 
 @pytest.mark.parametrize("size", [64])
