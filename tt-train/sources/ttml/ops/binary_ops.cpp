@@ -7,6 +7,7 @@
 #include <core/compute_kernel_config.hpp>
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
+#include <ranges>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
 #include <ttnn/tensor/types.hpp>
@@ -23,6 +24,68 @@
 namespace ttml::ops {
 
 namespace {
+
+struct BroadcastResult {
+    ttnn::Tensor fst;
+    ttnn::Tensor snd;
+    std::optional<std::vector<uint32_t>> fst_stretch_factors;
+    std::optional<std::vector<uint32_t>> snd_stretch_factors;
+};
+
+BroadcastResult broadcast(const ttnn::Tensor& fst, const ttnn::Tensor& snd) {
+    auto fst_shape = fst.get_logical_shape();
+    auto snd_shape = snd.get_logical_shape();
+    if (fst_shape == snd_shape) {
+        return BroadcastResult{
+            .fst = fst,
+            .snd = snd,
+            .fst_stretch_factors = std::nullopt,
+            .snd_stretch_factors = std::nullopt};  // no stretch required
+    }
+
+    auto fst_broadcasted = fst;
+    auto snd_broadcasted = snd;
+    if (fst_shape.rank() < snd_shape.rank()) {
+        fst_broadcasted = core::unsqueeze_to_rank(fst, snd_shape.rank());
+        fst_shape = fst_broadcasted.get_logical_shape();
+    }
+    if (snd_shape.rank() < fst_shape.rank()) {
+        snd_broadcasted = core::unsqueeze_to_rank(snd, fst_shape.rank());
+        snd_shape = snd_broadcasted.get_logical_shape();
+    }
+
+    bool fst_is_stretched = false;
+    bool snd_is_stretched = false;
+
+    std::vector<uint32_t> fst_stretch_factors;
+    std::vector<uint32_t> snd_stretch_factors;
+    for (size_t i = 0; i < fst_shape.size(); ++i) {
+        if (fst_shape[i] == snd_shape[i]) {
+            fst_stretch_factors.push_back(1);
+            snd_stretch_factors.push_back(1);
+        } else if (fst_shape[i] == 1) {
+            fst_stretch_factors.push_back(snd_shape[i]);
+            fst_is_stretched = true;
+        } else if (snd_shape[i] == 1) {
+            snd_stretch_factors.push_back(fst_shape[i]);
+            snd_is_stretched = true;
+        } else {
+            TT_THROW("Incompatible shapes for broadcasting: {} and {}, at dim {}", fst_shape, snd_shape, i);
+        }
+    }
+
+    if (fst_is_stretched) {
+        fst_broadcasted = ttnn::repeat(fst_broadcasted, ttnn::Shape{fst_stretch_factors});
+    }
+    if (snd_is_stretched) {
+        snd_broadcasted = ttnn::repeat(snd_broadcasted, ttnn::Shape{snd_stretch_factors});
+    }
+    return BroadcastResult{
+        .fst = fst_broadcasted,
+        .snd = snd_broadcasted,
+        .fst_stretch_factors = fst_is_stretched ? std::optional{fst_stretch_factors} : std::nullopt,
+        .snd_stretch_factors = snd_is_stretched ? std::optional{snd_stretch_factors} : std::nullopt};
+}
 
 bool is_batch_broadcasted(const autograd::TensorPtr& a, const ttnn::Tensor& grad) {
     auto a_shape = a->get_value().get_logical_shape();
@@ -54,21 +117,62 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 }
 
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
+    /* TT_ASSERT(a->get_value().shape().rank() == b->get_value().shape().rank(), "Ranks must match for addition"); */
     auto out = autograd::create_tensor();
 
     out->set_value(ttnn::add(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (is_batch_broadcasted(a, out->get_grad())) {
-            a->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
-        } else {
-            a->add_grad(out->get_grad());
+        auto broadcast_result_a = broadcast(out->get_grad(), a->get_value());
+        auto broadcast_result_b = broadcast(out->get_grad(), b->get_value());
+
+        auto a_stretch_factors = broadcast_result_a.fst_stretch_factors.value_or(std::vector<uint32_t>{});
+        auto b_stretch_factors = broadcast_result_b.snd_stretch_factors.value_or(std::vector<uint32_t>{});
+
+        ttnn::SmallVector<int64_t> a_sum_dims_vec;
+        ttnn::SmallVector<int64_t> b_sum_dims_vec;
+        a_sum_dims_vec.reserve(a_stretch_factors.size());
+        b_sum_dims_vec.reserve(b_stretch_factors.size());
+
+        uint32_t i = 0;
+        for (const auto& dim : a_stretch_factors) {
+            if (dim != 1) {
+                a_sum_dims_vec.push_back(i);
+            }
+            ++i;
         }
 
-        if (is_batch_broadcasted(b, out->get_grad())) {
-            b->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
-        } else {
-            b->add_grad(out->get_grad());
+        i = 0;
+        for (const auto& dim : b_stretch_factors) {
+            if (dim != 1) {
+                b_sum_dims_vec.push_back(i);
+            }
+            ++i;
         }
+
+        fmt::print("a_stretch_factors: {}\n", a_stretch_factors);
+        fmt::print("b_stretch_factors: {}\n", b_stretch_factors);
+        fmt::print("a_sum_dims_vec: {}\n", a_sum_dims_vec);
+        fmt::print("b_sum_dims_vec: {}\n", b_sum_dims_vec);
+        fmt::print("broadcast_result_a.fst: {}\n", broadcast_result_a.fst.get_logical_shape());
+        fmt::print("broadcast_result_b.fst: {}\n", broadcast_result_b.fst.get_logical_shape());
+        fmt::print("out->get_grad(): {}\n", out->get_grad().get_logical_shape());
+        fmt::print("a->get_value(): {}\n", a->get_value().get_logical_shape());
+        fmt::print("b->get_value(): {}\n", b->get_value().get_logical_shape());
+
+        a->add_grad(ttnn_fixed::sum_moreh(broadcast_result_a.fst, a_sum_dims_vec, /* keep_dim */ true));
+        b->add_grad(ttnn_fixed::sum_moreh(broadcast_result_b.fst, b_sum_dims_vec, /* keep_dim */ true));
+
+        // if (is_batch_broadcasted(a, out->get_grad())) {
+        //     a->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        // } else {
+        //     a->add_grad(out->get_grad());
+        // }
+
+        // if (is_batch_broadcasted(b, out->get_grad())) {
+        //     b->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        // } else {
+        //     b->add_grad(out->get_grad());
+        // }
     };
     auto links = autograd::get_links(a, b);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
