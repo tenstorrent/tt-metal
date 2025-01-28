@@ -69,19 +69,6 @@ enum class MemoryAllocator {
 
 namespace allocator {
 
-struct InitAndAllocFuncs {
-    std::function<void(Allocator&, const AllocatorConfig&)> init;
-    std::function<uint64_t(const AllocatorConfig&, BankManager&, uint64_t, uint64_t, bool, std::optional<uint32_t>)>
-        alloc;
-};
-
-// Holds callback functions required by allocators that specify how to initialize the bank managers and what the
-// allocation scheme is for a given storage substrate
-struct AllocDescriptor {
-    InitAndAllocFuncs dram;
-    InitAndAllocFuncs l1;
-};
-
 struct Statistics {
     size_t total_allocatable_size_bytes = 0;
     size_t total_allocated_bytes = 0;

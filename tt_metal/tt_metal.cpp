@@ -877,7 +877,7 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
             buffer->device()->get_active_sub_device_manager_id());
     }
 
-    DeviceAddr allocated_addr = allocator::allocate_buffer(*buffer->allocator(), buffer);
+    DeviceAddr allocated_addr = buffer->allocator()->allocate_buffer(buffer);
 
     // Assertion here because buffer class returns a u32 when address is queried
     // Requires updating all use cases of buffer address to accept a u64 to remove
@@ -916,8 +916,7 @@ void DeallocateBuffer(Buffer* buffer) {
             *buffer->sub_device_manager_id(),
             buffer->device()->get_active_sub_device_manager_id());
     }
-    auto allocator = buffer->allocator();
-    allocator::deallocate_buffer(*allocator, buffer);
+    buffer->allocator()->deallocate_buffer(buffer);
 }
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
