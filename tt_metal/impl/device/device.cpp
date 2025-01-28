@@ -995,18 +995,6 @@ void Device::init_command_queue_device() {
     }
 }
 
-void Device::initialize_synchronous_sw_cmd_queue() {
-    TT_THROW("Slow Dispatch is not supported in this change. Help needed to make it right 😱");
-
-    // Initialize a single Software Command Queue for SD, using passthrough mode.
-    // This queue is used for all host bound functions using the Software CQ in SD mode.
-    // sw_command_queues_.reserve(num_hw_cqs());
-    // for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-    //     sw_command_queues_.push_back(
-    //         std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
-    // }
-}
-
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");

@@ -476,16 +476,10 @@ void EnqueueSetRuntimeArgs(
     const CoreCoord& core_coord,
     std::shared_ptr<RuntimeArgs> runtime_args_ptr,
     bool blocking) {
-    auto runtime_args_md = RuntimeArgsMetadata{
-        .core_coord = core_coord,
-        .runtime_args_ptr = std::move(runtime_args_ptr),
-        .kernel = kernel,
-    };
-
     std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve((*runtime_args_md.runtime_args_ptr).size());
+    resolved_runtime_args.reserve(runtime_args_ptr->size());
 
-    for (const auto& arg : *(runtime_args_md.runtime_args_ptr)) {
+    for (const auto& arg : *(runtime_args_ptr)) {
         std::visit(
             [&resolved_runtime_args](auto&& a) {
                 using T = std::decay_t<decltype(a)>;
@@ -497,7 +491,7 @@ void EnqueueSetRuntimeArgs(
             },
             arg);
     }
-    runtime_args_md.kernel->set_runtime_args(runtime_args_md.core_coord, resolved_runtime_args);
+    kernel->set_runtime_args(core_coord, resolved_runtime_args);
 }
 
 void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
@@ -557,7 +551,7 @@ void EnqueueWriteBuffer(
 
 void EnqueueWriteSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
     bool blocking) {

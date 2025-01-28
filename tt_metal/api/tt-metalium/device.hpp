@@ -197,7 +197,6 @@ public:
     virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
-    virtual void initialize_synchronous_sw_cmd_queue() = 0;
     virtual void update_dispatch_cores_for_multi_cq_eth_dispatch() = 0;
 
     // Puts device into reset

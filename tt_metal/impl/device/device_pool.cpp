@@ -246,7 +246,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 

@@ -53,10 +53,6 @@ enum class EnqueueCommandType {
 
 string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
-class CommandInterface;
-
-using WorkerQueue = LockFreeQueue<CommandInterface>;
-
 class Command {
    public:
     Command() {}
@@ -201,29 +197,6 @@ class EnqueueTerminateCommand : public Command {
     EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
 
     constexpr bool has_side_effects() { return false; }
-};
-
-struct RuntimeArgsMetadata {
-    CoreCoord core_coord;
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr;
-    std::shared_ptr<Kernel> kernel;
-    std::vector<uint32_t> update_idx;
-};
-
-// Common interface for all command queue types
-struct CommandInterface {
-    EnqueueCommandType type;
-    std::optional<bool> blocking;
-    std::optional<std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>> buffer;
-    Program* program;
-    std::optional<RuntimeArgsMetadata> runtime_args_md;
-    std::optional<const Buffer*> shadow_buffer;
-    std::optional<HostDataType> src;
-    std::optional<void*> dst;
-    std::optional<std::shared_ptr<Event>> event;
-    std::optional<uint32_t> trace_id;
-    std::optional<BufferRegion> region;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
 };
 
 // Primitives used to place host only operations on the SW Command Queue.

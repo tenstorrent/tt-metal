@@ -692,10 +692,6 @@ void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
 }
-void MeshDevice::initialize_synchronous_sw_cmd_queue() {
-    TT_THROW("initialize_synchronous_sw_cmd_queue() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->initialize_synchronous_sw_cmd_queue();
-}
 void MeshDevice::update_dispatch_cores_for_multi_cq_eth_dispatch() {
     TT_THROW("update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices instead");
     reference_device()->update_dispatch_cores_for_multi_cq_eth_dispatch();
