@@ -97,7 +97,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
+        # PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
