@@ -190,8 +190,6 @@ public:
     void enable_async(bool enable) override;
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override;
-    void set_worker_queue_mode(const WorkerQueueMode& mode) override;
-    WorkerQueueMode get_worker_queue_mode() override;
     bool is_worker_queue_empty() const override;
     bool can_use_passthrough_scheduling() const override;
     void push_work(std::function<void()> work, bool blocking) override;

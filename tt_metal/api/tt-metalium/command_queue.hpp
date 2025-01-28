@@ -17,7 +17,7 @@
 #include "env_lib.hpp"
 #include "command_queue_interface.hpp"
 #include "device_command.hpp"
-#include "lock_free_queue.hpp"
+#include "multi_producer_single_consumer_queue.hpp"
 #include "program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
@@ -57,7 +57,7 @@ string EnqueueCommandTypeToString(EnqueueCommandType ctype);
 
 class CommandInterface;
 
-using WorkerQueue = LockFreeQueue<CommandInterface>;
+using WorkerQueue = MultiProducerSingleConsumerQueue<CommandInterface>;
 
 class Command {
    public:

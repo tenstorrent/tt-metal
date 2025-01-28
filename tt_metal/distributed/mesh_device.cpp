@@ -710,10 +710,6 @@ void MeshDevice::synchronize() {
     this->work_executor_->synchronize();
 }
 WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->get_worker_mode(); }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    this->work_executor_->set_worker_queue_mode(mode);
-}
-WorkerQueueMode MeshDevice::get_worker_queue_mode() { return this->work_executor_->get_worker_queue_mode(); }
 bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
 bool MeshDevice::can_use_passthrough_scheduling() const { return this->work_executor_->use_passthrough(); }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
