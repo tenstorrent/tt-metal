@@ -13,6 +13,7 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
+#include "debug/dprint.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -135,7 +136,8 @@ void MAIN {
         }
         tile_regs_commit();
         tile_regs_release();
-
+        DPRINT << "Printing out CB: " << ENDL();
+        DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
