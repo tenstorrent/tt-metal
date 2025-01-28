@@ -85,7 +85,7 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     }
     const auto current_trace_buffers_size = cq.device()->get_trace_buffers_size();
     cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = cq.device()->get_initialized_allocator()->config.trace_region_size;
+    auto trace_region_size = cq.device()->get_initialized_allocator()->get_config().trace_region_size;
     TT_FATAL(
         cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",

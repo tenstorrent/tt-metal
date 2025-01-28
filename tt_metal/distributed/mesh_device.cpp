@@ -491,27 +491,27 @@ uint32_t MeshDevice::num_worker_cores(HalProgrammableCoreType core_type, SubDevi
 int MeshDevice::num_dram_channels() const { return reference_device()->num_dram_channels() * this->num_devices(); }
 uint32_t MeshDevice::num_banks(const BufferType& buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::num_banks(*allocator, buffer_type);
+    return allocator->get_num_banks(buffer_type);
 }
 uint32_t MeshDevice::num_banks(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::num_banks(*allocator, buffer_type);
+    return allocator->get_num_banks(buffer_type);
 }
 uint32_t MeshDevice::bank_size(const BufferType& buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_size(*allocator, buffer_type);
+    return allocator->get_bank_size(buffer_type);
 }
 uint32_t MeshDevice::bank_size(const BufferType& buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_size(*allocator, buffer_type);
+    return allocator->get_bank_size(buffer_type);
 }
 uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+    return allocator->get_dram_channel_from_bank_id(bank_id);
 }
 uint32_t MeshDevice::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
+    return allocator->get_dram_channel_from_bank_id(bank_id);
 }
 CoreCoord MeshDevice::logical_core_from_dram_channel(uint32_t dram_channel) const {
     return validate_and_get_reference_value(scoped_devices_->get_devices(), [dram_channel](const auto& device) {
@@ -525,39 +525,39 @@ uint32_t MeshDevice::dram_channel_from_logical_core(const CoreCoord& logical_cor
 }
 int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
+    return allocator->get_bank_offset(buffer_type, bank_id);
 }
 int32_t MeshDevice::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
+    return allocator->get_bank_offset(buffer_type, bank_id);
 }
 CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
+    return allocator->get_logical_core_from_bank_id(bank_id);
 }
 
 CoreCoord MeshDevice::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
+    return allocator->get_logical_core_from_bank_id(bank_id);
 }
 const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(uint32_t dram_channel) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
+    return allocator->get_bank_ids_from_dram_channel(dram_channel);
 }
 const std::vector<uint32_t>& MeshDevice::bank_ids_from_dram_channel(
     uint32_t dram_channel, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
+    return allocator->get_bank_ids_from_dram_channel(dram_channel);
 }
 const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
+    return allocator->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 const std::vector<uint32_t>& MeshDevice::bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
+    return allocator->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
 // Core management and network operations
@@ -671,7 +671,7 @@ bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size
 
     const auto& allocator = reference_device()->get_initialized_allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, std::make_unique<L1BankingAllocator>(allocator->config), sub_devices);
+        this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
 
     if (this->using_fast_dispatch()) {
         mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
@@ -801,11 +801,11 @@ std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
 // Memory statistics and buffer management
 uint32_t MeshDevice::get_allocator_alignment() const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.alignment;
+    return allocator->get_config().alignment;
 }
 uint32_t MeshDevice::get_allocator_alignment(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.alignment;
+    return allocator->get_config().alignment;
 }
 
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
@@ -819,29 +819,29 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
 
 size_t MeshDevice::get_l1_small_size() const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.l1_small_size;
+    return allocator->get_config().l1_small_size;
 }
 size_t MeshDevice::get_l1_small_size(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.l1_small_size;
+    return allocator->get_config().l1_small_size;
 }
 const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers() const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_allocated_buffers(*allocator);
+    return allocator->get_allocated_buffers();
 }
 const std::unordered_set<Buffer*>& MeshDevice::get_allocated_buffers(SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_allocated_buffers(*allocator);
+    return allocator->get_allocated_buffers();
 }
 allocator::Statistics MeshDevice::get_memory_allocation_statistics(const BufferType& buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_statistics(*allocator, buffer_type);
+    return allocator->get_statistics(buffer_type);
 }
 
 allocator::Statistics MeshDevice::get_memory_allocation_statistics(
     const BufferType& buffer_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_statistics(*allocator, buffer_type);
+    return allocator->get_statistics(buffer_type);
 }
 const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator() const {
     return sub_device_manager_tracker_->get_default_sub_device_manager()->get_initialized_allocator(SubDeviceId{0});
@@ -851,33 +851,33 @@ const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator(SubDevic
 }
 DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
+    return allocator->get_unreserved_base_address(mem_type);
 }
 DeviceAddr MeshDevice::get_base_allocator_addr(const HalMemType& mem_type, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
+    return allocator->get_unreserved_base_address(mem_type);
 }
 // Buffer and memory management operations
 void MeshDevice::deallocate_buffers() {
     const auto& allocator = this->get_initialized_allocator();
-    allocator::deallocate_buffers(*allocator);
+    allocator->deallocate_buffers();
 }
 void MeshDevice::deallocate_buffers(SubDeviceId sub_device_id) {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    allocator::deallocate_buffers(*allocator);
+    allocator->deallocate_buffers();
 }
 void MeshDevice::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
     const auto& allocator = this->get_initialized_allocator();
-    allocator::dump_memory_blocks(*allocator, buffer_type, out);
+    allocator->dump_memory_blocks(buffer_type, out);
 }
 void MeshDevice::dump_memory_blocks(
     const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const {
     const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    allocator::dump_memory_blocks(*allocator, buffer_type, out);
+    allocator->dump_memory_blocks(buffer_type, out);
 }
 MemoryBlockTable MeshDevice::get_memory_block_table(const BufferType& buffer_type) const {
     const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_memory_block_table(*allocator, buffer_type);
+    return allocator->get_memory_block_table(buffer_type);
 }
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(

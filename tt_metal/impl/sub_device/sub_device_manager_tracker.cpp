@@ -83,10 +83,10 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
     this->reset_sub_device_state(sub_device_manager->second);
     const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
-    allocator::reset_allocator_size(*default_allocator, BufferType::L1);
+    default_allocator->reset_allocator_size(BufferType::L1);
     // Shrink the global allocator size to make room for sub-device allocators
     auto local_l1_size = sub_device_manager->second->local_l1_size();
-    allocator::shrink_allocator_size(*default_allocator, BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 
@@ -131,13 +131,13 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
         // Global bank id needs to look up a bank from the compute grid (not the storage grid)
         // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
         const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
-        return allocator::lowest_occupied_l1_address(*default_allocator, global_bank_id);
+        return default_allocator->get_lowest_occupied_l1_address(global_bank_id);
     } else {
         DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
         for (const auto& sub_device_id : sub_device_ids) {
             const auto& allocator = this->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
             if (allocator) {
-                auto found_addr = allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+                auto found_addr = allocator->get_lowest_occupied_l1_address(global_bank_id);
                 if (found_addr.has_value()) {
                     lowest_addr = std::min(lowest_addr, *found_addr);
                 }
