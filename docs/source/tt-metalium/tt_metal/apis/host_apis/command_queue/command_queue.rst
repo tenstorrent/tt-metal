@@ -16,5 +16,7 @@ CommandQueue
   ReplayTrace
   ReleaseTrace
   EnqueueTrace
+  LightMetalBeginCapture
+  LightMetalEndCapture
   Finish
   Synchronize
