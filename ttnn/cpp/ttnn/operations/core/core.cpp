@@ -85,23 +85,35 @@ ttnn::Tensor to_device(
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_devices(
-        shape, data_type, layout, {device}, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return allocate_tensor_on_device(
+        TensorSpec(
+            shape, TensorLayout(data_type, PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
+        device);
 }
 
 ttnn::Tensor allocate_tensor_on_device(
-    const Shape& shape,
+    const SimpleShape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config) {
-    return tt::tt_metal::allocate_tensor_on_devices(
-        shape, data_type, layout, mesh_device->get_devices(), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG));
+    return allocate_tensor_on_device(
+        TensorSpec(
+            shape, TensorLayout(data_type, PageConfig(layout), memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG))),
+        mesh_device);
+}
+
+ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, IDevice* device) {
+    return tt::tt_metal::allocate_tensor_on_devices(spec, {device});
+}
+
+ttnn::Tensor allocate_tensor_on_device(const ttnn::TensorSpec& spec, MeshDevice* mesh_device) {
+    return tt::tt_metal::allocate_tensor_on_devices(spec, mesh_device->get_devices());
 }
 
 void copy_host_to_device_tensor(const ttnn::Tensor& host_tensor, ttnn::Tensor device_tensor, uint8_t cq_id) {

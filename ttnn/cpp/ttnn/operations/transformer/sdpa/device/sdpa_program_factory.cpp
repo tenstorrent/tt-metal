@@ -6,6 +6,7 @@
 #include "sdpa_op.hpp"
 
 #include <optional>
+#include <cmath>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -42,8 +43,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     attn_mask: B x NQH x S x S
     */
 
-    const auto q_shape = input_tensor_q.get_legacy_shape();
-    const auto k_shape = input_tensor_k.get_legacy_shape();
+    const auto q_shape = input_tensor_q.get_logical_shape();
+    const auto k_shape = input_tensor_k.get_logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
     const uint32_t NKH = k_shape[1];
 
@@ -52,14 +53,36 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // In chunked mode, we only need to process K/V up to chunk_start_idx + Sq
     const uint32_t Sk = is_chunked ? (chunk_start_idx.value() + Sq) : k_shape[2];
 
-    const uint32_t Sqt = Sq / TILE_HEIGHT;
-    const uint32_t Skt = Sk / TILE_HEIGHT;
+    /*
+    Note about tensor shapes:
+    SDPA inputs may be padded on the sequence length dimension. In addition,
+    q_chunk_size and k_chunk_size don't have to divide the valid sequence length.
+    Internally, the kernels pad tensors up to nearest multiple of the larger chunk size
+    and handle masking pad tokens when appropriate.
+    */
+
+    // Calculate padded sequence length
+    const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
+    const uint32_t padded_Sk = std::ceil((float)Sk / k_chunk_size) * k_chunk_size;
+
+    const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
+    const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
+
+    const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
+    const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
+    /*
+    For non-causal case we must provide a padded mask if the K sequence length has been padded
+    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
+    don't affect attention of unpadded tokens.
+    In causal case, the causal mask takes care of masking K pad tokens.
+    */
+    const bool use_padded_mask = (!is_causal) && (padded_Sk != Sk);
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
-    const uint32_t q_num_chunks = Sq / q_chunk_size;
-    const uint32_t k_num_chunks = Sk / k_chunk_size;
+    const uint32_t q_num_chunks = padded_Sq / q_chunk_size;
+    const uint32_t k_num_chunks = padded_Sk / k_chunk_size;
     const bool use_provided_mask = attn_mask.has_value();
 
     // log_debug all of the above
@@ -68,6 +91,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     tt::log_debug("Sq: {}", Sq);
     tt::log_debug("Sk: {}", Sk);
+    tt::log_debug("padded_Sq: {}", padded_Sq);
+    tt::log_debug("padded_Sk: {}", padded_Sk);
+    tt::log_debug("valid_Sqt: {}", valid_Sqt);
+    tt::log_debug("valid_Skt: {}", valid_Skt);
     tt::log_debug("DH: {}", DH);
     tt::log_debug("Sqt: {}", Sqt);
     tt::log_debug("Skt: {}", Skt);
@@ -94,7 +121,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
+        max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
         page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
         TT_FATAL(
             page_table_stick_size % 32 == 0,
@@ -294,6 +321,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       NKH,
                                                       Sqt,
                                                       Skt,
+                                                      valid_Sqt,
+                                                      valid_Skt,
                                                       DHt,
                                                       Sq_chunk_t,
                                                       q_num_chunks,
@@ -302,6 +331,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       num_cores,
                                                       (std::uint32_t)is_causal,
                                                       (std::uint32_t)use_provided_mask,
+                                                      (std::uint32_t)use_padded_mask,
                                                       (uint32_t)is_chunked,
                                                       (uint32_t)page_table_is_dram,
                                                       block_size_t,
@@ -313,6 +343,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         NQH,
         NKH,
         Sqt,
+        valid_Sqt,
+        Sk,
         DHt,
         Sq_chunk_t,
         q_num_chunks,
@@ -323,6 +355,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         num_cores,
         (std::uint32_t)is_causal,
         (std::uint32_t)use_provided_mask,
+        (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
     };
 
@@ -352,6 +385,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         num_cores,
         (std::uint32_t)is_causal,
         (std::uint32_t)use_provided_mask,
+        (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
     };
 
@@ -443,7 +477,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto cb_in2_id = CreateCircularBuffer(program, core_grid, c_in2_config);
 
     // Only create mask buffer if it's going to be used
-    if (use_provided_mask or is_causal) {
+    if (use_provided_mask or is_causal or use_padded_mask) {
         // attn_mask input
         auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
                                 .set_page_size(tt::CB::c_in3, mask_tile_size);
@@ -593,24 +627,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     }
 
     auto override_runtime_arguments_callback =
-        [num_cores,
-         grid_size,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         batch_per_core,
-         nh_per_core,
-         q_per_core,
-         nh_parallel_factor,
-         q_parallel_factor,
-         B,
-         NQH,
-         q_num_chunks,
-         is_causal,
-         cb_in0_id,
-         cb_out0_id,
-         is_chunked,
-         q_chunk_size](
+        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, is_chunked, q_chunk_size](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -643,31 +660,6 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             // Set reader rt args
             for (uint32_t i = 0; i < num_cores; ++i) {
                 CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                // log_debug("core: {} getting runtime args for idx {i}", core, i);
-                uint32_t local_batch_start = (i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core;
-                uint32_t local_batch_end = local_batch_start + batch_per_core;
-                uint32_t local_nh_start = ((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core;
-                uint32_t local_nh_end = local_nh_start + nh_per_core;
-                uint32_t local_q_start = (i % q_parallel_factor) * q_per_core;
-                uint32_t local_q_end = local_q_start + q_per_core;
-
-                // clamp all to max values for non-even partitioning
-                local_batch_start = std::min(local_batch_start, B);
-                local_batch_end = std::min(local_batch_end, B);
-                local_nh_start = std::min(local_nh_start, NQH);
-                local_nh_end = std::min(local_nh_end, NQH);
-                local_q_start = std::min(local_q_start, q_num_chunks);
-                local_q_end = std::min(local_q_end, q_num_chunks);
-
-                // log the above
-                tt::log_debug("core: {}", i);
-                tt::log_debug("local_batch_start: {}", local_batch_start);
-                tt::log_debug("local_batch_end: {}", local_batch_end);
-                tt::log_debug("local_nh_start: {}", local_nh_start);
-                tt::log_debug("local_nh_end: {}", local_nh_end);
-                tt::log_debug("local_q_start: {}", local_q_start);
-                tt::log_debug("local_q_end: {}", local_q_end);
 
                 auto& reader_args = reader_args_by_core[core.x][core.y];
                 auto& writer_args = writer_args_by_core[core.x][core.y];

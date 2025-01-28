@@ -15,8 +15,13 @@
 #include "mesh_device_view.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
+#include "work_executor.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal {
+
+class SubDeviceManagerTracker;
+
+namespace distributed {
 
 class MeshCommandQueue;
 class MeshDeviceView;
@@ -56,8 +61,8 @@ private:
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
-
-    void initialize();
+    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::unique_ptr<WorkExecutor> work_executor_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -216,8 +221,8 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-    std::optional<SubDeviceId> get_fabric_sub_device_id() const override;
+    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     uint32_t get_completion_queue_reader_core() const override;
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override;
@@ -243,7 +248,7 @@ public:
     // Reshaping Rules:
     // 1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
     // 2. Line-to-Line Reshaping (when either dimension is 1):
-    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1
+    //    - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
     // 3. Grid-to-Grid Reshaping:
     //    - Only possible if the devices can form a connected physical mesh in the new shape
     //    - Must maintain physical connectivity between adjacent devices
@@ -292,7 +297,8 @@ public:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
-        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
@@ -305,4 +311,6 @@ struct MeshSubDeviceManagerId {
     std::vector<SubDeviceManagerId> sub_device_manager_ids;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace distributed
+
+}  // namespace tt::tt_metal

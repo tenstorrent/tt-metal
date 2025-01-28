@@ -50,80 +50,6 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-void validate_sharded_buffer_allocation(
-    const ttnn::SimpleShape& shape,
-    Layout layout,
-    DataType data_type,
-    const ShardSpecBuffer& shard_params,
-    const MemoryConfig& memory_config,
-    const Tile& tile) {
-    const auto& shard_spec = memory_config.shard_spec.value();
-    const auto& shard_shape = shard_spec.shape;
-
-    uint32_t num_cores = shard_spec.num_cores();
-
-    uint32_t total_height = shape.volume() / shape[-1];
-    uint32_t total_width = shape[-1];
-    if (memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        TT_ASSERT(
-            total_width == shard_shape[1],
-            "Shard shape {} does not divide tensor shape {} correctly according to sharding scheme",
-            shard_shape[1],
-            total_width);
-        uint32_t num_shards = div_up(total_height, shard_shape[0]);
-        TT_ASSERT(num_shards <= num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_ASSERT(
-            total_height == shard_shape[0],
-            "Shard shape does not divide tensor shape correctly according to sharding scheme");
-        uint32_t num_shards = div_up(total_width, shard_shape[1]);
-        TT_ASSERT(num_shards <= num_cores, "Number of shards {} must match number of cores {}", num_shards, num_cores);
-    } else if (memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        TT_ASSERT(
-            shard_spec.grid.ranges().size() == 1, "Shard grid must be one full rectangular grid for block sharded!");
-        uint32_t num_shards_along_height = div_up(total_height, shard_shape[0]);
-        uint32_t num_shards_along_width = div_up(total_width, shard_shape[1]);
-
-        // Additionally check that number of cores along height and width matches shard grid
-        const CoreCoord shard_grid = shard_spec.grid.bounding_box().grid_size();
-        if (shard_spec.orientation == ShardOrientation::ROW_MAJOR) {
-            TT_ASSERT(
-                num_shards_along_height <= shard_grid.y,
-                "Number of shards along height {} must match number of rows {} for row major orientation!",
-                num_shards_along_height,
-                shard_grid.y);
-            TT_ASSERT(
-                num_shards_along_width <= shard_grid.x,
-                "Number of shards along width {} must match number of columns {} for row major orientation!",
-                num_shards_along_width,
-                shard_grid.x);
-        } else {
-            TT_ASSERT(
-                num_shards_along_height <= shard_grid.x,
-                "Number of shards along height {} must match number of columns {} for column major orientation!",
-                num_shards_along_height,
-                shard_grid.x);
-            TT_ASSERT(
-                num_shards_along_width <= shard_grid.y,
-                "Number of shards along width {} must match number of rows {} for column major orientation!",
-                num_shards_along_width,
-                shard_grid.y);
-        }
-    } else {
-        TT_THROW("Unsupported sharding scheme");
-    }
-    if (layout == Layout::TILE) {
-        auto tile_shape = tile.get_tile_shape();
-        TT_FATAL(
-            (shard_shape[0] % tile_shape[0] == 0 && shard_shape[1] % tile_shape[1] == 0),
-            "Shard shape {} must be tile {} sized!",
-            shard_shape,
-            tile_shape);
-    } else if (layout == Layout::ROW_MAJOR) {
-        TT_FATAL(shard_shape[1] * tensor_impl::element_size_bytes(data_type) % sizeof(uint32_t) == 0, "Error");
-    }
-}
-
 DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
@@ -187,10 +113,17 @@ Tensor pad_bfloat8_b(
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -218,10 +151,17 @@ Tensor unpad_bfloat8_b(
     auto input_float_data =
         unpack_bfp8_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .unpad(output_tensor_start, output_tensor_end);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT8_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -230,10 +170,14 @@ Tensor unpad_bfloat8_b(
     auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-        float_tensor.get_legacy_shape(),
-        DataType::BFLOAT8_B,
-        tensor.get_layout(),
-        tile);
+        TensorSpec(
+            float_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT8_B,
+                PageConfig(tensor.get_layout(), tile),
+                MemoryConfig{},
+                float_tensor.get_logical_shape(),
+                float_tensor.get_padded_shape())));
 }
 
 Tensor pad_bfloat4_b(
@@ -249,10 +193,17 @@ Tensor pad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .pad(output_padded_shape, input_tensor_start, pad_value);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_logical_shape())))
+                            .pad(output_padded_shape, input_tensor_start, pad_value);
 
     // Convert back to BFLOAT4_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -280,10 +231,17 @@ Tensor unpad_bfloat4_b(
     auto input_float_data =
         unpack_bfp4_tiles_into_float_vec(input_packed_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
     auto input_float_buffer = owned_buffer::create<float>(std::move(input_float_data));
-    auto float_tensor =
-        Tensor(
-            OwnedStorage{input_float_buffer}, tensor.get_legacy_shape(), DataType::FLOAT32, tensor.get_layout(), tile)
-            .unpad(output_tensor_start, output_tensor_end);
+    auto float_tensor = Tensor(
+                            OwnedStorage{input_float_buffer},
+                            TensorSpec(
+                                tensor.get_logical_shape(),
+                                TensorLayout::fromPaddedShape(
+                                    DataType::FLOAT32,
+                                    PageConfig(tensor.get_layout(), tile),
+                                    MemoryConfig{},
+                                    tensor.get_logical_shape(),
+                                    tensor.get_padded_shape())))
+                            .unpad(output_tensor_start, output_tensor_end);
 
     // Convert back to BFLOAT4_B
     auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
@@ -292,10 +250,14 @@ Tensor unpad_bfloat4_b(
     auto output_uint32_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
     return Tensor(
         std::move(OwnedStorage{std::move(output_uint32_buffer)}),
-        float_tensor.get_legacy_shape(),
-        DataType::BFLOAT4_B,
-        tensor.get_layout(),
-        tile);
+        TensorSpec(
+            float_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                DataType::BFLOAT4_B,
+                PageConfig(tensor.get_layout(), tile),
+                MemoryConfig{},
+                float_tensor.get_logical_shape(),
+                float_tensor.get_padded_shape())));
 }
 
 // ======================================================================================
@@ -1194,7 +1156,7 @@ Tensor pad<bfloat4_b>(
 template <typename T>
 Tensor unpad(
     const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
-    const auto input_shape = tensor.get_legacy_shape();
+    const auto input_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
@@ -1254,7 +1216,7 @@ Tensor unpad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        output_shape,
+        ttnn::SimpleShape(output_shape),
         tensor.get_dtype(),
         tensor.get_layout(),
         tensor.get_tensor_spec().tile());
@@ -1293,8 +1255,7 @@ template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
-    std::array<uint32_t, 4> shard_shape_array = {1, 1, buffer_shard_shape[0], buffer_shard_shape[1]};
-    tt::tt_metal::LegacyShape shard_shape(shard_shape_array);
+    ttnn::SimpleShape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);
 

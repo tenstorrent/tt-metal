@@ -16,7 +16,8 @@
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"},
           "ENABLE_CCACHE": {"value": "TRUE"},
           "TT_UNITY_BUILDS": {"value": "FALSE"}
-        }
+        },
+        "toolchainFile": "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
       },
       {
         "name": "clang-tidy",

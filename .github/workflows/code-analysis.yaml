@@ -11,11 +11,6 @@ on:
         required: false
         type: boolean
         default: false
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
   workflow_dispatch:
     inputs:
       os:
@@ -26,24 +21,16 @@ on:
         required: false
         type: boolean
         default: false
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.build-docker == true }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
       os: ${{ inputs.os }}
 
-
   clang-tidy:
     needs: build-docker-image
-    if: always()
     env:
       ARCH_NAME: wormhole_b0
     runs-on:
@@ -137,10 +124,7 @@ jobs:
             # Suppress clang-tidy to first get an up-to-date build tree
             ln -sf /usr/bin/true ./clang-tidy-shim
 
-            # For Debug, check md5sum of a library
-            md5sum tt_metal/third_party/umd/device/libs/x86_64/libcreate_ethernet_map.a
-
-            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY=$(pwd)/clang-tidy-shim -DCMAKE_C_CLANG_TIDY=$(pwd)/clang-tidy-shim
+            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
 
             mkdir -p out
@@ -193,9 +177,7 @@ jobs:
             # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
             ln -sf $(which clang-tidy-17) ./clang-tidy-shim
 
-            # For Debug, check md5sum of a library
-            md5sum tt_metal/third_party/umd/device/libs/x86_64/libcreate_ethernet_map.a
-
+            # Keep this line _exactly_ the same as the one in the "Create baseline" or it will not be incremental
             cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
             mkdir -p out

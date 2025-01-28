@@ -27,7 +27,7 @@ struct ToMemoryConfig {
         const ttnn::MemoryConfig& memory_config,
         std::optional<ttnn::DataType> dtype = std::nullopt) {
         // Temporary until we see why buffer data not being populated
-        const auto original_shape = tensor.get_shape();
+        const auto& original_shape = tensor.get_logical_shape();
         const auto original_memory_config = ttnn::get_memory_config(tensor);
         if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
             return tensor;

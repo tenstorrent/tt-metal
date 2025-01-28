@@ -78,6 +78,14 @@ def append_to_csv(file_path, header, data, write_header=True):
 def profile_results():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "device_fw_duration": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_fw_duration"]["stats"][
@@ -89,6 +97,14 @@ def profile_results():
 def profile_results_kernel_duration():
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "device_kernel_duration": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     total_cycle = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["device_kernel_duration"]["stats"][
@@ -108,6 +124,14 @@ def get_device_freq():
 def profile_noc_results():
     setup = device_post_proc_config.test_noc()
     setup.deviceInputLog = profiler_log_path
+    setup.timerAnalysis = {
+        "NoC For Loop": {
+            "across": "device",
+            "type": "session_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in setup.riscTypes]},
+        },
+    }
     devices_data = import_log_run_stats(setup)
     deviceID = list(devices_data["devices"].keys())[0]
     min = devices_data["devices"][deviceID]["cores"]["DEVICE"]["analysis"]["NoC For Loop"]["stats"]["Min"]
@@ -820,8 +844,10 @@ def test_dram_read_all_core(arch, freq, test_vector, num_tests, nblock, data_for
     data.append([throughput])
     # check within range
     dev_freq = get_device_freq()
-    bw_bound = 260.0 * dev_freq / 1000.0
-    assert bw_bound <= throughput
+    bw_lower_bound = 260.0 * dev_freq / 1000.0
+    bw_upper_bound = bw_lower_bound + 10.0
+    assert bw_lower_bound <= throughput
+    assert throughput <= bw_upper_bound
 
 
 @pytest.mark.parametrize(
@@ -949,15 +975,19 @@ def test_dram_read_l1_write_core(
     data.append([throughput])
     # check within range
     if arch == "grayskull":
-        bw_bound = 70.0  # Equals 85 GB/s with 1200 MHz
+        bw_lower_bound = 70.0  # Equals 85 GB/s with 1200 MHz
     elif arch == "wormhole_b0":
-        bw_bound = 260.0
+        bw_lower_bound = 260.0
     elif arch == "blackhole":
-        bw_bound = 340.0
+        bw_lower_bound = 340.0
     if bw_target is not None:
-        bw_bound = bw_target
-    bw_bound = bw_bound * dev_freq / 1000.0  # Adjust for device frequency; target is based on max device frequency
-    assert bw_bound <= throughput
+        bw_lower_bound = bw_target
+    bw_lower_bound = (
+        bw_lower_bound * dev_freq / 1000.0
+    )  # Adjust for device frequency; target is based on max device frequency
+    assert bw_lower_bound <= throughput
+    bw_upper_bound = bw_lower_bound + 10.0
+    assert throughput <= bw_upper_bound
 
 
 @pytest.mark.parametrize(
@@ -1055,15 +1085,18 @@ def test_dram_read_remote_cb_sync(
     logger.info("DRAM read throughput: " + str(throughput))
     data.append([throughput])
     # check within range
+    bw_lower_bound = 0.0
     if test == None:
         if arch == "wormhole_b0":
-            bw_bound = 21.5
+            bw_lower_bound = 21.5
     elif test == "Matmul":
         if arch == "wormhole_b0":
-            bw_bound = 18.0
+            bw_lower_bound = 18.0
+    bw_upper_bound = bw_lower_bound + 4.0
     if use_sub_devices:
         pytest.xfail("Tests using sub-devices is not correctly set up for BW measurements")
-    assert bw_bound <= throughput
+    assert bw_lower_bound <= throughput
+    assert throughput <= bw_upper_bound
 
 
 @pytest.mark.parametrize(
