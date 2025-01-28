@@ -549,6 +549,7 @@ DevicePool::~DevicePool() {
         }
     }
     this->devices.clear();
+    std::cout << " done " << std::endl;
 }
 
 }  // namespace tt

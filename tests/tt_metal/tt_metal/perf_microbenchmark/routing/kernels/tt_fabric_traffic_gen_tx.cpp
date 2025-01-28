@@ -328,6 +328,7 @@ void kernel_main() {
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
 
+    DPRINT << HEX() << " TEST TX START: " << ENDL();
     while (true) {
         iter++;
 #ifdef CHECK_TIMEOUT

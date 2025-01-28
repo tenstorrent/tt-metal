@@ -115,7 +115,7 @@ class RunTimeOptions {
     bool clear_l1 = false;
 
     bool skip_loading_fw = false;
-    bool skip_reset_cores_on_init = false;
+    bool skip_reset_cores_on_init = true;
 
     bool riscv_debug_info_enabled = false;
     uint32_t watcher_debug_delay = 0;

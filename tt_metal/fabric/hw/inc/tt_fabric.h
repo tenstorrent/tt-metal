@@ -467,6 +467,7 @@ typedef struct fvc_producer_state {
         } else {
             uint32_t dst_device_id = current_packet_header.routing.dst_dev_id;
             uint32_t next_port = routing_table->intra_mesh_table.dest_entry[dst_device_id];
+            DPRINT << " next port to dev " << dst_device_id << ": " << next_port << ENDL();
             return eth_chan_to_noc_xy[noc_index][next_port];
         }
     }
@@ -494,6 +495,7 @@ typedef struct fvc_producer_state {
             advance_out_rdptr(words_available);
             // issue noc write to noc target of pull request.
             uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+            DPRINT << HEX() << get_next_hop_router_noc_xy() << " " << FABRIC_ROUTER_REQ_QUEUE_START << ENDL();
             packet_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 curr_packet_valid = false;
@@ -925,6 +927,7 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     noc_addr = dest_addr + offsetof(chan_req_buf, chan_req) + dest_wr_index * sizeof(pull_request_t);
     noc_async_write_one_packet(
         (uint32_t)(&local_pull_request->pull_request), noc_addr, sizeof(pull_request_t), noc_index);
+    DPRINT << " Pull request sent to 0x" << HEX() << noc_addr << ENDL();
 
     // compute the address to send write pointer updates to consumer buffer.
     // This will happen, if the producer did not have all the availale data in its buffer when
