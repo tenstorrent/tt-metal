@@ -15,6 +15,7 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Performs element-wise bitwise_not computation on input x , where x is each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
@@ -23,12 +24,11 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void bitwise_not_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_bitwise_not<APPROX>(idst))); }
 
 /**

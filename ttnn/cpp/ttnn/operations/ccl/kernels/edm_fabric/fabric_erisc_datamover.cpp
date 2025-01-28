@@ -824,6 +824,8 @@ void kernel_main() {
     // accept a new message
     const auto edm_forwarding_semaphore_address =
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const auto edm_teardown_semaphore_address =
+        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
 
     ////////////////////////
     // Sender runtime args
@@ -875,6 +877,7 @@ void kernel_main() {
                   channel_buffer_size,
                   local_sender_channel_1_connection_buffer_index_id,
                   reinterpret_cast<volatile uint32_t *const>(edm_forwarding_semaphore_address),
+                  reinterpret_cast<volatile uint32_t *const>(edm_teardown_semaphore_address),
                   downstream_noc_interface_buffer_index_local_addr)
             : tt::fabric::WorkerToFabricEdmSender();
 

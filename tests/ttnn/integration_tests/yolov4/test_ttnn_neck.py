@@ -28,7 +28,7 @@ def test_neck(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = TtNeck(weights_pth)
+    ttnn_model = TtNeck(device, weights_pth)
 
     torch_input_tensor1 = torch.randn(1, 10, 10, 1024, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.randn(1, 20, 20, 512, dtype=torch.bfloat16)
@@ -63,7 +63,7 @@ def test_neck(device, reset_seeds, model_location_generator):
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    result_ttnn = ttnn_model(device, ttnn_input_tensor)
+    result_ttnn = ttnn_model(ttnn_input_tensor)
 
     result_1 = ttnn.to_torch(result_ttnn[0])
     result_2 = ttnn.to_torch(result_ttnn[1])

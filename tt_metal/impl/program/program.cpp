@@ -25,10 +25,11 @@
 #include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>
+#include <tuple>
 
 namespace tt::tt_metal {
 
@@ -549,6 +550,7 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
+                bool logged_noncontiguous = false;
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[programmable_core_type_index][y * grid_extent_[programmable_core_type_index].x + x] = index;
@@ -560,6 +562,62 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                             max_local_cb_end_index = std::max(
                                 max_local_cb_end_index,
                                 NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(local_val->second.to_ulong()));
+
+                            uint32_t used_cbs = local_val->second.to_ulong();
+                            if (used_cbs > 0 && !logged_noncontiguous) {
+                                // Zeroso out the contiguous run of set bits starting at zero. Anything remaining is
+                                // above a zero bit.
+                                uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
+                                if (non_contiguous_cbs) {
+                                    // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
+                                    // contiguous.
+                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    std::string kernels;
+                                    for (auto id : kg_to_cores.first.kernel_ids) {
+                                        if (id.has_value()) {
+                                            std::shared_ptr<Kernel> kernel = get_kernel(*id);
+                                            if (!kernels.empty()) {
+                                                kernels += ", ";
+                                            }
+                                            kernels += kernel->kernel_source().name();
+                                        }
+                                    }
+
+                                    static std::mutex m;
+                                    std::lock_guard lock(m);
+                                    // Keep track of which programs have been logged to avoid spamming the log. This is
+                                    // particularly important for mesh devices.
+                                    static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
+                                    auto cb_tuple = std::make_tuple(non_contiguous_cbs, first_unused_index, kernels);
+
+                                    if (!logged.contains(cb_tuple)) {
+                                        logged.insert(cb_tuple);
+                                        // This code should be modified to log the core type index if it isn't obvious.
+                                        TT_ASSERT(
+                                            programmable_core_type_index ==
+                                            hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+
+                                        std::string cb_ids;
+                                        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+                                            if (non_contiguous_cbs & (1 << i)) {
+                                                if (!cb_ids.empty()) {
+                                                    cb_ids += ",";
+                                                }
+                                                cb_ids += std::to_string(i);
+                                            }
+                                        }
+                                        log_warning(
+                                            tt::LogMetal,
+                                            "Circular buffer indices are not contiguous starting at 0. This will hurt "
+                                            "dispatch performance. Non-contiguous indices: {}. "
+                                            "First unused index: {}. Kernels: {}",
+                                            cb_ids,
+                                            first_unused_index,
+                                            kernels);
+                                    }
+                                    logged_noncontiguous = true;
+                                }
+                            }
                         }
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end()) {

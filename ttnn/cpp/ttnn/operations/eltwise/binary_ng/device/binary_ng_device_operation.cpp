@@ -274,7 +274,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 
     if (output_tensor.has_value()) {
-        auto shape = output_tensor.value().get_shape();
+        auto shape = output_tensor.value().logical_shape();
         TT_FATAL(
             shape == output_shape,
             "Shape of Output tensor {} provided does not match the broadcasted output shape {}",
@@ -360,9 +360,9 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a.get_logical_shape()[-2],
         input_tensor_a.get_logical_shape()[-1],
@@ -400,9 +400,9 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> output_tensor,
-    tt::stl::Span<const unary::UnaryOpType> lhs_activations,
-    tt::stl::Span<const unary::UnaryOpType> rhs_activations,
-    tt::stl::Span<const unary::UnaryOpType> post_activations) {
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations) {
     DataType dtype1 = input_tensor_a.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
     bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype1) && device_check);

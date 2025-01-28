@@ -182,10 +182,10 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
         uint32_t tensix_num_worker_cores = tensix_num_worker_cols * tensix_num_worker_rows;
         const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
         // Get physical compute grid range based on SOC Desc and Logical Coords
-        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_core_from_logical_core(
-            CoreCoord(0, 0), CoreType::WORKER);  // Logical Worker Coords start at 0,0
-        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_core_from_logical_core(
-            CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1), CoreType::WORKER);
+        // Logical Worker Coords start at 0,0
+        CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(CoreCoord(0, 0));
+        CoreCoord tensix_worker_end_phys = soc_desc.get_physical_tensix_core_from_logical(
+            CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1));
         CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
         physical_grid_config_cache.insert(
             {config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});

@@ -307,7 +307,7 @@ void HWCommandQueue::enqueue_read_buffer(
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            buffer, this->id, this->expected_num_workers_completed);
+            buffer, this->id, this->expected_num_workers_completed, region);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
             dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer);
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {

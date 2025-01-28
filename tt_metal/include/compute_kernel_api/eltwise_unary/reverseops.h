@@ -23,6 +23,7 @@ namespace ckernel {
 
 // RSUB : rsub(x,y) = y-x
 
+// clang-format off
 /**
  * Performs element-wise computation of rsub ( rsub(x,y) = y -x) on each element of a tile and y is a constant param
  * in DST register at index tile_index. The DST register buffer must be in
@@ -31,13 +32,12 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     | | param0         | Constant value that is being subtracted
- * from                               | uint32_t |                                                       | True     |
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | param0         | Constant value that is being subtracted from                               | uint32_t |                                                       | True     |
  */
+ // clang-format on
 ALWI void rsub_tile(uint32_t idst, uint32_t param0) { MATH((llk_math_eltwise_unary_sfpu_rsub<APPROX>(idst, param0))); }
 
 /**

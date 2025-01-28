@@ -15,7 +15,7 @@
 #include <tt_metal.hpp>
 #include <system_mesh.hpp>
 #include <mesh_device_view.hpp>
-#include "tt_metal/distributed/mesh_command_queue.hpp"
+#include <mesh_command_queue.hpp>
 #include <device_impl.hpp>
 #include <sub_device.hpp>
 #include <sub_device_manager_tracker.hpp>
@@ -129,6 +129,8 @@ MeshDevice::MeshDevice(
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)) {
     work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
+    work_executor_->initialize();
+    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
 
 std::shared_ptr<MeshDevice> MeshDevice::create(

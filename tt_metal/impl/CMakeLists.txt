@@ -45,6 +45,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
 )
 
+# Include helper functions and generate headers from flatbuffer schemas
+include(flatbuffers)
+
+set(FLATBUFFER_SCHEMAS) # Empty to start, coming soon.
+
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
@@ -55,11 +65,13 @@ target_link_libraries(
         Tracy::TracyClient
     PRIVATE
         Boost::smart_ptr
+        FlatBuffers::FlatBuffers
         range-v3::range-v3
         Metalium::Metal::Common
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
+        Metalium::Metal::LLRT
 )
 
 target_include_directories(
@@ -68,6 +80,8 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal/include
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
