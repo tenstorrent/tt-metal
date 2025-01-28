@@ -2648,7 +2648,7 @@ def run_matmul(device, params, core_grid, dtype, test_bias):
     half = int(count / 2)
     shape0 = params[0:half]
     shape1 = params[half:count]
-    shape2 = [shape1[-1]]
+    shape2 = [1 if i < (half - 1) else shape1[-1] for i in range(half)]
     torch_input_tensor0 = torch.rand(shape0, dtype=torch.float32)
     torch_input_tensor1 = torch.rand(shape1, dtype=torch.float32)
     torch_input_tensor2 = torch.rand(shape2, dtype=torch.float32)

@@ -4,8 +4,6 @@
 
 #include "sharded_to_interleaved_op.hpp"
 
-#include <tt-metalium/host_api.hpp>
-
 #include "sharded_to_interleaved_program_factory.hpp"
 
 using namespace tt::tt_metal;

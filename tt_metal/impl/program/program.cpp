@@ -25,7 +25,7 @@
 #include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>

@@ -220,6 +220,8 @@ int main(int argc, char** argv) {
     uint32_t test_device_id_r =
         test_args::get_command_option_uint32(input_args, "--device_id_r", default_test_device_id_r);
 
+    bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
+
     uint32_t tx_signal_address = default_tx_signal_address;
 
     bool pass = true;
@@ -300,6 +302,7 @@ int main(int argc, char** argv) {
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);
@@ -405,6 +408,8 @@ int main(int argc, char** argv) {
             defines["CHECK_TIMEOUT"] = "";
         }
 
+        uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+
         std::vector<CoreCoord> tx_phys_core;
         for (uint32_t i = 0; i < num_src_endpoints; i++) {
             CoreCoord core = {tx_x + i, tx_y};
@@ -431,21 +436,23 @@ int main(int argc, char** argv) {
                 target_address,                                                         // 17:
                 atomic_increment,                                                       // 18:
                 tx_signal_address,                                                      // 19:
-                client_interface_addr,
-
+                client_interface_addr,                                                  // 20:
+                client_pull_req_buf_addr,                                               // 21:
+                fixed_async_wr_notif_addr,  // 22: use fixed addr for async wr atomic inc
             };
 
             // setup runtime args
             uint32_t tx_gk_noc_offset = tt_metal::hal.noc_xy_encoding(tx_gk_phys_core.x, tx_gk_phys_core.y);
             std::vector<uint32_t> runtime_args = {
-                (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
-                0x410,                                                                  // 1: dest_noc_offset
-                router_phys_core.x,                                                     // 2: router_x
-                router_phys_core.y,                                                     // 3: router_y
-                (dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 4: mesh and chip id
-                0xd0000,                                                                // 5: space in rx's L1
-                gk_interface_addr,                                                      // 6: gk_message_addr_l
-                tx_gk_noc_offset,                                                       // 7: gk_message_addr_h
+                time_seed,                                                              // 0: time based seed
+                (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 1: src_endpoint_id
+                0x410,                                                                  // 2: dest_noc_offset
+                router_phys_core.x,                                                     // 3: router_x
+                router_phys_core.y,                                                     // 4: router_y
+                (dev_r_mesh_id << 16 | dev_r_chip_id),                                  // 5: mesh and chip id
+                0xd0000,                                                                // 6: space in rx's L1
+                gk_interface_addr,                                                      // 7: gk_message_addr_l
+                tx_gk_noc_offset,                                                       // 8: gk_message_addr_h
             };
 
             if (ASYNC_WR == fabric_command) {
