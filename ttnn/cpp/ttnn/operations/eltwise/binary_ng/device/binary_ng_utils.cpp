@@ -271,7 +271,46 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     }
 }
 
-std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
+std::map<std::string, std::string> output_typecast(DataType input_dtype, DataType output_dtype) {
+    std::map<std::string, std::string> type_defines;
+    if (input_dtype != output_dtype && ((input_dtype == DataType::BFLOAT16 && output_dtype == DataType::UINT16) ||
+                                        (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::INT32) ||
+                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT16) ||
+                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT16) ||
+                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::BFLOAT16) ||
+                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::UINT16) ||
+                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::FLOAT32) ||
+                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::INT32) ||
+                                        (input_dtype == DataType::INT32 && output_dtype == DataType::FLOAT32) ||
+                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::UINT16) ||
+                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT8_B) ||
+                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::INT32) ||
+                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT8_B) ||
+                                        (input_dtype == DataType::BFLOAT16 && output_dtype == DataType::UINT32) ||
+                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT16) ||
+                                        (input_dtype == DataType::FLOAT32 && output_dtype == DataType::UINT32) ||
+                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::FLOAT32) ||
+                                        (input_dtype == DataType::BFLOAT8_B && output_dtype == DataType::UINT32) ||
+                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT8_B) ||
+                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::UINT32) ||
+                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::UINT32) ||
+                                        (input_dtype == DataType::UINT32 && output_dtype == DataType::BFLOAT4_B) ||
+                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::UINT16) ||
+                                        (input_dtype == DataType::UINT16 && output_dtype == DataType::BFLOAT4_B) ||
+                                        (input_dtype == DataType::BFLOAT4_B && output_dtype == DataType::INT32) ||
+                                        (input_dtype == DataType::INT32 && output_dtype == DataType::BFLOAT4_B))) {
+        TT_ASSERT(defines.count("TYPE_CHAIN") == 0, "TYPE_CHAIN already defined");
+
+        auto in_dataformat = (uint32_t)datatype_to_dataformat_converter(input_dtype);
+        auto out_dataformat = (uint32_t)datatype_to_dataformat_converter(output_dtype);
+        type_defines["TYPE_INIT"] = "typecast_tile_init();";
+        type_defines.insert({"TYPE_OP", fmt::format("typecast_tile<{0}u, {1}u>", in_dataformat, out_dataformat)});
+        type_defines.insert({"SFPU_OP_TYPECAST_INCLUDE", "1"});
+    }
+    return type_defines;
+}
+
+std::map<std::string, std::string> OpConfig::as_defines(DataType in_dtype, DataType out_dtype) const {
     std::map<std::string, std::string> defines;
 
     if (!is_sfpu_op()) {
@@ -279,9 +318,13 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
         auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
+        auto type_def = output_typecast(in_dtype, out_dtype);
+        if (in_dtype != out_dtype) {
+            defines.insert(type_def.begin(), type_def.end());
+        }
         return defines;
     } else {
-        auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), dtype);
+        auto&& [tile_init, tile_fn] = get_sfpu_init_fn(std::get<SfpuBinaryOp>(binary_op), in_dtype);
         defines["BINARY_SFPU_INIT"] = std::move(tile_init);
         defines["BINARY_SFPU_OP"] = std::move(tile_fn);
         return defines;

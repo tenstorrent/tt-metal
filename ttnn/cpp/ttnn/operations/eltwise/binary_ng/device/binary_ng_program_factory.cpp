@@ -394,7 +394,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
 
-    auto compute_kernel_defines = op_config.as_defines(a.get_dtype());
+    auto compute_kernel_defines = op_config.as_defines(a.get_dtype(), c.get_dtype());
 
     {
         ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;

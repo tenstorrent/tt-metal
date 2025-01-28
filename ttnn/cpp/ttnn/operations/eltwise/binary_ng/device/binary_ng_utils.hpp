@@ -60,7 +60,7 @@ struct OpConfig {
     template <class EnumT>
     OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>);
 
-    std::map<std::string, std::string> as_defines(DataType dtype) const;
+    std::map<std::string, std::string> as_defines(DataType in_dtype, DataType out_dtype) const;
 
     std::optional<unary::UnaryOpType> process_lhs{};
     std::optional<unary::UnaryOpType> process_rhs{};
