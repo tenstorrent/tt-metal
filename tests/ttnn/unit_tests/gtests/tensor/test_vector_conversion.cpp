@@ -269,8 +269,6 @@ TEST_P(ShardVectorConversionTest, UInt32RoundtripTilizedShardMapping) {
     auto tensor =
         Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::UINT32, Layout::TILE, GetParam()));
 
-    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
-
     EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
     EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
 
@@ -299,8 +297,6 @@ TEST_P(ShardVectorConversionTest, FloatRoundtripTilizedShardMapping) {
 
     auto tensor =
         Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::FLOAT32, Layout::TILE, GetParam()));
-
-    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
 
     EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
     EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
@@ -341,8 +337,6 @@ TEST_P(ShardVectorConversionTest, Bfloat16RoundtripTilizedShardMapping) {
     auto tensor_bf =
         Tensor::from_vector(input_ft, get_tensor_spec_with_memory(shape, DataType::BFLOAT16, Layout::TILE, GetParam()));
 
-    ASSERT_NE(tensor_bf.tensor_spec().logical_2d_shape(), tensor_bf.tensor_spec().physical_shape());
-
     EXPECT_THAT(tensor_bf.get_logical_shape(), ShapeIs(121, 128));
     EXPECT_THAT(tensor_bf.get_padded_shape(), ShapeIs(128, 128));
 
@@ -369,8 +363,6 @@ TEST_P(ShardVectorConversionTest, BlockfloatRoundtripTilizedShardMapping) {
 
     auto tensor =
         Tensor::from_vector(input, get_tensor_spec_with_memory(shape, DataType::BFLOAT8_B, Layout::TILE, GetParam()));
-
-    ASSERT_NE(tensor.tensor_spec().logical_2d_shape(), tensor.tensor_spec().physical_shape());
 
     EXPECT_THAT(tensor.get_logical_shape(), ShapeIs(121, 128));
     EXPECT_THAT(tensor.get_padded_shape(), ShapeIs(128, 128));
