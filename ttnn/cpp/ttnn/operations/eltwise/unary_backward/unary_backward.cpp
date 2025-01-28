@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
