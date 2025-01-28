@@ -18,7 +18,7 @@ def perf_report(file_path):
     def remove_keys_from_attributes(attributes):
         attributes = attributes.replace(";", ",").replace("'", '"')
 
-        keys_to_remove = ["receiver_device_id", "ring_index", "sender_device_id"]
+        keys_to_remove = ["receiver_device_id", "ring_index", "sender_device_id", "forward_device", "backward_device"]
 
         try:
             attributes_dict = eval(attributes)
@@ -63,7 +63,9 @@ def perf_report(file_path):
     )
 
     df["num_links"] = df["ATTRIBUTES"].apply(
-        lambda x: safe_parse_attributes(x).get("num_links", "") if isinstance(safe_parse_attributes(x), dict) else ""
+        lambda x: safe_parse_attributes(x).get("num_links", safe_parse_attributes(x).get("num_links_preferred", ""))
+        if isinstance(safe_parse_attributes(x), dict)
+        else ""
     )
 
     df["output_mem_config"] = df["ATTRIBUTES"].apply(
@@ -164,12 +166,10 @@ def perf_report(file_path):
     op_code = averages_df.iloc[0]["OP CODE"]
 
     today = time.strftime("%Y_%m_%d")
-    if op_code == "AllGather":
-        ccl_perf_file_path = f"CCL_all_gather_Perf_{today}.csv"
-    elif op_code == "AllGatherAsyn":
+    if op_code == "AllGatherAsync":
         ccl_perf_file_path = f"CCL_all_gather_async_Perf_{today}.csv"
-    elif op_code == "ReduceScatter":
-        ccl_perf_file_path = f"CCL_reduce_scatter_Perf_{today}.csv"
+    elif op_code == "ReduceScatterAsync":
+        ccl_perf_file_path = f"CCL_reduce_scatter_async_Perf_{today}.csv"
     else:
         ccl_perf_file_path = f"CCL_Perf_{today}.csv"
 
