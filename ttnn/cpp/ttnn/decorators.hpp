@@ -390,7 +390,7 @@ constexpr auto register_operation() {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t, false>();
 }
 
 namespace detail {
