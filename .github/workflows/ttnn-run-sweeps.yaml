@@ -21,6 +21,10 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.binary_backward.assign_bw.assign_bw
+          - eltwise.binary_backward.bias_gelu_bw.bias_gelu_bw
+          - eltwise.unary_backward.fmod_bw.fmod_bw
+          - eltwise.unary_backward.remainder_bw.remainder_bw
           - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh_sharded
           - eltwise.unary.deg2rad.deg2rad_sharded
