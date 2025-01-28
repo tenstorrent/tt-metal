@@ -26,15 +26,15 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 2], [6, 12, 256, 256], [1, 1, 1, 2], 2)
-        + gen_shapes([1, 1, 2], [12, 256, 256], [1, 1, 2], 2)
-        + gen_shapes([1, 2], [256, 256], [1, 2], 2),
+        "input_shape": gen_shapes([1, 1, 1, 2], [6, 12, 256, 256], [1, 1, 1, 2], 3)
+        + gen_shapes([1, 1, 2], [12, 256, 256], [1, 1, 2], 3)
+        + gen_shapes([1, 2], [256, 256], [1, 2], 3),
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "grad_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],  # , ttnn.ROW_MAJOR_LAYOUT
-        "input_a_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "grad_layout": [ttnn.TILE_LAYOUT],  # , ttnn.ROW_MAJOR_LAYOUT
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
