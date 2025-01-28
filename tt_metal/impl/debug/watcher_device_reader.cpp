@@ -81,7 +81,7 @@ static string get_noc_target_str(
         try {
             core_type = device->core_type_from_virtual_core(virtual_core);
         } catch (std::runtime_error& e) {
-            // We may not be able to get a core type if the physical coords are bad.
+            // We may not be able to get a core type if the virtual coords are bad.
             return {"Unknown", ""};
         }
         switch (core_type) {
@@ -103,21 +103,22 @@ static string get_noc_target_str(
     out += fmt::format("local L1[{:#08x}] {} ", san->l1_addr, string(san->is_write ? "to" : "from"));
 
     if (san->is_multicast) {
-        CoreCoord target_phys_noc_core_start = {
+        CoreCoord target_virtual_noc_core_start = {
             NOC_MCAST_ADDR_START_X(san->noc_addr), NOC_MCAST_ADDR_START_Y(san->noc_addr)};
-        CoreCoord target_phys_noc_core_end = {NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_noc_core_start, noc);
+        CoreCoord target_virtual_noc_core_end = {
+            NOC_MCAST_ADDR_END_X(san->noc_addr), NOC_MCAST_ADDR_END_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_virtual_noc_core_start, noc);
         out += fmt::format(
-            "{} core range w/ physical coords {}-{} {}",
+            "{} core range w/ virtual coords {}-{} {}",
             type_and_mem.first,
-            target_phys_noc_core_start.str(),
-            target_phys_noc_core_end.str(),
+            target_virtual_noc_core_start.str(),
+            target_virtual_noc_core_end.str(),
             type_and_mem.second);
     } else {
-        CoreCoord target_phys_noc_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
-        auto type_and_mem = get_core_and_mem_type(device, target_phys_noc_core, noc);
+        CoreCoord target_virtual_noc_core = {NOC_UNICAST_ADDR_X(san->noc_addr), NOC_UNICAST_ADDR_Y(san->noc_addr)};
+        auto type_and_mem = get_core_and_mem_type(device, target_virtual_noc_core, noc);
         out += fmt::format(
-            "{} core w/ physical coords {} {}", type_and_mem.first, target_phys_noc_core.str(), type_and_mem.second);
+            "{} core w/ virtual coords {} {}", type_and_mem.first, target_virtual_noc_core.str(), type_and_mem.second);
     }
 
     out += fmt::format("[addr=0x{:08x}]", NOC_LOCAL_ADDR(san->noc_addr));
@@ -141,10 +142,10 @@ WatcherDeviceReader::WatcherDeviceReader(
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device->id(),
-                phys_core,
+                virtual_core,
                 hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
@@ -157,24 +158,25 @@ WatcherDeviceReader::~WatcherDeviceReader() {
     if (device->arch() == ARCH::WORMHOLE_B0 && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         std::vector<uint32_t> read_data;
         for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(eth_core);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
             read_data = tt::llrt::read_hex_vec_from_core(
                 device->id(),
-                phys_core,
+                virtual_core,
                 hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_COUNT),
                 sizeof(uint32_t));
             uint32_t num_events = read_data[0] - logical_core_to_eth_link_retraining_count[eth_core];
             if (num_events > 0) {
                 log_warning(
-                    "Device {} physical ethernet core {}: Watcher detected {} link retraining events.",
+                    "Device {} virtual ethernet core {}: Watcher detected {} link retraining events.",
                     device->id(),
-                    phys_core,
+                    virtual_core,
                     num_events);
             }
             fprintf(
                 f,
                 "%s\n",
-                fmt::format("\tDevice {} Ethernet Core {} retraining events: {}", device->id(), phys_core, num_events)
+                fmt::format(
+                    "\tDevice {} Ethernet Core {} retraining events: {}", device->id(), virtual_core, num_events)
                     .c_str());
         }
     }
@@ -212,7 +214,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump eth cores
     for (const CoreCoord& eth_core : device->ethernet_cores()) {
         CoreDescriptor logical_core = {eth_core, CoreType::ETH};
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
+        CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
         if (device->is_active_ethernet_core(eth_core)) {
             DumpCore(logical_core, true);
         } else if (device->is_inactive_ethernet_core(eth_core)) {
@@ -285,17 +287,17 @@ void WatcherDeviceReader::Dump(FILE* file) {
 
         // Clear all pause flags
         for (auto& core_and_risc : paused_cores) {
-            const CoreCoord& phys_core = core_and_risc.first;
+            const CoreCoord& virtual_core = core_and_risc.first;
             riscv_id_t risc_id = core_and_risc.second;
 
-            uint64_t addr = GET_WATCHER_DEV_ADDR_FOR_CORE(device, phys_core, pause_status);
+            uint64_t addr = GET_WATCHER_DEV_ADDR_FOR_CORE(device, virtual_core, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
             auto pause_data =
-                tt::llrt::read_hex_vec_from_core(device->id(), phys_core, addr, sizeof(debug_pause_msg_t));
+                tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, addr, sizeof(debug_pause_msg_t));
             auto pause_msg = reinterpret_cast<debug_pause_msg_t*>(&(pause_data[0]));
             pause_msg->flags[risc_id] = 0;
-            tt::llrt::write_hex_vec_to_core(device->id(), phys_core, pause_data, addr);
+            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, pause_data, addr);
         }
     }
     fflush(f);
@@ -482,7 +484,11 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             break;
         case DebugSanitizeNocMixedVirtualandPhysical:
             error_msg = get_noc_target_str(device, core, noc, san);
-            error_msg += " (mixing virtual and physical coordinates in Mcast).";
+            error_msg += " (mixing virtual and virtual coordinates in Mcast).";
+            break;
+        case DebugSanitizeNocAddrMailbox:
+            error_msg = get_noc_target_str(device, core, noc, san);
+            error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
         default:
             error_msg = fmt::format(

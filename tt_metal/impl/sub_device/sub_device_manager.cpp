@@ -42,21 +42,14 @@ SubDeviceManager::SubDeviceManager(
     this->populate_noc_data();
 }
 
-SubDeviceManager::SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator) :
-    id_(next_sub_device_manager_id_++), device_(device) {
+SubDeviceManager::SubDeviceManager(
+    IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
+    id_(next_sub_device_manager_id_++),
+    device_(device),
+    sub_devices_(sub_devices.begin(), sub_devices.end()),
+    local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
-    local_l1_size_ = 0;
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
-    const auto& active_eth_cores = device_->get_active_ethernet_cores(true);
-    std::vector<CoreRange> active_eth_core_ranges;
-    active_eth_core_ranges.reserve(active_eth_cores.size());
-    for (const auto& core : active_eth_cores) {
-        active_eth_core_ranges.emplace_back(core, core);
-    }
 
-    sub_devices_ = {SubDevice(std::array{
-        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
-        CoreRangeSet(std::move(active_eth_core_ranges))})};
     this->populate_sub_device_ids();
     // No need to validate sub-devices since this constructs a sub-device of the entire grid
     this->populate_num_cores();
@@ -183,25 +176,30 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
-    const auto& device_eth_cores = device_->get_active_ethernet_cores(true);
-    for (const auto& sub_device : sub_devices_) {
+
+    for (auto sub_device_id = SubDeviceId{0}; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
+        const auto& sub_device = this->sub_device(sub_device_id);
         const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
             "Tensix cores {} specified in sub device must be within device grid {}",
             worker_cores,
             device_worker_cores);
-        const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
-        uint32_t num_eth_cores = 0;
-        for (const auto& dev_eth_core : device_eth_cores) {
-            if (eth_cores.contains(dev_eth_core)) {
-                num_eth_cores++;
+
+        if (sub_device.has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
+            const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
+            uint32_t num_eth_cores = 0;
+            const auto& device_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_->id());
+            for (const auto& dev_eth_core : device_eth_cores) {
+                if (eth_cores.contains(dev_eth_core)) {
+                    num_eth_cores++;
+                }
             }
+            TT_FATAL(
+                num_eth_cores == eth_cores.num_cores(),
+                "Ethernet cores {} specified in sub device must be within device grid",
+                eth_cores);
         }
-        TT_FATAL(
-            num_eth_cores == eth_cores.num_cores(),
-            "Ethernet cores {} specified in sub device must be within device grid",
-            eth_cores);
     }
     if (sub_devices_.size() < 2) {
         return;
@@ -309,7 +307,7 @@ void SubDeviceManager::populate_noc_data() {
     NOC noc_index = device_->dispatch_go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX);
+        const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
         const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
 
         noc_mcast_data_start_index_[i] = idx;

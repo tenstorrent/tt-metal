@@ -228,8 +228,20 @@ void Device::initialize_cluster() {
 
 void Device::initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     // Create the default sub-device manager representing the entire chip
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    const auto& active_eth_cores = this->get_active_ethernet_cores(true);
+    std::vector<CoreRange> active_eth_core_ranges;
+    active_eth_core_ranges.reserve(active_eth_cores.size());
+    for (const auto& core : active_eth_cores) {
+        active_eth_core_ranges.emplace_back(core, core);
+    }
+
+    auto sub_devices = {SubDevice(std::array{
+        CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
+        CoreRangeSet(std::move(active_eth_core_ranges))})};
+
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
-        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap));
+        this, this->initialize_allocator(l1_small_size, trace_region_size, l1_bank_remap), sub_devices);
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap) {
@@ -275,7 +287,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     }
     // Initialize core_type_from_noc_coord_table table
     for (const auto& core: soc_desc.physical_cores) {
-        config.core_type_from_noc_coord_table.insert({this->virtual_core_from_physical_core(core.first, core.second.type), AllocCoreType::Invalid});
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core(core.first), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -708,7 +721,7 @@ void Device::initialize_and_launch_firmware() {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const CoreCoord &core : eth_cores) {
-            auto virtual_core = this->virtual_core_from_physical_core(core, CoreType::ETH);
+            auto virtual_core = this->virtual_core_from_physical_core(core);
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
     }
@@ -737,6 +750,8 @@ void Device::initialize_and_launch_firmware() {
 
     core_info->noc_size_x = soc_d.grid_size.x;
     core_info->noc_size_y = soc_d.grid_size.y;
+    core_info->worker_grid_size_x = this->logical_grid_size().x;  // Grid size as virtual coords see it (workers only)
+    core_info->worker_grid_size_y = this->logical_grid_size().y;
 
     // Download to worker cores
     log_debug("Initializing firmware");
@@ -1159,11 +1174,12 @@ CoreCoord Device::compute_with_storage_grid_size() const {
 }
 
 CoreType Device::core_type_from_physical_core(const CoreCoord &physical_coord) const {
-    const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    if (soc_desc.physical_cores.find(physical_coord) == soc_desc.physical_cores.end())
-        TT_THROW("Physical core {} doesn't exist in metal_SocDescriptor.", physical_coord);
-
-    return soc_desc.physical_cores.at(physical_coord).type;
+    const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
+    CoreType core_type = soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    if (core_type == CoreType::TENSIX) {
+        core_type = CoreType::WORKER;
+    }
+    return core_type;
 }
 
 CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) const {
@@ -1182,7 +1198,7 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
     } else {
         const auto& grid_size = this->grid_size();
         // Coordinate in Physical NOC0 Space. Convert to Virtual.
-        coord = this->virtual_core_from_physical_core(coord, this->core_type_from_physical_core(coord));
+        coord = this->virtual_core_from_physical_core(coord);
         // Derive virtual coord in noc_index space.
         CoreCoord virtual_coord = {
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
@@ -1205,7 +1221,7 @@ CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) con
             hal.noc_coordinate(noc_index, grid_size.x, coord.x),
             hal.noc_coordinate(noc_index, grid_size.y, coord.y)
         };
-        return this->virtual_core_from_physical_core(physical_coord, this->core_type_from_physical_core(physical_coord));
+        return this->virtual_core_from_physical_core(physical_coord);
     }
 }
 
@@ -1234,8 +1250,8 @@ CoreCoord Device::virtual_core_from_logical_core(const CoreCoord &logical_coord,
     return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(this->id_, logical_coord, core_type);
 }
 
-CoreCoord Device::virtual_core_from_physical_core(const CoreCoord &physical_coord, const CoreType& core_type) const {
-    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord, core_type);
+CoreCoord Device::virtual_core_from_physical_core(const CoreCoord& physical_coord) const {
+    return tt::Cluster::instance().get_virtual_coordinate_from_physical_coordinates(this->id_, physical_coord);
 }
 
 CoreCoord Device::worker_core_from_logical_core(const CoreCoord &logical_core) const {
@@ -1444,39 +1460,11 @@ void Device::deallocate_buffers(SubDeviceId sub_device_id) {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
-    // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-    // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-    auto global_bank_id =
-        this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address();
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
-    // Sub-device banks are currently all compute banks
-    // Since banks are lockstep in an allocator it doesn't matter which core is used
-    uint32_t sub_device_bank_id = 0;
-    DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
-    for (const auto& sub_device_id : sub_device_ids) {
-        const auto& allocator =
-            sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device_allocator(sub_device_id);
-        if (allocator) {
-            auto found_addr = allocator::lowest_occupied_l1_address(*allocator, sub_device_bank_id);
-            if (found_addr.has_value()) {
-                lowest_addr = std::min(lowest_addr, *found_addr);
-            }
-        }
-    }
-    // sub-device allocators sit below global allocator. If an address is found for a sub-device, no need to check the global allocator
-    if (lowest_addr != std::numeric_limits<DeviceAddr>::max()) {
-        return lowest_addr;
-    } else {
-        const auto &allocator = this->get_initialized_allocator();
-        // Global bank id needs to look up a bank from the compute grid (not the storage grid)
-        auto global_bank_id =
-            this->bank_ids_from_logical_core(BufferType::L1, *this->compute_cores_.begin())[0];
-        return allocator::lowest_occupied_l1_address(*allocator, global_bank_id);
-    }
+    return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
 std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {

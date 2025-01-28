@@ -145,7 +145,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2048,
                 .expected_l1_peak_per_core = 2048,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
+                    .shape = ttnn::SimpleShape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                     .size = 6144,
                     .type = tt::tt_metal::BufferType::L1}}},
             AddOpGraphTestParam{
@@ -167,7 +167,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2048,
                 .expected_l1_peak_per_core = 2 * 2048,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
+                    .shape = ttnn::SimpleShape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                     .size = 24576,
                     .type = tt::tt_metal::BufferType::L1}},
             },
@@ -190,7 +190,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .expected_l1_output_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                 .expected_l1_peak_per_core = 2 * (3 * 32 * 32 * 32 * 32) / 16,
                 .expected_output_info = {graph::TensorInfo{
-                    .shape = ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+                    .shape = ttnn::SimpleShape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
                     .size = 2 * (3 * 32 * 32 * 32 * 32),
                     .type = tt::tt_metal::BufferType::L1}}}),
         ::testing::Values(

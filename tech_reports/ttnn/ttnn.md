@@ -7,11 +7,11 @@ Table of Contents
 - [ML Framework](#ml-framework)
 - [Library of Accelerated Operations](#op-library)
 - [OP Infra](#op-infra)
-  - [Tensor](https://docs.tenstorrent.com/ttnn/latest/ttnn/tensor.html)
-  - [Operation](https://docs.tenstorrent.com/ttnn/latest/ttnn/adding_new_ttnn_operation.html)
+  - [Tensor](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html)
+  - [Operation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html)
 - [Runtime](#tt-nn-runtime)
   - [Graph Tracing](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
-- [Profiler](https://docs.tenstorrent.com/ttnn/latest/ttnn/profiling_ttnn_operations.html)
+- [Profiler](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html)
 
 
 ## Roadmap
@@ -28,8 +28,8 @@ Table of Contents
 
 ## OP Infra
 OP Infra is the foundation for the OP Libary that provides common primitives required by all operations
-  - [Tensor](https://docs.tenstorrent.com/ttnn/latest/ttnn/tensor.html)
-  - [Operation](https://docs.tenstorrent.com/ttnn/latest/ttnn/adding_new_ttnn_operation.html)
+  - [Tensor](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html)
+  - [Operation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html)
 
 ## TT-NN Runtime
 ![TT-NN Runtime](https://github.com/user-attachments/assets/0794b7c2-82b6-49aa-9117-9aee8b1c1ecd)

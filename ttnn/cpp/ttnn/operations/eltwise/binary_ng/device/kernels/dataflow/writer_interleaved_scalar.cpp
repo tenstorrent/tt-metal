@@ -40,7 +40,13 @@ void kernel_main() {
 
     // we only need to fill a tile with the scalar value once
     cb_reserve_back(cb_id_src, onetile);
-    fill_with_val_bfloat16(cb_id_src, packed_scalar);
+#ifdef FILL_WITH_VALUE_FLOAT
+    float* float_ptr = reinterpret_cast<float*>(&packed_scalar);
+    FILL_WITH_VALUE_FLOAT(cb_id_src, *float_ptr);
+#endif
+#ifdef FILL_WITH_VALUE
+    FILL_WITH_VALUE(cb_id_src, packed_scalar);
+#endif
     cb_push_back(cb_id_src, onetile);
 
     uint32_t num_tiles_written = 0;

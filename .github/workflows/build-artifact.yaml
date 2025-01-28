@@ -16,18 +16,28 @@ on:
         required: false
         type: string
         default: "ubuntu-20.04-amd64"
-      build-docker:
+      toolchain:
+        required: false
+        type: string
+        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        description: "Toolchain file to use for build"
+      publish-artifact:
         required: false
         type: boolean
         default: true
-        description: "Build docker image"
+        # FIXME(afuller): We need to fix our artifact naming to avoid conflicts if we
+        #     wish to make builds of differing types available in a single workflow.
+        description: "Make resulting artifact available in the workflow"
+      skip-tt-train:
+        # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
+        #        Fow now enabling an opt-out. But this should get removed.
+        required: false
+        type: boolean
+        default: false
+
+
   workflow_dispatch:
     inputs:
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
       build-type:
         required: false
         type: string
@@ -45,15 +55,14 @@ on:
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.build-docker == true }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
       os: ${{ inputs.os }}
 
   build-artifact:
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
     needs: build-docker-image
-    if: always()
     timeout-minutes: 30
     env:
       SILENT: 0
@@ -123,8 +132,10 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
-            echo "${{ inputs.tracy }}"
+            args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
+            echo "Args: ${args_fixme}"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache"
+            echo "Build tracy: ${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
             fi
@@ -137,8 +148,10 @@ jobs:
           cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
       - name: 'Tar files'
+        if: ${{ inputs.publish-artifact }}
         run: tar -cvhf ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
       - name: 'Upload Artifact'
+        if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}

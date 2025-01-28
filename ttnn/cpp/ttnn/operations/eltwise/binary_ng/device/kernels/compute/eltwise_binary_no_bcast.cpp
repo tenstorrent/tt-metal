@@ -7,6 +7,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
+#include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
 namespace NAMESPACE {

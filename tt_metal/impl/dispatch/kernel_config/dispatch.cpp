@@ -145,13 +145,8 @@ void DispatchKernel::GenerateStaticConfigs() {
         dependent_config_.prefetch_h_local_downstream_sem_addr = 1;
         static_config_.prefetch_h_max_credits = my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs());
 
-        // To match with previous implementation, need to use grid size from mmio device. TODO: that doesn't seem
-        // correct though?
-        auto mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id_);
-        const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(mmio_device_id);
-        CoreCoord remote_grid_size =
-            tt::get_compute_grid_size(mmio_device_id, device_->num_hw_cqs(), dispatch_core_config);
-        static_config_.packed_write_max_unicast_sub_cmds = remote_grid_size.x * remote_grid_size.y;
+        static_config_.packed_write_max_unicast_sub_cmds =
+            device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
         static_config_.dispatch_s_sync_sem_base_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
         static_config_.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
