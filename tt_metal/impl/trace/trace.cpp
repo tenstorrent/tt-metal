@@ -77,7 +77,10 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
     uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(
-        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
+        unpadded_size,
+        cq.device()->get_initialized_allocator()->get_num_banks(BufferType::DRAM),
+        kExecBufPageMin,
+        kExecBufPageMax);
     uint64_t padded_size = round_up(unpadded_size, page_size);
     size_t numel_padding = (padded_size - unpadded_size) / sizeof(uint32_t);
     if (numel_padding > 0) {

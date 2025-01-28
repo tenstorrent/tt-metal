@@ -124,7 +124,7 @@ public:
     const std::vector<uint32_t>& get_bank_ids_from_logical_core(
         BufferType buffer_type, const CoreCoord& logical_core) const;
 
-    DeviceAddr get_unreserved_base_address(const HalMemType& mem_type) const;
+    DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
     const AllocatorConfig& get_config() const;
 
