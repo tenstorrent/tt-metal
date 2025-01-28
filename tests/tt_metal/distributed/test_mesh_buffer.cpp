@@ -120,13 +120,24 @@ TEST_F(MeshBufferTest, Deallocation) {
         .bottom_up = false};
 
     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
-    uint32_t expected_address = 0;
-    {
-        auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-        expected_address = replicated_buffer->address();
-    }
-    auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-    EXPECT_EQ(replicated_buffer->address(), expected_address);
+
+    // Fetch an address that the allocator provides on first allocation.
+    const uint32_t expected_address = [&]() {
+        auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+        EXPECT_TRUE(buffer->is_allocated());
+        return buffer->address();
+    }();
+
+    auto buffer1 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_TRUE(buffer1->is_allocated());
+    EXPECT_EQ(buffer1->address(), expected_address);
+
+    buffer1->deallocate();
+    EXPECT_FALSE(buffer1->is_allocated());
+
+    auto buffer2 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
+    EXPECT_TRUE(buffer2->is_allocated());
+    EXPECT_EQ(buffer2->address(), expected_address);
 }
 
 TEST_F(MeshBufferTest, GetDeviceBuffer) {

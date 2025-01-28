@@ -30,12 +30,15 @@ struct DeviceLocalBufferConfig {
 };
 
 // Specifies MeshBuffer that is replicated across the virtual mesh.
+// Write APIs for replicated buffers will write the same data to all devices in the virtual mesh.
 struct ReplicatedBufferConfig {
     // Each device will get a buffer of this size.
     DeviceAddr size = 0;
 };
 
 // Specifies sharded MeshBuffer.
+// Write APIs for sharded buffers will split the data so that each device in the virtual mesh will only get a fraction
+// of the data.
 struct ShardedBufferConfig {
     // Note: Only 2D sharding and replication is supported by the APIs exposed through this struct.
     // This interface will likely change over time depending on the status of native ND sharding.
@@ -72,6 +75,15 @@ public:
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
 
+    // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
+    // destructor or the `deallocate` method deallocate the MeshBuffer.
+    bool is_allocated() const;
+
+    // Deallocates the MeshBuffer.
+    // TODO: Re-consider a need for explicit deallocation methods, as opposed to relying on RAII to clean up the
+    // resources.
+    void deallocate();
+
     MeshDevice* device() const { return mesh_device_; }
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
@@ -79,9 +91,7 @@ public:
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }
-    // ND Sharding is not supported today. MeshBuffer only supports 2D sharding and
-    // replication. Tensor sharding schemes that can be lowered to 2D configurations
-    // are thus supported by the MeshCommandQueue.
+
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
@@ -91,6 +101,7 @@ public:
     std::pair<bool, bool> replicated_dims() const;
 
 private:
+    // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(
         const MeshBufferConfig& config,
         const DeviceLocalBufferConfig& device_local_config,
@@ -100,9 +111,12 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
+        owns_data_(true),
+        address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         backing_buffer_(std::move(backing_buffer)) {}
 
+    // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
         const MeshBufferConfig& config,
         const DeviceLocalBufferConfig& device_local_config,
@@ -112,13 +126,15 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
+        owns_data_(false),
         address_(address),
         device_local_size_(device_local_size) {}
 
-    void allocate();
+    void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     MeshDevice* mesh_device_ = nullptr;
+    bool owns_data_ = false;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
@@ -126,7 +142,7 @@ private:
     std::vector<std::vector<std::shared_ptr<Buffer>>> buffers_;
     // Buffer owned by the MeshBuffer. Responsible for interfacing with the
     // single device allocator. This data-structure is not populated if memory
-    // for the MeshBuffer is externally owned.
+    // for the MeshBuffer is externally owned, or if the MeshBuffer was deallocated.
     std::shared_ptr<Buffer> backing_buffer_;
 };
 
