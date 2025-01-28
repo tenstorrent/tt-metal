@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
     IDevice* device = CreateDevice(0);
 
     /* Setup program to execute along with its buffers and kernels to use */
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
     constexpr CoreCoord core = {0, 0};
 

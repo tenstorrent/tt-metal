@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     // get program/device
     int device_id = 0;
     IDevice* device = CreateDevice(device_id);
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
     // initialize source data - vector with shape (16, 1)

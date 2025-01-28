@@ -26,7 +26,7 @@ void launch_program(tt_metal::IDevice* device, tt_metal::Program& program) {
     if (getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         tt_metal::detail::LaunchProgram(device, program);
     } else {
-        HWCommandQueue& cq = device->command_queue();
+        CommandQueue& cq = device->command_queue();
         EnqueueProgram(cq, program, false);
         Finish(cq);
     }

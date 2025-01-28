@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-        HWCommandQueue& cq = device->command_queue();
+        CommandQueue& cq = device->command_queue();
 
         tt_metal::Program program = tt_metal::CreateProgram();
 

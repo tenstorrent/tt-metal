@@ -25,11 +25,11 @@ Then run the following:
 ``` cpp
 int device_id = 0;
 Device *device = CreateDevice(device_id);
-HWCommandQueue& cq = device->command_queue();
+CommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 ```
 
-In order to access the hardware capabilities of the accelerator, we retrieve the `Device` object, referencing the Tenstorrent device with a `device_id` of 0. We also instantiate the `HWCommandQueue` and `Program` objects in order to later dispatch the program to the device for execution.
+In order to access the hardware capabilities of the accelerator, we retrieve the `Device` object, referencing the Tenstorrent device with a `device_id` of 0. We also instantiate the `CommandQueue` and `Program` objects in order to later dispatch the program to the device for execution.
 
 ## Initialize data
 

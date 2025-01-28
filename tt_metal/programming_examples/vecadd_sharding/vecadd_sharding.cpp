@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
         SetRuntimeArgs(program, compute, core, {test_config.num_tiles_per_core});
     }
 
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     // Enqueue the program
     EnqueueProgram(cq, program, true);
 

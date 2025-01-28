@@ -32,7 +32,7 @@ namespace tt {
 
 namespace tt_metal {
 
-class HWCommandQueue;
+class CommandQueue;
 inline namespace v0 {
 
 class Program;
@@ -594,14 +594,14 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                        | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The memory where the result will be stored                                        | void*                               |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
  */
 // clang-format on
 void EnqueueReadBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking);
@@ -614,19 +614,19 @@ void EnqueueReadBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                            | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|----------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                        | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                        | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                        | Yes      |
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                        | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                | Only blocking mode supported currently | Yes      |
  */
 // clang-format on
 template <typename DType>
-void EnqueueReadBuffer(HWCommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
+void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
     dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
     EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
 }
 template <typename DType>
-void EnqueueReadBuffer(HWCommandQueue& cq, std::shared_ptr<Buffer> buffer, std::vector<DType>& dst, bool blocking) {
+void EnqueueReadBuffer(CommandQueue& cq, std::shared_ptr<Buffer> buffer, std::vector<DType>& dst, bool blocking) {
     EnqueueReadBuffer(cq, *buffer, dst, blocking);
 }
 
@@ -638,7 +638,7 @@ void EnqueueReadBuffer(HWCommandQueue& cq, std::shared_ptr<Buffer> buffer, std::
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | dst            | The memory where the result will be stored                                        | void*                               |                                    | Yes      |
  * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
@@ -646,7 +646,7 @@ void EnqueueReadBuffer(HWCommandQueue& cq, std::shared_ptr<Buffer> buffer, std::
  */
 // clang-format on
 void EnqueueReadSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     const BufferRegion& region,
@@ -660,7 +660,7 @@ void EnqueueReadSubBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are reading from                                             | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | dst            | The vector where the results that are read will be stored                         | vector<DType> &                     |                                    | Yes      |
  * | region         | The region of the buffer that we are reading from                                 | const BufferRegion &                |                                    | Yes      |
@@ -669,13 +669,13 @@ void EnqueueReadSubBuffer(
 // clang-format on
 template <typename DType>
 void EnqueueReadSubBuffer(
-    HWCommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, const BufferRegion& region, bool blocking) {
+    CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, const BufferRegion& region, bool blocking) {
     dst.resize(region.size / sizeof(DType));
     EnqueueReadSubBuffer(cq, buffer, static_cast<void*>(dst.data()), region, blocking);
 }
 template <typename DType>
 void EnqueueReadSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::shared_ptr<Buffer> buffer,
     std::vector<DType>& dst,
     const BufferRegion& region,
@@ -691,7 +691,7 @@ void EnqueueReadSubBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The vector we are writing to the device                                           | vector<DType> &                     |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
@@ -699,7 +699,7 @@ void EnqueueReadSubBuffer(
 // clang-format on
 template <typename DType>
 void EnqueueWriteBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     std::vector<DType>& src,
     bool blocking) {
@@ -714,14 +714,14 @@ void EnqueueWriteBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
  * | blocking       | Whether or not this is a blocking operation                                       | bool                                |                                    | Yes      |
  */
 // clang-format on
 void EnqueueWriteBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking);
@@ -734,7 +734,7 @@ void EnqueueWriteBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The memory we are writing to the device                                           | HostDataType                        |                                    | Yes      |
  * | region         | The region of the buffer that we are writing to                                   | const BufferRegion &                |                                    | Yes      |
@@ -742,7 +742,7 @@ void EnqueueWriteBuffer(
  */
 // clang-format on
 void EnqueueWriteSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     const BufferRegion& region,
@@ -756,7 +756,7 @@ void EnqueueWriteSubBuffer(
  *
  * | Argument       | Description                                                                       | Type                                | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                      |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                      |                                    | Yes      |
  * | buffer         | The device buffer we are writing to                                               | Buffer & or std::shared_ptr<Buffer> |                                    | Yes      |
  * | src            | The memory we are writing to the device                                           | std::vector<DType>&                 |                                    | Yes      |
  * | region         | The region of the buffer that we are writing to the device                        | const BufferRegion &                |                                    | Yes      |
@@ -765,7 +765,7 @@ void EnqueueWriteSubBuffer(
 // clang-format on
 template <typename DType>
 void EnqueueWriteSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     std::vector<DType>& src,
     const BufferRegion& region,
@@ -781,12 +781,12 @@ void EnqueueWriteSubBuffer(
  *
  * | Argument     | Description                                                            | Type                               | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|------------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | HWCommandQueue &                     |                                    | Yes      |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                     |                                    | Yes      |
  * | program      | The program that will be executed on the device that cq is bound to    | Program &                          |                                    | Yes      |
  * | blocking     | Whether or not this is a blocking operation                            | bool                               |                                    | Yes      |
  */
 // clang-format on
-void EnqueueProgram(HWCommandQueue& cq, Program& program, bool blocking);
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 // clang-format off
 /**
@@ -796,11 +796,11 @@ void EnqueueProgram(HWCommandQueue& cq, Program& program, bool blocking);
  *
  * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
 // clang-format on
-void Finish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**
@@ -876,13 +876,13 @@ void ReleaseTrace(IDevice* device, const uint32_t tid);
  *
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | HWCommandQueue &                |                                    | Yes      |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
  * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
  * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
  */
 // clang-format on
-void EnqueueTrace(HWCommandQueue& cq, uint32_t trace_id, bool blocking);
+void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
 
 // clang-format off
 /**
@@ -906,13 +906,13 @@ void DumpDeviceProfileResults(IDevice* device, const Program& program);
  * Return value: void
  * | Argument       | Description                                                                       | Type                          | Valid Range                        | Required |
  * |----------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq             | The command queue object which dispatches the command to the hardware             | HWCommandQueue &                |                                    | Yes      |
+ * | cq             | The command queue object which dispatches the command to the hardware             | CommandQueue &                |                                    | Yes      |
  * | event          | An event that will be populated by this function, and inserted in CQ              | std::shared_ptr<Event>        |                                    | Yes      |
  * | sub_device_ids | The sub-device ids to wait for completion on. If empty, waits for all sub-devices | tt::stl::Span<const uint32_t> |                                    | No       |
  */
 // clang-format on
 void EnqueueRecordEvent(
-    HWCommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 // clang-format off
 /**
@@ -920,12 +920,12 @@ void EnqueueRecordEvent(
  * Return value: void
  * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
  * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | HWCommandQueue &                |                                    | Yes      |
+ * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
  * |              | and waits for the event to complete.                                   |                               |                                    |          |
  * | event        | The event object that this CQ will wait on for completion.             | std::shared_ptr<Event>        |                                    | Yes      |
  */
 // clang-format on
-void EnqueueWaitForEvent(HWCommandQueue& cq, const std::shared_ptr<Event>& event);
+void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event);
 
 // clang-format off
 /**

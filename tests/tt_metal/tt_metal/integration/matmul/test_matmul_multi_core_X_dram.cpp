@@ -464,7 +464,7 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* d
             out_subblock_h,
             out_subblock_w);
 
-    // HWCommandQueue& cq = device->command_queue();
+    // CommandQueue& cq = device->command_queue();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application

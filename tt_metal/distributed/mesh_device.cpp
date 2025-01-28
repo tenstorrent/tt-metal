@@ -615,7 +615,7 @@ SystemMemoryManager& MeshDevice::sysmem_manager() {
     return reference_device()->sysmem_manager();
 }
 
-HWCommandQueue& MeshDevice::command_queue(size_t cq_id) {
+CommandQueue& MeshDevice::command_queue(size_t cq_id) {
     TT_THROW("command_queue() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->command_queue(cq_id);
 }

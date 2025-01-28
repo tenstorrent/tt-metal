@@ -44,7 +44,7 @@ class SubDevice;
 }  // namespace v0
 
 class JitBuildEnv;
-class HWCommandQueue;
+class CommandQueue;
 class TraceBuffer;
 
 inline namespace v0 {
@@ -174,7 +174,7 @@ public:
     virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-    virtual HWCommandQueue& command_queue(size_t cq_id = 0) = 0;
+    virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
     virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;

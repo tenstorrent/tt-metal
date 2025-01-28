@@ -60,7 +60,7 @@ bool vecadd_multi_core(DispatchFixture* fixture, IDevice* device, uint32_t n_til
     CoreCoord end_core = {0, 3};
     CoreRange cores(start_core, end_core);
 
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     const uint32_t tile_size = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     const uint32_t tiles_per_core = n_tiles / num_core;
 

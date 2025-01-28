@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
     IDevice* device = CreateDevice(device_id);
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     Program program = CreateProgram();
 
     // Configure and Create Void Kernel

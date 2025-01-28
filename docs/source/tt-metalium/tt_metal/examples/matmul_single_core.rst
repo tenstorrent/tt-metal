@@ -84,7 +84,7 @@ core at (0, 0).
 
 .. code-block:: cpp
 
-    HWCommandQueue& cq = detail::GetCommandQueue(device);
+    CommandQueue& cq = detail::GetCommandQueue(device);
     Program program{};
     CoreRange core({0, 0}, {0, 0});
 

@@ -138,7 +138,7 @@ inline bool move_tiles_to_dram(
     int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
     int tile_id = 0;
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;
     for (int i = 0; i < tiles_r; i++) {

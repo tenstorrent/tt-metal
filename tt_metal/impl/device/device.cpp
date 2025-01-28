@@ -956,7 +956,7 @@ void Device::init_command_queue_host() {
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
+        command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id, dispatch_downstream_noc));
     }
 }
 
@@ -1003,7 +1003,7 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     // sw_command_queues_.reserve(num_hw_cqs());
     // for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
     //     sw_command_queues_.push_back(
-    //         std::make_unique<HWCommandQueue>(this, cq_id, HWCommandQueue::CommandQueueMode::PASSTHROUGH));
+    //         std::make_unique<CommandQueue>(this, cq_id, CommandQueue::CommandQueueMode::PASSTHROUGH));
     // }
 }
 
@@ -1066,7 +1066,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<HWCommandQueue>& hw_command_queue : command_queues_) {
+    for (const std::unique_ptr<CommandQueue>& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
@@ -1502,7 +1502,7 @@ const string Device::build_kernel_target_path(uint32_t programmable_core, uint32
     return bs.get_target_out_path(kernel_name);
 }
 
-HWCommandQueue& Device::command_queue(size_t cq_id) {
+CommandQueue& Device::command_queue(size_t cq_id) {
     detail::DispatchStateCheck(using_fast_dispatch_);
     TT_FATAL(cq_id < command_queues_.size(), "cq_id {} is out of range", cq_id);
     TT_FATAL(this->is_initialized(), "Device has not been initialized, did you forget to call InitializeDevice?");

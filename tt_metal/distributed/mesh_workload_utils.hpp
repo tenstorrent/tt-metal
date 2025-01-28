@@ -13,7 +13,7 @@ namespace experimental {
 // can function independently and support MeshBuffer reads and
 // writes.
 void write_program_commands(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     ProgramCommandSequence& program_cmd_seq,
     uint32_t num_active_cores_in_program,
     SubDeviceId sub_device_id,
@@ -22,7 +22,7 @@ void write_program_commands(
     bool blocking);
 
 void write_go_signal(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     uint32_t expected_num_workers_completed,
     CoreCoord dispatch_core,
     bool send_mcast,

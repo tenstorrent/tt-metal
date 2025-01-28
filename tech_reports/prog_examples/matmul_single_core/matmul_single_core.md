@@ -69,7 +69,7 @@ We will go through sections of the `matmul_single_core` function:
 We want a just a single core, so we will restrict the core range to be just one core at (0, 0).
 
 ``` cpp
-HWCommandQueue& cq = detail::GetCommandQueue(device);
+CommandQueue& cq = detail::GetCommandQueue(device);
 Program program{};
 CoreRange core({0, 0}, {0, 0});
 ```

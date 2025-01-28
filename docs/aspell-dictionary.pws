@@ -29,7 +29,7 @@ CWFW
 CircularBufferConfig
 CircularBuffers
 CloseDevice
-HWCommandQueue
+CommandQueue
 CompileProgram
 ComputeConfig
 Configs

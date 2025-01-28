@@ -66,7 +66,7 @@ void matmul_multicore_reuse_mcast(
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
      */
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     Program program{};
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;

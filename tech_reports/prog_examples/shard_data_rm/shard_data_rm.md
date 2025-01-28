@@ -14,12 +14,12 @@ To build and execute, you may use the following commands:
 ``` cpp
 int device_id = 0;
 Device *device = CreateDevice(device_id);
-HWCommandQueue& cq = device->command_queue();
+CommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 ```
 
 We start the source code by creating an object that designates the hardware device that we will be using for the program. For this example, we select the device with an ID of 0.
-In order to dispatch commands to the device for execution we must also retrieve the `HWCommandQueue` object associated with `device`. Commands will be dispatched through this object to be executed on the device.
+In order to dispatch commands to the device for execution we must also retrieve the `CommandQueue` object associated with `device`. Commands will be dispatched through this object to be executed on the device.
 The `Program` object is created to encapsulate our kernels and buffers.
 
 # Initialize source data

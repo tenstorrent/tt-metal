@@ -58,7 +58,7 @@ void RunTest(IDevice* device) {
         tt::tt_metal::detail::LaunchProgram(device, program);
     } else {
         // Fast Dispatch uses the command queue
-        HWCommandQueue& cq = device->command_queue();
+        CommandQueue& cq = device->command_queue();
         EnqueueProgram(cq, program, false);
         Finish(cq);
     }

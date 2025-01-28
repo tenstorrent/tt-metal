@@ -37,7 +37,7 @@ struct PipelineRowConfig {
 };
 
 void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowConfig& test_config) {
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
 
     tt_metal::Program program = tt_metal::CreateProgram();
 

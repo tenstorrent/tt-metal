@@ -159,8 +159,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_cbs(
-    IDevice* device, HWCommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs(IDevice* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
     Program program;
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
@@ -173,7 +172,7 @@ bool test_dummy_EnqueueProgram_with_cbs(
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
-    IDevice* device, HWCommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+    IDevice* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
     Program program;
 
     const std::vector<CBHandle>& cb_handles =
@@ -201,7 +200,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(
 
 bool test_dummy_EnqueueProgram_with_sems(
     IDevice* device,
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     Program& program,
     const DummyProgramConfig& program_config,
     const vector<vector<uint32_t>>& expected_semaphore_vals) {
@@ -240,8 +239,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     return are_all_semaphore_values_correct;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(
-    IDevice* device, HWCommandQueue& cq, const DummyProgramConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_sems(IDevice* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
     Program program;
     vector<uint32_t> expected_semaphore_values;
 
@@ -255,7 +253,7 @@ bool test_dummy_EnqueueProgram_with_sems(
 
 bool test_dummy_EnqueueProgram_with_runtime_args(
     IDevice* device,
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_dm0,
     uint32_t num_runtime_args_dm1,
@@ -360,7 +358,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 
 bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     IDevice* device,
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_for_cr0,
     uint32_t num_runtime_args_for_cr1,
@@ -551,7 +549,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, HWCommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     /*
@@ -571,14 +569,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, HWCommandQueue& cq,
     return true;
 }
 
-bool test_EnqueueWrap_on_Finish(IDevice* device, HWCommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_Finish(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, HWCommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 

@@ -8,7 +8,7 @@
 2. Setup the host program:
 
 ```Device *device = CreateDevice(0);
-HWCommandQueue& cq = device->command_queue();
+CommandQueue& cq = device->command_queue();
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```

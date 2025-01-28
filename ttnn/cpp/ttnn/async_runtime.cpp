@@ -48,7 +48,7 @@ void read_buffer(
     src.tensor_attributes->update_main_thread_ref_count(src.workers.at(0), src_ref_count);
 }
 
-void queue_synchronize(HWCommandQueue& cq) {
+void queue_synchronize(CommandQueue& cq) {
     // Ensure that all work pushed to async engine has been passed
     // off to device CQ
     cq.device()->synchronize();
@@ -60,13 +60,13 @@ void event_synchronize(const std::shared_ptr<Event>& event) { EventSynchronize(e
 
 bool event_query(const std::shared_ptr<Event>& event) { return EventQuery(event); }
 
-void wait_for_event(HWCommandQueue& cq, const std::shared_ptr<Event>& event) {
+void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
     cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueWaitForEvent(cq_worker->command_queue(cq_id), event); });
 }
 
-void record_event(HWCommandQueue& cq, const std::shared_ptr<Event>& event) {
+void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     auto cq_id = cq.id();
     auto cq_worker = cq.device();
     cq_worker->push_work([cq_worker, cq_id, event]() { EnqueueRecordEvent(cq_worker->command_queue(cq_id), event); });

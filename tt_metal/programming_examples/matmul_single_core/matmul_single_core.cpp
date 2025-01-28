@@ -64,7 +64,7 @@ void matmul_single_core(
      * Setup program to execute along with its buffers and kernels to use
      * Core range is just single core
      */
-    HWCommandQueue& cq = device->command_queue();
+    CommandQueue& cq = device->command_queue();
     Program program{};
     CoreRange core({0, 0}, {0, 0});
 

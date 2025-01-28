@@ -68,11 +68,11 @@ using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescripto
 
 }  // namespace detail
 
-class HWCommandQueue {
+class CommandQueue {
 public:
-    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index);
+    CommandQueue(IDevice* device, uint32_t id, NOC noc_index);
 
-    ~HWCommandQueue();
+    ~CommandQueue();
 
     CoreCoord virtual_enqueue_program_dispatch_core;
     CoreCoord completion_queue_writer_core;
@@ -97,7 +97,7 @@ public:
 
     void terminate();
 
-    // These functions are temporarily needed since MeshCommandQueue relies on the HWCommandQueue object
+    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
     uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const;
     void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers);
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);

@@ -14,7 +14,7 @@ namespace tt::tt_metal::distributed {
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
     // Currently only supports dispatching workloads and relies on the
-    // tt::tt_metal::HWCommandQueue.
+    // tt::tt_metal::CommandQueue.
     // Additional support for Reads and Writes to be added
 private:
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id);

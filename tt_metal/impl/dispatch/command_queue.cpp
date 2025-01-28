@@ -456,7 +456,7 @@ void EnqueueTerminateCommand::process() {
 }
 
 void EnqueueAddBufferToProgram(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     Program& program,
     bool blocking) {
@@ -471,7 +471,7 @@ void EnqueueAddBufferToProgram(
 }
 
 void EnqueueSetRuntimeArgs(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     std::shared_ptr<RuntimeArgs> runtime_args_ptr,
@@ -500,14 +500,14 @@ void EnqueueSetRuntimeArgs(
     runtime_args_md.kernel->set_runtime_args(runtime_args_md.core_coord, resolved_runtime_args);
 }
 
-void EnqueueGetBufferAddr(HWCommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
+void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
     *(static_cast<uint32_t*>(dst_buf_addr)) = buffer->address();
 }
 
 inline namespace v0 {
 
 void EnqueueWriteBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     std::vector<uint32_t>& src,
     bool blocking) {
@@ -516,7 +516,7 @@ void EnqueueWriteBuffer(
 }
 
 void EnqueueReadBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
@@ -526,7 +526,7 @@ void EnqueueReadBuffer(
 }
 
 void EnqueueReadSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     void* dst,
     const BufferRegion& region,
@@ -546,7 +546,7 @@ void EnqueueReadSubBuffer(
 }
 
 void EnqueueWriteBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
@@ -556,7 +556,7 @@ void EnqueueWriteBuffer(
 }
 
 void EnqueueWriteSubBuffer(
-    HWCommandQueue& cq,
+    CommandQueue& cq,
     std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
     HostDataType src,
     const BufferRegion& region,
@@ -567,7 +567,7 @@ void EnqueueWriteSubBuffer(
     cq.enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 
-void EnqueueProgram(HWCommandQueue& cq, Program& program, bool blocking) {
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
     detail::DispatchStateCheck(true);
 
@@ -582,12 +582,12 @@ void EnqueueProgram(HWCommandQueue& cq, Program& program, bool blocking) {
 }
 
 void EnqueueRecordEvent(
-    HWCommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.enqueue_record_event(event, false, sub_device_ids);
 }
 
-void EnqueueWaitForEvent(HWCommandQueue& cq, const std::shared_ptr<Event>& event) {
+void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
@@ -637,7 +637,7 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
     return event_completed;
 }
 
-void Finish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
     cq.finish(sub_device_ids);
     TT_ASSERT(
@@ -648,7 +648,7 @@ void Finish(HWCommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids)
         tt::watcher_get_log_file_name());
 }
 
-void EnqueueTrace(HWCommandQueue& cq, uint32_t trace_id, bool blocking) {
+void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
     cq.enqueue_trace(trace_id, blocking);

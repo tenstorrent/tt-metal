@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
             /*
             * Setup program and command queue to execute along with its buffers and kernels to use
             */
-            HWCommandQueue& cq = device->command_queue();
+            CommandQueue& cq = device->command_queue();
             Program program = CreateProgram();
 
             constexpr CoreCoord core = {0, 0};
