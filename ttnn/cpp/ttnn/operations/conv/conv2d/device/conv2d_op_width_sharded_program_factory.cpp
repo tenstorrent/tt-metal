@@ -761,7 +761,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Share buffer if same data format
     CBHandle cb_output = 0;
-    if (interm0_df == out_df) {
+    if (interm0_df == out_df && untilize_out == false) {
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
             {out0_cb, out_df}, {matmul_partials_cb, out_df}};
