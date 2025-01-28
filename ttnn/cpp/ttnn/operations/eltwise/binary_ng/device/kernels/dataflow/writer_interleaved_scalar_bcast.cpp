@@ -11,14 +11,15 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t shard_width = get_arg_val<uint32_t>(4);
-    const uint32_t n_stride = get_arg_val<uint32_t>(5);
-    const uint32_t c_stride = get_arg_val<uint32_t>(6);
-    const uint32_t N = get_arg_val<uint32_t>(7);
-    const uint32_t C = get_arg_val<uint32_t>(8);
-    const uint32_t Ht = get_arg_val<uint32_t>(9);
-    const uint32_t Wt = get_arg_val<uint32_t>(10);
+    const uint32_t src_num_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(5);
+    const uint32_t n_stride = get_arg_val<uint32_t>(6);
+    const uint32_t c_stride = get_arg_val<uint32_t>(7);
+    const uint32_t N = get_arg_val<uint32_t>(8);
+    const uint32_t C = get_arg_val<uint32_t>(9);
+    const uint32_t Ht = get_arg_val<uint32_t>(10);
+    const uint32_t Wt = get_arg_val<uint32_t>(11);
     const uint32_t HtWt = Ht * Wt;
 
     constexpr uint32_t onetile = 1;
@@ -50,8 +51,8 @@ void kernel_main() {
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
     uint32_t num_tiles_written = 0;
-    for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
-        for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
+    for (uint32_t n = start_n; n < N && num_tiles_written < dst_num_tiles; ++n, start_c = 0) {
+        for (uint32_t c = start_c; c < C && num_tiles_written < dst_num_tiles; ++c, start_t = 0) {
             // read a tile from src
             cb_reserve_back(cb_id_src, onetile);
             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
@@ -60,7 +61,7 @@ void kernel_main() {
             FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
             cb_push_back(cb_id_src, onetile);
 
-            for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
+            for (uint32_t t = start_t; t < HtWt && num_tiles_written < dst_num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                 cb_wait_front(cb_id_dst, onetile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_dst);

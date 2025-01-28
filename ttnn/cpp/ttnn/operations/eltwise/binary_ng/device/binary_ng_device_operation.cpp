@@ -119,6 +119,35 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
+void validate_sharding(
+    TensorMemoryLayout memory_layout_x,
+    const ShardSpec& shard_spec_x,
+    TensorMemoryLayout memory_layout_y,
+    const ShardSpec& shard_spec_y,
+    SubtileBroadcastType subtile_broadcast_type) {
+    TT_FATAL(memory_layout_x == memory_layout_y, "Operands to eltwise binary need to have the same memory layout");
+
+    switch (subtile_broadcast_type) {
+        case SubtileBroadcastType::NONE:
+            TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
+            break;
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+            TT_FATAL(
+                memory_layout_x == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Operands to eltwise binary must be height sharded when broadcasting on W");
+            TT_FATAL(
+                memory_layout_y == TensorMemoryLayout::HEIGHT_SHARDED,
+                "Operands to eltwise binary must be height sharded when broadcasting on W");
+            TT_FATAL(
+                shard_spec_x.shape[0] == shard_spec_y.shape[0],
+                "Operands to eltwise binary need to have the same"
+                "shard height when broadcasting on W");
+            break;
+        default: TT_THROW("Invalid subtile broadcast type for sharding validation");
+    }
+}
+
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
@@ -170,30 +199,33 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Validate that all shard specs match
+    auto memory_layout_a = input_tensor_a.memory_config().memory_layout;
+    auto memory_layout_b = input_tensor_b->memory_config().memory_layout;
+    auto memory_layout_output = attributes.memory_config.memory_layout;
     if (tensor_a_sharded) {
         if (tensor_b_sharded) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == input_tensor_b->memory_config().memory_layout,
-                "Operands to eltwise binary need to have the same memory layout");
-            TT_FATAL(
-                input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(),
-                "Operands to eltwise binary need to have the same shard spec");
+            validate_sharding(
+                memory_layout_a,
+                *input_tensor_a.shard_spec(),
+                memory_layout_b,
+                *input_tensor_b->shard_spec(),
+                attributes.subtile_broadcast_type);
         }
         if (output_sharded) {
-            TT_FATAL(
-                input_tensor_a.memory_config().memory_layout == attributes.memory_config.memory_layout,
-                "LHS operand and output to eltwise binary need to have the same memory layout");
-            TT_FATAL(
-                input_tensor_a.shard_spec().value() == attributes.memory_config.shard_spec.value(),
-                "LHS operand and output to eltwise binary need to have the same shard spec");
+            validate_sharding(
+                memory_layout_a,
+                *input_tensor_a.shard_spec(),
+                memory_layout_output,
+                *attributes.memory_config.shard_spec,
+                attributes.subtile_broadcast_type);
         }
     } else if (tensor_b_sharded and output_sharded) {
-        TT_FATAL(
-            input_tensor_b->memory_config().memory_layout == attributes.memory_config.memory_layout,
-            "RHS operand and output to eltwise binary need to have the same memory layout");
-        TT_FATAL(
-            input_tensor_b->shard_spec().value() == attributes.memory_config.shard_spec.value(),
-            "RHS operand and output to eltwise binary need to have the same shard spec");
+        validate_sharding(
+            memory_layout_b,
+            *input_tensor_b->shard_spec(),
+            memory_layout_output,
+            *attributes.memory_config.shard_spec,
+            attributes.subtile_broadcast_type);
     }
 }
 
@@ -227,10 +259,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (has_shard_spec) {
+        if (has_shard_spec and i != -1) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Cannot broadcast sharded tensors, violation for rank {}, dim a: {}, dim b: {}",
+                "Cannot broadcast sharded tensors on dims other than W, violation for rank {}, dim a: {}, dim b: {}",
                 i,
                 a_dim,
                 b_dim);
@@ -284,17 +316,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     }
 
     if (attributes.memory_config.is_sharded()) {
-        ShardSpec shard_spec{CoreRangeSet(), {0, 0}};
-        if (input_tensor_a.memory_config().is_sharded()) {
-            shard_spec = input_tensor_a.shard_spec().value();
-        } else if (tensor_b.has_value() and tensor_b->memory_config().is_sharded()) {
-            shard_spec = tensor_b->shard_spec().value();
-        } else {
-            shard_spec = attributes.memory_config.shard_spec.value();
-        }
-        auto memory_config = attributes.memory_config;
-        memory_config.shard_spec = shard_spec;
-        return TensorSpec(output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), memory_config));
+        return TensorSpec(
+            output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
     }
 
     return TensorSpec(
@@ -381,8 +404,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             std::nullopt,
-            memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
@@ -413,8 +435,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
-            memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+            memory_config.value_or(output_tensor.has_value() ? output_tensor->memory_config() : MemoryConfig{}),
             input_tensor_a.get_dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, nullptr, output_tensor),
