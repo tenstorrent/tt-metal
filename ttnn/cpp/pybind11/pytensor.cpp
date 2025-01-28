@@ -70,22 +70,6 @@ void log_external_operation(
 #endif
 
 template <typename T>
-Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
-    TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-    std::size_t num_elements = tensor_spec.logical_shape().volume();
-    auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
-
-    // See implementation for documentation
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
-
-    auto buffer = owned_buffer::create(std::move(physical_data));
-    auto storage = OwnedStorage{std::move(buffer)};
-    return Tensor(std::move(storage), tensor_spec);
-}
-
-template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
     const TensorSpec& tensor_spec,
