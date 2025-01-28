@@ -139,7 +139,9 @@ def run_conv(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         input_channels_alignment=(
-            16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
+            16
+            if (use_shallow_conv_variant or (input_channels == 16 and input_height == 115)) and not (is_blackhole())
+            else 32
         ),
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=False,
@@ -445,7 +447,6 @@ def test_conv_features(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 @pytest.mark.parametrize("groups", [1, 2])
 @pytest.mark.parametrize("stride", [2])
@@ -578,7 +579,7 @@ def test_conv_ws(
     auto_shard,
     tilized_input,
 ):
-    if device.core_grid.y != 8:
+    if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid")
 
     stride_h = stride
@@ -765,7 +766,7 @@ def test_conv_for_segformer_512x512(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=groups,
         output_layout=output_layout,
         has_bias=False,
@@ -879,7 +880,6 @@ def test_resnet50_conv_gs(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -1007,7 +1007,7 @@ def test_resnet50_conv_wh(
         pad_w,
         use_1d_systolic_array,
         config_override=config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
@@ -1017,7 +1017,6 @@ def test_resnet50_conv_wh(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -1067,7 +1066,7 @@ def test_conv_mem_config_wh(
         pad_w,
         use_1d_systolic_array,
         config_override=config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=True,
         fp32_accum=False,
@@ -1190,7 +1189,7 @@ def test_resnet50_conv_wh_fp32(
         pad_w,
         use_1d_systolic_array,
         config_override=config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
@@ -1328,7 +1327,7 @@ def test_sd_conv(
             pad_w,
             use_1d_systolic_array,
             config_override,
-            use_shallow_conv_variant=(input_channels == 16),
+            use_shallow_conv_variant=(input_channels == 16) if not (is_blackhole()) else False,
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
             auto_shard=auto_shard,
@@ -1336,7 +1335,6 @@ def test_sd_conv(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -1490,7 +1488,7 @@ def test_sd_conv_wh(
             pad_w,
             use_1d_systolic_array,
             config_override,
-            use_shallow_conv_variant=(input_channels == 16),
+            use_shallow_conv_variant=(input_channels == 16) if not (is_blackhole()) else False,
             transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
             enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
@@ -1607,7 +1605,6 @@ def test_unet_conv(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override, use_shallow_conv_variant",
@@ -1691,7 +1688,7 @@ def test_unet_conv_wh(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -1700,7 +1697,6 @@ def test_unet_conv_wh(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1790,7 +1786,7 @@ def test_unet_conv_groups_2_wh(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -1800,7 +1796,6 @@ def test_unet_conv_groups_2_wh(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1890,7 +1885,7 @@ def test_unet_conv_groups_4_6_wh(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -1900,7 +1895,6 @@ def test_unet_conv_groups_4_6_wh(
 
 
 @skip_for_grayskull()
-@skip_for_blackhole()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1990,7 +1984,7 @@ def test_unet_conv_groups_8_wh(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         padded_input_channels=None,
         output_layout=output_layout,
@@ -2291,7 +2285,7 @@ def test_conv_groups(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=groups,
         output_layout=output_layout,
     )
@@ -2410,7 +2404,7 @@ def test_yolov4_conv_groups_larger_than_one(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=groups,
         padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
@@ -2484,7 +2478,7 @@ def test_swin_s_conv(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=groups,
         output_layout=output_layout,
         auto_shard=auto_shard,
@@ -2561,7 +2555,7 @@ def test_conv_for_segformer_512x512(
         pad_w,
         False,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=groups,
         output_layout=output_layout,
         shard_layout=shard_layout,
@@ -2711,14 +2705,13 @@ def test_conv_for_vanilla_unet(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         groups=1,
         output_layout=output_layout,
         has_bias=False,
     )
 
 
-@skip_for_blackhole()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, use_1d_systolic_array, config_override",
@@ -2825,7 +2818,7 @@ def test_non_tile_multiple_height_conv_wh(
         pad_w,
         use_1d_systolic_array,
         config_override=config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
+        use_shallow_conv_variant=use_shallow_conv_variant if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=fp32_accum,
@@ -2912,7 +2905,7 @@ def test_non_tile_multiple_width_conv_wh(
         pad_w,
         use_1d_systolic_array,
         config_override,
-        use_shallow_conv_variant=(input_channels == 16),
+        use_shallow_conv_variant=(input_channels == 16) if not (is_blackhole()) else False,
         transpose_mcast=use_1d_systolic_array,
         enable_auto_formatting=enable_auto_formatting,
         padded_input_channels=16 if input_channels == 16 else None,

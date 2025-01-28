@@ -168,8 +168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    TT_FATAL(num_cores_x < 13, "Error");
-    TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles =
         div_up(p_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     uint32_t per_core_out_matrix_width_ntiles = div_up(p_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
