@@ -226,17 +226,26 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                     dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            std::array<uint32_t, 2> shard_shape = {
-                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
-                this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
+
+            std::array<uint32_t, 2> physical_shard_shape = {
+                tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) * TILE_HEIGHT,
+                tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH) * TILE_WIDTH};
+            auto shard_shape = physical_shard_shape;
+
             auto shard_grid = this->memory_config.shard_spec.value().grid;
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
+            auto shard_spec = ShardSpec{
+                shard_grid, shard_shape, physical_shard_shape, this->memory_config.shard_spec.value().orientation};
             auto mem_config = this->memory_config;
             mem_config.shard_spec = shard_spec;
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
+            tt::log_debug(tt::LogOp, "Output shape: {}", output_shape);
+            tt::log_debug(tt::LogOp, "Padded output shape: {}", padded_output_shape);
+            tt::log_debug(tt::LogOp, "Output layout: {}", output_layout);
+            tt::log_debug(tt::LogOp, "Memory config: {}", mem_config);
+
+            auto returnTensorSpec =
+                std::vector{TensorSpec(output_shape, TensorLayout(dtype, PageConfig(output_layout), mem_config))};
+            tt::log_debug(tt::LogOp, "Return TensorSpec: {}", returnTensorSpec[0]);
+            return returnTensorSpec;
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             auto shard_grid = this->memory_config.shard_spec.value().grid;
             auto shard_spec = ShardSpec{

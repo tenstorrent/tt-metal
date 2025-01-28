@@ -700,7 +700,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     cb_indices.matmul_partials_cb = cb_indices.get_next_cb_index();
     // Share buffer if same data format
     CBHandle cb_output = 0;
-    if (interm0_df == out_df) {
+    CBHandle cb_matmul_partials = 0;
+    if (untilize_out == false && interm0_df == out_df) {
         cb_indices.out0_cb = cb_indices.get_next_cb_index();
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -720,13 +721,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                 out_tile_size);
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = cb_output;
     } else {
         // Separate buffer if not same data format
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(
                 num_output_tiles * interm0_single_tile_size, {{cb_indices.matmul_partials_cb, interm0_df}})
                 .set_page_size(cb_indices.matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
