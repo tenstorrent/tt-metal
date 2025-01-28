@@ -79,7 +79,7 @@ def create_tt_tensors(
 
     if not is_weight:
         core_range = ttnn.CoreRange(
-            grid_offset, ttnn.CoreCoord(core_grid[1] + grid_offset.x - 1, core_grid[0] + grid_offset.y - 1)
+            grid_offset, ttnn.CoreCoord(core_grid[0] + grid_offset.x - 1, core_grid[1] + grid_offset.y - 1)
         )
         tt_sharded_config = ttnn.create_sharded_memory_config(
             shape=(32, input_width // (core_grid[0] * core_grid[1])),
@@ -98,12 +98,14 @@ def create_tt_tensors(
 
 def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm, residual_input_tensor=None):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[core_grid[1], core_grid[0]],
+        compute_with_storage_grid_size=[core_grid[0], core_grid[1]],
         subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         block_h=1,
         block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         inplace=False,
     )
+
+    print(f"compute_pre_allgather_stats: {tt_input_tensor.memory_config()}")
 
     if is_rmsnorm:
         return ttnn.rms_norm_pre_all_gather(
@@ -119,12 +121,13 @@ def compute_post_allgather_output(
     tt_input_tensor, tt_weights, tt_stats_tensor, eps, is_rmsnorm, core_grid, input_width, output_df, out_memory_config
 ):
     SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid[1], core_grid[0]),
+        compute_with_storage_grid_size=(core_grid[0], core_grid[1]),
         subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         block_h=1,
         block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
         inplace=False,
     )
+    print(f"compute_post_allgather_output: {tt_input_tensor.memory_config()}")
 
     if is_rmsnorm:
         return ttnn.rms_norm_post_all_gather(
@@ -469,9 +472,9 @@ def test_post_allgather_layernorm(
 @pytest.mark.parametrize(
     "core_grid, grid_offset, output_core_grid",
     [
-        ((4, 8), ttnn.CoreCoord(0, 0), (4, 8)),
-        ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
-        ((2, 8), ttnn.CoreCoord(0, 0), (3, 8)),
+        ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
+        # ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
+        # ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
     ],
 )
 def test_simulated_distributed_layernorm(

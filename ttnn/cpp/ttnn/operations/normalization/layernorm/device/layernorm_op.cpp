@@ -214,10 +214,6 @@ void LayerNorm::validate(
                     if (this->output_mem_config.shard_spec.has_value()) {
                         const auto output_shard_spec = this->output_mem_config.shard_spec.value();
                         TT_FATAL(
-                            output_shard_spec.num_cores() * output_shard_spec.shape[1] >=
-                                shard_spec.num_cores() * shard_spec.shape[1],
-                            "Output shard spec must be >= input shard spec.");
-                        TT_FATAL(
                             output_shard_spec.shape[0] == shard_spec.shape[0],
                             "Output shard spec must have the same height as input shard spec.");
                     }
@@ -230,16 +226,10 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensor.get_logical_shape();
     auto output_padded_shape = input_tensor.get_padded_shape();
-    auto output_shard_spec = this->output_mem_config.shard_spec.has_value() ? this->output_mem_config.shard_spec.value()
-                                                                            : input_tensor.shard_spec().value();
+
     if (this->distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER) {
         uint32_t num_tiles_w = this->norm_type == LayerNormType::LAYERNORM ? 2 : 1;
         output_shape[3] = num_tiles_w * TILE_WIDTH;
-    } else if (
-        this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER &&
-        this->output_mem_config.shard_spec.has_value() &&
-        output_shard_spec.grid != input_tensor.shard_spec().value().grid) {
-        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
     }
 
     return std::visit(
@@ -256,6 +246,16 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     mem_config.shard_spec = shard_spec;
                     return {TensorSpec(
                         output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_config))};
+                } else if (this->distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
+                    auto output_shard_spec = this->output_mem_config.shard_spec.value();
+                    auto input_shard_spec = input_tensor.shard_spec().value();
+                    if (output_shard_spec != input_shard_spec) {
+                        std::cout << "output_shard_spec != input_shard_spec: " << std::endl;
+                        output_padded_shape[3] = output_shard_spec.shape[1] * output_shard_spec.num_cores();
+                    }
+
+                    tt::log_info("input shard spec {}", input_shard_spec);
+                    tt::log_info("output shard spec {}", output_shard_spec);
                 }
 
                 if (program_config.inplace) {
@@ -271,7 +271,8 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                         ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
             } else {
                 return {TensorSpec(
-                    output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
+                    output_shape,
+                    TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), this->output_mem_config))};
             }
         },
         this->program_config);

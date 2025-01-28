@@ -73,7 +73,7 @@ run_tg_distributed_op_tests() {
 
   echo "LOG_METAL: Running run_tg_distributed_op_tests"
 
-  pytest -n auto tests/ttnn/distributed/test_distributed_layernorm_TG.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
