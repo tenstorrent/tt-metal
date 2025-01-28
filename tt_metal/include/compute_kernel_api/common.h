@@ -78,5 +78,5 @@ template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((volatile tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
