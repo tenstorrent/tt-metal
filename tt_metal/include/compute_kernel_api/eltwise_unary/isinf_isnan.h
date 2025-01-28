@@ -14,6 +14,7 @@
 #endif
 
 namespace ckernel {
+// clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is infinity.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -22,12 +23,11 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void isinf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isinf<APPROX>(idst))); }
 
 /**
@@ -35,6 +35,7 @@ ALWI void isinf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isinf<AP
  */
 ALWI void isinf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isinf_init<APPROX>())); }
 
+// clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is positive infinity.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -43,12 +44,11 @@ ALWI void isinf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isinf_init<APPRO
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void isposinf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isposinf<APPROX>(idst))); }
 
 /**
@@ -56,6 +56,7 @@ ALWI void isposinf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_ispos
  */
 ALWI void isposinf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isposinf_init<APPROX>())); }
 
+// clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is negative infinity.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -64,12 +65,11 @@ ALWI void isposinf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isposinf_init
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void isneginf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isneginf<APPROX>(idst))); }
 
 /**
@@ -77,6 +77,7 @@ ALWI void isneginf_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isneg
  */
 ALWI void isneginf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isneginf_init<APPROX>())); }
 
+// clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is nan.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -85,12 +86,11 @@ ALWI void isneginf_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isneginf_init
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void isnan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isnan<APPROX>(idst))); }
 
 /**
@@ -98,6 +98,7 @@ ALWI void isnan_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isnan<AP
  */
 ALWI void isnan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isnan_init<APPROX>())); }
 
+// clang-format off
 /**
  * Will store in the output of the compute core True if the input tile is finite
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -106,12 +107,11 @@ ALWI void isnan_tile_init() { MATH((llk_math_eltwise_unary_sfpu_isnan_init<APPRO
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be
- * less than the size of the DST register buffer | True     |
+ * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+ // clang-format on
 ALWI void isfinite_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_isfinite<APPROX>(idst))); }
 
 /**

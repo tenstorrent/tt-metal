@@ -15,16 +15,17 @@
 #endif
 namespace ckernel {
 
+// clang-format off
 /**
  * Perform the init short for copy tile. This does not reconfigure the unpacker data types.
  * Return value: None
  *
- * | Argument       | Description                                       | Type     | Valid Range | Required |
- * |----------------|---------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | cbid           | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31 | False    | | transpose |
- * Flag to perform transpose on SrcA                 | uint32_t |  Any positive value will indicate tranpose is set   |
- * False    |
+ * | Argument    | Description                                       | Type     | Valid Range                                        | Required |
+ * |-------------|---------------------------------------------------|----------|----------------------------------------------------|----------|
+ * | cbid        | The identifier of the input circular buffer (CB)  | uint32_t | 0 to 31                                            | False    | 
+ * | transpose   | Flag to perform transpose on SrcA                 | uint32_t | Any positive value will indicate tranpose is set   | False    |
  */
+ // clang-format on
 ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, false /*transpose within 16x16 face*/, cbid)));
@@ -37,17 +38,17 @@ ALWI void copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
  */
 ALWI void copy_tile_init(uint32_t cbid) { copy_tile_to_dst_init_short(cbid); }
 
+// clang-format off
 /**
  * Return value: None
  *
- * | Argument       | Description                                                       | Type     | Valid Range |
- * Required |
- * |----------------|-------------------------------------------------------------------|----------|-----------------------------------------------------|----------|
- * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31 | True | |
- * new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31 | True     |
- * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t |  Any positive value
- * will indicate tranpose is set   | False    |
+ * | Argument       | Description                                                       | Type     | Valid Range                                       | Required |
+ * |----------------|-------------------------------------------------------------------|----------|---------------------------------------------------|----------|
+ * | old_cbid       | The identifier of the previous input circular buffer (CB) to SrcA | uint32_t | 0 to 31                                           | True     |
+ * | new_cbid       | The identifier of the new input circular buffer (CB) to SrcA      | uint32_t | 0 to 31                                           | True     |
+ * | transpose      | Flag to perform transpose on SrcA                                 | uint32_t | Any positive value will indicate tranpose is set  | False    |
  */
+ // clang-format on
 ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
@@ -56,6 +57,7 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
     copy_tile_to_dst_init_short(new_cbid, transpose);
 }
 
+// clang-format off
 /**
  * Copies a single tile from the specified input CB and writes the result to
  * DST at a specified index. The function will employ unpacker to first unpack into SRC
@@ -69,13 +71,13 @@ ALWI void copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cb
  *
  * Return value: None
  *
- * | Argument       | Description                                       | Data type | Valid range | required |
+ * | Argument       | Description                                       | Data type | Valid range                                         | required |
  * |----------------|---------------------------------------------------|-----------|-----------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the source circular buffer (CB) | uint32_t  | 0 to 31 | Yes      | |
- * in_tile_index  | The index of the tile to copy from the input CB   | uint32_t  | Must be less than the size of the CB
- * | Yes      | | dst_tile_index | The index of the tile in the DST register         | uint32_t  | Must be less than the
- * size of the DST register (16) | Yes      |
+ * | in_cb_id       | The identifier of the source circular buffer (CB) | uint32_t  | 0 to 31                                             | True     |
+ * | in_tile_index  | The index of the tile to copy from the input CB   | uint32_t  | Must be less than the size of the CB                | True     | 
+ * | dst_tile_index | The index of the tile in the DST register         | uint32_t  | Must be less than the size of the DST register (16) | True     |
  * */
+ // clang-format on
 ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index)));
