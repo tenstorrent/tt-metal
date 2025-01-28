@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ namespace ttnn::operations::transformer {
 
 void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_tensors) const {
     tt::log_info("Validating Joint SDPA inputs");
-    TT_ASSERT(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
+    TT_FATAL(input_tensors.size() == 6, "Must have 6 input tensors (Q, K, V, joint_Q, joint_K, joint_V)");
 
     const auto& input_tensor_q = input_tensors.at(0);
     const auto& input_tensor_k = input_tensors.at(1);
@@ -24,12 +24,12 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     const auto& joint_tensor_v = input_tensors.at(5);
 
     // Validate joint strategy is 'rear'
-    TT_ASSERT(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
+    TT_FATAL(this->joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", this->joint_strategy);
 
     // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.get_dtype();
     for (const auto& tensor : input_tensors) {
-        TT_ASSERT(
+        TT_FATAL(
             tensor.get_dtype() == dtype,
             "All tensors must have the same dtype. Expected {}, got {}",
             dtype,
@@ -46,19 +46,19 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
 
     // Validate storage types and buffers
     for (auto& tensor : input_tensors) {
-        TT_ASSERT(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
-        TT_ASSERT(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
-        TT_ASSERT(tensor.get_layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
-        TT_ASSERT(
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
+        TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.get_layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
+        TT_FATAL(
             tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::BFLOAT8_B,
             "Inputs to Joint SDPA must be BF16 or BF8");
-        TT_ASSERT(
+        TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
     }
 
     // Validate input shapes match
-    TT_ASSERT(
+    TT_FATAL(
         k_shape[0] == q_shape[0] && v_shape[0] == q_shape[0],
         "Batch sizes must match. Got Q: {}, K: {}, V: {}",
         q_shape[0],
@@ -66,7 +66,7 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
         v_shape[0]);
 
     // Validate joint input shapes match
-    TT_ASSERT(
+    TT_FATAL(
         joint_k_shape[0] == joint_q_shape[0] && joint_v_shape[0] == joint_q_shape[0],
         "Joint batch sizes must match. Got Q: {}, K: {}, V: {}",
         joint_q_shape[0],
@@ -74,28 +74,28 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
         joint_v_shape[0]);
 
     // Validate Q and joint Q have same batch size and num heads
-    TT_ASSERT(
+    TT_FATAL(
         q_shape[0] == joint_q_shape[0],
         "Q and joint Q must have same batch size. Got Q: {}, joint Q: {}",
         q_shape[0],
         joint_q_shape[0]);
 
     // Validate head dimensions match
-    TT_ASSERT(
+    TT_FATAL(
         k_shape[3] == q_shape[3] && v_shape[3] == q_shape[3],
         "Head dimensions must match. Got Q: {}, K: {}, V: {}",
         q_shape[3],
         k_shape[3],
         v_shape[3]);
 
-    TT_ASSERT(
+    TT_FATAL(
         joint_k_shape[3] == joint_q_shape[3] && joint_v_shape[3] == joint_q_shape[3],
         "Joint head dimensions must match. Got Q: {}, K: {}, V: {}",
         joint_q_shape[3],
         joint_k_shape[3],
         joint_v_shape[3]);
 
-    TT_ASSERT(
+    TT_FATAL(
         q_shape[3] == joint_q_shape[3],
         "Q and joint Q must have same head dimension. Got Q: {}, joint Q: {}",
         q_shape[3],
@@ -107,26 +107,26 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     const auto joint_nqh = joint_q_shape[1];
     const auto joint_nkv = joint_k_shape[1];
 
-    TT_ASSERT(nqh == nkv, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", nqh, nkv);
+    TT_FATAL(nqh == nkv, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", nqh, nkv);
 
-    TT_ASSERT(
+    TT_FATAL(
         joint_nqh == joint_nkv,
         "Joint Q num_heads must be equal to Joint K num_heads. Got Q: {}, K: {}",
         joint_nqh,
         joint_nkv);
-    TT_ASSERT(
+    TT_FATAL(
         joint_nkv == nkv, "Joint K num_heads must be equal to K num_heads. Got Joint K: {}, K: {}", joint_nkv, nkv);
 
     // Validate chunk sizes if program config is provided
     auto q_chunk_size = this->get_q_chunk_size();
     auto k_chunk_size = this->get_k_chunk_size();
 
-    TT_ASSERT(
+    TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
         "q_chunk_size must be divisible by TILE_SIZE. Got q_chunk_size: {}, TILE_SIZE: {}",
         q_chunk_size,
         tt::constants::TILE_WIDTH);
-    TT_ASSERT(
+    TT_FATAL(
         k_chunk_size % tt::constants::TILE_WIDTH == 0,
         "k_chunk_size must be divisible by TILE_SIZE. Got k_chunk_size: {}, TILE_SIZE: {}",
         k_chunk_size,
@@ -136,9 +136,9 @@ void JointScaledDotProductAttention::validate(const std::vector<Tensor>& input_t
     auto validate_padding = [](const Tensor& tensor) {
         auto logical_shape = tensor.get_logical_shape();
         auto padded_shape = tensor.get_padded_shape();
-        TT_ASSERT(logical_shape[0] == padded_shape[0], "Padding is not supported on the batch dimension");
-        TT_ASSERT(logical_shape[1] == padded_shape[1], "Padding is not supported on the num_heads dimension");
-        TT_ASSERT(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");
+        TT_FATAL(logical_shape[0] == padded_shape[0], "Padding is not supported on the batch dimension");
+        TT_FATAL(logical_shape[1] == padded_shape[1], "Padding is not supported on the num_heads dimension");
+        TT_FATAL(logical_shape[3] == padded_shape[3], "Padding is not supported on the head_dim dimension");
     };
 
     for (const auto& tensor : input_tensors) {
