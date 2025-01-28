@@ -45,6 +45,7 @@ void kernel_main() {
         // Read the batch offset 1 page to read
         uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
         noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
+        noc_async_read_barrier();
         cb_push_back(cb_batch_offset_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
         // Always pick 1st value in tensor as batch offset

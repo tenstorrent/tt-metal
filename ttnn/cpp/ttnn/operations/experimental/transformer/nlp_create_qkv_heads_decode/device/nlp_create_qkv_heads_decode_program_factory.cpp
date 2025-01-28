@@ -9,7 +9,7 @@
 #include "tt_metal/host_api.hpp"
 #include "tt_metal/common/constants.hpp"
 #include "tt_metal/detail/util.hpp"
-
+#include <iostream>
 using namespace tt::constants;
 using namespace tt;
 
@@ -27,6 +27,7 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode(
     std::vector<Tensor>& output,
     CoreCoord compute_with_storage_grid_size) {
     bool is_input_sharded = input_tensor.is_sharded();
+    std::cout << "THIS CODE IS EXECUTED !!!" << std::endl;
     if (is_input_sharded) {
         if (input_on_subcoregrids) {
             return multi_core_nlp_create_qkv_heads_decode_sharded_input_subcoregrid(
@@ -401,6 +402,12 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     bool use_batch_offset = batch_offset.has_value();
 
     for (uint32_t i = 0; i < q_num_cores; ++i) {
+        if (i == 0) {
+            std::cout << "q_start_addr: " << q_start_addr << std::endl;
+            if (use_batch_offset) {
+                std::cout << "batch_offset uncached: " << batch_offset.value().buffer()->address() << std::endl;
+            }
+        }
         const auto& core = q_cores_vector[i];
         std::vector<uint32_t> q_reader_runtime_args;
         q_reader_runtime_args.reserve(3 + in_num_cores_x + in_num_cores_y);
@@ -441,8 +448,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
          element_size,
          sub_tile_line_bytes,
          overlap_qk_coregrid,
-         batch_offset,
-         slice_size](
+         //  batch_offset,
+         slice_size,
+         use_batch_offset](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -464,17 +472,45 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             uint32_t q_start_addr = q_base_addr;
 
             uint32_t device_batch_offset = 0;
-            bool use_batch_offset = batch_offset.has_value();
+            // bool use_batch_offset = batch_offset.has_value();
             for (uint32_t i = 0; i < q_num_cores; ++i) {
                 const auto& core = q_cores_vector[i];
                 auto& runtime_args = GetRuntimeArgs(program, q_reader_kernel_id, core);
+                if (i == 0) {
+                    std::cout << "q_start_addr: " << q_start_addr << std::endl;
+                    if (use_batch_offset) {
+                        if (optional_input_tensors.size() > 0 && optional_input_tensors.at(0).has_value()) {
+                            std::cout << "batch_offset cached: "
+                                      << optional_input_tensors.at(0).value().buffer()->address() << std::endl;
+                        } else {
+                            if (optional_input_tensors.size() == 0) {
+                                std::cout << "optional_input_tensors size is 0" << std::endl;
+                            } else {
+                                std::cout << "optional_input_tensors size is: " << optional_input_tensors.size()
+                                          << std::endl;
+                                std::cout << "optional input tensor has no values" << std::endl;
+                            }
+                        }
+                        std::cout << "batch_offset cached: " << optional_input_tensors.at(0).value().buffer()->address()
+                                  << std::endl;
+                    }
+                    // if (batch_offset.has_value()){
+                    //     std::cout << "batch_offset cached: " << batch_offset.value().buffer()->address() <<
+                    //     std::endl;
+                    // }else{
+                    //     std::cout << "batch_offset has no value" << std::endl;
+                    // }
+                }
                 runtime_args[0] = q_start_addr;
-                runtime_args[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                runtime_args[1] = use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+                // runtime_args[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
                 runtime_args[2] = i;
 
                 auto& runtime_args_writer = GetRuntimeArgs(program, q_writer_kernel_id, core);
                 runtime_args_writer[0] = q_start_addr;
-                runtime_args_writer[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                runtime_args_writer[1] =
+                    use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+                // runtime_args_writer[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
                 runtime_args_writer[2] = i;
             }
 
@@ -483,12 +519,15 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
                     const auto& core = k_cores_vector[i];
                     auto& runtime_args = GetRuntimeArgs(program, k_reader_kernel_id, core);
                     runtime_args[0] = q_start_addr;
-                    runtime_args[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                    // runtime_args[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                    runtime_args[1] = use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
                     runtime_args[2] = i;
 
                     auto& runtime_args_writer = GetRuntimeArgs(program, k_writer_kernel_id, core);
                     runtime_args_writer[0] = q_start_addr;
-                    runtime_args_writer[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                    // runtime_args_writer[1] = use_batch_offset ? batch_offset.value().buffer()->address() : 0;
+                    runtime_args_writer[1] =
+                        use_batch_offset ? optional_input_tensors.at(0).value().buffer()->address() : 0;
                     runtime_args_writer[2] = i;
                 }
             }
