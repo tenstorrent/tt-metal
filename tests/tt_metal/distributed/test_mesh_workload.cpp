@@ -451,8 +451,8 @@ void verify_cb_config(
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
     for (const auto& device_range : workload.get_logical_device_ranges()) {
-        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x; logical_x++) {
-            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
+        for (std::size_t logical_x = device_range.start_coord.x; logical_x <= device_range.end_coord.x; logical_x++) {
+            for (std::size_t logical_y = device_range.start_coord.y; logical_y <= device_range.end_coord.y;
                  logical_y++) {
                 auto device = mesh_device->get_device(logical_y, logical_x);
                 uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
