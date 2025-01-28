@@ -787,6 +787,7 @@ def test_slice_adversarial_flexible(input_shape, input_start, input_ends, input_
     else:
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+
     if len(input_shape) == 5:
         torch_output = torch_input[
             input_start[0] : input_ends[0] : input_stride[0],
