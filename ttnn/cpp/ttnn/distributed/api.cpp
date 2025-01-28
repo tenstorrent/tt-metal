@@ -261,7 +261,7 @@ Tensor create_multi_device_tensor(
             specs.insert({device_id, tensor.get_tensor_spec()});
         }
         return Tensor{
-            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs},
+            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs, /*mesh_buffer_=*/nullptr},
             TensorSpec(
                 tensors.at(0).get_logical_shape(),
                 TensorLayout::fromPaddedShape(

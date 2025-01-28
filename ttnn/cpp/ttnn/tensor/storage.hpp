@@ -226,6 +226,7 @@ struct MultiDeviceStorage {
 
     // TODO: #17215 - This isn't populated by default. Switch to creating MeshBuffer backed storage, when TTNN is ready
     // to consume it.
+    // Eventually, `MultiDeviceStorage` will be renamed to `MeshDeviceStorage`, and unified with `DeviceStorage`.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
@@ -238,6 +239,7 @@ struct MultiDeviceStorage {
         swap(first.ordered_device_ids, second.ordered_device_ids);
         swap(first.buffers, second.buffers);
         swap(first.specs, second.specs);
+        swap(first.mesh_buffer, second.mesh_buffer);
     }
 
     MultiDeviceStorage(
@@ -260,6 +262,7 @@ struct MultiDeviceStorage {
         strategy = other.strategy;
         buffers = other.buffers;
         specs = other.specs;
+        mesh_buffer = other.mesh_buffer;
     }
 
     MultiDeviceStorage& operator=(const MultiDeviceStorage& other) {
@@ -275,7 +278,7 @@ struct MultiDeviceStorage {
 
     bool operator==(const MultiDeviceStorage& other) {
         return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and
-               this->buffers == other.buffers and this->specs == other.specs;
+               this->buffers == other.buffers and this->specs == other.specs and this->mesh_buffer == other.mesh_buffer;
     }
 
     MemoryConfig memory_config() const {
