@@ -26,6 +26,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
+inline bool InMainThread() { return not InWorkerThread(); }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool

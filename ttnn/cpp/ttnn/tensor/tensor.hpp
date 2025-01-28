@@ -36,7 +36,8 @@ namespace distributed {
 class MeshDevice;
 }
 
-struct Tensor {
+class Tensor {
+public:
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         TensorSpec tensor_spec;
@@ -81,7 +82,6 @@ struct Tensor {
 
     // Tensor gets worker queue handle through the device
     std::vector<IDevice*> workers = {};
-    bool deallocate_through_destructor = false;
 
     // ======================================================================================
     //                                  Hi Level APIs
@@ -123,7 +123,6 @@ struct Tensor {
             perform_cleanup_for_async_mode();
             this->workers = std::move(other.workers);
             this->tensor_attributes = std::move(other.tensor_attributes);
-            this->deallocate_through_destructor = std::move(other.deallocate_through_destructor);
         }
         return *this;
     }
@@ -302,7 +301,7 @@ struct Tensor {
             storage_type);
         return std::get<DeviceStorage>(this->get_storage()).get_buffer().get();
     }
-    DeviceBuffer device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
+    std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     IDevice* device() const {
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
@@ -351,6 +350,7 @@ struct Tensor {
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);
+    void deallocate_impl(bool force, bool deallocation_through_destructor);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
@@ -399,6 +399,10 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
 Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDevice*>& devices);
+
+// Allocates a tensor on a mesh device through mesh buffer.
+Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
