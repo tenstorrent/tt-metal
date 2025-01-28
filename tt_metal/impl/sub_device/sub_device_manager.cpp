@@ -61,10 +61,10 @@ SubDeviceManager::~SubDeviceManager() {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator) {
             // Clear the bank managers, this makes subsequent buffer deallocations fast
-            allocator::clear(*allocator);
+            allocator->clear();
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
-            const auto& allocated_buffers = allocator::get_allocated_buffers(*allocator);
+            const auto& allocated_buffers = allocator->get_allocated_buffers();
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
             }
@@ -136,7 +136,7 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
-        if (allocator && allocator->allocated_buffers.size() > 0) {
+        if (allocator && allocator->get_allocated_buffers().size() > 0) {
             return true;
         }
     }
@@ -237,7 +237,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->get_initialized_allocator()->config;
+    const auto& global_allocator_config = device_->get_initialized_allocator()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned

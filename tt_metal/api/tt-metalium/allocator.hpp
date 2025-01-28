@@ -27,7 +27,6 @@ class Buffer;
 
 // Fwd declares
 enum class BufferType;
-struct Allocator;
 
 namespace allocator {
 
@@ -98,86 +97,75 @@ private:
     void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
 };
 
-DeviceAddr get_unreserved_base_address(const Allocator& allocator, const HalMemType& mem_type);
-
-// Functions used to initiate allocator and allocate buffers
-void init_one_bank_per_channel(Allocator& allocator, const AllocatorConfig& alloc_config);
-
-void init_one_bank_per_l1(Allocator& allocator, const AllocatorConfig& alloc_config);
-
-uint32_t num_banks(const Allocator& allocator, const BufferType& buffer_type);
-
-DeviceAddr bank_size(const Allocator& allocator, const BufferType& buffer_type);
-
-uint32_t dram_channel_from_bank_id(const Allocator& allocator, uint32_t bank_id);
-
-CoreCoord logical_core_from_bank_id(const Allocator& allocator, uint32_t bank_id);
-
-int32_t bank_offset(const Allocator& allocator, BufferType buffer_type, uint32_t bank_id);
-
-const std::vector<uint32_t>& bank_ids_from_dram_channel(const Allocator& allocator, uint32_t dram_channel);
-
-const std::vector<uint32_t>& bank_ids_from_logical_core(
-    const Allocator& allocator, BufferType buffer_type, const CoreCoord& logical_core);
-
-Statistics get_statistics(const Allocator& allocator, const BufferType& buffer_type);
-
-void dump_memory_blocks(const Allocator& allocator, const BufferType& buffer_type, std::ofstream& out);
-
-MemoryBlockTable get_memory_block_table(const Allocator& allocator, const BufferType& buffer_type);
-
-std::optional<DeviceAddr> lowest_occupied_l1_address(const Allocator& allocator, uint32_t bank_id);
-
-DeviceAddr base_alloc(
-    const AllocatorConfig& config,
-    BankManager& bank_manager,
-    DeviceAddr size,
-    DeviceAddr page_size,
-    bool bottom_up,
-    std::optional<uint32_t> num_shards);
-
-void shrink_allocator_size(
-    Allocator& allocator, const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
-void reset_allocator_size(Allocator& allocator, const BufferType& buffer_type);
-
-DeviceAddr allocate_buffer(Allocator& allocator, Buffer* buffer);
-
-void mark_allocations_unsafe(Allocator& allocator);
-
-void mark_allocations_safe(Allocator& allocator);
-
-void deallocate_buffer(Allocator& allocator, Buffer* buffer);
-void deallocate_buffers(Allocator& allocator);
-
-const std::unordered_set<Buffer*>& get_allocated_buffers(const Allocator& allocator);
-
-void clear(Allocator& allocatator);
-
 }  // namespace allocator
 
-struct Allocator {
-    Allocator(const AllocatorConfig& alloc_config, const allocator::AllocDescriptor& alloc_descriptor);
+class Allocator {
+public:
+    Allocator(const AllocatorConfig& alloc_config);
+
+    ~Allocator();
+
+    DeviceAddr allocate_buffer(Buffer* buffer);
+
+    void deallocate_buffer(Buffer* buffer);
+    void deallocate_buffers();
+
+    const std::unordered_set<Buffer*>& get_allocated_buffers() const;
+
+    uint32_t get_num_banks(const BufferType& buffer_type) const;
+    DeviceAddr get_bank_size(const BufferType& buffer_type) const;
+
+    uint32_t get_dram_channel_from_bank_id(uint32_t bank_id) const;
+    CoreCoord get_logical_core_from_bank_id(uint32_t bank_id) const;
+
+    int32_t get_bank_offset(BufferType buffer_type, uint32_t bank_id) const;
+
+    const std::vector<uint32_t>& get_bank_ids_from_dram_channel(uint32_t dram_channel) const;
+    const std::vector<uint32_t>& get_bank_ids_from_logical_core(
+        BufferType buffer_type, const CoreCoord& logical_core) const;
+
+    DeviceAddr get_unreserved_base_address(const HalMemType& mem_type) const;
+
+    const AllocatorConfig& get_config() const;
+
+    allocator::Statistics get_statistics(const BufferType& buffer_type) const;
+    MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
+    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const;
+
+    std::optional<DeviceAddr> get_lowest_occupied_l1_address(uint32_t bank_id) const;
+
+    void shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up = true);
+    void reset_allocator_size(const BufferType& buffer_type);
+
+    void mark_allocations_unsafe();
+    void mark_allocations_safe();
+
+    void clear();
+
+protected:
+    // Initializers for mapping banks to DRAM channels / L1 banks
+    void init_one_bank_per_channel();
+    void init_one_bank_per_l1();
+    void init_compute_and_storage_l1_bank_manager();
+
+private:
+    void verify_safe_allocation() const;
+
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
-    bool allocations_unsafe = false;
-    allocator::BankManager dram_manager;
-    allocator::BankManager l1_manager;
-    allocator::BankManager l1_small_manager;
-    allocator::BankManager trace_buffer_manager;
-    // TODO: Track lowest l1 addresses!
+    bool allocations_unsafe_ = false;
+    allocator::BankManager dram_manager_;
+    allocator::BankManager l1_manager_;
+    allocator::BankManager l1_small_manager_;
+    allocator::BankManager trace_buffer_manager_;
 
-    std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel;
-    std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids;
-    std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core;
-    std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids;
-    std::unordered_set<Buffer*> allocated_buffers;
+    std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel_;
+    std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids_;
+    std::unordered_map<uint32_t, CoreCoord> bank_id_to_logical_core_;
+    std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
+    std::unordered_set<Buffer*> allocated_buffers_;
 
-    AllocatorConfig config;
-    // Callbacks to invoke during initialization and allocation
-    allocator::AllocDescriptor descriptor;
-
-    void reset();
-    ~Allocator();
+    AllocatorConfig config_;
 };
 
 }  // namespace tt_metal
