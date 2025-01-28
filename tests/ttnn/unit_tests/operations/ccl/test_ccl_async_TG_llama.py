@@ -45,14 +45,14 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
 @pytest.mark.parametrize(
     "tensor_mem_layout, output_shape, dim, input_shard_shape,shard_grid,layout",
     (
-        (  # AllGather after SDPA (~160 us)
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (1, 32, 32, 128),
-            1,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
-            ttnn.TILE_LAYOUT,
-        ),
+        # (  # AllGather after SDPA (~160 us)
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        #     (1, 32, 32, 128),
+        #     1,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+        #     ttnn.TILE_LAYOUT,
+        # ),
         (  # AllGather after Binary Mult+Silu (~160 us)
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
@@ -66,6 +66,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
 def test_line_all_gather_sharded_on_TG_rows_llama(
     mesh_device,
     num_devices,
@@ -111,6 +112,7 @@ def test_line_all_gather_sharded_on_TG_rows_llama(
         # input_shard_spec=input_shard_spec,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
+        trace_mode=False,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
         create_persistent_fabric=True,

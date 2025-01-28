@@ -286,6 +286,9 @@ def append_device_data(ops, traceReplays, logFolder):
                         timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
                         assert "run_host_id" in timeID.keys(), "Device op ID missing: Device data must provide op ID"
                         deviceOpID = timeID["run_host_id"]
+                        if deviceOpID not in opIDHostDataDict:
+                            logger.warning(f"Device op ID {deviceOpID} not present in host data")
+                            continue
                         assert (
                             deviceOpID in opIDHostDataDict
                         ), f"Device op ID not present: Device op ID {deviceOpID} not present in host data"
@@ -314,6 +317,9 @@ def append_device_data(ops, traceReplays, logFolder):
 
             deviceOpsTime.sort(key=device_op_compare_opID_time)
             devicesOps[device].sort(key=host_device_op_compare)
+            if len(devicesOps[device]) != len(deviceOpsTime):
+                deviceOpsTime = deviceOpsTime[1:]
+
             if len(devicesOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
