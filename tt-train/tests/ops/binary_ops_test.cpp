@@ -42,7 +42,7 @@ TEST_F(BinaryOpsTest, TensorAdd_Broadcasted) {
 
 TEST_F(BinaryOpsTest, TensorMul_Eltwise) {
     xt::xarray<float> a = {{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}};
-    xt::xarray<float> b = {{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}};
+    xt::xarray<float> b = {{5.F, 6.F, 7.F, 8.F, 9.F, 10.F, 11.F, 12.F}};
 
     auto a_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device()));
     auto b_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(b, &ttml::autograd::ctx().get_device()));
@@ -50,9 +50,20 @@ TEST_F(BinaryOpsTest, TensorMul_Eltwise) {
     auto result = ttml::ops::mul(a_tensor, b_tensor);
     auto result_xarray = ttml::core::to_xtensor(result->get_value());
 
-    auto expected_result = xt::xarray<float>{{1.F, 4.F, 9.F, 16.F, 1.F, 4.F, 9.F, 16.F}};
+    auto expected_result = xt::xarray<float>{{5.F, 12.F, 21.F, 32.F, 9.F, 20.F, 33.F, 48.F}};
 
     EXPECT_TRUE(xt::allclose(result_xarray, expected_result));
+
+    result->backward();
+
+    auto expected_a_grad = b;
+    auto expected_b_grad = a;
+
+    auto a_grad = ttml::core::to_xtensor(a_tensor->get_grad());
+    auto b_grad = ttml::core::to_xtensor(b_tensor->get_grad());
+
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad));
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
 }
 
 TEST_F(BinaryOpsTest, TensorDivByFloat) {
