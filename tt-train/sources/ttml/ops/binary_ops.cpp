@@ -103,6 +103,42 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
         auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
 
+        auto clamp_to_rank = [](const ttnn::Tensor& tensor, size_t rank) {
+            auto tensor_rank = tensor.shape().rank();
+            if (tensor_rank == rank) {
+                return tensor;
+            } else if (tensor_rank > rank) {
+                return ttml::core::squeeze_to_rank(tensor, rank);
+            } else {
+                return ttml::core::unsqueeze_to_rank(tensor, rank);
+            }
+        };
+
+        auto logical_suffixes_match = [](const ttnn::Tensor& a, const ttnn::Tensor& b) {
+            auto a_shape = a.get_logical_shape();
+            auto b_shape = b.get_logical_shape();
+
+            auto suffix_len = std::min(a_shape.size(), b_shape.size());
+            for (auto i = -1; i >= -suffix_len; i--) {
+                if (a_shape[i] != b_shape[i]) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        if (a->get_value().shape().rank() != a_grad.shape().rank()) {
+            if (logical_suffixes_match(a->get_value(), a_grad)) {
+                a_grad = clamp_to_rank(a_grad, a->get_value().shape().rank());
+            }
+        }
+
+        if (b->get_value().shape().rank() != b_grad.shape().rank()) {
+            if (logical_suffixes_match(b->get_value(), b_grad)) {
+                b_grad = clamp_to_rank(b_grad, b->get_value().shape().rank());
+            }
+        }
+
         a->add_grad(a_grad);
         b->add_grad(b_grad);
     };
