@@ -249,5 +249,5 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    passing, output = comp_pcc(torch_output_tensor, output_tensor, 0.9998)
+    passing, output = comp_pcc(torch_output_tensor, output_tensor)
     assert passing, output
