@@ -8,6 +8,9 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
     run_all_gather_impl,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_async import (
+    run_reduce_scatter_test,
+)
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
@@ -145,4 +148,74 @@ def test_all_gather_async_tg(
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
         trace_mode=True,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape, dim, layout",
+    [
+        ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
+        # ([1, 1, 128, 128], 0, ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        # ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [False])
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
+def test_reduce_scatter_async_t3000(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    dim,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    trace_mode,
+    num_iters=20,
+):
+    run_reduce_scatter_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        dim,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        topology=ttnn.Topology.Linear,
+        trace_mode=trace_mode,
     )
