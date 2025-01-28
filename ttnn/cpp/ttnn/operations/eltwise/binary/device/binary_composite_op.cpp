@@ -19,6 +19,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::binary {
 
@@ -491,8 +492,8 @@ Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optiona
  *   by running reshape.
  */
 Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const ttnn::SimpleShape s_a = input_a.padded_shape();
-    const ttnn::SimpleShape s_b = input_b.padded_shape();
+    const ttnn::SimpleShape s_a = input_a.get_logical_shape();
+    const ttnn::SimpleShape s_b = input_b.get_logical_shape();
     auto num_ones = [](const ttnn::SimpleShape& s) -> uint32_t {
         uint32_t num1s = 0;
         for (uint32_t idx = 0; idx < 4; idx++) {
@@ -512,10 +513,10 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     Tensor b_slim = input_b;
 
     if (!skip_reshape_a) {
-        a_slim = ttnn::reshape(input_a, ttnn::SimpleShape{std::array<uint32_t, 4>{1, 1, input_a.volume(), 1}});
+        a_slim = ttnn::experimental::view(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, input_a.volume(), 1}});
     }
     if (!skip_reshape_b) {
-        b_slim = ttnn::reshape(input_b, ttnn::SimpleShape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
+        b_slim = ttnn::experimental::view(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, input_b.volume()}});
     }
     a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
     b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
