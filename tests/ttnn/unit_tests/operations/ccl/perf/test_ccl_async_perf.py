@@ -59,6 +59,7 @@ def test_all_gather_async_t3000(
     function_level_defaults,
     enable_async,
 ):
+    output_shape[dim] *= num_devices
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
