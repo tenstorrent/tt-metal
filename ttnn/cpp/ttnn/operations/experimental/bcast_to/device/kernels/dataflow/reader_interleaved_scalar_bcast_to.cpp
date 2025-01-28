@@ -40,13 +40,14 @@ void kernel_main() {
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
+            // DPRINT << "broadcast_to reader scalar start, number of tile read " << num_tiles_read << ENDL();
             cb_reserve_back(cb_id_src, onetile);
             uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
             noc_async_read_tile(tile_offset, src, l1_write_addr_src);
             noc_async_read_barrier();
             fill_tile_with_first_element_bfloat16(cb_id_src);
             cb_push_back(cb_id_src, onetile);
-
+            // DPRINT << "broadcast_to reader scalar end, number of tile read " << num_tiles_read + 1 << ENDL();
             num_tiles_read += HtWt - start_t;
             tile_offset += c_stride;
         }

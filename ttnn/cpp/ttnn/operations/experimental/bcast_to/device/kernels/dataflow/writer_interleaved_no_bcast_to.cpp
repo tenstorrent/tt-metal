@@ -37,19 +37,21 @@ void kernel_main() {
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
-    // DPRINT << "broadcast_to writer number of tile " << num_tiles << ENDL();
     uint32_t num_tiles_written = 0;
+
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
-                // DPRINT << "broadcast_to writer start, number of tile written " << num_tiles_written << ENDL();
-                //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
+                // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
+                // DPRINT << "broadcast_to writer no_change start, number of tile written" << num_tiles_written <<
+                // ENDL();
                 cb_wait_front(cb_id_dst, onetile);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
                 noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_dst, onetile);
-                DPRINT << "broadcast_to writer start, number of tile written " << num_tiles_written + 1 << ENDL();
+                // DPRINT << "broadcast_to writer no_change end, number of tile written " << num_tiles_written + 1
+                //<< ENDL();
             }
         }
     }
