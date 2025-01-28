@@ -77,4 +77,10 @@ TEST_F(BinaryOpsTest, TensorDivByFloat) {
     auto expected_result = xt::xarray<float>{{0.5F, 1.F, 1.5F, 2.F, 0.5F, 1.F, 1.5F, 2.F}};
 
     EXPECT_TRUE(xt::allclose(result_xarray, expected_result));
+
+    result->backward();
+
+    auto expected_a_grad = xt::xarray<float>{{0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F, 0.5F}};
+    auto a_grad = ttml::core::to_xtensor(a_tensor->get_grad());
+    EXPECT_TRUE(xt::allclose(a_grad, expected_a_grad));
 }
