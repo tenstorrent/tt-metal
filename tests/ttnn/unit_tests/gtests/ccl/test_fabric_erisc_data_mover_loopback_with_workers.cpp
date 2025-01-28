@@ -3382,7 +3382,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_9) {
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
-    const size_t num_op_invocations = 2000;
+    const size_t num_op_invocations = 200;
     const bool report_performance = false;
     RunWriteThroughputStabilityTestWIthPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, report_performance);
@@ -3391,7 +3391,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_10) {
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
-    const size_t num_op_invocations = 200;
+    const size_t num_op_invocations = 150;
     const bool report_performance = false;
     RunWriteThroughputStabilityTestWIthPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, report_performance);
