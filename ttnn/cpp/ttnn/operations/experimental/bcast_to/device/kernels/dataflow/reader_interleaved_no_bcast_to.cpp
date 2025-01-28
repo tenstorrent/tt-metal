@@ -44,13 +44,13 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
-                // DPRINT << "broadcast_to reader start, number of tile read " << num_tiles_read << ENDL();
+                // DPRINT << "broadcast_to reader no_change start, number of tile read " << num_tiles_read << ENDL();
                 cb_reserve_back(cb_id_src, onetile);
                 uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
                 noc_async_read_tile(tile_offset, src, l1_write_addr_src);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_src, onetile);
-                DPRINT << "broadcast_to reader end, number of tile read " << num_tiles_read + 1 << ENDL();
+                // DPRINT << "broadcast_to reader no_change end, number of tile read " << num_tiles_read + 1 << ENDL();
             }
             tile_offset += next_channel_shift;
         }
