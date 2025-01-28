@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include "slice_op.hpp"
 using namespace tt::constants;
@@ -59,13 +60,24 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    uint32_t unpadded_row_size_bytes_offset = (output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ||
-                                               input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM)
-                                                  ? tt::round_up(unpadded_row_size_bytes, TILE_WIDTH)
-                                                  : tt::round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
+    using namespace tt::tt_metal::experimental;
+    auto SRC_BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
+    auto DST_BUFFER_ALIGNMENT = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
+    auto ALIGNMENT = std::max(SRC_BUFFER_ALIGNMENT, DST_BUFFER_ALIGNMENT);
+    uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
+    uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
 
+    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
+    uint32_t start_addr = input_tensor.buffer()->address();
+    if (misalignment == 0) {
+        start_addr += begins_bytes;
+    }
     std::vector<uint32_t> common_reader_kernel_args = {
-        input_tensor.buffer()->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        start_addr,
         padded_row_size_bytes,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
@@ -172,7 +184,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram};
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     uint32_t src_stick_size = padded_row_size_bytes;
@@ -180,8 +191,20 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     uint32_t src0_cb_index = 0;
     uint32_t max_read_size = 4096;
-    uint32_t cb_page_size = (dst_is_dram || src0_is_dram) ? tt::round_up(unpadded_row_size_bytes, TILE_WIDTH)
-                                                          : tt::round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
+
+    using namespace tt::tt_metal::experimental;
+    auto SRC_BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
+                                                                                            : hal::get_l1_alignment();
+    auto DST_BUFFER_ALIGNMENT = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                    ? hal::get_dram_alignment()
+                                    : hal::get_l1_alignment();
+    auto ALIGNMENT = std::max(SRC_BUFFER_ALIGNMENT, DST_BUFFER_ALIGNMENT);
+
+    // if begins is not aligned then we need to pad the cb size, so that we can read from the nearest aligned address
+    uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
+    uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
+
+    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, ALIGNMENT) + misalignment;
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
@@ -199,6 +222,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
 
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
