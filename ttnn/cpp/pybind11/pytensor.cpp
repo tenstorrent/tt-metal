@@ -145,7 +145,7 @@ Tensor create_tt_tensor_from_py_data(
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
-            return create_typed_tt_tensor_from_py_data<bfloat16>(
+            return create_typed_tt_tensor_from_py_data<float>(
                 py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::INVALID: {

@@ -599,12 +599,8 @@ Tensor Tensor::from_span<float>(
             return create_owned_tensor_from_row_major_data(
                 std::vector<float>(buffer.begin(), buffer.end()), spec, device);
         case DataType::BFLOAT16: {
-            std::vector<bfloat16> bfloat16_data;
-            bfloat16_data.reserve(buffer.size());
-            std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
-                return bfloat16(value);
-            });
-            return create_owned_tensor_from_row_major_data(std::move(bfloat16_data), spec, device);
+            return create_owned_tensor_from_row_major_data(
+                std::vector<bfloat16>(buffer.begin(), buffer.end()), spec, device);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
