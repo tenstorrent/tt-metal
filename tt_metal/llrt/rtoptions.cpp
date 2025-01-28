@@ -128,6 +128,11 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     this->enable_hw_cache_invalidation = (std::getenv("TT_METAL_ENABLE_HW_CACHE_INVALIDATION") != nullptr);
+
+    if (std::getenv("TT_METAL_SIMULATOR")) {
+        this->simulator_enabled = true;
+        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() {

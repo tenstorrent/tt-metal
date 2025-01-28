@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dispatch_core_manager.hpp"
+#include "dispatch_core_manager.hpp"       // For DispatchCoreConfig
 #include "umd/device/tt_soc_descriptor.h"  // For CoreType
 
 namespace tt {
@@ -132,6 +132,9 @@ class RunTimeOptions {
     tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
 
     bool skip_deleting_built_cache = false;
+
+    bool simulator_enabled = false;
+    std::filesystem::path simulator_path = "";
 
     RunTimeOptions();
 
@@ -306,6 +309,9 @@ public:
     inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
+
+    inline bool get_simulator_enabled() { return simulator_enabled; }
+    inline const std::filesystem::path& get_simulator_path() { return simulator_path; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

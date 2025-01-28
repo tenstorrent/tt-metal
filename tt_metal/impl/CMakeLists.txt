@@ -22,6 +22,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
