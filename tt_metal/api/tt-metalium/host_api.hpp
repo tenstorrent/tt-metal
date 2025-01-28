@@ -12,6 +12,7 @@
 #include "device.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
+#include "lightmetal_binary.hpp"
 
 /** @file */
 
@@ -882,6 +883,27 @@ void ReleaseTrace(IDevice* device, const uint32_t tid);
  */
 // clang-format on
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
+
+// clang-format off
+/**
+ * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
+ * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
+ * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: void
+ */
+// clang-format on
+void LightMetalBeginCapture();
+
+// clang-format off
+/**
+ * Ends Light Metal Binary capturing on host and all devices returns the binary blob to the user.
+ * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: LightMetalBinary
+ */
+// clang-format on
+LightMetalBinary LightMetalEndCapture();
 
 // clang-format off
 /**
