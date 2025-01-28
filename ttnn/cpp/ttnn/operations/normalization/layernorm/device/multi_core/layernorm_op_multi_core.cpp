@@ -479,7 +479,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     bool is_post_all_gather = distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER;
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
-    bool skip_write_back = output.shard_spec().value().grid == a.shard_spec().value().grid;
+    bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
@@ -1641,7 +1641,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
 
         std::vector<uint32_t> write_back_writer_args;
 
-        if (is_post_all_gather && !skip_write_back) {
+        if (is_post_all_gather) {
             uint32_t num_storage_cores = all_storage_cores.num_cores();
 
             write_back_writer_args.push_back(

@@ -473,8 +473,9 @@ def test_post_allgather_layernorm(
     "core_grid, grid_offset, output_core_grid",
     [
         ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
-        # ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
-        # ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
+        ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
+        ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
+        ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
     ],
 )
 def test_simulated_distributed_layernorm(
