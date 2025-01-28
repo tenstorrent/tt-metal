@@ -17,7 +17,7 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <tt_cluster.hpp>
 
 #include <core_coord.hpp>

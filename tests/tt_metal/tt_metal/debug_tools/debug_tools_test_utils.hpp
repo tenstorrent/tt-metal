@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
 inline bool OpenFile(string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {

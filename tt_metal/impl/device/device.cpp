@@ -18,7 +18,7 @@
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <utils.hpp>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <dev_msgs.h>
 #include <device_pool.hpp>
 #include <persistent_kernel_cache.hpp>
