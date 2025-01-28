@@ -57,9 +57,6 @@ using tt::tt_metal::SimpleShape;
 #if TTNN_WITH_PYTHON_BINDINGS
 namespace PYBIND11_NAMESPACE {
 namespace detail {
-
-namespace py = pybind11;
-
 template <>
 class type_caster<ttnn::SimpleShape> {
 public:
