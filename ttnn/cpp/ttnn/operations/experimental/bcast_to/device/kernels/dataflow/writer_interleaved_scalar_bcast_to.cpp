@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/bcast_to/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -20,7 +19,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_id_dst = tt::CBIndex::c_0;
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
 
@@ -38,16 +37,22 @@ void kernel_main() {
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
     uint32_t num_tiles_written = 0;
+
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
+            cb_wait_front(cb_id_dst, onetile);
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                cb_wait_front(cb_id_dst, onetile);
+                // DPRINT << "broadcast_to writer scalar start, number of tile written " << num_tiles_written << ENDL();
+
                 uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
                 noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
                 noc_async_write_barrier();
-                cb_pop_front(cb_id_dst, onetile);
+
+                // DPRINT << "broadcast_to writer scalar end, number of tile written " << num_tiles_written + 1 <<
+                // ENDL();
             }
+            cb_pop_front(cb_id_dst, onetile);
             tile_offset += c_stride;
         }
         tile_offset += next_batch_shift;

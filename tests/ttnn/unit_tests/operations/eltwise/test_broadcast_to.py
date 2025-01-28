@@ -13,8 +13,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from functools import reduce
 
 dtypes = [torch.bfloat16]
-shapes = [(1, 1, 64, 64), (1, 1, 64, 1), (1, 1, 1, 64), (1, 1, 1, 1), (1, 1, 64, 64), (1, 1, 64, 64)]
-broadcast_specs = [(1, 1, 64, 64), (1, 1, 64, 64), (1, 1, 64, 64), (1, 1, 64, 64), (1, 3, 64, 64), (3, 1, 64, 64)]
+shapes = [(1, 1, 64, 64 * 320), (1, 1, 64, 1), (1, 1, 1, 64), (1, 1, 1, 1), (1, 1, 64, 64), (1, 1, 64, 64)]
+broadcast_specs = [
+    (1, 1, 64, 64 * 320),
+    (1, 1, 64, 64 * 160),
+    (1, 1, 64 * 160, 64),
+    (1, 1, 640, 640),
+    (1, 320, 64, 64),
+    (320, 1, 64, 64),
+]
 
 
 shape_and_broadcast_specs = list(zip(shapes, broadcast_specs))

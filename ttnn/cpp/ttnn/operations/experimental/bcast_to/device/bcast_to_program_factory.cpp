@@ -85,7 +85,16 @@ void set_or_update_runtime_arguments(
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         std::array writer_runtime_args = {
-            output.buffer()->address(), start_tile_id, num_tiles_per_core, oHtWt, oN, oC, oHt, oWt, 0u, 0u};
+            output.buffer()->address(),
+            start_tile_id,
+            num_tiles_per_core,
+            oHtWt,
+            iHt * iWt * iC * (iN > 1),
+            iHt * iWt * (iC > 1),
+            oN,
+            oC,
+            oHt,
+            oWt};
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         start_tile_id += num_tiles_per_core;

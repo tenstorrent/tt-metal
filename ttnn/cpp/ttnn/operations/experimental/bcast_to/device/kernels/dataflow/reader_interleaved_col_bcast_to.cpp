@@ -42,17 +42,20 @@ void kernel_main() {
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
     uint32_t num_tiles_read = 0;
+    // DPRINT << "broadcast_to reader col total number of tile " << num_tiles << ENDL();
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
+                // DPRINT << "broadcast_to reader col start, number of tile read " << num_tiles_read << ENDL();
                 cb_reserve_back(cb_id_src, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_src);
                 noc_async_read_tile(tile_offset + th, src, l1_write_addr);
                 noc_async_read_barrier();
                 fill_tile_with_first_column_bfloat16(cb_id_src);
                 cb_push_back(cb_id_src, onetile);
-
+                // DPRINT << "broadcast_to reader col end, number of tile read " << num_tiles_read + 1 << ENDL();
                 num_tiles_read += Wt - start_tw;
+                // DPRINT << "broadcast_to reader col end, number of tile read " << num_tiles_read << ENDL();
             }
             tile_offset += c_stride;
         }
