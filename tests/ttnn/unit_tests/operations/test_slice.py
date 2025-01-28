@@ -774,19 +774,32 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
 
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends, input_stride",
-    (([3234, 4], [0, 2], [3234, 4], [1, 1]),),
+    (
+        ([3234, 4], [0, 2], [3234, 4], [1, 1]),
+        ([196, 196, 2], [0, 0, 1], [196, 196, 2], [1, 1, 1]),
+    ),
 )
 @pytest.mark.parametrize(
     "layout",
     (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
 )
-def test_slice_adversarial_flexible(input_shape, input_start, input_ends, input_stride, layout, device):
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_slice_adversarial_flexible(
+    input_shape, input_start, input_ends, input_stride, layout, input_memory_config, device
+):
     if layout == ttnn.TILE_LAYOUT:
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+        )
     else:
         torch_input = torch.randn(input_shape, dtype=torch.float32)
-        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+        ttnn_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+        )
 
     if len(input_shape) == 5:
         torch_output = torch_input[

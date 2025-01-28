@@ -204,7 +204,10 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     uint32_t begins_bytes = output_tensor_start[-1] * a.element_size();
     uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
 
-    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, ALIGNMENT) + misalignment;
+    if (misalignment != 0) {
+        ALIGNMENT *= 2;
+    }
+    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
