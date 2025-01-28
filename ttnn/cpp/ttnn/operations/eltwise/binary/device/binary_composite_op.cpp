@@ -19,6 +19,7 @@
 #include "ttnn/operations/creation.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 namespace ttnn::operations::binary {
 
