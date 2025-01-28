@@ -533,7 +533,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     uint32_t l1_write_addr = l1_write_addr_base;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
-        const auto [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT,MEM_LAYOUT>(
+        const auto [noc_addr, contig_pages_] = legacy_get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT>(
             cmd_specific_ctx.curr_tile_id,
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
@@ -693,8 +693,8 @@ FORCE_INLINE void try_advance_write_tensor_from_cb(command_context_t<Addrgen>& c
         // However, if we're writing locally, then we need to actually write using `noc_index` based coordinates.
         // This can lead to a discrepancy, so to stay consistent, we always generate noc0 based addresses here
         // so we can reliably translate to `noc_index` based addresses writing locally, inside the write function
-        auto const [noc0_dest_noc_addr, contig_pages_] =
-            get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT,MEM_LAYOUT>(
+        const auto [noc0_dest_noc_addr, contig_pages_] =
+            legacy_get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
                 cmd_specific_ctx.curr_tile_id,
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,
