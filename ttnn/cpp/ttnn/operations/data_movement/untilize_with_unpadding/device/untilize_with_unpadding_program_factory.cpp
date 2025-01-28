@@ -14,10 +14,35 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/functions.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+inline uint32_t get_estimated_size_of_cbs(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
+    uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
+    return cb_src0_size + cb_output_size;
+}
+
+inline bool enough_available_space(
+    const Tensor& input_tensor_a,
+    const uint32_t input_single_tile_size,
+    const uint32_t output_single_tile_size,
+    const uint32_t num_tiles_per_row) {
+    uint32_t max_l1_space = ttnn::get_max_l1_space(input_tensor_a);
+    uint32_t estimated_size_of_cbs =
+        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    return max_l1_space > estimated_size_of_cbs;
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
@@ -222,6 +247,12 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
 
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
+
+    bool enough_space = CMAKE_UNIQUE_NAMESPACE::enough_available_space(
+        a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+    if (!enough_space) {
+        return untilize_with_unpadding_single_core(a, output, use_pack_untilize, fp32_dest_acc_en);
+    }
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(grid_size, num_blocks);
