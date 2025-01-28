@@ -468,6 +468,17 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
             input_start[2] : input_ends[2],
             input_start[3] : input_ends[3],
         ]
+    elif len(input_shape) == 3:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+        ]
     elif len(input_shape) == 2:
         torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
         ttnn_output = ttnn_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
@@ -759,6 +770,71 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
     ttnn_output_tensor = ttnn.from_device(ttnn_output).to_torch_with_logical_shape()
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends, input_stride",
+    (([3234, 4], [0, 2], [3234, 4], [1, 1]),),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+def test_slice_adversarial_flexible(input_shape, input_start, input_ends, input_stride, layout, device):
+    if layout == ttnn.TILE_LAYOUT:
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch.float32)
+        ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
+    if len(input_shape) == 5:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+            input_start[4] : input_ends[4] : input_stride[4],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+            input_start[4] : input_ends[4] : input_stride[4],
+        ]
+    elif len(input_shape) == 4:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+        ]
+    elif len(input_shape) == 3:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+        ]
+    elif len(input_shape) == 2:
+        torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+        ttnn_output = ttnn_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+    elif len(input_shape) == 1:
+        torch_output = torch_input[input_start[0] : input_ends[0]]
+        ttnn_output = ttnn_input[input_start[0] : input_ends[0]]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
 @pytest.mark.parametrize(
