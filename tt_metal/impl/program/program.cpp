@@ -270,7 +270,6 @@ class Program_ {
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
