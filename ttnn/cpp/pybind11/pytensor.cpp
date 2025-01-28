@@ -87,7 +87,6 @@ Tensor create_typed_tt_tensor_from_py_data(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    // Use template type for generic function - TODO find better way, maybe decltype or variants w/ array or map?
     auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
 
     auto data_type = tensor_spec.data_type();
