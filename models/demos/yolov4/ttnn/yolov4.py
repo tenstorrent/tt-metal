@@ -24,33 +24,33 @@ from models.demos.yolov4.ttnn.head import TtHead
 
 
 class TtYOLOv4:
-    def __init__(self, path) -> None:
+    def __init__(self, device, path) -> None:
         if type(path) is str:
             self.torch_model = torch.load(path)
         else:
             self.torch_model = path
         self.torch_keys = self.torch_model.keys()
-        self.down1 = Down1(self)
-        self.down2 = Down2(self)
-        self.down3 = Down3(self)
-        self.down4 = Down4(self)
-        self.down5 = Down5(self)
+        self.down1 = Down1(device, self)
+        self.down2 = Down2(device, self)
+        self.down3 = Down3(device, self)
+        self.down4 = Down4(device, self)
+        self.down5 = Down5(device, self)
 
-        self.neck = TtNeck(self)
-        self.head = TtHead(self)
+        self.neck = TtNeck(device, self)
+        self.head = TtHead(device, self)
 
         self.downs = []  # [self.down1]
 
-    def __call__(self, device, input_tensor):
-        d1 = self.down1(device, input_tensor)
-        d2 = self.down2(device, d1)
+    def __call__(self, input_tensor):
+        d1 = self.down1(input_tensor)
+        d2 = self.down2(d1)
         ttnn.deallocate(d1)
-        d3 = self.down3(device, d2)
+        d3 = self.down3(d2)
         ttnn.deallocate(d2)
-        d4 = self.down4(device, d3)
-        d5 = self.down5(device, d4)
-        x20, x13, x6 = self.neck(device, [d5, d4, d3])
-        x4, x5, x6 = self.head(device, [x20, x13, x6])
+        d4 = self.down4(d3)
+        d5 = self.down5(d4)
+        x20, x13, x6 = self.neck([d5, d4, d3])
+        x4, x5, x6 = self.head([x20, x13, x6])
 
         return x4, x5, x6
 

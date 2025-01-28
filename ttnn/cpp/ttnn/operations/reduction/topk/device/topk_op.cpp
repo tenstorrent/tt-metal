@@ -122,10 +122,10 @@ operation::ProgramWithCallbacks TopK::create_program(
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.get_padded_shape()[dim] < topk_utils::multi_core_min_width) {
         return detail::topk_single_core_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, output_tensors.at(0), output_tensors.at(1));
     } else {
         return detail::topk_multicore_interleaved(
-            input_tensor, this->k, this->dim, output_tensors.at(0), output_tensors.at(1));
+            input_tensor, this->k, this->dim, this->largest, output_tensors.at(0), output_tensors.at(1));
     }
 }
 

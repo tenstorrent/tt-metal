@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 #include <tt-metalium/dprint_server.hpp>
 

@@ -14,7 +14,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
 namespace ttnn::operations::sliding_window {
@@ -22,12 +21,12 @@ namespace ttnn::operations::sliding_window {
 // Calculate Convolution on padded input buffer.
 owned_buffer::Buffer<bfloat16> ref_conv_op(
     const Tensor& input_padded_tensor,
-    const Shape& input_nchw_shape,
+    const ttnn::SimpleShape& input_nchw_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     const std::vector<float>& filter_vector,
-    const Shape& filter_pyt_tensor_shape,
-    const Shape& out_golden_pyt_tensor_shape);
+    const ttnn::SimpleShape& filter_pyt_tensor_shape,
+    const ttnn::SimpleShape& out_golden_pyt_tensor_shape);
 
 // Calculate convolution using op_trace_metadata on padded input buffer.
 owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(

@@ -852,7 +852,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             .set_page_size(src1_cb_index, stick_size_padded_aligned);
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    if (stick_size_padded_front != 0) {
+    bool unaligned = stick_size_padded_aligned % hal.get_alignment(HalMemType::DRAM) != 0;
+    if (stick_size_padded_front != 0 || unaligned) {
         uint32_t src2_cb_index = tt::CBIndex::c_2;
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(stick_size_padded_aligned, {{src2_cb_index, cb_data_format}})
@@ -895,7 +896,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
         (std::uint32_t)src_stick_size_is_power_of_two,
         (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size,
-        (std::uint32_t)stick_size_padded_aligned};
+        (std::uint32_t)stick_size_padded_aligned,
+        (std::uint32_t)unaligned};
     std::vector<uint32_t> writer_ct_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)dst_is_dram,

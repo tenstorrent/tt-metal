@@ -165,11 +165,13 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
         uint32_t source_read_size_bytes = ((source_page_size_bytes - 1) & MASK_64) + 128;
         uint32_t read_start_page = 0;
         uint32_t write_start_page = 0;
+        uint32_t write_start_offset = 0;
         uint32_t responsibility = (input_log_shape[-2] - 1) / num_cores_total + 1;
         while ((responsibility * source_page_size_bytes) % dest_page_size_bytes != 0) {
             responsibility++;
         }
         const uint32_t write_jump = (responsibility * source_page_size_bytes) / dest_page_size_bytes;
+        const uint32_t offset_jump = (responsibility * source_page_size_bytes) % dest_page_size_bytes;
         uint32_t done = 0;
         for (int core_x = 0; core_x < num_cores_x; core_x++) {
             for (int core_y = 0; core_y < num_cores_y; core_y++) {
@@ -195,11 +197,17 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
                         start_of_read,
                         end_of_read,
                         write_start_page,
-                        0,
+                        write_start_offset,
                         done
 
                     };
-                    write_start_page += write_jump;
+                    write_start_offset += offset_jump;
+                    if (write_start_offset >= dest_page_size_bytes) {
+                        write_start_page += write_jump + 1;
+                        write_start_offset -= dest_page_size_bytes;
+                    } else {
+                        write_start_page += write_jump;
+                    }
                     read_start_page = end_of_read;
                     done = (end_of_read == input_log_shape[-2]) ? 1 : 0;
                     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -207,7 +215,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer_single_risk(
             }
         }
     };
-    return {.program = std::move(program)};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_reshape_preparer(const Tensor& input, const Tensor& output) {

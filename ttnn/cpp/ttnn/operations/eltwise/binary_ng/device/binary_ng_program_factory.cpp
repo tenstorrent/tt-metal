@@ -322,9 +322,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto compute_kernel_defines = op_config.as_defines(a.get_dtype());
 
     {
-        ttnn::SmallVector<unary::UnaryOpType> lhs_activations = operation_attributes.lhs_activations;
-        ttnn::SmallVector<unary::UnaryOpType> rhs_activations = operation_attributes.rhs_activations;
-        ttnn::SmallVector<unary::UnaryOpType> post_activations = operation_attributes.post_activations;
+        ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
+        ttnn::SmallVector<unary::UnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
+        ttnn::SmallVector<unary::UnaryWithParam> post_activations = operation_attributes.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);
@@ -342,7 +342,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS");
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1 and
-            post_activations[0] == unary::UnaryOpType::RELU) {
+            post_activations[0].op_type == unary::UnaryOpType::RELU) {
             compute_kernel_defines["PACK_RELU"] = "1";
             compute_kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
             unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
