@@ -232,7 +232,7 @@ def create_tt_model(
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            8192,  # max_seq_len
+            5120,  # max_seq_len
             32,  # batch_size
             4096,  # max_generated_tokens
             False,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
