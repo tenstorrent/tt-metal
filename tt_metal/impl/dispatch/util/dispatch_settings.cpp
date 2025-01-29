@@ -29,10 +29,8 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
         .prefetch_scratch_db_size(128_KB)
         .prefetch_d_buffer_size(256_KB)
 
-        .dispatch_pages_per_block(4)
         .dispatch_size(512_KB)
         .dispatch_s_buffer_size(32_KB)
-        .prefetch_d_blocks(4)
 
         .with_alignment(hal.get_alignment(HalMemType::L1))
 
@@ -51,10 +49,8 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& cluster, cons
         .prefetch_scratch_db_size(19_KB)
         .prefetch_d_buffer_size(128_KB)
 
-        .dispatch_pages_per_block(4)
         .dispatch_size(128_KB)
         .dispatch_s_buffer_size(32_KB)
-        .prefetch_d_blocks(4)
 
         .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 

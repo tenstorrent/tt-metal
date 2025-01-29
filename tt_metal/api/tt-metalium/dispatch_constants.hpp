@@ -10,7 +10,7 @@
 #include "cq_commands.hpp"
 #include "dev_msgs.h"
 
-namespace tt::tt_metal::dispatch {
+namespace tt::tt_metal {
 
 // FD Constants
 struct DispatchConstants {
@@ -29,6 +29,8 @@ struct DispatchConstants {
 
     static constexpr uint32_t DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;
 
+    static constexpr uint32_t DISPATCH_BUFFER_SIZE_BLOCKS = 4;
+
     static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
 
     // dispatch_s CB page size is 128 bytes. This should currently be enough to accomodate all commands that
@@ -44,6 +46,8 @@ struct DispatchConstants {
     static constexpr uint32_t TRANSFER_PAGE_SIZE = 1 << LOG_TRANSFER_PAGE_SIZE;
 
     static constexpr uint32_t PREFETCH_D_BUFFER_LOG_PAGE_SIZE = 12;
+
+    static constexpr uint32_t PREFETCH_D_BUFFER_BLOCKS = 4;
 
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
@@ -61,4 +65,4 @@ struct DispatchConstants {
     static constexpr uint32_t DEVICES_PER_UMD_CHANNEL = MAX_HUGEPAGE_SIZE / MAX_DEV_CHANNEL_SIZE; // 256 MB;
 };
 
-}  // namespace tt::tt_metal::dispatch
+}  // namespace tt::tt_metal

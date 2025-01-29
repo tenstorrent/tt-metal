@@ -33,10 +33,8 @@ struct DispatchSettings {
     uint32_t prefetch_scratch_db_size_;
     uint32_t prefetch_d_buffer_size_;
     uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
-    uint32_t prefetch_d_blocks_;
 
     // cq_dispatch
-    uint32_t dispatch_pages_per_block_;  // number of pages per block
     uint32_t dispatch_size_;             // total buffer size
     uint32_t dispatch_pages_;            // total buffer size / page size
     uint32_t dispatch_s_buffer_size_;
@@ -57,8 +55,7 @@ struct DispatchSettings {
                prefetch_cmddat_q_size_ == other.prefetch_cmddat_q_size_ &&
                prefetch_scratch_db_size_ == other.prefetch_scratch_db_size_ &&
                prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ &&
-               prefetch_d_pages_ == other.prefetch_d_pages_ && prefetch_d_blocks_ == other.prefetch_d_blocks_ &&
-               dispatch_pages_per_block_ == other.dispatch_pages_per_block_ && dispatch_size_ == other.dispatch_size_ &&
+               prefetch_d_pages_ == other.prefetch_d_pages_ && dispatch_size_ == other.dispatch_size_ &&
                dispatch_pages_ == other.dispatch_pages_ && dispatch_s_buffer_size_ == other.dispatch_s_buffer_size_ &&
                dispatch_s_buffer_pages_ == other.dispatch_s_buffer_pages_ &&
                tunneling_buffer_size_ == other.tunneling_buffer_size_ &&
@@ -120,18 +117,6 @@ struct DispatchSettings {
         this->prefetch_d_pages_ =
             this->prefetch_d_buffer_size_ / (1 << DispatchConstants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
 
-        return *this;
-    }
-
-    // Trivial setter for dispatch_pages_per_block
-    DispatchSettings& dispatch_pages_per_block(uint32_t val) {
-        this->dispatch_pages_per_block_ = val;
-        return *this;
-    }
-
-    // Trivial setter for prefetch_d_blocks
-    DispatchSettings& prefetch_d_blocks(uint32_t val) {
-        this->prefetch_d_blocks_ = val;
         return *this;
     }
 
