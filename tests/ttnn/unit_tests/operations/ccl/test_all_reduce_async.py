@@ -16,6 +16,66 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
 )
 
 
+def run_with_trace(
+    mesh_device,
+    input_tensor_mesh,
+    num_links,
+    math_op,
+    output_mem_config,
+    topology,
+    from_remote_semaphore_handles,
+    to_remote_semaphore_handles,
+    gather_semaphore_handles,
+    worker_sub_device_id,
+    num_iters,
+    n_worker=None,
+    n_buffer=None,
+):
+    # Compile Run
+    logger.info("Compiling model")
+    output_tensor_mesh = ttnn.experimental.all_reduce_async(
+        input_tensor_mesh,
+        from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+        to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+        gather_multi_device_global_semaphore=gather_semaphore_handles,
+        math_op=math_op,
+        num_links=num_links,
+        memory_config=output_mem_config,
+        topology=topology,
+        subdevice_id=worker_sub_device_id,
+    )
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iters):
+        output_tensor_mesh = ttnn.experimental.all_reduce_async(
+            input_tensor_mesh,
+            from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+            to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+            gather_multi_device_global_semaphore=gather_semaphore_handles,
+            math_op=math_op,
+            num_links=num_links,
+            memory_config=output_mem_config,
+            topology=topology,
+            subdevice_id=worker_sub_device_id,
+        )
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
+
+    # Run the op
+    logger.info("Starting Trace perf test...")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    for device_id in mesh_device.get_device_ids():
+        ttnn.synchronize_device(mesh_device.get_device(device_id))
+
+    return output_tensor_mesh
+
+
 def run_all_reduce_test(
     mesh_device,
     num_devices,
@@ -34,6 +94,7 @@ def run_all_reduce_test(
     enable_persistent_fabric=False,
     create_persistent_fabric=False,
     teardown_persistent_fabric=False,
+    trace_mode=False,
 ):
     if len(mesh_device.get_device_ids()) < num_devices:
         pytest.skip(
@@ -97,20 +158,35 @@ def run_all_reduce_test(
 
     input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
     # Run the op
-    for i in range(num_iters):
-        output_tensor_mesh = ttnn.experimental.all_reduce_async(
+    if trace_mode:
+        output_tensor_mesh = run_with_trace(
+            mesh_device,
             input_tensor_mesh,
-            from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
-            to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
-            gather_multi_device_global_semaphore=gather_semaphore_handles,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=mem_config,
+            num_links,
+            math_op,
+            output_mem_config=mem_config,
             topology=topology,
-            subdevice_id=worker_sub_device_id,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            gather_semaphore_handles=gather_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
+            num_iters=num_iters,
         )
-        if enable_persistent_fabric:
-            ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+    else:
+        for i in range(num_iters):
+            output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                input_tensor_mesh,
+                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
+                gather_multi_device_global_semaphore=gather_semaphore_handles,
+                math_op=math_op,
+                num_links=num_links,
+                memory_config=mem_config,
+                topology=topology,
+                subdevice_id=worker_sub_device_id,
+            )
+            if enable_persistent_fabric:
+                ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
     ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
