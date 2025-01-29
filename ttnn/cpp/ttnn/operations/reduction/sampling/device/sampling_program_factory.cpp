@@ -53,7 +53,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRangeSet core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})});
+    CoreRangeSet core_grid = num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
 
     if (sub_core_grids.has_value()) {
         core_grid = sub_core_grids.value();

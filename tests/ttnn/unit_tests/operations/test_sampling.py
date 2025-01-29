@@ -17,18 +17,18 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from models.utility_functions import skip_for_grayskull
 
 
-def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grid):
+def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids):
     """
     Check that the sampling operation is deterministic for the same seed.
     """
     # Run the operation twice with the same seed
     output_tensor_1 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grid=sub_core_grid
+        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
     )
     output_1 = ttnn.to_torch(output_tensor_1)
 
     output_tensor_2 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grid=sub_core_grid
+        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
     )
     output_2 = ttnn.to_torch(output_tensor_2)
 
@@ -66,13 +66,13 @@ def validate_statistics(input_values, output, k, p):
             ), f"Output values for user {user_idx} are not within the top-{cutoff_index} values"
 
 
-def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grid):
+def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids):
     """
     Test edge cases for the sampling operation.
     """
     num_users = len(k)
     output_tensor_k1 = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=[1] * num_users, p=p, seed=seed, sub_core_grid=sub_core_grid
+        input_values_tensor, input_indices_tensor, k=[1] * num_users, p=p, seed=seed, sub_core_grids=sub_core_grids
     )
     output_k1 = ttnn.to_torch(output_tensor_k1)
     top_1_value, top_1_ind = torch.topk(input_values, k=1, dim=-1)
@@ -81,30 +81,30 @@ def run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p
     ), f"Output for users does not match top-1 value"
 
 
-def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_grid=None):
+def validate_sampling(input_values, input_indices, k, p, seed, device, sub_core_grids=None):
     # Convert input tensors to ttnn tensors
     input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     # Call the sampling operation
     output_tensor = ttnn.sampling(
-        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grid=sub_core_grid
+        input_values_tensor, input_indices_tensor, k=k, p=p, seed=seed, sub_core_grids=sub_core_grids
     )
 
     # Convert the output tensor back to torch
     output = ttnn.to_torch(output_tensor)
 
     # Perform determinism check
-    check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grid)
+    check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids)
 
     # Perform statistical validation
     validate_statistics(input_values, output, k, p)
 
     # Perform edge case testing
-    run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grid)
+    run_edge_cases(input_values, input_values_tensor, input_indices_tensor, k, p, seed, device, sub_core_grids)
 
 
-def run_sampling(shape, k, p, seed, device, sub_core_grid=None):
+def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     # Generate random input values and indices
     input_values = torch.randn(shape)
     input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
@@ -117,7 +117,7 @@ def run_sampling(shape, k, p, seed, device, sub_core_grid=None):
         p=p,
         seed=seed,
         device=device,
-        sub_core_grid=sub_core_grid,
+        sub_core_grids=sub_core_grids,
     )
 
 
@@ -158,14 +158,14 @@ def test_sampling_callback(shape, k, p, seed, device, use_program_cache):
 @pytest.mark.parametrize("p", [[0.0, 0.3, 0.5, 0.7, 0.9] * 6 + [0.1, 0.8]])  # Example of per-user p
 @pytest.mark.parametrize("seed", [2024])
 @pytest.mark.parametrize(
-    "sub_core_grid", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
+    "sub_core_grids", [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(8 - 1, 4 - 1))})]
 )
-def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grid, use_program_cache):
+def test_sampling_subcores_callback(shape, k, p, seed, device, sub_core_grids, use_program_cache):
     device.enable_async(True)
     torch.manual_seed(seed)
     num_program_cache_entries_list = []
     for _ in range(2):
-        run_sampling(shape, k, p, seed, device, sub_core_grid)
+        run_sampling(shape, k, p, seed, device, sub_core_grids)
         # Add dummy tensor to make sure that created tensor in 2 iteration don't share the same addr
         tt_dummy_tensor = ttnn.empty([1, 1, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
