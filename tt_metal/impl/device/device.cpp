@@ -610,22 +610,20 @@ void Device::reset_cores() {
     std::memset(&go_msg, 0, sizeof(go_msg_t));
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
         CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
-        if (erisc_app_still_running(virtual_core)) {
-            std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-            DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
+        // if (erisc_app_still_running(virtual_core)) {
+        //     std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+        //     DeviceAddr launch_addr = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::LAUNCH);
 
-            data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
-            launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-            log_info(
-                tt::LogMetal,
-                "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running, issuing exit signal.",
-                this->id(),
-                virtual_core.str(),
-                this->id());
-            launch_msg->kernel_config.exit_erisc_kernel = 1;
-            llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
-            device_to_early_exit_cores[this->id()].insert(virtual_core);
-        }
+        //     data = tt::llrt::read_hex_vec_from_core(this->id(), virtual_core, launch_addr, sizeof(launch_msg_t));
+        //     launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+        //     log_info(
+        //         tt::LogMetal,
+        //         "While initializing Device {}, ethernet tunneler core {} on Device {} detected as still running,
+        //         issuing exit signal.", this->id(), virtual_core.str(), this->id());
+        //     launch_msg->kernel_config.exit_erisc_kernel = 1;
+        //     llrt::write_launch_msg_to_core(this->id(), virtual_core, launch_msg, &go_msg, launch_addr, false);
+        //     device_to_early_exit_cores[this->id()].insert(virtual_core);
+        // }
     }
 
     this->get_associated_dispatch_virtual_cores(dispatch_cores, other_dispatch_cores);
@@ -640,23 +638,21 @@ void Device::reset_cores() {
             // Only need to manually reset ethernet dispatch cores, tensix cores are all reset below.
             if (tt::Cluster::instance().is_ethernet_core(virtual_core, id_and_cores.first)) {
                 // Ethernet cores won't be reset, so just signal the dispatch cores to early exit.
-                if (erisc_app_still_running(virtual_core)) {
-                    log_info(
-                        tt::LogMetal,
-                        "While initializing device {}, ethernet dispatch core {} on Device {} detected as still running, issuing exit signal.",
-                        this->id(),
-                        virtual_core.str(),
-                        id_and_cores.first);
-                    std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-                    DeviceAddr launch_addr =
-                        hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
-                    data = tt::llrt::read_hex_vec_from_core(
-                        id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
-                    launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
-                    launch_msg->kernel_config.exit_erisc_kernel = 1;
-                    llrt::write_launch_msg_to_core(id_and_cores.first, virtual_core, launch_msg, &go_msg, launch_addr, false);
-                    device_to_early_exit_cores[id_and_cores.first].insert(virtual_core);
-                }
+                // if (erisc_app_still_running(virtual_core)) {
+                //     log_info(
+                //         tt::LogMetal,
+                //         "While initializing device {}, ethernet dispatch core {} on Device {} detected as still
+                //         running, issuing exit signal.", this->id(), virtual_core.str(), id_and_cores.first);
+                //     std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
+                //     DeviceAddr launch_addr =
+                //         hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::LAUNCH);
+                //     data = tt::llrt::read_hex_vec_from_core(
+                //         id_and_cores.first, virtual_core, launch_addr, sizeof(launch_msg_t));
+                //     launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
+                //     launch_msg->kernel_config.exit_erisc_kernel = 1;
+                //     llrt::write_launch_msg_to_core(id_and_cores.first, virtual_core, launch_msg, &go_msg,
+                //     launch_addr, false); device_to_early_exit_cores[id_and_cores.first].insert(virtual_core);
+                // }
             }
         }
     }
@@ -689,6 +685,22 @@ void Device::reset_cores() {
                     tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), worker_core));
                 }
             }
+        }
+    }
+
+    if (this->arch() == ARCH::BLACKHOLE) {
+        for (const auto& eth_core : this->get_active_ethernet_cores()) {
+            CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_eth_core), reset_val);
+        }
+
+        for (const auto& eth_core : this->get_inactive_ethernet_cores()) {
+            CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            tt::Cluster::instance().assert_risc_reset_at_core(tt_cxy_pair(this->id(), phys_eth_core));
         }
     }
 }
