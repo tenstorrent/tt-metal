@@ -130,5 +130,4 @@ def run(
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     pcc[1] = str(pcc[1])
-    # print(f"pcc {pcc} - {grad_dtype}, {input_a_dtype}, {input_b_dtype}")
     return [pcc, e2e_perf]

@@ -102,21 +102,16 @@ def run(
     )
 
     start_time = start_measuring_time()
+    result = ttnn.l1_loss(
+        input_reference_tensor,
+        input_prediction_tensor,
+        reduction=reduction_1,
+        output_tensor=None,
+        memory_config=output_memory_config,
+    )
 
-    try:
-        result = ttnn.l1_loss(
-            input_reference_tensor,
-            input_prediction_tensor,
-            reduction=reduction_1,
-            output_tensor=None,
-            memory_config=output_memory_config,
-        )
-
-        output_tensor = ttnn.to_torch(result)
-        e2e_perf = stop_measuring_time(start_time)
-
-    except Exception as e:
-        print(e)
+    output_tensor = ttnn.to_torch(result)
+    e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
     return [pcc, e2e_perf]
