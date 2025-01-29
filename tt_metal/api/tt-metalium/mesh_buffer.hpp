@@ -111,10 +111,9 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
-        owns_data_(true),
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
-        backing_buffer_(std::move(backing_buffer)) {}
+        state_(OwnedBufferState{std::move(backing_buffer)}) {}
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
@@ -126,24 +125,31 @@ private:
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
-        owns_data_(false),
         address_(address),
-        device_local_size_(device_local_size) {}
+        device_local_size_(device_local_size),
+        state_(ExternallyOwnedState{}) {}
 
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
     MeshDevice* mesh_device_ = nullptr;
-    bool owns_data_ = false;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 
     // TODO: Consider optimizing with SmallVector.
     std::vector<std::vector<std::shared_ptr<Buffer>>> buffers_;
-    // Buffer owned by the MeshBuffer. Responsible for interfacing with the
-    // single device allocator. This data-structure is not populated if memory
-    // for the MeshBuffer is externally owned, or if the MeshBuffer was deallocated.
-    std::shared_ptr<Buffer> backing_buffer_;
+
+    // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
+    // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
+    // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
+    // 3. Deallocated - the MeshBuffer is in the deallocated state.
+    struct OwnedBufferState {
+        std::shared_ptr<Buffer> backing_buffer;
+    };
+    struct ExternallyOwnedState {};
+    struct DeallocatedState {};
+    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
+    MeshBufferState state_;
 };
 
 }  // namespace tt::tt_metal::distributed

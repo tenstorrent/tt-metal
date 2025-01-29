@@ -133,13 +133,9 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const { return owns_data_ ? backing_buffer_ != nullptr : true; }
+bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
 
-void MeshBuffer::deallocate() {
-    if (owns_data_) {
-        backing_buffer_.reset();
-    }
-}
+void MeshBuffer::deallocate() { state_ = DeallocatedState{}; }
 
 std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const Coordinate& device_coord) const {
     TT_FATAL(
