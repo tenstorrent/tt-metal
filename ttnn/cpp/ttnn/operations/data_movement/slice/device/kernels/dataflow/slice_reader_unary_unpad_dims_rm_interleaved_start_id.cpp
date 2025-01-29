@@ -38,7 +38,6 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
             uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0);
-
             noc_async_read(src_noc_addr, src_buffer_l1_addr, read_size);
             if constexpr (misalignment != 0) {
                 noc_async_read_barrier();
