@@ -74,8 +74,10 @@ def test_create_pipeline_json_to_detect_generic_set_up_error_v1(workflow_run_gh_
     for job in pipeline.jobs:
         if job.github_job_id == 30531878948:
             assert job.failure_signature == str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+            assert job.failure_description is not None
         else:
             assert job.failure_signature is None
+            assert job.failure_description is None
 
 
 def test_create_pipeline_json_to_detect_generic_set_up_error_v1_among_other_failures(workflow_run_gh_environment):
@@ -110,8 +112,10 @@ def test_create_pipeline_json_to_detect_generic_set_up_error_v1_among_other_fail
     for job in pipeline.jobs:
         if job.github_job_id == 30868260202:
             assert job.failure_signature == str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+            assert job.failure_description is not None
         else:
             assert job.failure_signature is None
+            assert job.failure_description is None
 
 
 def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_environment):
