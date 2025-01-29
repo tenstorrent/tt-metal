@@ -163,24 +163,18 @@ def test_all_gather_async_tg(
     "per_chip_output_shape, dim, layout",
     [
         ([1, 1, 32, 32], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 32, 32 * 2], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 64, 32], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 64, 64], 3, ttnn.TILE_LAYOUT),
-        # ([1, 1, 128, 128], 0, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
