@@ -724,6 +724,20 @@ def test_llama_demo_text(
                 target=None,
             )
 
+        # Also save the avg decode performance for the 128 iterations (excluding the compile time)
+        inference_decode_time_first_128 = sum(
+            profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, 128)
+        )
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            "inference_decode",
+            "avg_decode_time_first_128",
+            inference_decode_time_first_128 * 1000 / 127,
+            step_warm_up_num_iterations=None,
+            target=None,
+        )
+
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
