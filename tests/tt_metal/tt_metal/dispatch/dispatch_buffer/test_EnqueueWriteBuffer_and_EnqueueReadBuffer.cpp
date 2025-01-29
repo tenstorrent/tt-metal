@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <iostream>
 #include <memory>
 
 #include "buffer.hpp"
@@ -243,6 +244,12 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
                 EnqueueReadBuffer(cq, *bufa, result.data(), true);
             } else {
                 ::detail::ReadFromBuffer(*bufa, result);
+            }
+
+            for (uint32_t i = 0; i < result.size(); i++) {
+                if (result[i] != i) {
+                    std::cout << "i: " + std::to_string(i) + " result[i]: " + std::to_string(result[i]) << std::endl;
+                }
             }
 
             EXPECT_EQ(src, result);
@@ -518,7 +525,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanMaxPrefetchCommand
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
-            .num_pages = 1, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
+            .num_pages = 9, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
