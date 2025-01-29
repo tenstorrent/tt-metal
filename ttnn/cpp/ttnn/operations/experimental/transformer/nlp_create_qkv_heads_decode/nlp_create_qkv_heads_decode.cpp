@@ -24,8 +24,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
     std::optional<std::array<Tensor, 3>> optional_output_tensors) {
     const uint32_t num_kv_heads_val = num_kv_heads.value_or(num_heads);
     const bool overlap_qk_coregrid_val = input_tensor.is_sharded() ? overlap_qk_coregrid.value_or(true) : true;
+    // Check if input is on subcoregrids
+    // Conditions to check:
+    // - input is sharded
+    // - input is sharded on more than 1 grid range
+    // - input is sharded on single grid range but does not start from 0,0
     const bool input_on_subcoregrids =
-        input_tensor.is_sharded() ? (input_tensor.shard_spec().value().grid.ranges().size() > 1) : false;
+        input_tensor.is_sharded() &&
+        (input_tensor.shard_spec().value().grid.ranges().size() > 1 ||
+         input_tensor.shard_spec().value().grid.bounding_box().start_coord != CoreCoord{0, 0});
 
     // Infer head_dim
     TT_FATAL(input_tensor.get_legacy_shape()[3] % (num_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
