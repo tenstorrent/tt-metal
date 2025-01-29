@@ -30,11 +30,11 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device->get_device(0));
-        program.allocate_circular_buffers(mesh_device->get_device(0));
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device->get_device(0));
+        program.compile(mesh_device->get_device_index(0));
+        program.allocate_circular_buffers(mesh_device->get_device_index(0));
+        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device->get_device_index(0));
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device->get_device(0));
+    program_dispatch::finalize_program_offsets(*this, mesh_device->get_device_index(0));
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -258,7 +258,7 @@ uint32_t MeshWorkload::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
             TT_ASSERT(sem_size == program.get_sem_size(device, logical_core, core_type));
@@ -282,7 +282,7 @@ uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
             TT_ASSERT(cb_size == program.get_cb_size(device, logical_core, core_type));

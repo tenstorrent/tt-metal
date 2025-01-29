@@ -234,7 +234,7 @@ void MeshCommandQueue::enqueue_write_shard(
     std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     auto shard = mesh_buffer->get_device_buffer(coord);
@@ -250,7 +250,7 @@ void MeshCommandQueue::enqueue_read_shard(
     TT_FATAL(blocking, "Only blocking reads are currently supported from MeshBuffer shards.");
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     auto shard = mesh_buffer->get_device_buffer(coord);
@@ -401,7 +401,7 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
     const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
 
@@ -432,7 +432,7 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     this->read_sharded_buffer(*buffer, host_data, expected_num_workers_completed, sub_device_ids);
