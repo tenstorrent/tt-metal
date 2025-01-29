@@ -215,6 +215,18 @@ class TtModelArgs:
                 fuse_batch=seq_len <= 2048,
             )
 
+            self.model_config["OUTPUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(7, 8),
+                in0_block_w=1,
+                per_core_M=1,
+                per_core_N=18,  # vocab size: 32000 = 1000 tiles. 1000/56cores = 18
+                out_subblock_h=1,
+                out_subblock_w=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time

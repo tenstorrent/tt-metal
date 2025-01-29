@@ -29,6 +29,7 @@ class TtTransformer(nn.Module):
         self.n_layers = args.n_layers
         self.start_pos = start_pos
         self.device = device
+        self.model_config = args.get_model_config()
         assert self.vocab_size > 0
 
         self.layers = torch.nn.ModuleList(
@@ -79,10 +80,13 @@ class TtTransformer(nn.Module):
         if mode == "prefill":
             return x
         x = self.norm(x, mode=mode)
+
         output = ttnn.linear(
             x,
             self.output_weight,
             compute_kernel_config=self.args.get_compute_kernel_config(),
-            core_grid=self.args.max_grid_size,
+            program_config=self.model_config["OUTPUT_MM_PROGCFG"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
         )
         return output
