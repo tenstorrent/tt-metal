@@ -246,10 +246,20 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
     auto q_shard_spec = output[0].shard_spec().value();
     auto q_cores = q_shard_spec.grid;
     auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
+    auto k_shard_spec = output[1].shard_spec().value();
+    auto k_cores = k_shard_spec.grid;
+    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
     auto in_shard_spec = input_tensor.shard_spec().value();
     auto in_cores = in_shard_spec.grid;
     auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
     uint32_t batch_offset_index_stick_size = 0;
+    auto qk_cores = q_cores;
+    if (!overlap_qk_coregrid) {
+        auto qk_cores_set = std::set<CoreRange>();
+        qk_cores_set.insert(q_cores.ranges().begin(), q_cores.ranges().end());
+        qk_cores_set.insert(k_cores.ranges().begin(), k_cores.ranges().end());
+        qk_cores = CoreRangeSet(qk_cores_set);
+    }
     // if batch_offset is provided we need to allocate a buffer for it
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
@@ -261,13 +271,13 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_reader, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_reader, 1);
-        cb_batch_offset_reader = tt_metal::CreateCircularBuffer(program, q_cores, cb_batch_offset_config_reader);
+        cb_batch_offset_reader = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_reader);
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_writer =
             tt_metal::CircularBufferConfig(
                 single_batch_offset_tile_size, {{batch_offset_cb_index_writer, cb_batch_offset_data_format}})
                 .set_page_size(batch_offset_cb_index_writer, 1);
-        cb_batch_offset_writer = tt_metal::CreateCircularBuffer(program, q_cores, cb_batch_offset_config_writer);
+        cb_batch_offset_writer = tt_metal::CreateCircularBuffer(program, qk_cores, cb_batch_offset_config_writer);
     }
 
     uint32_t q_output_cb_index = CBIndex::c_16;
@@ -276,10 +286,6 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             .set_page_size(q_output_cb_index, single_tile_size)
             .set_globally_allocated_address(*output[0].buffer());
     auto cb_q_output = tt_metal::CreateCircularBuffer(program, q_cores, cb_q_output_config);
-
-    auto k_shard_spec = output[1].shard_spec().value();
-    auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
 
     uint32_t k_output_cb_index = CBIndex::c_17;
     tt_metal::CircularBufferConfig cb_k_output_config =
