@@ -244,3 +244,27 @@ def test_int_untilize(device, batch_size, sentence_size):
     output_torch = ttnn.to_torch(output_tt)
 
     assert_with_pcc(torch_input_tensor, output_torch)
+
+
+@pytest.mark.parametrize("shape", [[143], [64], [380]])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_to_layout_for_1D(shape, dtype, input_layout, output_layout, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout)
+    output_tensor = ttnn.to_layout(input_tensor, output_layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[30], [64], [2040]])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_tilize_with_padding_for_1D(shape, dtype, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.tilize_with_zero_padding(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)

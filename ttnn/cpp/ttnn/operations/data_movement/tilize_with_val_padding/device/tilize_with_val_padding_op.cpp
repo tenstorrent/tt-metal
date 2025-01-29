@@ -22,7 +22,8 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
         input_tensor_a.get_dtype() == DataType::BFLOAT16 or input_tensor_a.get_dtype() == DataType::UINT32 or
             input_tensor_a.get_dtype() == DataType::FLOAT32,
         "Can only tilize bfloat16/float32 or uint32 tensors");
-    TT_FATAL(input_shape.rank() >= 2, "Input tensor must be of rank >2, but its shape is {}", input_shape);
+
+    TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
 
     for (auto i = 0; i < input_shape.rank(); i++) {
         TT_FATAL(
