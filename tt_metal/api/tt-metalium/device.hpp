@@ -255,8 +255,6 @@ public:
     virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
-    virtual uint32_t get_completion_queue_reader_core() const = 0;
-
     virtual bool is_mmio_capable() const = 0;
     virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const = 0;
 
