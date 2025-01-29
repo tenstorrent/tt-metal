@@ -266,7 +266,7 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     const auto &compute_size = this->compute_with_storage_grid_size();
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_channels()),
-         .dram_bank_size = soc_desc.dram_bank_size,
+         .dram_bank_size = soc_desc.dram_view_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base =
              hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
@@ -1167,9 +1167,7 @@ int Device::num_dram_channels() const {
 uint32_t Device::l1_size_per_core() const {
     return tt::Cluster::instance().get_soc_desc(id_).worker_l1_size;
 }
-uint32_t Device::dram_size_per_channel() const {
-    return tt::Cluster::instance().get_soc_desc(id_).dram_bank_size;
-}
+uint32_t Device::dram_size_per_channel() const { return tt::Cluster::instance().get_soc_desc(id_).dram_view_size; }
 
 CoreCoord Device::grid_size() const {
     return tt::Cluster::instance().get_soc_desc(id_).grid_size;

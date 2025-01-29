@@ -1,7 +1,3 @@
-# soc-descriptor yaml
-# Anything using [#-#] is noc coordinates
-# Anything using [[#, #]] is logical coordinates (Can be relative)
-# relative index: 0 means first row, -1 means last row of functional grid...
 grid:
   x_size: 10
   y_size: 12
@@ -28,14 +24,20 @@ dram:
     [5-5, 5-6, 5-7]
   ]
 
-dram_preferred_eth_endpoint:
+# Dram view parameters are used by tt-metal and are not supported in UMD
+dram_view_eth_endpoint:
   [ 0-0, 0-0, 0-6, 0-6, 5-0, 5-0, 5-10, 5-10, 5-4, 5-4, 5-6, 5-6 ]
 
-dram_preferred_worker_endpoint:
-  [ 0-11, 0-1, 0-5, 0-7, 5-1, 5-11, 5-2, 5-9, 5-8, 5-3, 5-5, 5-7 ]
+# These are given in dram coordinates, for example 0-2 means first dram bank array,
+# third noc port core which would resolve to 0-11 in noc coordinates.
+dram_view_worker_endpoint:
+  [ 0-2, 0-1, 2-0, 2-2, 4-1, 4-2, 6-0, 6-1, 8-2, 8-0, 10-0, 10-2 ]
 
-dram_address_offsets:
+dram_view_address_offsets:
   [ 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824 ]
+
+dram_view_size:
+  1073741824
 
 eth:
   [
@@ -69,7 +71,7 @@ worker_l1_size:
   1499136
 
 dram_bank_size:
-  1073741824
+  2147483648
 
 eth_l1_size:
   262144
