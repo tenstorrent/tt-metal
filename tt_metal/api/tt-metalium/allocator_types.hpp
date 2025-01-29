@@ -21,9 +21,7 @@ size: bytes
 */
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 struct Allocator;
-namespace allocator {
 class BankManager;
-}
 
 // Setup what each core-type is
 enum class AllocCoreType {
@@ -67,8 +65,6 @@ enum class MemoryAllocator {
     L1_BANKING = 1,
 };
 
-namespace allocator {
-
 struct Statistics {
     size_t total_allocatable_size_bytes = 0;
     size_t total_allocated_bytes = 0;
@@ -77,7 +73,5 @@ struct Statistics {
     std::vector<uint32_t>
         largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
 };
-
-}  // namespace allocator
 
 }  // namespace tt::tt_metal

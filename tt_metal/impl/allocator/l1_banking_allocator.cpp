@@ -16,6 +16,7 @@
 #include <allocator.hpp>
 #include <allocator_types.hpp>
 #include <buffer_constants.hpp>
+#include "bank_manager.hpp"
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include "umd/device/types/xy_pair.h"
@@ -195,7 +196,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(config_.worker_l1_size) - config_.l1_unreserved_base - config_.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    l1_manager_ = allocator::BankManager(
+    l1_manager_ = std::make_unique<BankManager>(
         BufferType::L1,
         bank_id_to_bank_offset,
         allocatable_l1_size,
@@ -209,7 +210,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
     TT_ASSERT(
         (config_.l1_unreserved_base + config_.l1_small_size) <= config_.worker_l1_size,
         "L1 small region extends past L1 size");
-    l1_small_manager_ = allocator::BankManager(
+    l1_small_manager_ = std::make_unique<BankManager>(
         BufferType::L1_SMALL,
         small_bank_id_to_bank_offset,
         config_.l1_small_size,
