@@ -296,7 +296,7 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
         address >= device->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device->get_base_allocator_addr(HalMemType::DRAM));
-    tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
+    tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel}, address);
     return pass;
 }
 
@@ -304,7 +304,7 @@ bool ReadFromDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     tt::Cluster::instance().dram_barrier(device->id());
-    tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel, 0}, address);
+    tt::Cluster::instance().read_dram_vec(host_buffer, size, tt_target_dram{device->id(), dram_channel}, address);
     return pass;
 }
 
