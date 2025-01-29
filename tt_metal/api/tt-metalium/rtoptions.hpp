@@ -130,7 +130,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
+    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
     bool skip_deleting_built_cache = false;
 
@@ -309,7 +309,7 @@ public:
 
     inline bool get_hw_cache_invalidation_enabled() const { return this->enable_hw_cache_invalidation; }
 
-    inline tt_metal::DispatchCoreConfig get_dispatch_core_config() { return dispatch_core_config; }
+    tt_metal::DispatchCoreConfig get_dispatch_core_config();
 
     inline bool get_skip_deleting_built_cache() { return skip_deleting_built_cache; }
 
