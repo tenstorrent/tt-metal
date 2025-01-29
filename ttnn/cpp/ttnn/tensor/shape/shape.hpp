@@ -53,18 +53,3 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shap
 namespace ttnn {
 using tt::tt_metal::SimpleShape;
 }  // namespace ttnn
-//
-// #if TTNN_WITH_PYTHON_BINDINGS
-// namespace PYBIND11_NAMESPACE {
-// namespace detail {
-// template <>
-// class type_caster<ttnn::SimpleShape> {
-// public:
-//     PYBIND11_TYPE_CASTER(ttnn::SimpleShape, _("Shape"));
-//
-//     bool load(handle src, bool);
-//     static handle cast(const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
-// };
-// }  // namespace detail
-// }  // namespace PYBIND11_NAMESPACE
-// #endif
