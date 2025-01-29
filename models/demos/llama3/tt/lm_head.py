@@ -26,6 +26,8 @@ class LMHead(LightweightModule):
         self.dtype = dtype
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
+
+        # num_devices signal the parallelism type
         self.num_devices = args.num_devices_tp
 
         size_per_device = self.vocab_size // self.num_devices
@@ -87,7 +89,9 @@ class LMHead(LightweightModule):
                     ttnn.as_tensor(
                         combined_split,
                         device=mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+                        if self.num_devices > 1
+                        else ttnn.ReplicateTensorToMesh(mesh_device),
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config,
@@ -142,17 +146,18 @@ class LMHead(LightweightModule):
         # Concatenate the outputs
         output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        output = tt_all_reduce(
-            output,
-            mesh_device=self.mesh_device,
-            cluster_axis=1,
-            dim=3 if self.args.is_galaxy else 0,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
-            sharded=False,
-            use_composite=True,
-        )
+        if self.num_devices > 1:
+            output = tt_all_reduce(
+                output,
+                mesh_device=self.mesh_device,
+                cluster_axis=1,
+                dim=3 if self.args.is_galaxy else 0,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+                sharded=False,
+                use_composite=True,
+            )
 
         return output

@@ -13,6 +13,9 @@ from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Colum
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
+    skip_for_parallelism,
+    skip_for_batch_parallelism,
+    skip_for_model_parallelism,
 )
 from models.utility_functions import skip_for_grayskull
 
@@ -24,8 +27,12 @@ from models.utility_functions import skip_for_grayskull
     (32,),
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
+    "batch_dp_tp",
+    [
+        (1, 1, 2),
+        (2, 2, 1),
+    ],
+    ids=lambda args: "batch_{}_dp_{}_tp_{}".format(*args),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -36,12 +43,35 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_llama_lm_head_inference(seq_len, batch_dp_tp, mesh_device, use_program_cache, reset_seeds):
+    batch_size, data_parallel, tensor_parallel = batch_dp_tp
+
+    skip, reason = skip_for_batch_parallelism(batch_size, data_parallel)
+    if skip:
+        pytest.skip(reason)
+
+    skip, reason = skip_for_parallelism(
+        mesh_device.get_num_devices() if mesh_device else 0, data_parallel, tensor_parallel
+    )
+    if skip:
+        pytest.skip(reason)
+    skip, reason = skip_for_model_parallelism(data_parallel)
+    if skip:
+        pytest.skip(reason)
+
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
+    if data_parallel > 1:
+        mesh_device.reshape(ttnn.MeshShape(mesh_device.get_num_devices(), 1))
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = TtModelArgs(
+        mesh_device,
+        max_batch_size=batch_size,
+        data_parallel=data_parallel,
+        tensor_parallel=tensor_parallel,
+        max_seq_len=seq_len,
+    )
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -64,13 +94,15 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         weight_cache_path=model_args.weight_cache_path(dtype),
     )
 
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(batch_size, 1, seq_len, model_args.dim)
     reference_output = reference_model(torch_input)
+
+    dims = (0, None) if data_parallel > 1 else (None, None)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
+            mesh_device, dims=(None, 3) if model_args.is_galaxy else dims, mesh_shape=model_args.cluster_shape
         ),
         dtype=ttnn.bfloat8_b,
         memory_config=model_args.model_config["LM_HEAD_INPUT_MEMCFG"],
@@ -79,10 +111,12 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
 
     logger.info("Run Llama_LM_Head")
     tt_output = tt_model(tt_input)
+
+    dims = (0, 3) if data_parallel > 1 else (1, 3)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else (1, 3)
+            mesh_device, model_args.cluster_shape, dims=(3, 1) if model_args.is_galaxy else dims
         ),
     )
     tt_output_torch = tt_output_torch[:, 0:1, :, : model_args.vocab_size]
