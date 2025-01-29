@@ -610,7 +610,7 @@ bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size
     auto sub_devices = {
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
-    const auto& allocator = reference_device()->get_initialized_allocator();
+    const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
 
@@ -748,11 +748,11 @@ std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address(
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
 }
 
-const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->get_initialized_allocator(SubDeviceId{0});
+const std::unique_ptr<Allocator>& MeshDevice::allocator() const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
-const std::unique_ptr<Allocator>& MeshDevice::get_initialized_allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_initialized_allocator(sub_device_id);
+const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
 MeshSubDeviceManagerId MeshDevice::mesh_create_sub_device_manager(

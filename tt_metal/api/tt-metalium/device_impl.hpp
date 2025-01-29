@@ -99,8 +99,8 @@ public:
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
 
-    const std::unique_ptr<Allocator> &get_initialized_allocator() const override;
-    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<Allocator>& allocator() const override;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;

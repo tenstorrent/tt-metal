@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
-        uint32_t l1_unreserved_base = device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
 
         // Application setup

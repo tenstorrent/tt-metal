@@ -242,9 +242,9 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->get_initialized_allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->get_initialized_allocator().get();
+        this->allocator_ = device->allocator().get();
     }
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);

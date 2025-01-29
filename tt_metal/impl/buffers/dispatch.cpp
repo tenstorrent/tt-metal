@@ -121,7 +121,7 @@ InterleavedBufferWriteDispatchParams initialize_interleaved_buf_dispatch_params(
         dispatch_params.page_size_to_write = partial_size;
         dispatch_params.total_pages_to_write = dispatch_params.padded_buffer_size / dispatch_params.page_size_to_write;
     }
-    const uint32_t num_banks = buffer.device()->get_initialized_allocator()->get_num_banks(buffer.buffer_type());
+    const uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
     const uint32_t num_pages_round_robined = num_pages / num_banks;
     const uint32_t num_banks_with_residual_pages = num_pages % num_banks;
     const uint32_t num_partial_pages_per_page = padded_page_size / dispatch_params.page_size_to_write;
@@ -162,7 +162,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     uint32_t full_page_size = buffer.aligned_page_size();  // dispatch_params.page_size_to_write could be a partial
                                                            // page if buffer page size > MAX_PREFETCH_CMD_SIZE
     bool write_partial_pages = dispatch_params.page_size_to_write < full_page_size;
-    const uint32_t num_banks = buffer.device()->get_initialized_allocator()->get_num_banks(buffer.buffer_type());
+    const uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
 
     // TODO: Consolidate
     if (write_partial_pages) {
@@ -333,7 +333,7 @@ void write_interleaved_buffer_to_device(
         if (dispatch_params.dst_page_index > 0xFFFF or
             (dispatch_params.pages_per_txn == dispatch_params.max_num_pages_to_write and
              dispatch_params.write_partial_pages)) {
-            uint32_t num_banks = buffer.device()->get_initialized_allocator()->get_num_banks(buffer.buffer_type());
+            uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
             uint32_t num_banks_to_use =
                 dispatch_params.write_partial_pages ? dispatch_params.max_num_pages_to_write : num_banks;
             uint32_t residual = dispatch_params.dst_page_index % num_banks_to_use;
@@ -458,7 +458,7 @@ void write_sharded_buffer_to_core(
 
     uint32_t bank_base_address = buffer.address();
     if (buffer.is_dram()) {
-        bank_base_address += buffer.device()->get_initialized_allocator()->get_bank_offset(
+        bank_base_address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
 
@@ -725,7 +725,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     }
 
     if (buffer.is_dram()) {
-        address += buffer.device()->get_initialized_allocator()->get_bank_offset(
+        address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
     }
     address += curr_page_idx_in_shard * buffer.aligned_page_size();
@@ -755,8 +755,7 @@ void copy_interleaved_buffer_to_completion_queue(
         // To handle larger page offsets move bank base address up and update page offset to be relative to the new
         // bank address
         if (dispatch_params.src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-            const uint32_t num_banks =
-                dispatch_params.device->get_initialized_allocator()->get_num_banks(buffer.buffer_type());
+            const uint32_t num_banks = dispatch_params.device->allocator()->get_num_banks(buffer.buffer_type());
             const uint32_t num_pages_per_bank = dispatch_params.src_page_index / num_banks;
             bank_base_address += num_pages_per_bank * buffer.aligned_page_size();
             dispatch_params.src_page_index = dispatch_params.src_page_index % num_banks;

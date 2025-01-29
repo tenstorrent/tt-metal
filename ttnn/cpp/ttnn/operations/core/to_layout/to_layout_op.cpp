@@ -36,8 +36,8 @@ inline bool use_multicore_device_tilize(
             : input_single_tile_size;
 
     uint32_t num_tiles_in_row = input.get_logical_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t max_l1_size = input.device()->l1_size_per_core() / 2 -
-                           input.device()->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        input.device()->l1_size_per_core() / 2 - input.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
 
     return num_tiles_in_row <= max_tiles;

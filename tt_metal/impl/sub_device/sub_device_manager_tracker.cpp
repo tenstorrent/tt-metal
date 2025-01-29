@@ -82,7 +82,7 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
     this->reset_sub_device_state(sub_device_manager->second);
-    const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
+    const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
     default_allocator->reset_allocator_size(BufferType::L1);
     // Shrink the global allocator size to make room for sub-device allocators
     auto local_l1_size = sub_device_manager->second->local_l1_size();
@@ -130,7 +130,7 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
     if (sub_device_ids.empty()) {
         // Global bank id needs to look up a bank from the compute grid (not the storage grid)
         // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
-        const auto& default_allocator = default_sub_device_manager_->get_initialized_allocator(SubDeviceId{0});
+        const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
         return default_allocator->get_lowest_occupied_l1_address(global_bank_id);
     } else {
         DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
