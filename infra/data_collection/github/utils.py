@@ -90,9 +90,12 @@ def return_first_string_starts_with(starting_string, strings):
     raise Exception(f"{strings} do not have any that match {starting_string}")
 
 
-def get_job_failure_signature_(github_job) -> Optional[Union[InfraErrorV1]]:
-    if github_job["conclusion"] == "success":
-        return None
+def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
+
+    # a little hacky
+    if 'timed out' in failure_description:
+        return str(InfraErrorV1.JOB_TIMEOUT_FAILURE)
+
     for step in github_job["steps"]:
         is_generic_setup_failure = (
             step["name"] == "Set up runner"
@@ -103,10 +106,24 @@ def get_job_failure_signature_(github_job) -> Optional[Union[InfraErrorV1]]:
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
-    return None
+    return str(InfraErrorV1.GENERIC_FAILURE)
 
 
-def get_job_row_from_github_job(github_job):
+def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
+    if github_job["conclusion"] == "success":
+        return None, None
+
+    failure_signature, failure_description = None, None
+    job_id = github_job['id']
+    if job_id in github_job_id_to_annotations:
+        annotation_info = github_job_id_to_annotations[job_id]
+        failure_description = next((d['message'] for d in annotation_info if d['annotation_level'] == 'failure'), None)
+        if failure_description:
+            failure_signature = get_job_failure_signature_(github_job, failure_description)
+    return failure_signature, failure_description
+
+
+def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
     github_job_id = github_job["id"]
 
     logger.info(f"Processing github job with ID {github_job_id}")
@@ -209,7 +226,9 @@ def get_job_row_from_github_job(github_job):
 
     github_job_link = github_job["html_url"]
 
-    failure_signature = get_job_failure_signature_(github_job)
+    failure_signature, failure_description = get_failure_signature_and_description_from_annotations(
+        github_job, github_job_id_to_annotations
+    )
 
     return {
         "github_job_id": github_job_id,
@@ -227,11 +246,12 @@ def get_job_row_from_github_job(github_job):
         "docker_image": docker_image,
         "github_job_link": github_job_link,
         "failure_signature": failure_signature,
+        "failure_description": failure_description
     }
 
 
-def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json):
-    return list(map(get_job_row_from_github_job, github_jobs_json["jobs"]))
+def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
+    return list(map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"]))
 
 
 def get_github_partial_benchmark_json_filenames():
