@@ -33,8 +33,6 @@ def test_expand(input_shape, output_shape, tensor_layout, device):
     output_tensor = ttnn.expand(input_tensor, output_shape)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    print(output_tensor.shape)
-    print(torch_output_tensor.shape)
     assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
 
 
