@@ -14,7 +14,7 @@
 #include <core_descriptor.hpp>
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <utils.hpp>

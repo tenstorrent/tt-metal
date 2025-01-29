@@ -29,7 +29,7 @@
 #include <host_api.hpp>
 #include <circular_buffer_constants.h>
 #include <circular_buffer.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
