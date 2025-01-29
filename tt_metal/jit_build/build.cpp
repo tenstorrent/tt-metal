@@ -229,8 +229,13 @@ void JitBuildState::finish_init() {
             ((this->env_.arch_ == tt::ARCH::GRAYSKULL or this->env_.arch_ == tt::ARCH::WORMHOLE_B0))) {
             this->link_objs_ += build_dir + "ncrisc-halt.o ";
         }
+        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
+            this->link_objs_ += build_dir + "ncrisc-halt-wormhole.o ";
+        }
     } else {
-        if (this->target_name_ != "erisc") {
+        if (this->target_name_ == "ncrisc" and this->env_.arch_ == tt::ARCH::WORMHOLE_B0) {
+            this->link_objs_ += build_dir + "tmu-crt0k-ncrisc.o ";
+        } else if (this->target_name_ != "erisc") {
             this->link_objs_ += build_dir + "tmu-crt0k.o ";
         }
     }
