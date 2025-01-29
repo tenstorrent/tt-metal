@@ -8,6 +8,7 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -55,7 +56,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
                 // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -152,7 +153,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_blocks = dispatch_constants::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
-        if (device_->dispatch_s_enabled() || true) {  // Just to make it match previous implementation
+        if (DispatchQueryManager::instance().dispatch_s_enabled() ||
+            true) {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
                 // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -168,7 +170,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
         static_config_.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
-        static_config_.dispatch_s_cb_log_page_size = device_->dispatch_s_enabled()
+        static_config_.dispatch_s_cb_log_page_size = DispatchQueryManager::instance().dispatch_s_enabled()
                                                          ? dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE
                                                          : dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
     } else {
@@ -184,7 +186,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
         // Downstream
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
         } else {
             TT_ASSERT(downstream_kernels_.size() == 1);
@@ -209,7 +211,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 TT_FATAL(false, "Unrecognized downstream kernel.");
             }
         }
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             // Should have found dispatch_s in the downstream kernels
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
@@ -247,7 +249,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
             router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
 
         // Downstream, expect a DISPATCH_D and s DISPATCH_S
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
         } else {
             TT_ASSERT(downstream_kernels_.size() == 1);
@@ -272,7 +274,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 TT_FATAL(false, "Unrecognized downstream kernel.");
             }
         }
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             // Should have found dispatch_s in the downstream kernels
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
@@ -280,7 +282,9 @@ void PrefetchKernel::GenerateDependentConfigs() {
             TT_ASSERT(found_dispatch && ~found_dispatch_s);
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
             dependent_config_.downstream_dispatch_s_cb_sem_id =
-                device_->dispatch_s_enabled() ? UNUSED_SEM_ID : 1;  // Just to make it match previous implementation
+                DispatchQueryManager::instance().dispatch_s_enabled()
+                    ? UNUSED_SEM_ID
+                    : 1;  // Just to make it match previous implementation
         }
     } else {
         TT_FATAL(false, "PrefetchKernel must be one of (or both) H and D variants");

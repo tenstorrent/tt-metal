@@ -38,6 +38,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "umd/device/tt_xy_pair.h"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include <hal.hpp>
 
@@ -355,7 +356,7 @@ void EnqueueTraceCommand::process() {
         align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * descriptor->descriptors.size();
 
     uint32_t cmd_sequence_sizeB =
-        this->device->dispatch_s_enabled() *
+        DispatchQueryManager::instance().dispatch_s_enabled() *
             hal.get_alignment(
                 HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +        // go signal cmd
@@ -365,7 +366,7 @@ void EnqueueTraceCommand::process() {
                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                   // be sent when dispatch is distributed on 2 cores)
-         (this->device->distributed_dispatcher()) * hal.get_alignment(HalMemType::HOST)) *
+         (DispatchQueryManager::instance().distributed_dispatcher()) * hal.get_alignment(HalMemType::HOST)) *
             num_sub_devices +
         hal.get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
 
@@ -374,7 +375,7 @@ void EnqueueTraceCommand::process() {
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (this->device->dispatch_s_enabled()) {
+    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
         uint16_t index_bitmask = 0;
         for (const auto& id : descriptor->sub_device_ids) {
             index_bitmask |= 1 << id.to_index();
@@ -430,7 +431,7 @@ void EnqueueTraceCommand::process() {
         auto index = id.to_index();
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(index);
-        if (this->device->distributed_dispatcher()) {
+        if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 false,
                 dispatch_message_addr,
@@ -477,7 +478,7 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-    if (this->device->dispatch_s_enabled()) {
+    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
         // Terminate dispatch_s if enabled
         cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
         HugepageDeviceCommand dispatch_s_command_sequence(cmd_region, cmd_sequence_sizeB);

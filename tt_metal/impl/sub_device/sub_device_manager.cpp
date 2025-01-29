@@ -18,6 +18,7 @@
 #include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -304,7 +305,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = device_->dispatch_go_signal_noc();
+    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();

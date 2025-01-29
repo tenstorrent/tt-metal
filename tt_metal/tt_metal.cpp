@@ -30,6 +30,7 @@
 #include <global_semaphore.hpp>
 #include <sub_device_types.hpp>
 #include <global_circular_buffer.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
@@ -990,6 +991,7 @@ IDevice* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
     auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
