@@ -20,6 +20,8 @@
 
 #include "llrt.hpp"
 
+#include "dprint_server.hpp"
+
 namespace tt {
 
 namespace tt_metal {
