@@ -13,7 +13,7 @@ run_t3000_ttmetal_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
-  ./build/test/tt_metal/distributed/distributed_unit_tests
+  ./build/test/tt_metal/distributed/distributed_unit_tests_${ARCH_NAME}
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth_${ARCH_NAME} --gtest_filter="DeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth_${ARCH_NAME} --gtest_filter="DeviceFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips" ; fail+=$?
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth_${ARCH_NAME} --gtest_filter="DeviceFixture.ActiveEthKernelsDirectRingGatherAllChips" ; fail+=$?
