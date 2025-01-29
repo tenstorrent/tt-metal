@@ -57,7 +57,7 @@ void kernel_main() {
     constexpr uint64_t r_offset_to_use = tensor_is_dram ? OFFSET_64 : OFFSET_16;
 
     constexpr uint32_t r_alignment_requirement = tensor_is_dram ? 64 : 16;
-    const uint32_t w_alignment_requirement = 16;
+    constexpr uint32_t w_alignment_requirement = 16;
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 

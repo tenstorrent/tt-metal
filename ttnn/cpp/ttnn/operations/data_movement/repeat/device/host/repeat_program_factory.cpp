@@ -19,6 +19,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
+#define READ_ALIGNMENT 64
+
 namespace ttnn::operations::data_movement::repeat {
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
@@ -57,11 +59,11 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     uint32_t number_of_pages = input_log_shape[-2];
     uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
     uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t cb_size_bytes = 128 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
-                             : (source_page_size_bytes & 0x7) == 0     ? source_page_size_bytes * 2
-                             : (source_page_size_bytes & 0x3) == 0     ? source_page_size_bytes * 4
-                             : (source_page_size_bytes & 0x1) == 0     ? source_page_size_bytes * 8
-                                                                       : source_page_size_bytes * 16;
+    uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
+                             : (source_page_size_bytes & 0x7) == 0                    ? source_page_size_bytes * 2
+                             : (source_page_size_bytes & 0x3) == 0                    ? source_page_size_bytes * 4
+                             : (source_page_size_bytes & 0x1) == 0                    ? source_page_size_bytes * 8
+                                                                                      : source_page_size_bytes * 16;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -157,7 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t number_of_lower_pages = input_log_shape[2];
     uint32_t number_of_rep_dim_pages = input_log_shape[1];
     uint32_t src0_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t cb_size_bytes = 128 + page_size_bytes;
+    uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + page_size_bytes;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
