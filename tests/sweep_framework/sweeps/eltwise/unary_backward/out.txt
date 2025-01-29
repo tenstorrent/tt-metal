@@ -1,0 +1,107 @@
+2025-01-30 10:45:12.660 | DEBUG    | ttnn:<module>:82 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2025-01-30 10:45:12.735 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2025-01-30 10:45:12.736 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.Conv1d be migrated to C++?
+2025-01-30 10:45:12.736 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.conv2d be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.from_torch be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.to_torch be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.to_device be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.from_device be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.deallocate be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.reallocate be migrated to C++?
+2025-01-30 10:45:12.737 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.load_tensor be migrated to C++?
+2025-01-30 10:45:12.738 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.dump_tensor be migrated to C++?
+2025-01-30 10:45:12.738 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.as_tensor be migrated to C++?
+2025-01-30 10:45:12.741 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.conv_transpose2d be migrated to C++?
+2025-01-30 10:45:12.743 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.conv2d be migrated to C++?
+2025-01-30 10:45:12.743 | DEBUG    | ttnn.decorators:operation_decorator:807 - Should ttnn.Conv1d be migrated to C++?
+[38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+
+[32m2025-01-30 10:45:12.841[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Opened PCI device 0; KMD version: 1.30.0, IOMMU: disabled
+[32m2025-01-30 10:45:12.842[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected PCI devices: [0]
+[32m2025-01-30 10:45:12.842[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Using local chip ids: {0} and remote chip ids {}
+[32m2025-01-30 10:45:12.854[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+[32m2025-01-30 10:45:12.854[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+[32m2025-01-30 10:45:12.855[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+[32m2025-01-30 10:45:12.855[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+[32m2025-01-30 10:45:12.861[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Software version 6.0.0, Ethernet FW version 6.10.0 (Device 0)
+[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1000 MHz
+[38;2;000;128;000m                  Metal[0m | [1m[38;2;255;165;000mWARNING [0m | Circular buffer indices are not contiguous starting at 0. This will hurt dispatch performance. Non-contiguous indices: 2. First unused index: 1. Kernels: reader_unary_sharded, eltwise_sfpu
+[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+/home/ubuntu/tt-metal/ttnn/ttnn/operations/unary_backward.py:28: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+  pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
+/home/ubuntu/tt-metal/ttnn/ttnn/operations/unary_backward.py:28: UserWarning: To copy construct from a tensor, it is recommended to use sourceTensor.clone().detach() or sourceTensor.clone().detach().requires_grad_(True), rather than torch.tensor(sourceTensor).
+  pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
+384
+(False, '0.9636454690451458')
+(False, '0.3535835634074373')
+(False, '0.922392836738907')
+(False, '0.1778739005234104')
+(False, '0.6122729646807337')
+(False, '0.9451977016051503')
+(False, '0.1772568924869947')
+(False, '0.6428356658962175')
+(False, '0.3521915156535903')
+(False, '0.3032616643354411')
+(False, '0.8662799709340462')
+(False, '0.24910511609031924')
+(False, '0.43291582967188535')
+(False, '0.43215632525518416')
+(False, '0.5010517499554019')
+(False, '0.8378102246607806')
+(False, '0.3531095801409135')
+(False, '0.8656114715651364')
+(False, '0.8666646104531196')
+(False, '0.8656238498634459')
+(False, '0.9364836954350094')
+(False, '0.7067257173328397')
+(False, '0.248453844321115')
+(False, '0.3512007124828225')
+(False, '0.17844054960991526')
+(False, '0.24581412128263563')
+(False, '0.7902814758629136')
+(False, '0.7050618908999845')
+(False, '0.1761633284223134')
+(False, '0.1735267788972067')
+(False, '0.4332158661838002')
+(False, '0.6123938231388601')
+(False, '0.17589759408360406')
+(False, '0.30656692008698105')
+(False, '0.17671916872634882')
+(False, '0.4328251881886327')
+(False, '0.3533506492586587')
+(False, '0.5000912396660948')
+(False, '0.7068122669410014')
+(False, '0.707241384516332')
+(False, '0.7074581953802422')
+(False, '0.17594115779149014')
+(False, '0.8838215137869849')
+(False, '0.7087043593920027')
+(False, '0.4685286699634628')
+(False, '0.9851471861999312')
+(False, '0.7075907343838252')
+(False, '0.17677837303620694')
+(False, '0.3542082815288348')
+(False, '0.9968420405445816')
+(False, '0.7117020173482645')
+(False, '0.4693651854941931')
+(False, '0.42157732708975726')
+(False, '0.737754871626045')
+(False, '0.5310443677136086')
+(False, '0.9276377701407869')
+(False, '0.9404839992682138')
+(False, '0.41239469012528224')
+(False, '0.61428793572995')
+(False, '0.9384383968440725')
+(False, '0.5935170711565035')
+(False, '0.5001282712800994')
+(False, '0.8317246789094025')
+(False, '0.4824017267281414')
+(False, '0.672736567049111')
+0 crash, 65 fail, 319 pass (83.07291666666666%)
+[38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Closing user mode device drivers
