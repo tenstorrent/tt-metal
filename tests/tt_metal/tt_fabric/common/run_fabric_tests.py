@@ -10,6 +10,9 @@ DEFAULT_TEST_CONFIG = "tests/tt_metal/tt_fabric/common/fabric_test_config.json"
 FABRIC_TESTS_DIR = "test/tt_metal/perf_microbenchmark/routing"
 TOP_LEVEL_KEY = "fabric_test_config"
 
+TEST_GROUP_CHOICES = ["sanity", "benchmark", "all"]
+BOARD_TYPE_CHOICES = ["n300", "t3k", "glx8", "glx16", "glx32"]
+
 # env vars
 TT_METAL_HOME = os.getenv("TT_METAL_HOME")
 ARCH_NAME = os.getenv("ARCH_NAME")
@@ -54,24 +57,26 @@ def run_test(test_file, params):
     # TODO: add timeouts
     result = subprocess.run(command, shell=True, capture_output=True, env=full_env)
     if result.returncode:
-        print(f"Test failed")
+        print("Test failed")
         print(result.stdout.decode("utf-8"))
         print(result.stderr.decode("utf-8"))
         NUM_FAILED_TESTS += 1
 
-    return result.stdout.decode("utf-8")
+    return result.returncode, result.stdout.decode("utf-8")
 
 
-def parse_perf_output(perf_type, output):
+def parse_perf_from_output(perf_type, output):
     if "bandwidth" == perf_type:
         pattern = r"(Total TX BW = )([0-9\.]*)( B/cycle)"
         result = re.findall(pattern, output)
         return float(result[0][1])
+    else:
+        return None
 
 
-def check_perf(perf_type, expectation, tolerance, output):
+def compare_perf(perf_type, expectation, tolerance, output):
     global NUM_FAILED_TESTS
-    test_perf = parse_perf_output(perf_type, output)
+    test_perf = parse_perf_from_output(perf_type, output)
     if "bandwidth" == perf_type:
         if test_perf >= (1 - tolerance) * expectation:
             print(
@@ -98,7 +103,7 @@ def parse_and_run_tests(test_config, group_name, board_type):
         if "benchmark" == group_name:
             assert "perf_expectation" in test
             benchmark = True
-        param_str = " --board_type " + board_type + " "
+        param_str = convert_to_param("board_type", board_type)
         for key, value in test["test_params"].items():
             param_str += convert_to_param(key, value)
         if "paramterize" in test:
@@ -106,25 +111,27 @@ def parse_and_run_tests(test_config, group_name, board_type):
             for key, values in test["paramterize"].items():
                 for i in range(len(values)):
                     add_param = convert_to_param(key, values[i])
-                    output = run_test(test_file, param_str + add_param)
+                    return_code, output = run_test(test_file, param_str + add_param)
                     # TODO: check only for tests that ran successfully
-                    if benchmark:
-                        outcome = check_perf(
+                    if benchmark and not return_code:
+                        outcome = compare_perf(
                             test["perf_type"], test["perf_expectation"][i], test["perf_tolerance"], output
                         )
 
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("--test-group", type=str, choices=["sanity", "benchmark", "all"], default="sanity")
-    parser.add_argument("--board-type", type=str, choices=["n300", "t3k", "glx32"], default="glx32")
+    parser.add_argument("--test-group", type=str, choices=TEST_GROUP_CHOICES, default="sanity")
+    parser.add_argument("--board-type", type=str, choices=BOARD_TYPE_CHOICES, default="glx32")
     parser.add_argument("--test-config", type=str, default=DEFAULT_TEST_CONFIG)
     args = parser.parse_args()
 
     test_config = read_test_config(args.test_config)
+    test_groups = [x for x in TEST_GROUP_CHOICES if x is not "all"]
+    print(test_groups)
     if "all" == args.test_group:
-        parse_and_run_tests(test_config, "benchmark", args.board_type)
-        parse_and_run_tests(test_config, "sanity", args.board_type)
+        for group in test_groups:
+            parse_and_run_tests(test_config, group, args.board_type)
     else:
         parse_and_run_tests(test_config, args.test_group, args.board_type)
 
