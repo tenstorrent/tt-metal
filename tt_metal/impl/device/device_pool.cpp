@@ -11,6 +11,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/fabric/control_plane.hpp"
 
 using namespace tt::tt_metal;
 

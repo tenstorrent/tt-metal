@@ -655,4 +655,6 @@ void ControlPlane::print_ethernet_channels() const {
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
+void ControlPlane::initialize_fabric_kernels() const {}
+
 }  // namespace tt::tt_fabric

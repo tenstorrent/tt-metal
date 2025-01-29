@@ -747,4 +747,91 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
+std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
+    auto fabric_program_ptr = std::make_unique<Program>();
+    constexpr uint32_t default_tunneler_queue_size_bytes = 0x8000;  // maximum queue (power of 2)
+    constexpr uint32_t default_tunneler_test_results_addr =
+        0x39000;  // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
+    // TODO: the size below is overriding eth barrier, need to fix this
+    constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
+
+    if (run_gk_on_idle_ethernet) {
+        routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    } else {
+        routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    }
+    gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+    socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+
+    // create router kernels
+    std::vector<uint32_t> router_compile_args = {
+        (tunneler_queue_size_bytes >> 4),    // 0: rx_queue_size_words
+        default_tunneler_test_results_addr,  // 1: test_results_addr
+        default_tunneler_test_results_size,  // 2: test_results_size
+        0,                                   // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+    };
+    std::vector<uint32_t> zero_buf(1, 0);
+
+    std::uint32_t num_routers = device->get_active_ethernet_cores().size();  // TODO: should get this from control plane
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        const auto& router_physical_core = device->ethernet_core_from_logical_core(router_logical_core);
+        // setup run time args
+        std::vector<uint32_t> runtime_args = {
+            num_routers,        // 0: number of active fabric routers
+            /*router_mask*/ 0,  // 1: active fabric router mask, should be unused by kernels
+            gk_interface_addr,  // 2: gk_message_addr_l
+            gk_noc_offset,      // 3: gk_message_addr_h
+        };
+
+        // initialize the semaphore
+        tt::llrt::write_hex_vec_to_core(device->id(), router_physical_core, zero_buf, FABRIC_ROUTER_SYNC_SEM);
+
+        auto kernel = tt_metal::CreateKernel(
+            fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
+            router_logical_cores[i],
+            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = compile_args, .defines = defines});
+
+        tt_metal::SetRuntimeArgs(program_handle, kernel, router_logical_core, runtime_args);
+    }
+
+    // create gatekeeper kernel
+    uint32_t num_routers = router_logical_cores.size();
+    std::vector<uint32_t> zero_buf(12, 0);
+
+    std::vector<uint32_t> runtime_args = {
+        num_routers,  // 0: number of active fabric routers
+        router_mask,  // 1: active fabric router mask
+    };
+
+    // initialize the semaphore
+    tt::llrt::write_hex_vec_to_core(device_handle->id(), gk_phys_core, zero_buf, gk_interface_addr);
+
+    KernelHandle kernel;
+
+    if (run_gk_on_idle_ethernet) {
+        kernel = tt_metal::CreateKernel(
+            program_handle,
+            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+            {gk_logical_core},
+            tt_metal::EthernetConfig{
+                .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = compile_args, .defines = defines});
+    } else {
+        kernel = tt_metal::CreateKernel(
+            program_handle,
+            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+            {gk_logical_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = compile_args,
+                .defines = defines});
+    }
+
+    tt_metal::SetRuntimeArgs(program_handle, kernel, gk_logical_core, runtime_args);
+    return fabric_program_ptr;
+}
+
+void configure_fabric_cores(IDevice* device) {}
+
 }  // namespace tt::tt_metal
