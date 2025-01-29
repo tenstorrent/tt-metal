@@ -1160,9 +1160,7 @@ tt::ARCH Device::arch() const {
     return tt::Cluster::instance().arch();
 }
 
-int Device::num_dram_channels() const {
-    return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_channels();
-}
+int Device::num_dram_channels() const { return tt::Cluster::instance().get_soc_desc(id_).get_num_dram_views(); }
 
 uint32_t Device::l1_size_per_core() const {
     return tt::Cluster::instance().get_soc_desc(id_).worker_l1_size;

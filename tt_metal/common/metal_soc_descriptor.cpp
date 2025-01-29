@@ -139,7 +139,6 @@ CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(thi
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
-    int num_dram_channels = this->get_num_dram_channels();
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
     this->view_eth_dram_core.clear();
     for (const auto& core_node : device_descriptor_yaml["dram_view_eth_endpoint"]) {
@@ -312,8 +311,8 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
     }
 
     int coreCount = this->physical_routing_to_profiler_flat_id.size();
-    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_channels();
-    if ((coreCount % this->get_num_dram_channels()) > 0) {
+    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_views();
+    if ((coreCount % this->get_num_dram_views()) > 0) {
         this->profiler_ceiled_core_count_perf_dram_bank++;
     }
 
