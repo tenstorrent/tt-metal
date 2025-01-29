@@ -73,11 +73,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
     uint32_t start_addr = input_tensor.buffer()->address();
-    if (misalignment == 0) {
-        start_addr += begins_bytes;
-    }
     std::vector<uint32_t> common_reader_kernel_args = {
-        start_addr,
+        start_addr + begins_bytes - misalignment,  // read from nearest aligned address
         padded_row_size_bytes,
         unpadded_row_size_bytes,
         unpadded_row_size_bytes_offset,
