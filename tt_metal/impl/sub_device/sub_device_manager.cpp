@@ -107,7 +107,7 @@ uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id
     return noc_unicast_data_start_index_[sub_device_index];
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
@@ -237,7 +237,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->get_initialized_allocator()->get_config();
+    const auto& global_allocator_config = device_->allocator()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -254,8 +254,7 @@ void SubDeviceManager::populate_sub_allocators() {
         l1_bank_remap.reserve(compute_cores_vec.size());
         for (const auto& core : compute_cores_vec) {
             // These are compute cores, so they should have a single bank
-            l1_bank_remap.push_back(
-                device_->get_initialized_allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
+            l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,

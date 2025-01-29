@@ -444,7 +444,7 @@ void add_paged_dram_data_to_device_data(
     uint32_t last_page = start_page + pages;
     for (uint32_t page_idx = start_page; page_idx < last_page; page_idx++) {
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-        auto dram_channel = device->get_initialized_allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
         uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
@@ -500,7 +500,7 @@ void gen_dram_packed_read_cmd(
         uint32_t page_idx = sub_cmd.start_page;
         for (uint32_t i = 0; i < length_words; i += page_size_words) {
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
-            auto dram_channel = device->get_initialized_allocator()->get_dram_channel_from_bank_id(dram_bank_id);
+            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
             uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
 
@@ -1041,7 +1041,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     add_prefetcher_cmd(exec_buf_cmds, empty_sizes, CQ_PREFETCH_CMD_EXEC_BUF_END, dispatch_cmds);
 
     // writes cmds to dram
-    num_dram_banks_g = device->get_initialized_allocator()->get_num_banks(BufferType::DRAM);
+    num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);
 
     uint32_t page_size = 1 << exec_buf_log_page_size_g;
 
@@ -1619,9 +1619,8 @@ void write_prefetcher_cmds(
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
 void initialize_dram_banks(IDevice* device) {
-    auto num_banks = device->get_initialized_allocator()->get_num_banks(BufferType::DRAM);
-    auto bank_size = DRAM_DATA_SIZE_WORDS *
-                     sizeof(uint32_t);  // device->get_initialized_allocator()->get_bank_size(BufferType::DRAM);
+    auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
+    auto bank_size = DRAM_DATA_SIZE_WORDS * sizeof(uint32_t);  // device->allocator()->get_bank_size(BufferType::DRAM);
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
@@ -1730,7 +1729,7 @@ void configure_for_single_chip(
     phys_dispatch_relay_demux_core = device->worker_core_from_logical_core(dispatch_relay_demux_core);
 
     // Packetized components will write their status + a few debug values here:
-    uint32_t l1_unreserved_base = device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     packetized_path_test_results_addr = l1_unreserved_base;
 
     // Want different buffers on each core, instead use big buffer and self-manage it
@@ -2435,7 +2434,7 @@ void configure_for_multi_chip(
     log_info(LogTest, "Right Tunneler = {}", r_tunneler_logical_core.str());
 
     // Packetized components will write their status + a few debug values here:
-    uint32_t l1_unreserved_base = device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     packetized_path_test_results_addr = l1_unreserved_base;
     uint32_t tunneler_queue_start_addr = 0x19000;
     uint32_t tunneler_queue_size_bytes = 0x10000;
@@ -3311,7 +3310,7 @@ int main(int argc, char** argv) {
         tt_metal::Program program_r = tt_metal::CreateProgram();
 
         void* host_hugepage_base;
-        uint32_t l1_unreserved_base = device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t packetized_path_test_results_size = 1024;
         uint32_t l1_unreserved_base_aligned = tt::align(
             l1_unreserved_base + packetized_path_test_results_size,
@@ -3363,8 +3362,7 @@ int main(int argc, char** argv) {
                 dev_hugepage_base_g);
         }
 
-        if ((1 << exec_buf_log_page_size_g) * device->get_initialized_allocator()->get_num_banks(BufferType::DRAM) >
-            cmddat_q_size_g) {
+        if ((1 << exec_buf_log_page_size_g) * device->allocator()->get_num_banks(BufferType::DRAM) > cmddat_q_size_g) {
             log_fatal("Exec buffer must fit in cmddat_q, page size too large ({})", 1 << exec_buf_log_page_size_g);
             exit(0);
         }
@@ -3407,7 +3405,7 @@ int main(int argc, char** argv) {
             (uint32_t*)host_hugepage_completion_buffer_base_g,
             false,
             DRAM_DATA_SIZE_WORDS);
-        num_dram_banks_g = device->get_initialized_allocator()->get_num_banks(BufferType::DRAM);
+        num_dram_banks_g = device->allocator()->get_num_banks(BufferType::DRAM);
 
         if (debug_g) {
             initialize_dram_banks(device);
