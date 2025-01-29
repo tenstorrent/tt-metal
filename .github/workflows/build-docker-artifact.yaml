@@ -19,6 +19,7 @@ on:
 jobs:
   build-docker-image:
     name: "🐳️ Build ${{ inputs.os }} image"
+    timeout-minutes: 30
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       CONFIG: ci
