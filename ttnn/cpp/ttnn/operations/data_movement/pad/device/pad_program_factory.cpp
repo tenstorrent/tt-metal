@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "tt-metalium/logger.hpp"
+#include "tt-metalium/math.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
@@ -792,6 +794,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
+uint32_t get_num_max_sticks(uint32_t num_sticks_to_read, uint32_t stick_size, uint32_t max_read_size) {
+    uint32_t num_sticks = tt::round_up(max_read_size, stick_size) / stick_size;
+    while (num_sticks * stick_size > max_read_size || num_sticks_to_read % num_sticks != 0) {
+        num_sticks--;
+    }
+    return num_sticks;
+}
+
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const Tensor& a,
     Tensor& output,
@@ -841,8 +851,15 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
                           ? num_sticks_padded_per_core_group_1
                           : num_sticks_padded_per_core_group_2;
 
+    uint32_t max_read_size = 256 * 1024;
+    uint32_t W_bytes = a.get_padded_shape()[3] * a.element_size();
+    auto num_sticks_per_core_read = get_num_max_sticks(num_sticks, W_bytes, max_read_size);
+
+    auto input_cb_pages = std::min(num_sticks_per_core_read, num_sticks);
+
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            input_cb_pages * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size_padded_aligned);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 

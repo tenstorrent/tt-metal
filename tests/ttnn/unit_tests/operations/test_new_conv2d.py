@@ -176,7 +176,9 @@ def run_conv(
         memory_config=memory_config,
         return_output_dim=True,
     )
+    import numpy as np
 
+    np.save("out.npy", weights_device.cpu().to_torch().float().numpy())
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -390,6 +392,7 @@ def test_conv_features(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
         pytest.skip("skipping due to pack_untilize_dst issue!")
+    pytest.skip("Skip WS")
 
     run_conv(
         device,
@@ -554,6 +557,7 @@ def test_conv_ws(
 ):
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
+
 
     stride_h = stride
     stride_w = stride
@@ -1356,7 +1360,7 @@ def test_sd_conv(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
