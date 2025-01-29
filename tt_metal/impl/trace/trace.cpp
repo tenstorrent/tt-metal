@@ -70,7 +70,7 @@ std::atomic<uint32_t> Trace::global_trace_id = 0;
 uint32_t Trace::next_id() { return global_trace_id++; }
 
 std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
-    return std::make_shared<TraceBuffer>(std::make_shared<detail::TraceDescriptor>(), nullptr);
+    return std::make_shared<TraceBuffer>(std::make_shared<TraceDescriptor>(), nullptr);
 }
 
 void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
