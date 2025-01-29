@@ -5,6 +5,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <thread>
 
@@ -73,7 +74,7 @@ using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescripto
 
 class CommandQueue {
 public:
-    CommandQueue(IDevice* device, uint32_t id, NOC noc_index);
+    CommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core = 0);
 
     ~CommandQueue();
 
@@ -146,6 +147,7 @@ public:
 private:
     uint32_t id_;
     uint32_t size_B;
+    uint32_t completion_queue_reader_core = 0;
     std::optional<uint32_t> tid_;
     std::shared_ptr<detail::TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;

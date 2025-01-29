@@ -57,7 +57,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     auto all_cores = sender_cores.merge(receiver_cores).merge(dummy_receiver_cores);
     auto device = devices_[0];
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), receiver_cores}};
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{sender_core, receiver_cores}};
     auto global_cb = tt::tt_metal::v1::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     std::vector<std::pair<CoreCoord, CoreRangeSet>> dummy_sender_receiver_core_mapping = {
