@@ -115,7 +115,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (getenv("TT_METAL_GTEST_ETH_DISPATCH")) {
-        this->dispatch_core_config.set_dispatch_core_type(tt_metal::DispatchCoreType::ETH);
+        this->dispatch_core_type = tt_metal::DispatchCoreType::ETH;
     }
 
     if (getenv("TT_METAL_SKIP_LOADING_FW")) {
@@ -379,6 +379,14 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
+}
+
+// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
+// depends on RTOptions settings.
+tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() {
+    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
+    dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
+    return dispatch_core_config;
 }
 
 }  // namespace llrt
