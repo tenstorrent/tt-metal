@@ -12,6 +12,8 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+  schedule:
+    - cron: "0 2,11 * * *"
 
 permissions:
   actions: read
