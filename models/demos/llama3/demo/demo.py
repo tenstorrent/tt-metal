@@ -537,10 +537,15 @@ def run_llama3_demo(
         if tt_model.args.num_devices > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
-                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                    tt_out,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=model_args.ccl_topology(),
                 )
             else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=model_args.ccl_topology())
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out

@@ -77,7 +77,6 @@ def tt_all_reduce(
             dims=[dim],
             output=None,
             compute_kernel_config=None,
-            topology=topology,
             memory_config=ttnn.L1_MEMORY_CONFIG if sharded else ttnn.DRAM_MEMORY_CONFIG,
         )
         gathered_tensor.deallocate(True)
