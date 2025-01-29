@@ -85,8 +85,8 @@ $LLAMA_DIR/TG   # For TG
 
 The Llama3 demo includes 3 main modes of operation and is fully parametrized to support other configurations.
 
-- `batch-1`: Runs a small prompt for a single user
-- `batch-32`: Runs a small prompt for a a batch of 32 users
+- `batch-1`: Runs a small prompt (128 tokens) for a single user
+- `batch-32`: Runs a small prompt (128 tokens) for a a batch of 32 users
 - `long-context`: Runs a large prompt (64k tokens) for a single user
 
 If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/simple_text_demo.py`. For convenience we list all the supported params below:
@@ -100,6 +100,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `paged_attention (bool)`: Whether to use paged attention or default attention (vLLM support (WIP) requires paged attention)
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
+- `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
 - `optimization (LlamaOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
@@ -127,6 +128,14 @@ pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and long"
 The above examples are run in `LlamaOptimizations.performance` mode.
 You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
+#### Custom input arguments
+To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/demos/llama3/demo/conftest.py`.
+
+An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
+
+```
+pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
+```
 
 ### Expected performance and accuracy
 
