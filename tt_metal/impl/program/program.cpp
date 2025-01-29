@@ -18,7 +18,7 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <semaphore.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include <device.hpp>
 #include <command_queue.hpp>
 #include <hardware_command_queue.hpp>

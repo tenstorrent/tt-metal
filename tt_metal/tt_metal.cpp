@@ -15,7 +15,7 @@
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
 

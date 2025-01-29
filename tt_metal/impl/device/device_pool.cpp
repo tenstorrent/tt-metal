@@ -7,6 +7,13 @@
 
 #include <numa.h>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dprint_server.hpp"
+#include "host_api.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"

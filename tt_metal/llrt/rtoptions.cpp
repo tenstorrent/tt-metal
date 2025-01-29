@@ -10,7 +10,6 @@
 #include <cstring>
 #include <string>
 
-#include <dprint_server.hpp>
 #include <profiler_state.hpp>
 
 using std::vector;
