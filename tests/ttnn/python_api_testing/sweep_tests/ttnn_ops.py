@@ -2772,7 +2772,6 @@ def arange(
     output_mem_config,
     **kwargs,
 ):
-    # t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.arange(start, end, step, dtype=dtype[0], device=device, memory_config=input_mem_config[0])
     return ttnn_tensor_to_torch(t1)
 
@@ -2874,8 +2873,6 @@ def zeros(
     output_mem_config,
     **kwargs,
 ):
-    # t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
     t1 = ttnn.zeros(
         x.shape,
         device=device,
