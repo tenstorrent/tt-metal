@@ -290,8 +290,8 @@ void DevicePool::activate_device(chip_id_t id) {
             this->trace_region_size,
             this->l1_bank_remap,
             false,
-            worker_core_thread_core);
-        // completion_queue_reader_core); BLOZANO: NEED TO RESOLVE HOW TO PASS THIS TO HWCMDQUEUE
+            worker_core_thread_core,
+            completion_queue_reader_core);
         device->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(device->build_key())) {
             device->build_firmware();

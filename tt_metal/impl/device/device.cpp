@@ -45,8 +45,9 @@ Device::Device(
     size_t trace_region_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
-    uint32_t worker_core) :
-    id_(device_id), worker_thread_core_(worker_core), work_executor_(worker_core, device_id)
+    uint32_t worker_thread_core,
+    uint32_t completion_queue_reader_core) :
+    id_(device_id), worker_thread_core_(worker_thread_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_thread_core, device_id)
 {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
@@ -972,7 +973,8 @@ void Device::init_command_queue_host() {
     hw_command_queues_.reserve(num_hw_cqs());
     sw_command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        hw_command_queues_.push_back(std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc));
+        hw_command_queues_.push_back(
+            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
         sw_command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id));
     }
 }

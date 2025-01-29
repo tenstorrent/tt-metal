@@ -41,7 +41,8 @@ public:
         std::size_t trace_region_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
-        uint32_t worker_core = 0);
+        uint32_t worker_thread_core = 0,
+        uint32_t completion_queue_reader_core = 0);
 
     ~Device() override;
 
@@ -293,7 +294,8 @@ private:
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
     WorkExecutor work_executor_;
-    uint32_t worker_thread_core_ = 0;
+    uint32_t worker_thread_core_;
+    uint32_t completion_queue_reader_core_;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 
