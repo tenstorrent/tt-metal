@@ -449,9 +449,10 @@ void EnqueueTerminateCommand::process() {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
 }
 
-void EnqueueAddBufferToProgramImpl(
+void EnqueueAddBufferToProgram(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    Program& program) {
+    Program& program,
+    bool blocking) {
     std::visit(
         [&program](auto&& b) {
             using buffer_type = std::decay_t<decltype(b)>;
@@ -462,19 +463,15 @@ void EnqueueAddBufferToProgramImpl(
         buffer);
 }
 
-void EnqueueAddBufferToProgram(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    Program& program,
+void EnqueueSetRuntimeArgs(
+    const std::shared_ptr<Kernel>& kernel,
+    const CoreCoord& core_coord,
+    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
     bool blocking) {
-    EnqueueAddBufferToProgramImpl(std::move(buffer), program);
-}
-
-void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
     std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve((*runtime_args_md.runtime_args_ptr).size());
+    resolved_runtime_args.reserve(runtime_args_ptr->size());
 
-    for (const auto& arg : *(runtime_args_md.runtime_args_ptr)) {
+    for (const auto& arg : *(runtime_args_ptr)) {
         std::visit(
             [&resolved_runtime_args](auto&& a) {
                 using T = std::decay_t<decltype(a)>;
@@ -486,34 +483,11 @@ void EnqueueSetRuntimeArgsImpl(const RuntimeArgsMetadata& runtime_args_md) {
             },
             arg);
     }
-    runtime_args_md.kernel->set_runtime_args(runtime_args_md.core_coord, resolved_runtime_args);
+    kernel->set_runtime_args(core_coord, resolved_runtime_args);
 }
 
-void EnqueueSetRuntimeArgs(
-    CommandQueue& cq,
-    const std::shared_ptr<Kernel>& kernel,
-    const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
-    bool blocking) {
-    auto runtime_args_md = RuntimeArgsMetadata{
-        .core_coord = core_coord,
-        .runtime_args_ptr = std::move(runtime_args_ptr),
-        .kernel = kernel,
-    };
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::SET_RUNTIME_ARGS,
-        .blocking = blocking,
-        .runtime_args_md = runtime_args_md,
-    });
-}
-
-void EnqueueGetBufferAddrImpl(void* dst_buf_addr, const Buffer* buffer) {
+void EnqueueGetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
     *(static_cast<uint32_t*>(dst_buf_addr)) = buffer->address();
-}
-
-void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::GET_BUF_ADDR, .blocking = blocking, .shadow_buffer = buffer, .dst = dst_buf_addr});
 }
 
 inline namespace v0 {
@@ -546,12 +520,15 @@ void EnqueueReadSubBuffer(
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_READ_BUFFER,
-        .blocking = blocking,
-        .buffer = buffer,
-        .dst = dst,
-        .region = region});
+    std::visit(
+        [&](auto&& b) {
+            using T = std::decay_t<decltype(b)>;
+            if constexpr (
+                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
+                cq.enqueue_read_buffer(b, dst, region, blocking);
+            }
+        },
+        buffer);
 }
 
 void EnqueueWriteBuffer(
@@ -566,45 +543,48 @@ void EnqueueWriteBuffer(
 
 void EnqueueWriteSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
     bool blocking) {
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WRITE_BUFFER,
-        .blocking = blocking,
-        .buffer = buffer,
-        .src = std::move(src),
-        .region = region});
+    cq.enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 
-void EnqueueProgram(
-    CommandQueue& cq, Program& program, bool blocking) {
+void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
+    ZoneScoped;
     detail::DispatchStateCheck(true);
-    cq.run_command(
-        CommandInterface{.type = EnqueueCommandType::ENQUEUE_PROGRAM, .blocking = blocking, .program = &program});
+
+    IDevice* device = cq.device();
+    detail::CompileProgram(device, program);
+    program.allocate_circular_buffers(device);
+    detail::ValidateCircularBufferRegion(program, device);
+    cq.enqueue_program(program, blocking);
+    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
+    // leaks on device.
+    program.release_buffers();
 }
 
-void EnqueueRecordEvent(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void EnqueueRecordEvent(
+    CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_RECORD_EVENT,
-        .blocking = false,
-        .event = event,
-        .sub_device_ids = sub_device_ids
-    });
+    cq.enqueue_record_event(event, false, sub_device_ids);
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     detail::DispatchStateCheck(true);
-    cq.run_command(CommandInterface{
-        .type = EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT,
-        .blocking = false,
-        .event = event,
-    });
+    event->wait_until_ready();  // Block until event populated. Worker thread.
+    log_trace(
+        tt::LogMetal,
+        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
+        event->device->id(),
+        event->cq_id,
+        event->event_id,
+        cq.device()->id(),
+        cq.id());
+    cq.enqueue_wait_for_event(event);
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
@@ -645,13 +625,11 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     detail::DispatchStateCheck(true);
-    cq.run_command(
-        CommandInterface{.type = EnqueueCommandType::FINISH, .blocking = true, .sub_device_ids = sub_device_ids});
+    cq.finish(sub_device_ids);
     TT_ASSERT(
-        !(cq.hw_command_queue().is_dprint_server_hung()),
-        "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
+        !(cq.is_dprint_server_hung()), "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.");
     TT_ASSERT(
-        !(cq.hw_command_queue().is_noc_hung()),
+        !(cq.is_noc_hung()),
         "Command Queue could not finish: device hang due to illegal NoC transaction. See {} for details.",
         tt::watcher_get_log_file_name());
 }
@@ -659,292 +637,10 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     detail::DispatchStateCheck(true);
     TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
-    cq.run_command(
-        CommandInterface{.type = EnqueueCommandType::ENQUEUE_TRACE, .blocking = blocking, .trace_id = trace_id});
+    cq.enqueue_trace(trace_id, blocking);
 }
 
 }  // namespace v0
-
-void EnqueueReadBufferImpl(
-    CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
-    void* dst,
-    const BufferRegion& region,
-    bool blocking) {
-    std::visit(
-        [&](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (
-                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.hw_command_queue().enqueue_read_buffer(b, dst, region, blocking);
-            }
-        },
-        buffer);
-}
-
-void EnqueueWriteBufferImpl(
-    CommandQueue& cq,
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    HostDataType src,
-    const BufferRegion& region,
-    bool blocking) {
-    cq.hw_command_queue().enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
-}
-
-void EnqueueProgramImpl(
-    CommandQueue& cq, Program& program, bool blocking) {
-    ZoneScoped;
-
-    IDevice* device = cq.device();
-    detail::CompileProgram(device, program);
-    program.allocate_circular_buffers(device);
-    detail::ValidateCircularBufferRegion(program, device);
-    cq.hw_command_queue().enqueue_program(program, blocking);
-    // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
-    // leaks on device.
-    program.release_buffers();
-
-}
-
-void EnqueueRecordEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    cq.hw_command_queue().enqueue_record_event(event, false, sub_device_ids);
-}
-
-void EnqueueWaitForEventImpl(CommandQueue& cq, const std::shared_ptr<Event>& event) {
-    event->wait_until_ready();  // Block until event populated. Worker thread.
-    log_trace(
-        tt::LogMetal,
-        "EnqueueWaitForEvent() issued on Event(device_id: {} cq_id: {} event_id: {}) from device_id: {} cq_id: {}",
-        event->device->id(),
-        event->cq_id,
-        event->event_id,
-        cq.device()->id(),
-        cq.id());
-    cq.hw_command_queue().enqueue_wait_for_event(event);
-}
-
-void FinishImpl(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) { cq.hw_command_queue().finish(sub_device_ids); }
-
-void EnqueueTraceImpl(CommandQueue& cq, uint32_t trace_id, bool blocking) {
-    cq.hw_command_queue().enqueue_trace(trace_id, blocking);
-}
-
-CommandQueue::CommandQueue(IDevice* device, uint32_t id, CommandQueueMode mode) :
-    device_ptr(device), cq_id(id), mode(mode), worker_state(CommandQueueState::IDLE) {
-    if (this->async_mode()) {
-        num_async_cqs++;
-        // The main program thread launches the Command Queue
-        parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        this->start_worker();
-    } else if (this->passthrough_mode()) {
-        num_passthrough_cqs++;
-    }
-}
-
-CommandQueue::CommandQueue(Trace& trace) :
-    device_ptr(nullptr),
-    parent_thread_id(0),
-    cq_id(-1),
-    mode(CommandQueueMode::TRACE),
-    worker_state(CommandQueueState::IDLE) {}
-
-CommandQueue::~CommandQueue() {
-    if (this->async_mode()) {
-        this->stop_worker();
-    }
-    if (not this->trace_mode()) {
-        TT_FATAL(this->worker_queue.empty(), "{} worker queue must be empty on destruction", this->name());
-    }
-}
-
-HWCommandQueue& CommandQueue::hw_command_queue() { return this->device()->hw_command_queue(this->cq_id); }
-
-void CommandQueue::dump() {
-    int cid = 0;
-    log_info(LogMetalTrace, "Dumping {}, mode={}", this->name(), this->get_mode());
-    for (const auto& cmd : this->worker_queue) {
-        log_info(LogMetalTrace, "[{}]: {}", cid, cmd.type);
-        cid++;
-    }
-}
-
-std::string CommandQueue::name() {
-    if (this->mode == CommandQueueMode::TRACE) {
-        return "TraceQueue";
-    }
-    return "CQ" + std::to_string(this->cq_id);
-}
-
-void CommandQueue::wait_until_empty() {
-    log_trace(LogDispatch, "{} WFI start", this->name());
-    if (this->async_mode()) {
-        // Insert a flush token to push all prior commands to completion
-        // Necessary to avoid implementing a peek and pop on the lock-free queue
-        this->worker_queue.push(CommandInterface{.type = EnqueueCommandType::FLUSH});
-    }
-    while (true) {
-        if (this->worker_queue.empty()) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-    log_trace(LogDispatch, "{} WFI complete", this->name());
-}
-
-void CommandQueue::set_mode(const CommandQueueMode& mode) {
-    TT_ASSERT(
-        not this->trace_mode(),
-        "Cannot change mode of a trace command queue, copy to a non-trace command queue instead!");
-    if (this->mode == mode) {
-        // Do nothing if requested mode matches current CQ mode.
-        return;
-    }
-    this->mode = mode;
-    if (this->async_mode()) {
-        num_async_cqs++;
-        num_passthrough_cqs--;
-        // Record parent thread-id and start worker.
-        parent_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        start_worker();
-    } else if (this->passthrough_mode()) {
-        num_passthrough_cqs++;
-        num_async_cqs--;
-        // Wait for all cmds sent in async mode to complete and stop worker.
-        this->wait_until_empty();
-        this->stop_worker();
-    }
-}
-
-void CommandQueue::start_worker() {
-    if (this->worker_state == CommandQueueState::RUNNING) {
-        return;  // worker already running, exit
-    }
-    this->worker_state = CommandQueueState::RUNNING;
-    this->worker_thread = std::make_unique<std::thread>(std::thread(&CommandQueue::run_worker, this));
-    tt::log_debug(tt::LogDispatch, "{} started worker thread", this->name());
-}
-
-void CommandQueue::stop_worker() {
-    if (this->worker_state == CommandQueueState::IDLE) {
-        return;  // worker already stopped, exit
-    }
-    this->worker_state = CommandQueueState::TERMINATE;
-    this->worker_thread->join();
-    this->worker_state = CommandQueueState::IDLE;
-    tt::log_debug(tt::LogDispatch, "{} stopped worker thread", this->name());
-}
-
-void CommandQueue::run_worker() {
-    // forever loop checking for commands in the worker queue
-    // Track the worker thread id, for cases where a command calls a sub command.
-    // This is to detect cases where commands may be nested.
-    worker_thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
-    while (true) {
-        if (this->worker_queue.empty()) {
-            if (this->worker_state == CommandQueueState::TERMINATE) {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
-        } else {
-            std::shared_ptr<CommandInterface> command(this->worker_queue.pop());
-            run_command_impl(*command);
-        }
-    }
-}
-
-void CommandQueue::run_command(CommandInterface&& command) {
-    log_trace(LogDispatch, "{} received {} in {} mode", this->name(), command.type, this->mode);
-    if (this->async_mode()) {
-        if (std::hash<std::thread::id>{}(std::this_thread::get_id()) == parent_thread_id) {
-            // In async mode when parent pushes cmd, feed worker through queue.
-            bool blocking = command.blocking.has_value() and *command.blocking;
-            this->worker_queue.push(std::move(command));
-            if (blocking) {
-                TT_ASSERT(not this->trace_mode(), "Blocking commands cannot be traced!");
-                this->wait_until_empty();
-            }
-        } else {
-            // Handle case where worker pushes command to itself (passthrough)
-            TT_ASSERT(
-                std::hash<std::thread::id>{}(std::this_thread::get_id()) == worker_thread_id,
-                "Only main thread or worker thread can run commands through the SW command queue");
-            run_command_impl(command);
-        }
-    } else if (this->trace_mode()) {
-        // In trace mode push to the trace queue
-        this->worker_queue.push(std::move(command));
-    } else if (this->passthrough_mode()) {
-        this->run_command_impl(command);
-    } else {
-        TT_THROW("Unsupported CommandQueue mode!");
-    }
-}
-
-void CommandQueue::run_command_impl(const CommandInterface& command) {
-    log_trace(LogDispatch, "{} running {}", this->name(), command.type);
-    switch (command.type) {
-        case EnqueueCommandType::ENQUEUE_READ_BUFFER:
-            TT_ASSERT(command.dst.has_value(), "Must provide a dst!");
-            TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
-            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            TT_ASSERT(command.region.has_value(), "Must specify region value!");
-            EnqueueReadBufferImpl(
-                *this,
-                command.buffer.value(),
-                command.dst.value(),
-                command.region.value(),
-                command.blocking.value());
-            break;
-        case EnqueueCommandType::ENQUEUE_WRITE_BUFFER:
-            TT_ASSERT(command.src.has_value(), "Must provide a src!");
-            TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
-            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            TT_ASSERT(command.region.has_value(), "Must specify region value!");
-            EnqueueWriteBufferImpl(
-                *this,
-                command.buffer.value(),
-                command.src.value(),
-                command.region.value(),
-                command.blocking.value());
-            break;
-        case EnqueueCommandType::GET_BUF_ADDR:
-            TT_ASSERT(command.dst.has_value(), "Must provide a dst address!");
-            TT_ASSERT(command.shadow_buffer.has_value(), "Must provide a shadow buffer!");
-            EnqueueGetBufferAddrImpl(command.dst.value(), command.shadow_buffer.value());
-            break;
-        case EnqueueCommandType::SET_RUNTIME_ARGS:
-            TT_ASSERT(command.runtime_args_md.has_value(), "Must provide RuntimeArgs Metdata!");
-            EnqueueSetRuntimeArgsImpl(command.runtime_args_md.value());
-            break;
-        case EnqueueCommandType::ADD_BUFFER_TO_PROGRAM:
-            TT_ASSERT(command.buffer.has_value(), "Must provide a buffer!");
-            TT_ASSERT(command.program != nullptr, "Must provide a program!");
-            EnqueueAddBufferToProgramImpl(command.buffer.value(), *command.program);
-            break;
-        case EnqueueCommandType::ENQUEUE_PROGRAM:
-            TT_ASSERT(command.program != nullptr, "Must provide a program!");
-            TT_ASSERT(command.blocking.has_value(), "Must specify blocking value!");
-            EnqueueProgramImpl(*this, *command.program, command.blocking.value());
-            break;
-        case EnqueueCommandType::ENQUEUE_TRACE:
-            EnqueueTraceImpl(*this, command.trace_id.value(), command.blocking.value());
-            break;
-        case EnqueueCommandType::ENQUEUE_RECORD_EVENT:
-            TT_ASSERT(command.event.has_value(), "Must provide an event!");
-            EnqueueRecordEventImpl(*this, command.event.value(), command.sub_device_ids);
-            break;
-        case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT:
-            TT_ASSERT(command.event.has_value(), "Must provide an event!");
-            EnqueueWaitForEventImpl(*this, command.event.value());
-            break;
-        case EnqueueCommandType::FINISH: FinishImpl(*this, command.sub_device_ids); break;
-        case EnqueueCommandType::FLUSH:
-            // Used by CQ to push prior commands
-            break;
-        default: TT_THROW("Invalid command type");
-    }
-    log_trace(LogDispatch, "{} running {} complete", this->name(), command.type);
-}
 
 v1::CommandQueueHandle v1::GetCommandQueue(IDevice* device, std::uint8_t cq_id) {
     return v1::CommandQueueHandle{device, cq_id};
@@ -989,16 +685,6 @@ std::ostream& operator<<(std::ostream& os, EnqueueCommandType const& type) {
         case EnqueueCommandType::FINISH: os << "FINISH"; break;
         case EnqueueCommandType::FLUSH: os << "FLUSH"; break;
         default: TT_THROW("Invalid command type!");
-    }
-    return os;
-}
-
-std::ostream& operator<<(std::ostream& os, CommandQueue::CommandQueueMode const& type) {
-    switch (type) {
-        case CommandQueue::CommandQueueMode::PASSTHROUGH: os << "PASSTHROUGH"; break;
-        case CommandQueue::CommandQueueMode::ASYNC: os << "ASYNC"; break;
-        case CommandQueue::CommandQueueMode::TRACE: os << "TRACE"; break;
-        default: TT_THROW("Invalid CommandQueueMode type!");
     }
     return os;
 }
