@@ -1353,6 +1353,10 @@ LightMetalBinary LightMetalEndCapture() {
     return {};
 }
 
+void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
+    device->load_trace(cq_id, trace_id, trace_desc);
+}
+
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
         if (cq_id.has_value()) {

@@ -1588,6 +1588,24 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
     this->mark_allocations_unsafe();
 }
 
+// Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
+void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
+    this->mark_allocations_safe();
+
+    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+    TT_FATAL(
+        active_sub_device_manager->get_trace(trace_id) == nullptr,
+        "Trace already exists for trace_id {} on device {}'s active sub-device manager {}",
+        trace_id,
+        this->id_,
+        active_sub_device_manager->id());
+
+    auto& trace_buffer = active_sub_device_manager->create_trace(trace_id);
+    *trace_buffer->desc = trace_desc;
+    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+    this->mark_allocations_unsafe();
+}
+
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     ZoneScoped;
     TracyTTMetalReplayTrace(this->id(), tid);

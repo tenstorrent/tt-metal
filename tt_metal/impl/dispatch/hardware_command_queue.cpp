@@ -701,7 +701,7 @@ volatile bool CommandQueue::is_dprint_server_hung() { return dprint_server_hang;
 
 volatile bool CommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
 
-void CommandQueue::record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx) {
+void CommandQueue::record_begin(const uint32_t tid, std::shared_ptr<TraceDescriptor> ctx) {
     auto num_sub_devices = this->device_->num_sub_devices();
     // Record the original value of expected_num_workers_completed, and reset it to 0.
     std::copy(
