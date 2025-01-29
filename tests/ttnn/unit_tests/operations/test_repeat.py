@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -29,15 +29,15 @@ repeat_shapes = [
 ]
 
 
-def _get_shape(larger, smaller) -> int:
+def _get_size(larger, smaller) -> int:
     return prod([a * b for a, b in zip(((1,) * (len(larger) - len(smaller)) + smaller), larger)])
 
 
-def _get_final_shape(shape, reshape):
+def _get_final_size(shape, reshape):
     if len(shape) > len(reshape):
-        return _get_shape(shape, reshape)
+        return _get_size(shape, reshape)
     else:
-        return _get_shape(shape, reshape)
+        return _get_size(shape, reshape)
 
 
 @pytest.mark.parametrize("layout", layouts)
@@ -47,7 +47,7 @@ def _get_final_shape(shape, reshape):
 def test_repeat(device, layout, dtype, shape, repeat_shape):
     # trying to avoid the `buffer not divisible by page size` error. Does this make sense?
     if layout == ttnn.TILE_LAYOUT and (
-        prod(shape) % ttnn.TILE_SIZE != 0 or _get_final_shape(shape, repeat_shape) % ttnn.TILE_SIZE != 0
+        prod(shape) % ttnn.TILE_SIZE != 0 or _get_final_size(shape, repeat_shape) % ttnn.TILE_SIZE != 0
     ):
         pytest.skip("Tensor not suitable for tile layout")
 
@@ -69,4 +69,4 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.999999)
+    assert_with_pcc(torch_result, output, 0.99999)

@@ -1,15 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "ttnn/operations/data_movement/repeat_new/device/host/repeat_program_factory.hpp"
-#include "ttnn/operations/data_movement/repeat_new/device/repeat_op.hpp"
+#include "ttnn/operations/data_movement/repeat/device/host/repeat_program_factory.hpp"
+#include "ttnn/operations/data_movement/repeat/device/repeat_op.hpp"
 
 namespace ttnn {
 
-void RM_REPEAT_STRUCT::validate(const std::vector<Tensor>& input_tensors) const {
+void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     // Validate the input tensor
     const Tensor& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to reshape need to be on device!");
@@ -25,7 +25,7 @@ void RM_REPEAT_STRUCT::validate(const std::vector<Tensor>& input_tensors) const 
         "Output tensor must have the same memory layout as input tensor");
 }
 
-std::vector<TensorSpec> RM_REPEAT_STRUCT::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto simple_output_shape = input_tensor_a.get_logical_shape();
     simple_output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
@@ -48,7 +48,7 @@ std::vector<TensorSpec> RM_REPEAT_STRUCT::compute_output_specs(const std::vector
             output_shape.padded_shape()))};
 }
 
-std::vector<Tensor> RM_REPEAT_STRUCT::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<Tensor> RepeatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
     // Create the output tensor
     const auto& input_tensor_a = input_tensors.at(0);
     const auto output_shape = this->compute_output_specs(input_tensors).at(0).logical_shape();
@@ -64,7 +64,7 @@ std::vector<Tensor> RM_REPEAT_STRUCT::create_output_tensors(const std::vector<Te
         output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(), mem_config)};
 }
 
-operation::ProgramWithCallbacks RM_REPEAT_STRUCT::create_program(
+operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     return operations::data_movement::repeat::rm_repeat_program_factory(
         input_tensors.at(0), m_num_repeats, output_tensors.at(0), m_is_last_dim);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,7 @@ struct LastRepeatDims {
     static constexpr uint32_t repeat = 1;
 };
 
-ttnn::Tensor
-repeat_upper_dims_rm(
+ttnn::Tensor repeat_upper_dims_rm(
     const ttnn::Tensor& tensor,
     const uint32_t dim,
     const uint32_t repetitions,
@@ -63,7 +62,8 @@ repeat_upper_dims_rm(
 
     constexpr bool is_final_dim = false;
     auto out_tensor =
-        operation::run(RM_REPEAT_STRUCT{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
+        operation::run(
+            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
             .at(0);
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
@@ -88,7 +88,8 @@ ttnn::Tensor repeat_last_dim_rm(
 
     constexpr bool is_final_dim = true;
     auto out_tensor =
-        operation::run(RM_REPEAT_STRUCT{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
+        operation::run(
+            RepeatDeviceOperation{repetitions, is_final_dim, output_mem_config}, {input_tensor}, {}, {}, queue_id)
             .at(0);
 
     auto expected_shape = input_shape;
@@ -142,7 +143,6 @@ ttnn::Tensor RepeatOperation::invoke(
     MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());
     auto working_output_mem_config = output_mem_config;
 
-    // does reshape handle 0 length dims?
     if (std::any_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 0; })) {
         const auto& shape = working_tensor.get_logical_shape();
         std::transform(
@@ -154,7 +154,7 @@ ttnn::Tensor RepeatOperation::invoke(
         return tensor.reshape(repetition_vector);
     }
 
-    TT_ASSERT(working_tensor.get_logical_shape().rank() > 0);
+    TT_FATAL(working_tensor.get_logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
 
     // nothing to do!
     if (std::all_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 1; })) {

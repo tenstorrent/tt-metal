@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 #include <ttnn/operations/functions.hpp>
-#include "ttnn/operations/data_movement/repeat_new/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 namespace ttnn::operations::expand {
 
 

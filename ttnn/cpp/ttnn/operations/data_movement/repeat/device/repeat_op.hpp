@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include "ttnn/run_operation.hpp"
 namespace ttnn {
 
-struct RM_REPEAT_STRUCT {
+struct RepeatDeviceOperation {
     const uint32_t m_num_repeats;
     const bool m_is_last_dim;
     MemoryConfig m_output_mem_config;

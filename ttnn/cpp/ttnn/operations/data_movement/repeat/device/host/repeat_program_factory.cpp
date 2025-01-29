@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <math.h>
@@ -45,13 +45,13 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
     tt::log_debug("data size: {}", data_size);
     uint32_t source_page_size_bytes = input_log_shape[-1] * data_size;
     uint32_t dest_page_size_bytes = source_page_size_bytes * num_repeats;
-    TT_ASSERT(
+    TT_FATAL(
         dest_page_size_bytes == output_log_shape[-1] * data_size,
         "Data size of output does not match requirement for repeat last dim");
     uint32_t read_start_page = 0;
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     // Find how many input pages each core is responsible for so that we always start at the begining of a read and
     // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
     uint32_t number_of_pages = input_log_shape[-2];
@@ -89,7 +89,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/repeat_new/device/device/repeat_last_dim_rm.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/repeat/device/device/repeat_last_dim_rm.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
@@ -183,7 +183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/repeat_new/device/device/repeat_higher_dim_rm.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/repeat/device/device/repeat_higher_dim_rm.cpp",
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
