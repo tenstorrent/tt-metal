@@ -110,8 +110,9 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
 
 
 def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
-    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
 
+    # Read <job_id>_annotations.json inside the logs dir
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
     annot_json_files = logs_dir.glob("*_annotations.json")
 
     github_job_ids_to_annotation_jsons = {}
@@ -120,6 +121,7 @@ def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int)
         with open(annot_json_file, 'r') as f:
             annot_json_info = json.load(f)
         if annot_json_info:
+            # Map job id to annotation info (list of dict)
             github_job_id = annot_json_file.name.replace("_annotations.json", "")
             assert github_job_id.isnumeric(), f"{github_job_id}"
             github_job_id = int(github_job_id)

@@ -92,10 +92,19 @@ def return_first_string_starts_with(starting_string, strings):
 
 def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
 
-    # a little hacky
-    if 'timed out' in failure_description:
-        return str(InfraErrorV1.JOB_TIMEOUT_FAILURE)
+    error_snippet_to_signature_mapping = {
+        "timed out": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
+        "exceeded the maximum execution time": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
+        "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
+        "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE)
+    }
 
+    # Check the mapping dictionary for specific failure signature types
+    for error_snippet in error_snippet_to_signature_mapping:
+        if error_snippet in failure_description:
+            return error_snippet_to_signature_mapping[error_snippet]
+
+    # If failure occurred in runner setup, classify as set up failure
     for step in github_job["steps"]:
         is_generic_setup_failure = (
             step["name"] == "Set up runner"
@@ -106,18 +115,26 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+    
+    # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
 
 
 def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
-    if github_job["conclusion"] == "success":
-        return None, None
 
     failure_signature, failure_description = None, None
-    job_id = github_job['id']
+    
+    # Don't return any failure info if job passed
+    if github_job["conclusion"] == "success":
+        return failure_signature, failure_description
+
+    # Otherwise, check the job's annotation info for failure reason
+    job_id = github_job["id"]
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
-        failure_description = next((d['message'] for d in annotation_info if d['annotation_level'] == 'failure'), None)
+
+        # Iterate over list of job annotation's until first failure-level annotation message
+        failure_description = next((d["message"] for d in annotation_info if d["annotation_level"] == "failure"), None)
         if failure_description:
             failure_signature = get_job_failure_signature_(github_job, failure_description)
     return failure_signature, failure_description
