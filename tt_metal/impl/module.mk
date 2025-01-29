@@ -14,6 +14,7 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/kernels/kernel.cpp \
 	tt_metal/impl/allocator/algorithms/free_list.cpp \
 	tt_metal/impl/allocator/allocator.cpp \
+	tt_metal/impl/allocator/bank_manager.cpp \
 	tt_metal/impl/allocator/basic_allocator.cpp \
 	tt_metal/impl/allocator/l1_banking_allocator.cpp \
 	tt_metal/impl/program/program.cpp \

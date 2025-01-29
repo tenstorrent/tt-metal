@@ -12,7 +12,6 @@
 #include "allocator_types.hpp"
 #include "assert.hpp"
 #include "core_coord.hpp"
-#include "allocator_algorithm.hpp"
 #include "hal.hpp"
 
 namespace tt {
@@ -27,10 +26,7 @@ class Buffer;
 
 // Fwd declares
 enum class BufferType;
-
-namespace allocator {
-
-}  // namespace allocator
+class BankManager;
 
 class Allocator {
 public:
@@ -61,7 +57,7 @@ public:
 
     const AllocatorConfig& get_config() const;
 
-    allocator::Statistics get_statistics(const BufferType& buffer_type) const;
+    Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
     void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const;
 
@@ -87,10 +83,10 @@ private:
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
-    allocator::BankManager dram_manager_;
-    allocator::BankManager l1_manager_;
-    allocator::BankManager l1_small_manager_;
-    allocator::BankManager trace_buffer_manager_;
+    std::unique_ptr<BankManager> dram_manager_;
+    std::unique_ptr<BankManager> l1_manager_;
+    std::unique_ptr<BankManager> l1_small_manager_;
+    std::unique_ptr<BankManager> trace_buffer_manager_;
 
     std::unordered_map<uint32_t, uint32_t> bank_id_to_dram_channel_;
     std::unordered_map<uint32_t, std::vector<uint32_t>> dram_channel_to_bank_ids_;
