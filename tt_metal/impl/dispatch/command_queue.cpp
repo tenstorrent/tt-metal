@@ -312,7 +312,7 @@ EnqueueTraceCommand::EnqueueTraceCommand(
     uint32_t command_queue_id,
     IDevice* device,
     SystemMemoryManager& manager,
-    std::shared_ptr<detail::TraceDescriptor>& descriptor,
+    std::shared_ptr<TraceDescriptor>& descriptor,
     Buffer& buffer,
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> & expected_num_workers_completed,
     NOC noc_index,
