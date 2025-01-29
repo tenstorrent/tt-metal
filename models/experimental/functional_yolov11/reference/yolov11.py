@@ -143,8 +143,10 @@ class SPPF(nn.Module):
 
     def forward(self, x):
         x = self.cv1(x)
+        print("torch out shape is", x.shape)
         x1 = x
         m1 = self.m(x)
+        # print("m1 indfo",m1.shape)
         m2 = self.m(m1)
         m3 = self.m(m2)
         y = torch.cat((x1, m1, m2, m3), 1)
@@ -388,6 +390,7 @@ class PSABlock(nn.Module):
     def forward(self, x):
         x1 = x
         x = self.attn(x)
+
         x = x1 + x
         x1 = x
         x = self.ffn(x)
@@ -915,6 +918,7 @@ class YoloV11(nn.Module):
         x = torch.cat((x, x10), 1)  # 21
         x = self.model[22](x)  # 22
         x22 = x
+        # torch.save(x22,"/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
         x = self.model[23](x16, x19, x22)  # 23
         return x
 

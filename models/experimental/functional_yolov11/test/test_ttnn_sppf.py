@@ -11,6 +11,7 @@ from models.experimental.functional_yolov11.tt.model_preprocessing import (
 )
 from models.experimental.functional_yolov11.reference.yolov11 import SPPF as torch_sppf
 from models.experimental.functional_yolov11.tt.ttnn_yolov11 import SPPF as ttnn_sppf
+from models.experimental.functional_yolov11.tt.ttnn_yolov11 import get_sharded_mem_config
 
 
 @pytest.mark.parametrize(
@@ -44,6 +45,8 @@ def test_yolo_v11_sppf(
     )
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
+    shard_config = get_sharded_mem_config(device, ttnn_input)
+    ttnn_input = ttnn.to_memory_config(ttnn_input, memory_config=shard_config)
     torch_output = torch_module(torch_input)
     parameters = create_yolov11_model_parameters(torch_module, torch_input, device=device)
     ttnn_module = ttnn_sppf(device=device, parameter=parameters.conv_args, conv_pt=parameters)
