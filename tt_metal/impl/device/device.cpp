@@ -37,7 +37,6 @@ namespace tt {
 
 namespace tt_metal {
 
-// clang-format off
 Device::Device(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
@@ -52,7 +51,6 @@ Device::Device(
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
-// clang-format on
 
 std::unordered_set<CoreCoord> Device::get_active_ethernet_cores(bool skip_reserved_tunnel_cores) const {
     return tt::Cluster::instance().get_active_ethernet_cores(this->id_, skip_reserved_tunnel_cores);

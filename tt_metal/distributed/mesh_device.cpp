@@ -118,7 +118,6 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
-// clang-format off
 MeshDevice::MeshDevice(
     std::shared_ptr<ScopedDevices> mesh_handle,
     const MeshShape& mesh_shape,
@@ -134,7 +133,6 @@ MeshDevice::MeshDevice(
     work_executor_->initialize();
     work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
 }
-// clang-format on
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
