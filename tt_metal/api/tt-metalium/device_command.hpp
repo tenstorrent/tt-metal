@@ -714,42 +714,52 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    // Add write packed large, with no data.
     void add_dispatch_write_packed_large(
         uint16_t alignment,
         uint16_t num_sub_cmds,
         const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
         const uint32_t offset_idx = 0,
         uint32_t write_offset_index = 0) {
-        TT_ASSERT(
-            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
-            "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeCmd",
-            num_sub_cmds);
-        static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
-        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
         constexpr bool flush_prefetch = false;
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
         uint32_t payload_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
-        this->add_prefetch_relay_inline(flush_prefetch, payload_size);
+        this->add_dispatch_write_packed_large_internal(
+            flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
 
-        auto initialize_write_packed_large_cmd = [&](CQDispatchCmd* write_packed_large_cmd) {
-            write_packed_large_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
-            write_packed_large_cmd->write_packed_large.count = num_sub_cmds;
-            write_packed_large_cmd->write_packed_large.alignment = alignment;
-            write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
-        };
-        uint32_t payload_dst_size =
-            tt::align(sizeof(CQPrefetchCmd) + payload_size, this->pcie_alignment) - sizeof(CQPrefetchCmd);
-        CQDispatchCmd* write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd*>(payload_dst_size);
-        char* write_packed_large_sub_cmds_dst = (char*)write_packed_large_cmd_dst + sizeof(CQDispatchCmd);
-
-        if constexpr (hugepage_write) {
-            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_large_cmd;
-            initialize_write_packed_large_cmd(&write_packed_large_cmd);
-            this->memcpy(write_packed_large_cmd_dst, &write_packed_large_cmd, sizeof(CQDispatchCmd));
-        } else {
-            initialize_write_packed_large_cmd(write_packed_large_cmd_dst);
+    // Add write packed large, with data inlined.
+    void add_dispatch_write_packed_large(
+        uint16_t alignment,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
+        const std::vector<tt::stl::Span<const uint8_t>>& data_collection,
+        std::vector<uint8_t*>*
+            data_collection_buffer_ptr,  // optional. Stores the location each data segment was written to
+        const uint32_t offset_idx = 0,
+        uint32_t write_offset_index = 0) {
+        constexpr bool flush_prefetch = true;
+        size_t data_collection_size = 0;
+        for (const auto& data : data_collection) {
+            data_collection_size += data.size();
         }
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
+        uint32_t payload_size = tt::align(
+            tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment) + data_collection_size,
+            this->l1_alignment);
+        this->add_dispatch_write_packed_large_internal(
+            flush_prefetch, alignment, payload_size, num_sub_cmds, sub_cmds, offset_idx, write_offset_index);
 
-        this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
+        if (data_collection_buffer_ptr != nullptr) {
+            data_collection_buffer_ptr->resize(data_collection.size());
+        }
+        for (size_t i = 0; i < data_collection.size(); i++) {
+            if (data_collection_buffer_ptr) {
+                data_collection_buffer_ptr->at(i) = (uint8_t*)this->cmd_region + this->cmd_write_offsetB;
+            }
+            this->add_data(data_collection[i].data(), data_collection[i].size(), data_collection[i].size());
+        }
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
@@ -798,6 +808,44 @@ private:
         } else {
             initialize_relay_write(relay_write_dst);
         }
+    }
+
+    // Write packed large cmd and subcmds, but not data.
+    void add_dispatch_write_packed_large_internal(
+        bool flush_prefetch,
+        uint16_t alignment,
+        uint32_t payload_sizeB,
+        uint16_t num_sub_cmds,
+        const std::vector<CQDispatchWritePackedLargeSubCmd>& sub_cmds,
+        const uint32_t offset_idx,
+        uint32_t write_offset_index) {
+        TT_ASSERT(
+            num_sub_cmds <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS,
+            "Cannot fit {} sub cmds in one CQDispatchWritePackedLargeCmd",
+            num_sub_cmds);
+        static_assert(sizeof(CQDispatchWritePackedLargeSubCmd) % sizeof(uint32_t) == 0);
+        uint32_t sub_cmds_sizeB = num_sub_cmds * sizeof(CQDispatchWritePackedLargeSubCmd);
+        this->add_prefetch_relay_inline(flush_prefetch, payload_sizeB);
+
+        auto initialize_write_packed_large_cmd = [&](CQDispatchCmd* write_packed_large_cmd) {
+            write_packed_large_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
+            write_packed_large_cmd->write_packed_large.count = num_sub_cmds;
+            write_packed_large_cmd->write_packed_large.alignment = alignment;
+            write_packed_large_cmd->write_packed_large.write_offset_index = write_offset_index;
+        };
+        uint32_t sub_cmd_size = tt::align(sizeof(CQDispatchCmd) + sub_cmds_sizeB, this->l1_alignment);
+        CQDispatchCmd* write_packed_large_cmd_dst = this->reserve_space<CQDispatchCmd*>(sub_cmd_size);
+        char* write_packed_large_sub_cmds_dst = (char*)write_packed_large_cmd_dst + sizeof(CQDispatchCmd);
+
+        if constexpr (hugepage_write) {
+            alignas(MEMCPY_ALIGNMENT) CQDispatchCmd write_packed_large_cmd;
+            initialize_write_packed_large_cmd(&write_packed_large_cmd);
+            this->memcpy(write_packed_large_cmd_dst, &write_packed_large_cmd, sizeof(CQDispatchCmd));
+        } else {
+            initialize_write_packed_large_cmd(write_packed_large_cmd_dst);
+        }
+
+        this->memcpy(write_packed_large_sub_cmds_dst, &sub_cmds[offset_idx], sub_cmds_sizeB);
     }
 
     void validate_cmd_write(uint32_t data_sizeB) const {

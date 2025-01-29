@@ -66,6 +66,24 @@ run_tg_llama3.1-70b_tests() {
   fi
 }
 
+run_tg_distributed_op_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_tg_distributed_op_tests"
+
+  pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_tg_distributed_op_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_tg_prefetcher_tests() {
   # Record the start time
   fail=0
@@ -98,6 +116,7 @@ run_tg_tests() {
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.*TG*
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 1 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 64 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity_wormhole_b0 --fabric_command 65 --board_type glx32 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
 
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.1-70b_tests
@@ -107,6 +126,9 @@ run_tg_tests() {
 
   elif [[ "$1" == "prefetcher" ]]; then
     run_tg_prefetcher_tests
+
+  elif [[ "$1" == "distributed-ops" ]]; then
+    run_tg_distributed_op_tests
 
   else
     echo "LOG_METAL: Unknown model type: $1"

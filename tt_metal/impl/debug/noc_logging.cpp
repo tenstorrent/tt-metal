@@ -13,7 +13,7 @@
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include <device.hpp>
-#include <llrt.hpp>
+#include "llrt.hpp"
 
 using namespace tt::tt_metal;
 
