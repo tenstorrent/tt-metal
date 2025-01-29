@@ -53,12 +53,10 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRangeSet core_grid =
-        CoreRangeSet(std::vector{CoreRange({0, 0}, {num_cores_x - 1, (num_cores / num_cores_x) - 1})});
+    CoreRangeSet core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1})});
 
     if (sub_core_grids.has_value()) {
         core_grid = sub_core_grids.value();
-        num_cores = core_grid.num_cores();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
@@ -149,7 +147,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
 
     // random number
     const uint32_t rand_tile_size = tile_size(tt::DataFormat::Float16_b);
-    constexpr uint32_t rand_tile_index = tt::CBIndex::c_24;
+    constexpr uint32_t rand_tile_index = tt::CBIndex::c_11;
     CircularBufferConfig cb_rand_config =
         CircularBufferConfig(rand_tile_size, {{rand_tile_index, tt::DataFormat::Float16_b}})
             .set_page_size(rand_tile_index, rand_tile_size);
@@ -158,7 +156,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     // final indices
     uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
     uint32_t aligned_final_indices_rm_unit_size = Wt * TILE_WIDTH * final_indices_rm_unit_size;
-    uint32_t final_indices_rm_cb_index = tt::CBIndex::c_28;
+    uint32_t final_indices_rm_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
             Ht * TILE_HEIGHT * aligned_final_indices_rm_unit_size,
@@ -170,7 +168,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     // // Output sampling indices
     uint32_t output_unit_size = output_tensor.element_size();
     uint32_t aligned_out0_unit_size = Ht * TILE_HEIGHT * output_unit_size;
-    uint32_t output_cb_index = tt::CBIndex::c_14;
+    uint32_t output_cb_index = tt::CBIndex::c_13;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(aligned_out0_unit_size, {{output_cb_index, index_cb_data_format}})
             .set_page_size(output_cb_index, aligned_out0_unit_size);

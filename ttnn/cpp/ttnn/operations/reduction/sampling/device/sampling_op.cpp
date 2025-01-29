@@ -35,7 +35,8 @@ void Sampling::validate_with_output_tensors(
         input_indices_tensor.get_logical_shape() == input_values_tensor.get_logical_shape(),
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.get_logical_shape();
-    TT_FATAL(input_shape[0] * input_shape[01] * input_shape[2] == 32, "Input must have 32 users!");
+    TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
+    TT_FATAL(input_shape[3] % 32 == 0, "Input inner dim must be divisible by 32, pad if needed!");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);

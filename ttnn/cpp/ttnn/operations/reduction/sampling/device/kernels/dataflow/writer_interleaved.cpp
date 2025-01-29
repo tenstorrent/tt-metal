@@ -8,6 +8,16 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
 #include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
+/* This kernel does:
+Top-p Cumulative Probability Filtering:
+Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
+tokens satisfying cumulative probabilty > p condition.
+
+Top-k Sampling:
+Samples from the top-k subset by comparing cumulative sums of probabilities with a random threshold to select the
+appropriate index.
+*/
+
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
@@ -62,6 +72,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* index_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
     uint32_t start_id_local_phase_0 = core_id * 16;
+    // each user is on 1 core, so core_id = user_id
+    // users 0-16 have their data on first 2 faces (2 * 16 * 16 values)
+    // skip the first 2 faces for users>=16
     if (core_id >= 16) {
         start_id_local_phase_0 = 32 * 16 + (core_id - 16) * 16;
     }

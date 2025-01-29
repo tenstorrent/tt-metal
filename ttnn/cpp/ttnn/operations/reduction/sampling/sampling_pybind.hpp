@@ -22,6 +22,16 @@ void bind_reduction_sampling_operation(py::module& module) {
             and `p` (top-p nucleus sampling). The operation uses the `input_indices_tensor` for indexing and applies sampling
             under the given seed for reproducibility.
 
+            The op first converts the input_values_tensor into probabilities by doing a softmax.
+
+            In top-k sampling, the op considers only the k highest-probability values from the input distribution. The remaining values are ignored, regardless of their probabilities.
+            In top-p sampling, the op selects values from the input distribution such that the cumulative probability mass is less than or equal to a threshold p.
+            When combining top-k and top-p sampling, the op first applies the top-k filter and then the top-p filter.
+
+            Within this selected corpus, multinomial sampling is applied. Multinomial sampling selects values from a given distribution by comparing each probability with a randomly generated number between 0 and 1. Specifically, the operation identifies the largest cumulative probability that exceeds the random threshold.
+
+            The op finally returns input_indices_tensor[final_index]  where final_index is the index of the largest cumulative probability > random number found in the multinomial sampling.
+
             Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.
 
             Constraints:
@@ -29,12 +39,13 @@ void bind_reduction_sampling_operation(py::module& module) {
                     - Must have `BFLOAT16` data type.
                     - Must have `TILE` layout.
                     - Must have `INTERLEAVED` memory layout.
+                    - Must be padded to a multiple of 32 on the last dim
                 - `input_indices_tensor`:
                     - Must have `UINT32` or `INT32` data type.
                     - Must have `ROW_MAJOR` layout.
                     - Must have the same shape as `input_values_tensor`.
                 - The input tensors must represent exactly `32 users` (based on their shape).
-                - `k`: All values in the list must be ≤ 32.
+                - `k`: All values in the list must be >0 and ≤ 32.
                 - `p`: All values in the list must be in the range `[0.0, 1.0]`.
                 - Output tensor (if provided):
                     - Must have `UINT32` or `INT32` data type.

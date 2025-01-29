@@ -6,7 +6,6 @@
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 #include "compute_kernel_api.h"
-#include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/rand.h"
@@ -19,8 +18,6 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/pack.h"
 #include "ckernel_sfpu.h"
-
-#include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tilize.h"
 
 #define DEBUG_PRINT 0
@@ -149,23 +146,6 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         cb_push_back(in_cb, 1);
         release_dst();
     }
-}
-
-void untilize_block_fn(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // Precondition: in_cb has num_tiles produced
-    // Postcondition: out_cb has num_tiles produced
-
-    // untilize_init(in_cb, out_cb);
-    untilize_init_short(in_cb);
-    cb_wait_front(in_cb, num_tiles);
-    // print_full_tile(in_cb);
-    cb_reserve_back(out_cb, num_tiles);
-    untilize_block(in_cb, num_tiles, out_cb);
-    cb_push_back(out_cb, num_tiles);
-    cb_wait_front(out_cb, num_tiles);
-    // print_full_tile(out_cb);
-    cb_pop_front(in_cb, num_tiles);
-    // untilize_uninit(in_cb);
 }
 
 template <
