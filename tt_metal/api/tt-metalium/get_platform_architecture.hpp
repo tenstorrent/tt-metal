@@ -50,7 +50,7 @@ namespace tt::tt_metal {
  */
 inline tt::ARCH get_platform_architecture() {
     auto arch = tt::ARCH::Invalid;
-    if (std::getenv("TT_METAL_SIMULATOR")) {
+    if (llrt::RunTimeOptions::get_instance().get_simulator_enabled()) {
         tt_SimulationDeviceInit init(llrt::RunTimeOptions::get_instance().get_simulator_path());
         arch = init.get_arch_name();
     } else {
