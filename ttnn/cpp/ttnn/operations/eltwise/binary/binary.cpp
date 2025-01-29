@@ -7,7 +7,7 @@
 
 #include "device/binary_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/data_movement/repeat_new/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/copy.hpp"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@ Function reads from RM and writes to RM repeating the last dimension
 */
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
@@ -29,7 +28,7 @@ void kernel_main() {
     // else if original_page_size_bytes is a multiple of 8, equal to original_page_size_bytes * 2 + 128
     // else if original_page_size_bytes is a multiple of 4, equal to original_page_size_bytes * 4 + 128
     // else if original_page_size_bytes is a multiple of 2, equal to original_page_size_bytes * 8 + 128
-    // if it is an odd number equal to original_page_size_bytes * 16
+    // if it is an odd number equal to original_page_size_bytes * 16 + 128
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
 #define source_page_is_pow_2 (get_compile_time_arg_val(5) == 1)
@@ -74,9 +73,9 @@ void kernel_main() {
     constexpr uint64_t r_mask_to_use = tensor_is_dram ? MASK_64 : MASK_16;
     constexpr uint64_t r_offset_to_use = tensor_is_dram ? OFFSET_64 : OFFSET_16;
     constexpr uint32_t r_alignment_requirement = tensor_is_dram ? 64 : 16;
-    const uint32_t w_alignment_requirement = 16;
-    const uint64_t w_mask_to_use = MASK_16;
-    const uint64_t w_offset_to_use = OFFSET_16;
+    constexpr uint32_t w_alignment_requirement = 16;
+    constexpr uint64_t w_mask_to_use = MASK_16;
+    constexpr uint64_t w_offset_to_use = OFFSET_16;
 
     alignment_buffer = (alignment_buffer & w_mask_to_use) + w_alignment_requirement;  // Guaranteed aligned for write
     input_buffer = (input_buffer & r_mask_to_use) + r_alignment_requirement;          // Guaranteed aligned for reads

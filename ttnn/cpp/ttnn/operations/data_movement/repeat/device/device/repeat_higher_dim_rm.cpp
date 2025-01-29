@@ -1,10 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"  // required in all kernels using DPRINT
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
@@ -71,10 +70,8 @@ void kernel_main() {
 
     alignment_buffer = (alignment_buffer & w_mask_to_use) + w_alignment_requirement;  // alligned for writes
     input_buffer = (input_buffer & r_mask_to_use) + r_alignment_requirement;          // alligned for reads
-    // The jump for the upper dims
     uint64_t src_noc_addr = 0;
     uint32_t data_location = 0;
-    // lower dimensions stride
 
     for (uint32_t h = higher_dim_start; h < higher_dim_end; h++) {
         uint32_t h_offset = h * LOWER_DIMS_TIMES_REP_DIM;
@@ -82,7 +79,6 @@ void kernel_main() {
         for (uint32_t r = 0; r < REP_DIM; r++) {
             uint32_t r_offset = r * LOWER_DIMS;
             for (uint32_t l = lower_dim_start; l < lower_dim_end; l++) {
-                // !TODO make offset computation more efficient
                 uint32_t read_offset = h_offset + r_offset + l;
                 src_noc_addr = s.get_noc_addr(read_offset, 0);
                 data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
@@ -92,7 +88,6 @@ void kernel_main() {
 
                 for (uint32_t n = 0; n < repetitions; n++) {
                     // Perform the writes
-                    // !TODO make offset computation more efficient
                     uint32_t write_offset = h_offset_rep + n * LOWER_DIMS_TIMES_REP_DIM + r_offset + l;
                     const uint64_t dst_noc_addr = d.get_noc_addr(write_offset, 0);
                     if ((data_location & w_offset_to_use) != (dst_noc_addr & w_offset_to_use)) {
