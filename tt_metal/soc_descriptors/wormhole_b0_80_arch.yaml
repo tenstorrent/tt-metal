@@ -11,16 +11,10 @@ pcie:
 dram:
   [
     [0-0, 0-1, 0-11],
-    [0-0, 0-1, 0-11],
-    [0-5, 0-6, 0-7],
     [0-5, 0-6, 0-7],
     [5-0, 5-1, 5-11],
-    [5-0, 5-1, 5-11],
-    [5-2, 5-9, 5-10],
     [5-2, 5-9, 5-10],
     [5-3, 5-4, 5-8],
-    [5-3, 5-4, 5-8],
-    [5-5, 5-6, 5-7],
     [5-5, 5-6, 5-7]
   ]
 
@@ -31,7 +25,7 @@ dram_view_eth_endpoint:
 # These are given in dram coordinates, for example 0-2 means first dram bank array,
 # third noc port core which would resolve to 0-11 in noc coordinates.
 dram_view_worker_endpoint:
-  [ 0-2, 0-1, 2-0, 2-2, 4-1, 4-2, 6-0, 6-1, 8-2, 8-0, 10-0, 10-2 ]
+  [ 0-2, 0-1, 1-0, 1-2, 2-1, 2-2, 3-0, 3-1, 4-2, 4-0, 5-0, 5-2 ]
 
 dram_view_address_offsets:
   [ 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824 ]
