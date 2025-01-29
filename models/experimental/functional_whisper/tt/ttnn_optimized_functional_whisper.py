@@ -63,11 +63,16 @@ def calculate_key_values(config, key_value_states, *, parameters):
     key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
     value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
 
-    desired_shape = ttnn.Shape([bsz, config.encoder_attention_heads, head_size, tgt_len])
-    key_states = ttnn.reshape(key_states, shape=desired_shape)
-
-    desired_shape = ttnn.Shape([bsz, config.encoder_attention_heads, tgt_len, head_size])
-    value_states = ttnn.reshape(value_states, shape=desired_shape)
+    key_states = ttnn.reshape(
+        key_states,
+        [bsz, config.encoder_attention_heads, head_size, tgt_len],
+        [bsz, config.encoder_attention_heads, head_size, tgt_len_padded],
+    )
+    value_states = ttnn.reshape(
+        value_states,
+        [bsz, config.encoder_attention_heads, tgt_len, head_size],
+        [bsz, config.encoder_attention_heads, tgt_len_padded, head_size],
+    )
 
     return key_states, value_states
 
@@ -98,11 +103,21 @@ def split_query_key_value_and_split_heads(
         fused_qkv, num_heads=config.encoder_attention_heads
     )
 
-    desired_shape = ttnn.Shape([batch_size, config.encoder_attention_heads, seq_length, head_size])
-    desired_key_shape = ttnn.Shape([batch_size, config.encoder_attention_heads, head_size, seq_length])
-    query_states = ttnn.reshape(query_states, shape=desired_shape)
-    key_states = ttnn.reshape(key_states, shape=desired_key_shape)
-    value_states = ttnn.reshape(value_states, shape=desired_shape)
+    query_states = ttnn.reshape(
+        query_states,
+        [batch_size, config.encoder_attention_heads, seq_length, head_size],
+        [batch_size, config.encoder_attention_heads, padded_seq_length, head_size],
+    )
+    key_states = ttnn.reshape(
+        key_states,
+        [batch_size, config.encoder_attention_heads, head_size, seq_length],
+        [batch_size, config.encoder_attention_heads, head_size, padded_seq_length],
+    )
+    value_states = ttnn.reshape(
+        value_states,
+        [batch_size, config.encoder_attention_heads, seq_length, head_size],
+        [batch_size, config.encoder_attention_heads, padded_seq_length, head_size],
+    )
     return query_states, key_states, value_states
 
 
