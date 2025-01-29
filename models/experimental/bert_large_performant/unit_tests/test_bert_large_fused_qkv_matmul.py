@@ -71,7 +71,7 @@ def run_bert_large_fused_qkv_matmul_test(
         logger.debug(f"bias is on: {bias_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    assert t2.shape.with_tile_padding() == [9, 1, 384, 3072]
+    assert t2.padded_shape == [9, 1, 384, 3072]
     pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)

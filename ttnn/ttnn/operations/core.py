@@ -92,7 +92,7 @@ def _preprocess_golden_function_inputs(args, kwargs):
     input_tensor, args, kwargs = ttnn.reflection.pop_argument("input_tensor", args, kwargs)
     shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
-    input_tensor = input_tensor.reshape(input_tensor.shape.with_tile_padding())
+    input_tensor = input_tensor.reshape(input_tensor.padded_shape)
     return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
 
 

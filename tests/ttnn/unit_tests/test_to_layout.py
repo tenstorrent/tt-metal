@@ -51,10 +51,10 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
     if (start_with_padding and from_layout == to_layout) or to_layout == ttnn.TILE_LAYOUT:
         assert output_tensor.shape == (height, width)
-        assert output_tensor.shape.with_tile_padding() == (height + pad_h, width + pad_w)
+        assert output_tensor.padded_shape == (height + pad_h, width + pad_w)
     else:
         assert output_tensor.shape == (height, width)
-        assert output_tensor.shape.with_tile_padding() == (height, width)
+        assert output_tensor.padded_shape == (height, width)
 
     output_tensor = ttnn.to_torch(output_tensor)
 

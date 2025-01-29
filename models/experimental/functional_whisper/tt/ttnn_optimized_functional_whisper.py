@@ -29,7 +29,7 @@ def dropout(hidden_states, p, training):
 # def calculate_key_values(config, query_states, key_value_states, *, parameters):
 #     fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
 #     head_size = config.d_model // config.encoder_attention_heads
-#     batch_size, *_, _, two_times_hidden_size = fused_kv.shape.with_tile_padding()
+#     batch_size, *_, _, two_times_hidden_size = fused_kv.padded_shape
 #     hidden_size = two_times_hidden_size // 2
 #     encoder_attention_heads = hidden_size // head_size
 #     query_states, key_states, value_states = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -44,7 +44,7 @@ def dropout(hidden_states, p, training):
 
 def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
-    bsz, tgt_len_padded, _ = key_value_states.shape.with_tile_padding()
+    bsz, tgt_len_padded, _ = key_value_states.padded_shape
     head_size = hidden_size // config.encoder_attention_heads
 
     fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
@@ -77,7 +77,7 @@ def calculate_key_values(config, key_value_states, *, parameters):
 # def calculate_query_key_values(config, hidden_states, *, parameters):
 #     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
 #     head_size = config.d_model // config.encoder_attention_heads
-#     batch_size, *_, _, three_times_hidden_size = fused_qkv.shape.with_tile_padding()
+#     batch_size, *_, _, three_times_hidden_size = fused_qkv.padded_shape
 #     hidden_size = three_times_hidden_size // 3
 #     encoder_attention_heads = hidden_size // head_size
 #     return ttnn.transformer.split_query_key_value_and_split_heads(
@@ -92,7 +92,7 @@ def split_query_key_value_and_split_heads(
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, *_, seq_length, _ = fused_qkv.shape
-    batch_size, *_, padded_seq_length, _ = fused_qkv.shape.with_tile_padding()
+    batch_size, *_, padded_seq_length, _ = fused_qkv.padded_shape
 
     query_states, key_states, value_states = ttnn.transformer.split_query_key_value_and_split_heads(
         fused_qkv, num_heads=config.encoder_attention_heads

@@ -119,7 +119,7 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
         layout=ttnn.TILE_LAYOUT,
     )
     # Use ttnn shape to get padding of batch
-    padded_batch = proj_output_tt.shape.with_tile_padding()[2]
+    padded_batch = proj_output_tt.padded_shape[2]
     shard_spec_1_cores_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(

@@ -22,7 +22,7 @@ def dropout(hidden_states, p, training):
 
 def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
-    bsz, tgt_len_padded, _ = key_value_states.shape.with_tile_padding()
+    bsz, tgt_len_padded, _ = key_value_states.padded_shape
     head_size = hidden_size // config.encoder_attention_heads
 
     fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
@@ -53,7 +53,7 @@ def split_query_key_value_and_split_heads(
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     head_size = config.d_model // config.encoder_attention_heads
     batch_size, *_, seq_length, three_times_hidden_size = fused_qkv.shape
-    batch_size, *_, padded_seq_length, three_times_hidden_size = fused_qkv.shape.with_tile_padding()
+    batch_size, *_, padded_seq_length, three_times_hidden_size = fused_qkv.padded_shape
     hidden_size = three_times_hidden_size // 3
     encoder_attention_heads = hidden_size // head_size
 
@@ -90,7 +90,7 @@ def calculate_query_key_values(config, hidden_states, *, parameters):
 def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
-    bsz, *_, padded_tgt_len, _ = hidden_states.shape.with_tile_padding()
+    bsz, *_, padded_tgt_len, _ = hidden_states.padded_shape
     bsz, *_, tgt_len, _ = hidden_states.shape
 
     is_cross_attention = key_value_states is not None
@@ -104,7 +104,7 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
         query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
         query_states = ttnn.permute(query_states, (0, 2, 1, 3))
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
-        padded_key_value_tgt_len = key_states.shape.with_tile_padding()[2]
+        padded_key_value_tgt_len = key_states.padded_shape[2]
         key_value_tgt_len = key_states.shape[2]
     else:
         query_states, key_states, value_states = calculate_query_key_values(

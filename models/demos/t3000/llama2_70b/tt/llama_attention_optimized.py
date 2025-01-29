@@ -256,7 +256,7 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        d = fused_query_key_value.shape.with_tile_padding()[-1]
+        d = fused_query_key_value.padded_shape[-1]
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
             ttnn.Shape((1, 1, self.max_batch_size, d)),
