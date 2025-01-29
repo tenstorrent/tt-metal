@@ -8,13 +8,21 @@
   any modifications should be made to tensix-sections-pre-proc.ld, tensix-sections.ld is a generated file
 */
 
-#if defined(TYPE_FIRMWARE)
+#if defined(TYPE_FIRMWARE) || (defined(NCRISC_FIRMWARE_KERNEL_SPLIT) && defined(COMPILE_FOR_NCRISC))
 /* Start of the appropriate region. */
 #define TEXT_START ORIGIN(REGION_CODE)
-#define DATA_START ORIGIN(REGION_DATA)
 #elif defined(TYPE_KERNEL)
 /* Where firmware ended. */
 #define TEXT_START __fw_export_end_text
+#else
+#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
+#endif
+
+#if defined(TYPE_FIRMWARE)
+/* Start of the appropriate region. */
+#define DATA_START ORIGIN(REGION_DATA)
+#elif defined(TYPE_KERNEL)
+/* Where firmware ended. */
 #define DATA_START __fw_export_ldm_end
 #else
 #error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
@@ -51,8 +59,15 @@ PHDRS {
 
 SECTIONS
 {
+#if defined(TYPE_FIRMWARE)
+  .firmware_text TEXT_START : ALIGN(4)
+#else
   .text TEXT_START : ALIGN(4)
+#endif
   {
+    #if defined(TYPE_KERNEL)
+    __kernel_text_start = ABSOLUTE(.);
+    #endif
     /* Because TEXT_START might not be the start of a region, we
        need to force this section to be emitted so that following sections
        do not restart the region, if this one is empty.  */
@@ -82,7 +97,11 @@ SECTIONS
 #if defined(TYPE_FIRMWARE)
   __fw_export_end_text = ABSOLUTE(.);
 #if defined(TARGET_NCRISC)
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
   PROVIDE (KERNEL_ENTRY_SYMBOL = ABSOLUTE(__fw_export_end_text));
+#else
+  PROVIDE (KERNEL_ENTRY_SYMBOL = MEM_NCRISC_KERNEL_BASE);
+#endif
 #endif
 #endif
 
