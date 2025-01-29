@@ -1129,6 +1129,8 @@ int main(int argc, char **argv) {
 
     bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
 
+    bool run_traffic = !(test_args::has_command_option(input_args, "--no_traffic"));
+
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
@@ -1156,73 +1158,43 @@ int main(int argc, char **argv) {
 
         // keep the number of test devices even
         // TODO: handle differently for multicast
-        if (num_traffic_devices % 2) {
-            num_traffic_devices++;
-        }
-
-        if (num_traffic_devices > num_available_devices) {
-            throw std::runtime_error("Insufficient number of devices available");
-        } else if (default_num_traffic_devices == num_traffic_devices) {
-            num_traffic_devices = num_available_devices;
-        }
-
-        // validate left and right device IDs
-        if ((default_test_device_id_l != test_device_id_l) && !test_board.is_valid_chip_id(test_device_id_l)) {
-            throw std::runtime_error("Invalid left chip id");
-        }
-        if ((default_test_device_id_r != test_device_id_r) && !test_board.is_valid_chip_id(test_device_id_r)) {
-            throw std::runtime_error("Invalid right chip id");
-        }
-
-        // if both left and right device IDs are specified, launch traffic only b/w them
-        if ((default_test_device_id_l != test_device_id_l) && (default_test_device_id_r != test_device_id_r)) {
-            if (test_device_id_l == test_device_id_r) {
-                throw std::runtime_error("Left and right chips should be different");
+        if (run_traffic) {
+            if (num_traffic_devices % 2) {
+                num_traffic_devices++;
             }
-            test_board.unicast_map.push_back({test_device_id_l, test_device_id_r});
-        } else {
-            test_board.generate_unicast_map(num_hops);
+
+            if (num_traffic_devices > num_available_devices) {
+                throw std::runtime_error("Insufficient number of devices available");
+            } else if (default_num_traffic_devices == num_traffic_devices) {
+                num_traffic_devices = num_available_devices;
+            }
+
+            // validate left and right device IDs
+            if ((default_test_device_id_l != test_device_id_l) && !test_board.is_valid_chip_id(test_device_id_l)) {
+                throw std::runtime_error("Invalid left chip id");
+            }
+            if ((default_test_device_id_r != test_device_id_r) && !test_board.is_valid_chip_id(test_device_id_r)) {
+                throw std::runtime_error("Invalid right chip id");
+            }
+
+            // if both left and right device IDs are specified, launch traffic only b/w them
+            if ((default_test_device_id_l != test_device_id_l) && (default_test_device_id_r != test_device_id_r)) {
+                if (test_device_id_l == test_device_id_r) {
+                    throw std::runtime_error("Left and right chips should be different");
+                }
+                test_board.unicast_map.push_back({test_device_id_l, test_device_id_r});
+            } else {
+                test_board.generate_unicast_map(num_hops);
+            }
         }
 
         std::unordered_map<chip_id_t, std::shared_ptr<test_device_t>> test_devices;
-        std::vector<test_traffic_t> fabric_traffic;
-
         // init test devices from the list of chips
         for (auto& chip_id : test_board.physical_chip_ids) {
             test_devices[chip_id] = std::make_shared<test_device_t>(chip_id, &test_board);
         }
 
-        // init traffic
-        chip_id_t tx_chip_id, rx_chip_id;
-        for (auto& [tx_chip_id, rx_chip_id] : test_board.unicast_map) {
-            if (num_allocated_devices >= num_traffic_devices) {
-                break;
-            }
-
-            test_traffic_t traffic(
-                test_devices[tx_chip_id],
-                test_devices[rx_chip_id],
-                num_src_endpoints,
-                num_dest_endpoints,
-                target_address,
-                num_hops,
-                num_links);
-            fabric_traffic.push_back(traffic);
-
-            if (bidirectional_traffic) {
-                test_traffic_t traffic_r(
-                    test_devices[rx_chip_id],
-                    test_devices[tx_chip_id],
-                    num_src_endpoints,
-                    num_dest_endpoints,
-                    target_address,
-                    num_hops,
-                    num_links);
-                fabric_traffic.push_back(traffic_r);
-            }
-
-            num_allocated_devices += 2;
-        }
+        std::vector<test_traffic_t> fabric_traffic;
 
         // TODO: check this in a loop for all the devices involved in the traffic
         /*
@@ -1275,53 +1247,87 @@ int main(int argc, char **argv) {
             defines["CHECK_TIMEOUT"] = "";
         }
 
-        uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
+        if (run_traffic) {
+            // init traffic
+            chip_id_t tx_chip_id, rx_chip_id;
+            for (auto& [tx_chip_id, rx_chip_id] : test_board.unicast_map) {
+                if (num_allocated_devices >= num_traffic_devices) {
+                    break;
+                }
 
-        std::vector<uint32_t> tx_compile_args = {
-            0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
-            num_dest_endpoints,          // 1: num_dest_endpoints
-            dest_endpoint_start_id,      // 2:
-            tx_queue_start_addr,         // 3: queue_start_addr_words
-            (tx_queue_size_bytes >> 4),  // 4: queue_size_words
-            routing_table_start_addr,    // 5: routeing table
-            test_results_addr,           // 6: test_results_addr
-            test_results_size,           // 7: test_results_size
-            prng_seed,                   // 8: prng_seed
-            data_kb_per_tx,              // 9: total_data_kb
-            max_packet_size_words,       // 10: max_packet_size_words
-            timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
-            tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
-            tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
-            tx_data_sent_per_iter_low,          // 14: data_sent_per_iter_low
-            tx_data_sent_per_iter_high,         // 15: data_sent_per_iter_high
-            fabric_command,                     // 16: fabric_command
-            target_address,                     // 17: target_address
-            atomic_increment,                   // 18: atomic_increment
-            tx_signal_address,                  // 19: tx_signal_address
-            client_interface_addr,              // 20:
-            client_pull_req_buf_addr,           // 21:
-            fixed_async_wr_notif_addr,          // 22: use fixed addr for async wr atomic inc
-        };
+                test_traffic_t traffic(
+                    test_devices[tx_chip_id],
+                    test_devices[rx_chip_id],
+                    num_src_endpoints,
+                    num_dest_endpoints,
+                    target_address,
+                    num_hops,
+                    num_links);
+                fabric_traffic.push_back(traffic);
 
-        std::vector<uint32_t> rx_compile_args = {
-            prng_seed,                  // 0: prng seed
-            data_kb_per_tx,             // 1: total data kb
-            max_packet_size_words,      // 2: max packet size (in words)
-            fabric_command,             // 3: fabric command
-            target_address,             // 4: target address
-            atomic_increment,           // 5: atomic increment
-            test_results_addr,          // 6: test results addr
-            test_results_size,          // 7: test results size in bytes
-            tx_pkt_dest_size_choice,    // 8: pkt dest and size choice
-            tx_skip_pkt_content_gen,    // 9: skip packet validation
-            fixed_async_wr_notif_addr,  // 10: use fixed addr for async wr atomic inc
-        };
+                if (bidirectional_traffic) {
+                    test_traffic_t traffic_r(
+                        test_devices[rx_chip_id],
+                        test_devices[tx_chip_id],
+                        num_src_endpoints,
+                        num_dest_endpoints,
+                        target_address,
+                        num_hops,
+                        num_links);
+                    fabric_traffic.push_back(traffic_r);
+                }
 
-        // TODO: launch traffic kernels
-        for (auto& traffic : fabric_traffic) {
-            traffic.create_kernels(
-                tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address, test_results_addr);
+                num_allocated_devices += 2;
+            }
+
+            uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+            uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
+
+            std::vector<uint32_t> tx_compile_args = {
+                0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
+                num_dest_endpoints,          // 1: num_dest_endpoints
+                dest_endpoint_start_id,      // 2:
+                tx_queue_start_addr,         // 3: queue_start_addr_words
+                (tx_queue_size_bytes >> 4),  // 4: queue_size_words
+                routing_table_start_addr,    // 5: routeing table
+                test_results_addr,           // 6: test_results_addr
+                test_results_size,           // 7: test_results_size
+                prng_seed,                   // 8: prng_seed
+                data_kb_per_tx,              // 9: total_data_kb
+                max_packet_size_words,       // 10: max_packet_size_words
+                timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
+                tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
+                tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
+                tx_data_sent_per_iter_low,          // 14: data_sent_per_iter_low
+                tx_data_sent_per_iter_high,         // 15: data_sent_per_iter_high
+                fabric_command,                     // 16: fabric_command
+                target_address,                     // 17: target_address
+                atomic_increment,                   // 18: atomic_increment
+                tx_signal_address,                  // 19: tx_signal_address
+                client_interface_addr,              // 20:
+                client_pull_req_buf_addr,           // 21:
+                fixed_async_wr_notif_addr,          // 22: use fixed addr for async wr atomic inc
+            };
+
+            std::vector<uint32_t> rx_compile_args = {
+                prng_seed,                  // 0: prng seed
+                data_kb_per_tx,             // 1: total data kb
+                max_packet_size_words,      // 2: max packet size (in words)
+                fabric_command,             // 3: fabric command
+                target_address,             // 4: target address
+                atomic_increment,           // 5: atomic increment
+                test_results_addr,          // 6: test results addr
+                test_results_size,          // 7: test results size in bytes
+                tx_pkt_dest_size_choice,    // 8: pkt dest and size choice
+                tx_skip_pkt_content_gen,    // 9: skip packet validation
+                fixed_async_wr_notif_addr,  // 10: use fixed addr for async wr atomic inc
+            };
+
+            // launch traffic kernels
+            for (auto& traffic : fabric_traffic) {
+                traffic.create_kernels(
+                    tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address, test_results_addr);
+            }
         }
 
         if (check_txrx_timeout) {
@@ -1340,14 +1346,24 @@ int main(int argc, char **argv) {
             test_device->wait_for_gatekeeper_sync();
         }
 
-        // notify tx kernels to start transmitting
-        for (auto& traffic : fabric_traffic) {
-            traffic.notify_tx_workers(tx_signal_address);
+        if (!run_traffic) {
+            log_info("Gatekeeper sync complete on all chips");
         }
 
-        // wait for rx kernels to finish
-        for (auto& traffic : fabric_traffic) {
-            traffic.wait_for_rx_workers_to_finish();
+        if (run_traffic) {
+            // notify tx kernels to start transmitting
+            for (auto& traffic : fabric_traffic) {
+                traffic.notify_tx_workers(tx_signal_address);
+            }
+
+            // wait for rx kernels to finish
+            for (auto& traffic : fabric_traffic) {
+                traffic.wait_for_rx_workers_to_finish();
+            }
+        }
+
+        if (!run_traffic) {
+            log_info("Sending termination signal");
         }
 
         // terminate fabric routers
@@ -1365,11 +1381,13 @@ int main(int argc, char **argv) {
         std::chrono::duration<double> elapsed_seconds = (end-start);
         log_info(LogTest, "Ran in {:.2f}us", elapsed_seconds.count() * 1000 * 1000);
 
-        // collect traffic results
-        for (auto& traffic : fabric_traffic) {
-            pass &= traffic.collect_results(test_results_addr);
-            if (!pass) {
-                log_fatal(LogTest, "Result collection failed\n");
+        if (run_traffic) {
+            // collect traffic results
+            for (auto& traffic : fabric_traffic) {
+                pass &= traffic.collect_results(test_results_addr);
+                if (!pass) {
+                    log_fatal(LogTest, "Result collection failed\n");
+                }
             }
         }
 
@@ -1393,18 +1411,20 @@ int main(int argc, char **argv) {
         // close devices
         test_board.close_devices();
 
-        // tally-up the packets and words from tx/rx kernels
-        for (auto& traffic : fabric_traffic) {
-            pass &= traffic.validate_results();
-            if (!pass) {
-                log_fatal(LogTest, "Result validation failed\n");
-            }
-        }
-
-        // print results
-        if (pass) {
+        if (run_traffic) {
+            // tally-up the packets and words from tx/rx kernels
             for (auto& traffic : fabric_traffic) {
-                traffic.print_result_summary();
+                pass &= traffic.validate_results();
+                if (!pass) {
+                    log_fatal(LogTest, "Result validation failed\n");
+                }
+            }
+
+            // print results
+            if (pass) {
+                for (auto& traffic : fabric_traffic) {
+                    traffic.print_result_summary();
+                }
             }
         }
 
