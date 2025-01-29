@@ -111,7 +111,7 @@ jobs:
             find . -name "*.gcno"
             echo "Checking for gcda files"
             find . -name "*.gcda"
-            lcov --directory . --capture --output-file coverage.info
+            lcov --gcov-tool=$(which llvm-cov-17) --directory . --capture --output-file coverage.info
       - uses: codecov/codecov-action@v5
         if: ${{ inputs.upload_coverage }}
         with:
