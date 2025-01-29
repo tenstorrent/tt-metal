@@ -57,7 +57,7 @@ namespace distributed {
 } // namespace distributed
 
 class EnqueueProgramCommand;
-class HWCommandQueue;
+class CommandQueue;
 class JitBuildOptions;
 namespace detail{
     class Program_;
@@ -187,8 +187,8 @@ class Program {
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
@@ -232,7 +232,7 @@ class Program {
     template<typename T> friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    friend HWCommandQueue;
+    friend CommandQueue;
     friend EnqueueProgramCommand;
     friend distributed::MeshWorkload;
     friend detail::Internal_;

@@ -39,13 +39,12 @@ inline namespace v0 {
 
 class Buffer;
 class Program;
-class CommandQueue;
 class SubDevice;
 
 }  // namespace v0
 
 class JitBuildEnv;
-class HWCommandQueue;
+class CommandQueue;
 class TraceBuffer;
 
 inline namespace v0 {
@@ -175,7 +174,6 @@ public:
     virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-    virtual HWCommandQueue& hw_command_queue(size_t cq_id = 0) = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
@@ -199,7 +197,6 @@ public:
     virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
-    virtual void initialize_synchronous_sw_cmd_queue() = 0;
     virtual void update_dispatch_cores_for_multi_cq_eth_dispatch() = 0;
 
     // Puts device into reset

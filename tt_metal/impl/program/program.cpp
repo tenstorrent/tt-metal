@@ -156,52 +156,51 @@ class Program_ {
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
    private:
-    HWCommandQueue *last_used_command_queue_for_testing = nullptr;
+       CommandQueue* last_used_command_queue_for_testing = nullptr;
 
-    // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+       // Buffers temporarily owned by the program
+       std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
-    // The buffer that holds the kernel/binaries/etc for this program
-    std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
-    ProgramTransferInfo program_transfer_info;
+       // The buffer that holds the kernel/binaries/etc for this program
+       std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
+       ProgramTransferInfo program_transfer_info;
 
-    bool finalized_;
-    bool cached_;
+       bool finalized_;
+       bool cached_;
 
-    // TODO: Should map based on the hash of the configured sub-devices
-    // This way we can cache it agnostic of the device
-    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
+       // TODO: Should map based on the hash of the configured sub-devices
+       // This way we can cache it agnostic of the device
+       std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-    struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
+       struct CircularBufferAllocator {
+           CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
 
-        // Circular buffers are created and allocated at core range granularity
-        CoreRange core_range;
+           // Circular buffers are created and allocated at core range granularity
+           CoreRange core_range;
 
-        // Holds vector of addresses where circular buffers are allocated [start, end)
-        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
-        // To enable this, circular buffer address is the maximum address amongst all of its target cores
-        // This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
+           // Holds vector of addresses where circular buffers are allocated [start, end)
+           // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
+           // multiple cores must share the same address To enable this, circular buffer address is the maximum address
+           // amongst all of its target cores This vector is sorted from lower to higher address spaces
+           std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
-        // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
-        uint64_t get_cb_region_end() const {
-            return this->l1_regions.empty() ? 0 : this->l1_regions.back().second;
-        }
+           // Returns address for next circular buffer
+           // Circular buffers are placed sequentially on a core so the next available address gets appended to the last
+           // L1 region
+           uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+           // If address is the end of the last L1 region, the last region is extended by size bytes,
+           //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
+           void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
 
-        // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions.clear(); }
-    };
+           // Reset when circular buffer allocation is invalidated
+           void reset_available_addresses() { this->l1_regions.clear(); }
+       };
 
     uint64_t id; // Need to make non-const due to move constructor
     uint64_t runtime_id;
@@ -270,7 +269,6 @@ class Program_ {
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
@@ -1469,21 +1467,19 @@ uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord logical_core, Core
     return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
-void detail::Program_::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+void detail::Program_::set_last_used_command_queue_for_testing(CommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-HWCommandQueue* detail::Program_::get_last_used_command_queue() const {
+CommandQueue* detail::Program_::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
-void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
     pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
-HWCommandQueue* Program::get_last_used_command_queue() const {
-    return pimpl_->get_last_used_command_queue();
-}
+CommandQueue* Program::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
 
 uint32_t detail::Program_::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);

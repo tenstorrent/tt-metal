@@ -560,23 +560,7 @@ void write_data_to_device_buffer(CommandQueue& cq, const BufferType<T>& host_buf
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
-    if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
-        if constexpr (std::is_same_v<BufferType<T>, borrowed_buffer::Buffer<T>>) {
-            // When writing borrowed storage asynchronously, we have no control over when host memory is deallocated by
-            // the main thread. To ensure that worker threads enqueues the correct buffer, make a copy and caputre it in
-            // an owned buffer.
-            uint32_t borrowed_buf_size_words =
-                device_buffer->num_pages() * device_buffer->page_size() / sizeof(uint32_t);
-            const uint32_t* borrowed_buf_base = static_cast<const uint32_t*>(host_buffer.data());
-            std::vector<uint32_t> owned_copy_vec(borrowed_buf_base, borrowed_buf_base + borrowed_buf_size_words);
-            owned_buffer::Buffer<uint32_t> owned_copy(std::make_shared<std::vector<uint32_t>>(owned_copy_vec));
-            EnqueueWriteBuffer(cq, device_buffer, owned_copy.get_ptr(), false);
-        } else if constexpr (std::is_same_v<BufferType<T>, owned_buffer::Buffer<T>>) {
-            EnqueueWriteBuffer(cq, device_buffer, host_buffer.get_ptr(), false);
-        }
-    } else {
-        EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
-    }
+    EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
 }
 
 template <typename T, template <typename> typename BufferType>
