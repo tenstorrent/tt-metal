@@ -9,8 +9,6 @@
 
 #include "assert.hpp"
 #include "buffer_constants.hpp"
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 #include "shape2d.hpp"
 #include "tests/ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 #include <tt-metalium/bfloat16.hpp>
