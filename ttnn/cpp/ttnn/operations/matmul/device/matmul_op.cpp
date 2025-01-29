@@ -10,7 +10,6 @@
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"

@@ -43,8 +43,10 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
 
 }  // namespace
 
-HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index) :
-    manager(device->sysmem_manager()), completion_queue_thread{} {
+HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core) :
+    manager(device->sysmem_manager()),
+    completion_queue_thread{},
+    completion_queue_reader_core(completion_queue_reader_core) {
     ZoneScopedN("CommandQueue_constructor");
     this->device = device;
     this->id = id;
@@ -86,7 +88,7 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index) :
     std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
-    set_device_thread_affinity(this->completion_queue_thread, device->get_completion_queue_reader_core());
+    set_device_thread_affinity(this->completion_queue_thread, this->completion_queue_reader_core);
 
     for (uint32_t i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
@@ -307,7 +309,7 @@ void HWCommandQueue::enqueue_read_buffer(
         // Forward data from each core to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
         auto dispatch_params = buffer_dispatch::initialize_sharded_buf_read_dispatch_params(
-            buffer, this->id, this->expected_num_workers_completed);
+            buffer, this->id, this->expected_num_workers_completed, region);
         auto cores = buffer_dispatch::get_cores_for_sharded_buffer(
             dispatch_params.width_split, dispatch_params.buffer_page_mapping, buffer);
         for (uint32_t core_id = 0; core_id < buffer.num_cores(); ++core_id) {
