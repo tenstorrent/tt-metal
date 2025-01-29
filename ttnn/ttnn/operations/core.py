@@ -105,14 +105,6 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
             # We mimic Python negative slicing for start/stop
             start, stop, step = s.start, s.stop, s.step
 
-            # handle negative starts
-            if start is not None and start < 0:
-                start = start + shape[dim_idx]
-
-            # handle negative stops
-            if stop is not None and stop < 0:
-                stop = stop + shape[dim_idx]
-
             # default values
             if start is None:
                 start = 0
