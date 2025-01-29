@@ -462,52 +462,6 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
 namespace basic_tests {
 namespace dram_tests {
 
-TEST_F(CommandQueueBufferFixture, DISABLED_TestAsyncBufferRW) {
-    // Test Async Enqueue Read and Write + Get Addr + Buffer Allocation and Deallocation
-    auto& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    Program program;
-    for (int j = 0; j < 10; j++) {
-        // Asynchronously initialize a buffer on device
-        uint32_t first_buf_value = j + 1;
-        uint32_t second_buf_value = j + 2;
-        uint32_t first_buf_size = 4096;
-        uint32_t second_buf_size = 2048;
-        // Asynchronously allocate buffer on device
-        std::shared_ptr<Buffer> buffer =
-            Buffer::create(this->device_, first_buf_size, first_buf_size, BufferType::DRAM);
-        std::shared_ptr<uint32_t> allocated_buffer_address = std::make_shared<uint32_t>();
-        EnqueueGetBufferAddr(this->device_->command_queue(), allocated_buffer_address.get(), buffer.get(), true);
-        // Ensure returned addr is correct
-        EXPECT_EQ((*allocated_buffer_address), buffer->address());
-
-        std::shared_ptr<std::vector<uint32_t>> vec =
-            std::make_shared<std::vector<uint32_t>>(first_buf_size / 4, first_buf_value);
-        std::vector<uint32_t> readback_vec = {};
-        // Write first vector to existing on device buffer.
-        EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
-        // Reallocate the vector in the main thread after asynchronously pushing it (ensure that worker still has access
-        // to this data)
-        vec = std::make_shared<std::vector<uint32_t>>(second_buf_size / 4, second_buf_value);
-        // Simulate what tt-eager does: Share buffer ownership with program
-        AssignGlobalBufferToProgram(buffer, program);
-        // Reallocate buffer (this is safe, since the program also owns the existing buffer, which will not be
-        // deallocated)
-        buffer = Buffer::create(this->device_, second_buf_size, second_buf_size, BufferType::DRAM);
-        // Write second vector to second buffer
-        EnqueueWriteBuffer(this->device_->command_queue(), buffer, vec, false);
-        // Have main thread give up ownership immediately after writing
-        vec.reset();
-        // Read both buffer and ensure data is correct
-        EnqueueReadBuffer(this->device_->command_queue(), buffer, readback_vec, true);
-        for (int i = 0; i < readback_vec.size(); i++) {
-            EXPECT_EQ(readback_vec[i], second_buf_value);
-        }
-    }
-    command_queue.set_mode(current_mode);
-}
-
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToDramBank0) {
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     for (IDevice* device : devices_) {

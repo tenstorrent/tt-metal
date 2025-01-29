@@ -162,7 +162,6 @@ public:
     const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
     SystemMemoryManager& sysmem_manager() override;
-    HWCommandQueue& hw_command_queue(size_t cq_id = 0) override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Trace APIs
@@ -184,7 +183,6 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void initialize_synchronous_sw_cmd_queue() override;
     void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
     bool close() override;
     void enable_async(bool enable) override;
