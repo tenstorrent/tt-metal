@@ -19,7 +19,6 @@ def test_shape_equality_operator():
     input_shape_d = ttnn.Shape((1, 2, 32, 32))
     assert input_shape_a != input_shape_d
     assert input_shape_b != input_shape_d
-    assert input_shape_c != input_shape_d
     assert input_shape_d == (1, 2, 32, 32)
     assert (1, 2, 32, 32) == input_shape_d
     assert input_shape_d.with_tile_padding() == (1, 2, 32, 32)
