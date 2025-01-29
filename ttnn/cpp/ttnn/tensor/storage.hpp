@@ -364,12 +364,15 @@ struct MultiDeviceStorage {
 
     inline bool is_allocated() const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-
-        return std::all_of(
-            ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
-                const auto& buffer = buffers.at(device_id);
-                return buffer && buffer->is_allocated();
-            });
+        if (mesh_buffer != nullptr) {
+            return mesh_buffer->is_allocated();
+        } else {
+            return std::all_of(
+                ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
+                    const auto& buffer = buffers.at(device_id);
+                    return buffer && buffer->is_allocated();
+                });
+        }
     }
 };
 

@@ -442,7 +442,7 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                     if (storage.mesh_buffer != nullptr) {
                         // TODO: #17215 - Consider if it is possible to retain references to individual device buffers
                         // after mesh buffer was deallocated.
-                        storage.mesh_buffer.reset();
+                        storage.mesh_buffer->deallocate();
                     } else {
                         auto dealloc_lambda = std::make_shared<std::function<void(IDevice*)>>(
                             [force, attr = this->tensor_attributes](IDevice* worker) mutable {

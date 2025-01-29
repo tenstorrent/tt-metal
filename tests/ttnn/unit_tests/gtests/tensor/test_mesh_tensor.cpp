@@ -13,9 +13,6 @@
 namespace ttnn::distributed::test {
 namespace {
 
-using ::testing::IsNull;
-using ::testing::Not;
-
 using MeshTensorTest = T3kMultiDeviceFixture;
 
 TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape, DataType dtype) {
@@ -35,9 +32,9 @@ TEST_F(MeshTensorTest, Lifecycle) {
     auto* multi_device_storage = std::get_if<tt::tt_metal::MultiDeviceStorage>(&storage);
 
     ASSERT_NE(multi_device_storage, nullptr);
-    EXPECT_THAT(multi_device_storage->mesh_buffer, Not(IsNull()));
+    EXPECT_NE(multi_device_storage->mesh_buffer, nullptr);
 
-    // Buffer address stays the same across all device buffers.
+    // Buffer address is the same across all device buffers.
     const auto buffer_address = multi_device_storage->mesh_buffer->address();
     for (auto* device : mesh_device_->get_devices()) {
         auto buffer = multi_device_storage->get_buffer_for_device(device);
@@ -45,6 +42,9 @@ TEST_F(MeshTensorTest, Lifecycle) {
         EXPECT_TRUE(buffer->is_allocated());
         EXPECT_EQ(buffer->address(), buffer_address);
     }
+
+    input_tensor.deallocate();
+    EXPECT_FALSE(input_tensor.is_allocated());
 }
 
 }  // namespace
