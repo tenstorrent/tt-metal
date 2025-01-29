@@ -450,7 +450,6 @@ void EnqueueTerminateCommand::process() {
 }
 
 void EnqueueAddBufferToProgram(
-    CommandQueue& cq,
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     Program& program,
     bool blocking) {
@@ -465,7 +464,6 @@ void EnqueueAddBufferToProgram(
 }
 
 void EnqueueSetRuntimeArgs(
-    CommandQueue& cq,
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
     std::shared_ptr<RuntimeArgs> runtime_args_ptr,
@@ -488,7 +486,7 @@ void EnqueueSetRuntimeArgs(
     kernel->set_runtime_args(core_coord, resolved_runtime_args);
 }
 
-void EnqueueGetBufferAddr(CommandQueue& cq, uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
+void EnqueueGetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
     *(static_cast<uint32_t*>(dst_buf_addr)) = buffer->address();
 }
 
