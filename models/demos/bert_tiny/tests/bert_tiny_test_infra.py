@@ -121,6 +121,7 @@ class BertTinyTestInfra:
                 core_grid = ttnn.CoreGrid(y=5, x=6)  # untested due to unsupported batch20 on WH
         num_devices = 1 if isinstance(device, ttnn.Device) else device.get_num_devices()
         # torch tensor
+        print("Torch tensor in L1 :", torch_input_tensor)
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
         torch_token_type_ids = self.torch_token_type_ids if torch_token_type_ids is None else torch_token_type_ids
         torch_position_ids = self.torch_position_ids if torch_position_ids is None else torch_position_ids
@@ -157,9 +158,17 @@ class BertTinyTestInfra:
         return tt_inputs_host, tt_token_type_ids, tt_position_ids, tt_attention_mask, input_mem_config
 
     def setup_dram_sharded_input(
-        self, device, torch_input_tensor=None, tt_token_type_ids=None, tt_position_ids=None, tt_attention_mask=None
+        self,
+        device,
+        torch_input_tensor=None,
+        torch_token_type_ids=None,
+        torch_position_ids=None,
+        torch_attention_mask=None,
     ):
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
+        torch_token_type_ids = self.torch_token_type_ids if torch_input_tensor is None else torch_token_type_ids
+        torch_position_ids = self.torch_position_ids if torch_input_tensor is None else torch_position_ids
+        torch_attention_mask = self.torch_attention_mask if torch_input_tensor is None else torch_attention_mask
         (
             tt_inputs_host,
             tt_token_type_ids,
@@ -167,7 +176,7 @@ class BertTinyTestInfra:
             tt_attention_mask,
             input_mem_config,
         ) = self.setup_l1_sharded_input(
-            device, torch_input_tensor, tt_token_type_ids, tt_position_ids, tt_attention_mask
+            device, torch_input_tensor, torch_token_type_ids, torch_position_ids, torch_attention_mask
         )
 
         dram_grid_size = device.dram_grid_size()

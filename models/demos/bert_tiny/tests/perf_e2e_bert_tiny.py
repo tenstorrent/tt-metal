@@ -260,7 +260,7 @@ def run_perf_bert_tiny(
         dealloc_input=True,
         final_output_mem_config=ttnn.L1_MEMORY_CONFIG,
     )
-    ttnn.synchronize_devices(device)
+    # ttnn.synchronize_devices(device)
 
     (
         inputs_host,
@@ -295,10 +295,11 @@ def run_perf_bert_tiny(
     test_infra.position = ttnn.to_memory_config(tt_position_ids, input_mem_config)
     test_infra.attention = ttnn.to_memory_config(tt_attention_mask, input_mem_config)
 
-    shape = test_infra.input.shape
-    dtype = test_infra.input.dtype
-    layout = test_infra.input.layout
-    att_shape = test_infra.attention.shape
+    spec = test_infra.input.spec
+    # shape = test_infra.input.shape
+    # dtype = test_infra.input.dtype
+    # layout = test_infra.input.layout
+    # att_shape = test_infra.attention.shape
     ttnn.record_event(0, op_event)
     test_infra.run()
     test_infra.validate()
@@ -340,37 +341,37 @@ def run_perf_bert_tiny(
     trace_attention_mask_addr = ttnn.buffer_address(test_infra.attention)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
-    input = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    input = ttnn.allocate_tensor_on_device(spec, device)
+    #     shape,
+    #     dtype,
+    #     layout,
+    #     device,
+    #     input_mem_config,
+    # )
 
-    tok_type = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    tok_type = ttnn.allocate_tensor_on_device(spec, device)
+    #     shape,
+    #     dtype,
+    #     layout,
+    #     device,
+    #     input_mem_config,
+    # )
 
-    pos_id = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    pos_id = ttnn.allocate_tensor_on_device(spec, device)
+    #     shape,
+    #     dtype,
+    #     layout,
+    #     device,
+    #     input_mem_config,
+    # )
 
-    at_mask = ttnn.allocate_tensor_on_device(
-        att_shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    at_mask = ttnn.allocate_tensor_on_device(spec, device)
+    #     att_shape,
+    #     dtype,
+    #     layout,
+    #     device,
+    #     input_mem_config,
+    # )
     ttnn.end_trace_capture(device, tid, cq_id=0)
     print("***********")
     print(trace_input_addr, " ", ttnn.buffer_address(input))

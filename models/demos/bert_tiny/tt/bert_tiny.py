@@ -207,6 +207,16 @@ def bert(
     *,
     parameters,
 ):
+    print(
+        "BUffer in pp",
+        ttnn.buffer_address(input_ids),
+        " ",
+        ttnn.buffer_address(token_type_ids),
+        " ",
+        ttnn.buffer_address(position_ids),
+        " ",
+        ttnn.buffer_address(attention_mask),
+    )
     if input_ids.is_sharded():
         input_ids = ttnn.sharded_to_interleaved(input_ids, ttnn.L1_MEMORY_CONFIG)
     word_embeddings = ttnn.embedding(input_ids, parameters.embeddings.word_embeddings.weight)
@@ -222,7 +232,16 @@ def bert(
     word_embeddings = ttnn.to_layout(word_embeddings, ttnn.TILE_LAYOUT)
     token_type_embeddings = ttnn.to_layout(token_type_embeddings, ttnn.TILE_LAYOUT)
     position_embeddings = ttnn.to_layout(position_embeddings, ttnn.TILE_LAYOUT)
-
+    print(
+        "BUffer in pp after",
+        ttnn.buffer_address(input_ids),
+        " ",
+        ttnn.buffer_address(token_type_ids),
+        " ",
+        ttnn.buffer_address(position_ids),
+        " ",
+        ttnn.buffer_address(attention_mask),
+    )
     embeddings = word_embeddings + token_type_embeddings + position_embeddings
 
     hidden_states = ttnn.layer_norm(
