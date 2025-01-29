@@ -28,10 +28,9 @@ uint32_t virtual_seq_tile_id_to_physical_tile_id(
 }
 
 class TensorTileShape {
+public:
     uint32_t shape[4];
     uint32_t strides[4];
-
-public:
     // Constructor to initialize with 4D shape
     TensorTileShape(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3) {
         shape[0] = d0;
@@ -365,4 +364,138 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     }
     noc_async_read_barrier();
     cb_push_back(cb_mask_in, mask_size_tiles);
+}
+
+struct CatAddrGenerator {
+    InterleavedAddrGenFast<true> first_reader;
+    InterleavedAddrGenFast<true> second_reader;
+    TensorTileShape first_shape;
+    TensorTileShape second_shape;
+    uint32_t first_seq_padded;
+    uint32_t second_seq_padded;
+
+    CatAddrGenerator(
+        const InterleavedAddrGenFast<true>& first_reader,
+        TensorTileShape first_logical_shape,
+        uint32_t first_seq_padded,
+        const InterleavedAddrGenFast<true>& second_reader,
+        TensorTileShape second_logical_shape,
+        uint32_t second_seq_padded) :
+        first_reader(first_reader),
+        second_reader(second_reader),
+        first_shape(first_logical_shape),
+        second_shape(second_logical_shape),
+        first_seq_padded(first_seq_padded),
+        second_seq_padded(second_seq_padded) {}
+
+    uint32_t maybe_read_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t dst_addr) const {
+        if (d2 < first_shape.shape[2]) {
+            uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
+            noc_async_read_tile(tile_id, first_reader, dst_addr);
+            return 1;
+        } else if (d2 >= first_seq_padded && (d2 - first_seq_padded) < second_shape.shape[2]) {
+            uint32_t adjusted_seq = d2 - first_seq_padded;
+            uint32_t tile_id = second_shape.id_of(d0, d1, adjusted_seq, d3);
+            noc_async_read_tile(tile_id, second_reader, dst_addr);
+            return 1;
+        }
+        return 0;
+    }
+
+    uint32_t maybe_write_tile(uint32_t d0, uint32_t d1, uint32_t d2, uint32_t d3, uint32_t src_addr) const {
+        if (d2 < first_shape.shape[2]) {
+            uint32_t tile_id = first_shape.id_of(d0, d1, d2, d3);
+            noc_async_write_tile(tile_id, first_reader, src_addr);
+            return 1;
+        } else if (d2 >= first_seq_padded && (d2 - first_seq_padded) < second_shape.shape[2]) {
+            uint32_t adjusted_seq = d2 - first_seq_padded;
+            uint32_t tile_id = second_shape.id_of(d0, d1, adjusted_seq, d3);
+            noc_async_write_tile(tile_id, second_reader, src_addr);
+            return 1;
+        }
+        return 0;
+    }
+};
+
+struct Slice {
+    uint32_t d0;        // batch dimension
+    uint32_t d1;        // head dimension
+    uint32_t d2_start;  // sequence start
+    uint32_t d2_end;    // sequence end
+    uint32_t d3_start;  // feature start
+    uint32_t d3_end;    // feature end
+
+    Slice(uint32_t d0, uint32_t d1, uint32_t d2_start, uint32_t d2_end, uint32_t d3_start, uint32_t d3_end) :
+        d0(d0), d1(d1), d2_start(d2_start), d2_end(d2_end), d3_start(d3_start), d3_end(d3_end) {}
+
+    uint32_t get_d2_size() const { return d2_end - d2_start; }
+    uint32_t get_d3_size() const { return d3_end - d3_start; }
+};
+
+void read_block(
+    const CatAddrGenerator& cat_addr_generator,
+    const Slice& src_slice,
+    const uint32_t cb_id,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold,
+    const bool transpose) {
+    const uint32_t src_rows = src_slice.get_d2_size();
+    const uint32_t src_cols = src_slice.get_d3_size();
+    const uint32_t num_tiles = src_rows * src_cols;
+    cb_reserve_back(cb_id, num_tiles);
+    const uint32_t base_write_ptr = get_write_ptr(cb_id);
+    uint32_t outer_ptr_stride = transpose ? tile_bytes : src_cols * tile_bytes;
+    uint32_t inner_ptr_stride = transpose ? tile_bytes * src_rows : tile_bytes;
+
+    uint32_t barrier_count = 0;
+    for (uint32_t row = 0; row < src_rows; ++row) {
+        uint32_t write_ptr = base_write_ptr + row * outer_ptr_stride;
+        for (uint32_t col = 0; col < src_cols; ++col) {
+            uint32_t did_read = cat_addr_generator.maybe_read_tile(
+                src_slice.d0, src_slice.d1, src_slice.d2_start + row, src_slice.d3_start + col, write_ptr);
+
+            write_ptr += inner_ptr_stride;
+            barrier_count += did_read;
+            if (barrier_count == barrier_threshold) {
+                noc_async_read_barrier();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_id, num_tiles);
+}
+
+void write_block(
+    const CatAddrGenerator& cat_addr_generator,
+    const Slice& dst_slice,
+    const uint32_t cb_id,
+    const uint32_t tile_bytes,
+    const uint32_t barrier_threshold) {
+    const uint32_t dst_rows = dst_slice.get_d2_size();
+    const uint32_t dst_cols = dst_slice.get_d3_size();
+    const uint32_t num_tiles = dst_rows * dst_cols;
+    const uint32_t base_read_ptr = get_read_ptr(cb_id);
+    uint32_t outer_ptr_stride = dst_cols * tile_bytes;
+    uint32_t inner_ptr_stride = tile_bytes;
+
+    uint32_t barrier_count = 0;
+
+    cb_wait_front(cb_id, num_tiles);
+    for (uint32_t row = 0; row < dst_rows; ++row) {
+        uint32_t read_ptr = base_read_ptr + row * outer_ptr_stride;
+        for (uint32_t col = 0; col < dst_cols; ++col) {
+            uint32_t did_write = cat_addr_generator.maybe_write_tile(
+                dst_slice.d0, dst_slice.d1, dst_slice.d2_start + row, dst_slice.d3_start + col, read_ptr);
+            read_ptr += inner_ptr_stride;
+
+            barrier_count += did_write;
+            if (barrier_count == barrier_threshold) {
+                noc_async_writes_flushed();
+                barrier_count = 0;
+            }
+        }
+    }
+    noc_async_write_barrier();
+    cb_pop_front(cb_id, num_tiles);
 }
