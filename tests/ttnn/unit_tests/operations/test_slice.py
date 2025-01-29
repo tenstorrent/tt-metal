@@ -886,3 +886,50 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    ([8, 8, 8, 33, 33],),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+@pytest.mark.parametrize(
+    "indices",
+    (
+        [0, 0, 0, slice(0, 33, 1), slice(0, 33, 1)],
+        [1, -1, 2, slice(0, 33, 1), slice(0, 33, 1)],
+        [slice(0, 8, 1), slice(0, 8, 1), slice(0, 8, 1), 2, 2],
+    ),
+)
+def test_slice_index(device, input_shape, layout, input_memory_config, indices):
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+    )
+
+    torch_output = torch_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)

@@ -26,47 +26,134 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     golden_function=_golden_function,
 )
 def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
+    """
+    Mimics PyTorch-style indexing for ttnn.Tensor using ttnn.slice and ttnn.squeeze.
+    """
+
+    # Gather some basic info
     input_rank = len(input_tensor.logical_shape)
+    shape = input_tensor.shape  # Or input_tensor.logical_shape, depending on your library's conventions
 
-    if isinstance(slices, int):
-        slices = (slice(None, slices, None),)
-    elif isinstance(slices, slice):
+    # 1) Normalize slices into a tuple.
+    #    e.g. if user wrote a[3], slices is just int(3), so wrap it into (3,).
+    #    or if user wrote a[2:5], slices is slice(2,5).
+    if isinstance(slices, (int, slice, type(...))):
         slices = (slices,)
-    elif isinstance(slices, type(...)):
-        return ttnn.clone(input_tensor)
+    else:
+        # ensure it's a tuple in case user wrote something like a[1, 2:5, ...]
+        slices = tuple(slices)
 
+    # 2) Expand any bare Ellipsis into enough slice(None) to fill out to input_rank.
+    #    But we have to do this carefully in the presence of other slices.
+    #    We'll do it in two passes:
+    #      - first copy slices to a “normalized_slices”, remembering where Ellipsis is
+    #      - then replace the Ellipsis with however many slice(None) are needed
     normalized_slices = []
-
     ellipsis_found = False
+
     for s in slices:
-        if isinstance(s, int):
-            normalized_slices.append(slice(None, s, None))
-        elif isinstance(s, slice):
-            normalized_slices.append(s)
-        elif s is Ellipsis:
+        if s is Ellipsis:
             if ellipsis_found:
                 raise ValueError("Only one ellipsis ('...') is allowed in a slice.")
+            # We'll deal with actually expanding it after this loop.
             ellipsis_found = True
-            # Fill in the remaining dimensions with slice(None) based on how many slices are missing
-            num_missing_slices = input_rank - len(slices) + 1
-            normalized_slices.extend([slice(None)] * num_missing_slices)
+            normalized_slices.append(Ellipsis)
         else:
-            raise TypeError(f"Invalid slice object: {s}")
+            normalized_slices.append(s)
 
-    # If fewer slices than the rank, pad with slice(None)
+    # If there's exactly one Ellipsis, expand it
+    if ellipsis_found:
+        ellipsis_index = normalized_slices.index(Ellipsis)
+        # Number of slices ignoring the Ellipsis
+        num_slices_no_ellipsis = len(normalized_slices) - 1
+        # How many dimensions are “missing”
+        num_missing = input_rank - num_slices_no_ellipsis
+        if num_missing < 0:
+            raise IndexError(f"Too many indices for tensor of dimension {input_rank}")
+
+        # Remove the Ellipsis placeholder
+        del normalized_slices[ellipsis_index]
+        # Insert slice(None) for however many dims are missing
+        for _ in range(num_missing):
+            normalized_slices.insert(ellipsis_index, slice(None, None, None))
+
+    # If there was no Ellipsis and we still have fewer slices than rank, pad with slice(None)
     while len(normalized_slices) < input_rank:
-        normalized_slices.append(slice(None))
+        normalized_slices.append(slice(None, None, None))
 
-    slices = tuple(normalized_slices)
+    # Now if we have more slices than the rank, that’s an error
+    if len(normalized_slices) > input_rank:
+        raise IndexError(f"Too many indices for tensor of dimension {input_rank}")
 
-    if isinstance(slices, tuple):
-        if len(slices) > input_rank:
-            raise RuntimeError(f"Too many slices for tensor of rank {input_rank}")
+    # 3) Convert everything into slice objects (including integer indices),
+    #    and record which dimensions we’ll need to squeeze out (integer-indexed dims).
+    final_slices = []
+    singled_out_dims = []  # dims where user gave an integer index
 
-    slice_start = [_slice.start if _slice.start is not None else 0 for _slice in slices]
-    slice_end = [_slice.stop if _slice.stop is not None else input_tensor.shape[i] for i, _slice in enumerate(slices)]
-    slice_step = [_slice.step if _slice.step is not None else 1 for _slice in slices]
+    for dim_idx, s in enumerate(normalized_slices):
+        if isinstance(s, int):
+            # Negative index => convert as in python: s + size if s < 0
+            idx = s if s >= 0 else (s + shape[dim_idx])
+            if not 0 <= idx < shape[dim_idx]:
+                raise IndexError(
+                    f"Index {s} (converted to {idx}) is out of bounds "
+                    f"for dimension {dim_idx} of size {shape[dim_idx]}"
+                )
+            final_slices.append(slice(idx, idx + 1, 1))
+            singled_out_dims.append(dim_idx)
+        elif isinstance(s, slice):
+            # We mimic Python negative slicing for start/stop
+            start, stop, step = s.start, s.stop, s.step
+
+            # handle negative starts
+            if start is not None and start < 0:
+                start = start + shape[dim_idx]
+
+            # handle negative stops
+            if stop is not None and stop < 0:
+                stop = stop + shape[dim_idx]
+
+            # default values
+            if start is None:
+                start = 0
+            if stop is None:
+                stop = shape[dim_idx]
+            if step is None:
+                step = 1
+
+            final_slices.append(slice(start, stop, step))
+        else:
+            raise TypeError(f"Invalid slice type: {s}")
+
+    # 4) Prepare the lists for ttnn.slice
+    slice_start = []
+    slice_end = []
+    slice_step = []
+
+    for dim_idx, sl in enumerate(final_slices):
+        # No further negative indexing needed: we already converted above
+        st = sl.start
+        end = sl.stop
+        stp = sl.step
+        slice_start.append(st)
+        slice_end.append(end)
+        slice_step.append(stp)
+
+    # 5) Perform the slicing
     output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
+
+    # 6) Squeeze out all dimensions that were indexed by an integer.
+    #    We do this from left to right, adjusting each subsequent dimension index
+    #    or do it from right to left so we don't need to adjust. Either approach works
+    #    if we’re careful. The simplest is ascending order with a small counter.
+    shift = 0
+    singled_out_dims_sorted = sorted(singled_out_dims)
+    for original_dim in singled_out_dims_sorted:
+        # after removing 'shift' dims, the current dim is (original_dim - shift)
+        squeeze_dim = original_dim - shift
+        # Squeeze only if that dim is actually size 1 after slicing
+        output = ttnn.squeeze(output, squeeze_dim)
+        shift += 1
 
     return output
 
