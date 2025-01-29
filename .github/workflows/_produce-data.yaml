@@ -43,6 +43,7 @@ on:
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "Custom test dispatch"
+      - "PR Gate"
     types:
       - completed
 
