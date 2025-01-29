@@ -170,26 +170,32 @@ class UNetConv2D:
         self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
+    def get_conv2d_kwargs(self):
+        return {
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": self.kernel_size,
+            "stride": self.stride,
+            "padding": self.padding,
+            "dilation": [1, 1],
+            "groups": 2,
+            "device": self.device,
+            "conv_config": self.conv_config,
+        }
+
     def __call__(self, x):
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            input_height=self.input_height,
-            input_width=self.input_width,
-            batch_size=self.batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            conv_config=self.conv_config,
             compute_config=self.compute_config,
             conv_op_cache=self.cache,
-            groups=2,
             return_output_dim=False,
             return_weights_and_bias=True,
+            **self.get_conv2d_kwargs(),
         )
         return x
 

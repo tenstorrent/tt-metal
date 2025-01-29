@@ -5,7 +5,6 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"

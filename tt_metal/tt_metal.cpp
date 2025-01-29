@@ -35,6 +35,8 @@
 
 #include <graph_tracking.hpp>
 
+#include "llrt.hpp"
+
 namespace tt {
 
 namespace tt_metal {
@@ -1363,6 +1365,16 @@ void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const
 }
 
 void ReleaseTrace(IDevice* device, const uint32_t tid) { device->release_trace(tid); }
+
+// Light Metal Begin/End Capture APIs are stubs for now, filled in soon.
+void LightMetalBeginCapture() {
+    log_warning(tt::LogMetalTrace, "Begin LightMetalBinary Capture - not yet implemented.");
+}
+
+LightMetalBinary LightMetalEndCapture() {
+    log_warning(tt::LogMetalTrace, "End LightMetalBinary Capture - not yet implemented.");
+    return {};
+}
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {

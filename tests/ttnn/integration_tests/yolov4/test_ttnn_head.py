@@ -28,7 +28,7 @@ def test_head(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = TtHead(weights_pth)
+    ttnn_model = TtHead(device, weights_pth)
 
     torch_input_tensor1 = torch.randn(1, 40, 40, 128, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.randn(1, 10, 10, 512, dtype=torch.bfloat16)
@@ -68,10 +68,10 @@ def test_head(device, reset_seeds, model_location_generator):
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    result_ttnn = ttnn_model(device, ttnn_input_tensor)
+    result_ttnn = ttnn_model(ttnn_input_tensor)
     start_time = time.time()
     for x in range(1):
-        result_ttnn = ttnn_model(device, ttnn_input_tensor)
+        result_ttnn = ttnn_model(ttnn_input_tensor)
     logger.info(f"Time taken: {time.time() - start_time}")
 
     result_1 = ttnn.to_torch(result_ttnn[0])
