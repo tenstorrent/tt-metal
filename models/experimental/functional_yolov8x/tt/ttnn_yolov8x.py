@@ -159,10 +159,7 @@ def Bottleneck(
     ttnn.deallocate(cv1)
 
     cv2 = ttnn.sharded_to_interleaved(cv2, ttnn.L1_MEMORY_CONFIG)
-    cv2 = ttnn.reshape(cv2, (1, out_h, out_w, cv2.shape[-1]))
-
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device)
-    cv2 = ttnn.to_layout(cv2, ttnn.TILE_LAYOUT, device=device)
 
     add = shortcut
 
@@ -203,8 +200,6 @@ def C2f(
     )
 
     cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
-    cv1 = ttnn.reshape(cv1, (1, out_h, out_w, cv1.shape[-1]))
-
     y = list(ttnn.split(cv1, 2, 3))
 
     for i in range(n):
@@ -462,12 +457,10 @@ def DetectionModel(device, x, parameters):
     )
     ttnn.deallocate(Conv_7)
 
-    SPPF_9, out_h, out_w = SPPF(device, C2f_8, parameters, "model.9", out_h, out_w)
+    nine, out_h, out_w = SPPF(device, C2f_8, parameters, "model.9", out_h, out_w)
     ttnn.deallocate(C2f_8)
 
-    nine = ttnn.clone(SPPF_9, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    SPPF_9 = ttnn.to_layout(SPPF_9, ttnn.ROW_MAJOR_LAYOUT)
+    SPPF_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
 
     SPPF_9 = ttnn.reshape(SPPF_9, (1, out_h, out_w, SPPF_9.shape[-1]))
     SPPF_9 = ttnn.upsample(SPPF_9, scale_factor=(2, 2))
