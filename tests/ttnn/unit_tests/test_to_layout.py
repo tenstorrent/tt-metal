@@ -29,7 +29,7 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
             torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0.0
         )
         input_tensor = ttnn.from_torch(torch_padded_input_tensor)
-        input_tensor = ttnn.reshape(input_tensor, shape=ttnn.Shape([height, width]))
+        input_tensor = ttnn.reshape(input_tensor, [height, width], [height + pad_h, width + pad_w])
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor)
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
