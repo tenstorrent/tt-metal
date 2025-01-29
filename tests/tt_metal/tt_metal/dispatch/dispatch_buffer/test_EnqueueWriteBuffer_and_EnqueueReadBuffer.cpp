@@ -473,7 +473,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToDramBank0) {
 TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileToAllDramBanks) {
     for (IDevice* device : devices_) {
         TestBufferConfig config = {
-            .num_pages = uint32_t(device->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
@@ -485,7 +485,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, WriteOneTileAcrossAllDramBanksTwiceR
     constexpr uint32_t num_round_robins = 2;
     for (IDevice* device : devices_) {
         TestBufferConfig config = {
-            .num_pages = num_round_robins * (device->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
@@ -504,7 +504,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTran
     constexpr uint32_t num_round_robins = 2;
     for (IDevice* device : devices_) {
         TestBufferConfig config = {
-            .num_pages = num_round_robins * (device->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = dispatch_constants::TRANSFER_PAGE_SIZE + 32,
             .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
@@ -820,7 +820,7 @@ TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         TestBufferConfig config = {
-            .num_pages = uint32_t(device->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
@@ -837,7 +837,7 @@ TEST_F(MultiCommandQueueMultiDeviceBufferFixture, WriteOneTileAcrossAllDramBanks
     for (IDevice* device : devices_) {
         tt::log_info("Running On Device {}", device->id());
         TestBufferConfig config = {
-            .num_pages = num_round_robins * (device->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+            .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
             .page_size = 2048,
             .buftype = BufferType::DRAM};
 
@@ -918,7 +918,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
     TestBufferConfig config = {
-        .num_pages = uint32_t(this->device_->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = uint32_t(this->device_->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 
@@ -932,7 +932,7 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
-        .num_pages = num_round_robins * (this->device_->get_initialized_allocator()->get_num_banks(BufferType::DRAM)),
+        .num_pages = num_round_robins * (this->device_->allocator()->get_num_banks(BufferType::DRAM)),
         .page_size = 2048,
         .buftype = BufferType::DRAM};
 

@@ -837,7 +837,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_cb_address = device->get_initialized_allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
@@ -853,7 +853,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = tt::align(computed_addr, device->get_initialized_allocator()->get_config().alignment);
+        computed_addr = tt::align(computed_addr, device->allocator()->get_config().alignment);
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
