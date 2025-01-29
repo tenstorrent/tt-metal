@@ -5,8 +5,6 @@
 #include "nlp_create_qkv_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/host_api.hpp>
-
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op for decode

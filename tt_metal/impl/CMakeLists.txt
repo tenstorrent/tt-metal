@@ -65,12 +65,13 @@ target_link_libraries(
         Tracy::TracyClient
     PRIVATE
         Boost::smart_ptr
+        FlatBuffers::FlatBuffers
         range-v3::range-v3
         Metalium::Metal::Common
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
-        FlatBuffers::FlatBuffers
+        Metalium::Metal::LLRT
 )
 
 target_include_directories(
