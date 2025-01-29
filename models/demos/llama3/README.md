@@ -52,8 +52,8 @@ python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
-#### Llama3.2-11B multimodal only
-Llama3.2-11B multimodal requires extra python dependencies. Install them from:
+#### Additional package
+All Llama3 model demos require extra python dependencies. Install them from:
 
 ```
 pip install -r models/demos/llama3/requirements.txt

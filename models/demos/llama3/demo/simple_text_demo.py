@@ -235,7 +235,7 @@ def create_tt_model(
             8192,  # max_seq_len
             32,  # batch_size
             4096,  # max_generated_tokens
-            True,  # paged_attention
+            False,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
             {"page_block_size": 32, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos

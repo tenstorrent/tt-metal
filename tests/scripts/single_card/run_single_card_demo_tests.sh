@@ -114,8 +114,6 @@ run_n300_perf_tests(){
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  pip install -r models/demos/llama3/requirements.txt
-
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do

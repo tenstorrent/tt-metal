@@ -30,8 +30,6 @@ run_t3000_llama3_70b_tests() {
 
   echo "LOG_METAL: Running run_t3000_llama3_70b_tests"
 
-  pip install -r models/demos/llama3/requirements.txt
-
   LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
 
   # Output verification demo for old llama3-70b codebase, to be removed once old codebase is deleted
@@ -66,8 +64,6 @@ run_t3000_llama3_tests() {
   # Llama3.2-11B
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  pip install -r models/demos/llama3/requirements.txt
-
   # Run all Llama3 tests for 8B, 1B, and 3B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
     LLAMA_DIR=$llama_dir WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
@@ -95,9 +91,6 @@ run_t3000_llama3_vision_tests() {
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
   n300=N300
   t3k=T3K
-
-  # Install Vision-specific packages
-  pip install -r models/demos/llama3/requirements.txt
 
   for fake_device in "$n300" "$t3k"; do
     FAKE_DEVICE=$fake_device LLAMA_DIR=$llama11b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/demos/llama3/demo/simple_vision_demo.py -k "batch1-trace or batch4-trace-with-text-prompts" --timeout 600; fail+=$?
