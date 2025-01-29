@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // clang-format off
+#include <cstdint>
 #include "risc_common.h"
 #include "noc_overlay_parameters.h"
 #include "noc_nonblocking_api.h"
@@ -18,6 +19,8 @@
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
 // clang-format on
+
+#define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
 
 uint32_t halt_stack_ptr_save;
 
@@ -57,15 +60,16 @@ namespace kernel_profiler {
 
 extern "C" void ncrisc_resume(void);
 extern "C" void notify_brisc_and_halt(uint32_t status);
+extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
 
 inline __attribute__((always_inline)) void set_ncrisc_resume_addr() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
 #endif
 }
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 #else
     while (*ncrisc_run != RUN_SYNC_MSG_GO) {
@@ -75,7 +79,7 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 }
 
 inline __attribute__((always_inline)) void signal_ncrisc_completion() {
-#ifndef NCRISC_HAS_IRAM
+#if !NCRISC_FIRMWARE_IN_IRAM
     *ncrisc_run = RUN_SYNC_MSG_DONE;
 #endif
 }
@@ -120,6 +124,10 @@ int main(int argc, char *argv[]) {
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #ifdef ARCH_BLACKHOLE
         (*kernel_address)((uint32_t)kernel_address);
+#elif defined(ARCH_WORMHOLE)
+        // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
+        mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
+        notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_DONE, (uint32_t)kernel_address);
 #else
         kernel_init((uint32_t)kernel_address);
 #endif
