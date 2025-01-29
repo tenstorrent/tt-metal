@@ -9,7 +9,13 @@ import ttnn
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.utility_functions import comp_pcc, comp_allclose, skip_for_batch_parallelism, skip_for_parallelism
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+    skip_for_batch_parallelism,
+    skip_for_parallelism,
+    skip_for_model_parallelism,
+)
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3.tt.llama_common import HostEmbedding
 
@@ -45,6 +51,10 @@ def test_llama_embedding(max_seq_len, batch_dp_tp, mesh_device, use_program_cach
     )
     if skip:
         pytest.skip(reason)
+    skip, reason = skip_for_model_parallelism(data_parallel)
+    if skip:
+        pytest.skip(reason)
+
     dtype = ttnn.bfloat16
     mesh_device.enable_async(True)
 

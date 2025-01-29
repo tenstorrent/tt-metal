@@ -1068,3 +1068,13 @@ def skip_for_parallelism(num_devices: int, data_parallel: int, tensor_parallel: 
         )
 
     return (False, "")
+
+
+def skip_for_model_parallelism(data_parallel: int):
+    model = os.getenv("LLAMA_DIR")
+    if (data_parallel > 1) and (("11B" in model) or ("70B" in model)):
+        return (
+            True,
+            f"Skipping test: Data parallelism ({data_parallel}) does support model size greater than 8B.",
+        )
+    return (False, "")
