@@ -40,6 +40,8 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
+#define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
+
 #ifdef NCRISC_HAS_IRAM
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
 #else
@@ -279,7 +281,7 @@ void init_sync_registers() {
 }
 
 inline void init_ncrisc_iram() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     uint16_t fw_size16 = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.ncrisc_kernel_size16;
     ncrisc_kernel_start_offset16 = fw_size16;
 
@@ -300,7 +302,7 @@ inline void deassert_ncrisc_trisc() {
 }
 
 inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     WAYPOINT("INW");
     while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE);
     WAYPOINT("IND");
@@ -308,13 +310,13 @@ inline __attribute__((always_inline)) void wait_for_ncrisc_to_halt() {
 }
 
 inline __attribute__((always_inline)) void reset_ncrisc_with_iram() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     assert_just_ncrisc_reset();
 #endif
 }
 
 inline void set_ncrisc_kernel_resume_deassert_address() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
     WAYPOINT("INRW");
     while (mailboxes->ncrisc_halt.resume_addr == 0);
@@ -331,15 +333,29 @@ inline void run_triscs(dispatch_core_processor_masks enables) {
 
 inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+        l1_to_ncrisc_iram_copy_wait();
         mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
 
-        l1_to_ncrisc_iram_copy_wait();
-
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
         // Note: only ncrisc is in reset, so just deasserts ncrisc
         deassert_all_reset();
 #endif
     }
+}
+
+inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
+#ifdef NCRISC_FIRMWARE_KERNEL_SPLIT
+    if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+        // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
+        // address it provides.
+        while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE);
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+        volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
+        cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
+        assert_just_ncrisc_reset();
+        deassert_all_reset();
+    }
+#endif
 }
 
 inline void wait_ncrisc_trisc() {
@@ -495,6 +511,7 @@ int main() {
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                 experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -516,6 +533,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 }
+                start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
             }
             WAYPOINT("D");
