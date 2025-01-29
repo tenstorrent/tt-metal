@@ -777,6 +777,7 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
     (
         ([3234, 4], [0, 2], [3234, 4], [1, 1]),
         ([196, 196, 2], [0, 0, 1], [196, 196, 2], [1, 1, 1]),
+        ([1, 23, 40], [0, 0, 39], [1, 23, 40], [1, 1, 1]),
     ),
 )
 @pytest.mark.parametrize(
