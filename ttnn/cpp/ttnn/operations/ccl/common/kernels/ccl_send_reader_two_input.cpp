@@ -154,8 +154,7 @@ FORCE_INLINE auto build_source_address_generator(
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        constexpr SHARDING_INFO_OBJECT test_object {};
-        std::pair<const uint32_t* const, uint32_t> map = experimental::shard_addr_gen_utils::parse_map<test_object.number_of_cores>(arg_idx);
+        std::pair<const uint32_t* const, uint32_t> map = experimental::shard_addr_gen_utils::parse_map<SHARDING_INFO_OBJECT>(arg_idx);
         arg_idx = map.second;
 
         experimental::ShardedAddrGen<SHARDING_INFO_OBJECT> ret_val = {
