@@ -54,7 +54,7 @@ public:
     uint8_t noc_mcast_data_start_index(SubDeviceId sub_device_id) const;
     uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
-    const std::unique_ptr<Allocator>& get_initialized_allocator(SubDeviceId sub_device_id) const;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
 
     std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);

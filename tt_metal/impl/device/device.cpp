@@ -328,8 +328,8 @@ void Device::initialize_device_kernel_defines()
     // Clear previously stored defines, in case we are running with different configuration this time.
     // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
     this->device_kernel_defines_.clear();
-    const size_t num_dram_banks = this->get_initialized_allocator()->get_num_banks(BufferType::DRAM);
-    const size_t num_l1_banks = this->get_initialized_allocator()->get_num_banks(BufferType::L1);
+    const size_t num_dram_banks = this->allocator()->get_num_banks(BufferType::DRAM);
+    const size_t num_l1_banks = this->allocator()->get_num_banks(BufferType::L1);
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
@@ -1297,12 +1297,12 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->get_initialized_allocator(SubDeviceId{0});
+const std::unique_ptr<Allocator>& Device::allocator() const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_initialized_allocator(sub_device_id);
+const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
 uint32_t Device::num_sub_devices() const {
@@ -1521,13 +1521,13 @@ std::size_t Device::num_program_cache_entries() {
     return program_cache_.num_entries();
 }
 
-void Device::mark_allocations_unsafe() { this->get_initialized_allocator()->mark_allocations_unsafe(); }
+void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() { this->get_initialized_allocator()->mark_allocations_safe(); }
+void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
 
 void Device::generate_device_bank_to_noc_tables()
 {
-    const auto& allocator = this->get_initialized_allocator();
+    const auto& allocator = this->allocator();
     const size_t num_dram_banks = allocator->get_num_banks(BufferType::DRAM);
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
     dram_bank_offset_map_.clear();
@@ -1756,7 +1756,7 @@ IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
 
 bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
-void v1::DeallocateBuffers(IDevice* device) { device->get_initialized_allocator()->deallocate_buffers(); }
+void v1::DeallocateBuffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
 
 void v1::DumpDeviceProfileResults(IDevice* device) {
     detail::DumpDeviceProfileResults(device);
@@ -1789,16 +1789,16 @@ std::vector<CoreCoord> v1::GetEthernetSockets(IDevice* device, chip_id_t connect
 }
 
 std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) {
-    return device->get_initialized_allocator()->get_num_banks(buffer_type);
+    return device->allocator()->get_num_banks(buffer_type);
 }
 
 std::int32_t v1::GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id) {
-    return device->get_initialized_allocator()->get_bank_offset(buffer_type, bank_id);
+    return device->allocator()->get_bank_offset(buffer_type, bank_id);
 }
 
 tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
     IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
-    return device->get_initialized_allocator()->get_bank_ids_from_logical_core(buffer_type, logical_core);
+    return device->allocator()->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
 float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }
