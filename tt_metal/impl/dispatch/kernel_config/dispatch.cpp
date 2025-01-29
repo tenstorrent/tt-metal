@@ -9,6 +9,7 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -57,7 +58,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
                 ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
-        static_config_.distributed_dispatcher = (GetCoreType() == CoreType::ETH);
+        static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -157,7 +158,7 @@ void DispatchKernel::GenerateStaticConfigs() {
             (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
                 ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
                 : 0;
-        static_config_.distributed_dispatcher = (GetCoreType() == CoreType::ETH);
+        static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
 
         static_config_.host_completion_q_wr_ptr =
             my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
@@ -181,7 +182,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
 
         // Downstream
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 1);
             auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
             TT_ASSERT(dispatch_s_kernel);
@@ -232,7 +233,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         // Downstream, expect a MUX_D and a DISPATCH_S if enabled
         auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(downstream_kernels_[0]);
         auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0]);
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
             mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[1]);
             if (!dispatch_s_kernel) {

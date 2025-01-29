@@ -869,18 +869,6 @@ void Device::clear_l1_state() {
     // TODO: clear idle eriscs as well
 }
 
-bool Device::dispatch_s_enabled() const {
-    // Dispatch_s is always enabled for Tensix Dispatch
-    // Conditionally enabled for Ethernet Dispatch - If a single CQ is being used
-    // This condition may be modified for BH
-    return (this->num_hw_cqs() == 1 or dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER);
-}
-
-bool Device::distributed_dispatcher() const {
-    // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores.
-    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
-}
-
 void Device::compile_command_queue_programs() {
     ZoneScoped;
     auto command_queue_program_ptr = std::make_unique<Program>();
@@ -1603,11 +1591,6 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
-}
-
-// Main source to get NOC idx for dispatch core
-NOC Device::dispatch_go_signal_noc() const {
-    return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {

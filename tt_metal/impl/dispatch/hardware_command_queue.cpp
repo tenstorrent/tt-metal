@@ -16,6 +16,7 @@
 
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -107,7 +108,7 @@ SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager; }
 
 void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
-    if (!this->device_->dispatch_s_enabled()) {
+    if (!DispatchQueryManager::instance().dispatch_s_enabled()) {
         return;
     }
     uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
@@ -125,8 +126,9 @@ void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_alig
         sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    DispatcherSelect dispatcher_for_go_signal =
-        this->device_->dispatch_s_enabled() ? DispatcherSelect::DISPATCH_SLAVE : DispatcherSelect::DISPATCH_MASTER;
+    DispatcherSelect dispatcher_for_go_signal = DispatchQueryManager::instance().dispatch_s_enabled()
+                                                    ? DispatcherSelect::DISPATCH_SLAVE
+                                                    : DispatcherSelect::DISPATCH_MASTER;
     command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
     this->manager.fetch_queue_reserve_back(this->id_);
@@ -156,7 +158,7 @@ void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg
         go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
     }
     uint32_t cmd_sequence_sizeB =
-        reset_launch_msg_state * this->device_->dispatch_s_enabled() *
+        reset_launch_msg_state * DispatchQueryManager::instance().dispatch_s_enabled() *
             hal.get_alignment(
                 HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
         go_signals_cmd_size +        // go signal cmd
@@ -166,7 +168,7 @@ void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg
                                   // dispatch_s is responsible for resetting worker count and giving dispatch_d the
                                   // latest worker state. This is encapsulated in the dispatch_s wait command (only to
                                   // be sent when dispatch is distributed on 2 cores)
-         this->device_->distributed_dispatcher() * hal.get_alignment(HalMemType::HOST)) *
+         DispatchQueryManager::instance().distributed_dispatcher() * hal.get_alignment(HalMemType::HOST)) *
             num_sub_devices;
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -177,7 +179,7 @@ void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg
         dispatch_constants::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     if (reset_launch_msg_state) {
-        if (device_->dispatch_s_enabled()) {
+        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
             for (uint32_t i = 0; i < num_sub_devices; ++i) {
                 index_bitmask |= 1 << i;
@@ -213,7 +215,7 @@ void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
-        if (device_->distributed_dispatcher()) {
+        if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 false, dispatch_message_addr, expected_num_workers_completed[i], clear_count, false, true, 1);
         }

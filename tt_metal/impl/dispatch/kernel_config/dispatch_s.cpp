@@ -7,6 +7,7 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -16,7 +17,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
 
     uint32_t dispatch_s_buffer_base = 0xff;
-    if (device_->dispatch_s_enabled()) {
+    if (DispatchQueryManager::instance().dispatch_s_enabled()) {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
         if (GetCoreType() == CoreType::WORKER) {
             // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -42,7 +43,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
         (hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1)
             ? hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::GO_MSG)
             : 0;
-    static_config_.distributed_dispatcher = (GetCoreType() == CoreType::ETH);
+    static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
     static_config_.worker_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     static_config_.max_num_worker_sems = dispatch_constants::DISPATCH_MESSAGE_ENTRIES;
@@ -110,7 +111,7 @@ void DispatchSKernel::CreateKernel() {
 }
 
 void DispatchSKernel::ConfigureCore() {
-    if (!device_->distributed_dispatcher()) {
+    if (!DispatchQueryManager::instance().distributed_dispatcher()) {
         return;
     }
     // Just need to clear the dispatch message

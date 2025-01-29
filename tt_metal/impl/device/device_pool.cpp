@@ -18,6 +18,7 @@
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -198,7 +199,10 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
