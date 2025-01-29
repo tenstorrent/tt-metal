@@ -1889,7 +1889,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     noc_fast_write_dw_inline<proc_type, noc_mode>(
         noc,
-        write_reg_cmd_buf,
+        write_at_cmd_buf,
         val,
         addr,
         be,  // byte-enable
