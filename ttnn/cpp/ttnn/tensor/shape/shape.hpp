@@ -62,8 +62,9 @@ class type_caster<ttnn::SimpleShape> {
 public:
     PYBIND11_TYPE_CASTER(ttnn::SimpleShape, _("SimpleShape"));
 
-    bool load(handle src, bool);
-    static handle cast(const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
+    PYBIND11_EXPORT bool load(handle src, bool);
+    PYBIND11_EXPORT static handle cast(
+        const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
 };
 }  // namespace detail
 }  // namespace PYBIND11_NAMESPACE
