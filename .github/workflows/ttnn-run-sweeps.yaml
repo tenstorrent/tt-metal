@@ -306,6 +306,7 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez

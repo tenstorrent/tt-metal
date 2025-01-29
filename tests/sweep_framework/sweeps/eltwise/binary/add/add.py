@@ -26,8 +26,8 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
         + gen_shapes([1, 1], [256, 256], [1, 1], 8),
         "activations": [None, ["relu"]],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -43,6 +43,13 @@ activation_types = {"relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)}
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if (
+        test_vector["input_a_dtype"] == ttnn.int32
+        and test_vector["input_b_dtype"] != ttnn.int32
+        or test_vector["input_b_dtype"] == ttnn.int32
+        and test_vector["input_a_dtype"] != ttnn.int32
+    ):
+        return True, "Both input tensors must have int32 datatype if one of them has int32 datatype"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Row Major layout is not supported"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
@@ -80,7 +87,7 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.subtract)
+    golden_function = ttnn.get_golden_function(ttnn.add)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, activations=activations)
 
     input_tensor_a = ttnn.from_torch(
@@ -105,7 +112,7 @@ def run(
         activations = None
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.subtract(
+    output_tensor = ttnn.add(
         input_tensor_a, input_tensor_b, activations=activations, memory_config=output_memory_config
     )
     e2e_perf = stop_measuring_time(start_time)

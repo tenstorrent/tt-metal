@@ -27,8 +27,21 @@ def apply_activations(tensor, activations):
     return tensor
 
 
+def is_complex_tensor(tensor):
+    import torch
+
+    if tensor.dtype in [torch.complex64, torch.cfloat, torch.complex128, torch.cdouble]:
+        return True
+    else:
+        return False
+
+
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a + input_tensor_b
+    import torch
+
+    output_tensor = torch.add(input_tensor_a, input_tensor_b)
+    if is_complex_tensor(input_tensor_a) and is_complex_tensor(input_tensor_b):
+        return output_tensor
     return apply_activations(output_tensor, activations)
 
 
@@ -37,7 +50,11 @@ ttnn.attach_golden_function(ttnn.add_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a - input_tensor_b
+    import torch
+
+    output_tensor = torch.sub(input_tensor_a, input_tensor_b)
+    if is_complex_tensor(input_tensor_a) and is_complex_tensor(input_tensor_b):
+        return output_tensor
     return apply_activations(output_tensor, activations)
 
 
@@ -46,7 +63,11 @@ ttnn.attach_golden_function(ttnn.subtract_, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor_a, input_tensor_b, *args, activations=None, **kwargs):
-    output_tensor = input_tensor_a * input_tensor_b
+    import torch
+
+    output_tensor = torch.mul(input_tensor_a, input_tensor_b)
+    if is_complex_tensor(input_tensor_a) and is_complex_tensor(input_tensor_b):
+        return output_tensor
     return apply_activations(output_tensor, activations)
 
 
