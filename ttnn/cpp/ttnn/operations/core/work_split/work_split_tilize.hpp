@@ -195,11 +195,6 @@ inline std::vector<std::vector<BlockRep>> distribute_work(
     bool has_cliff,
     uint32_t nblocks_per_core_cliff,
     uint32_t tile_height) {
-    TT_FATAL(
-        logical_shape.rank() >= 2,
-        "Only tensors >=2D, tensors are supported. Shape: {}",
-        logical_shape);
-
     auto input_w = logical_shape[-4];
     auto input_z = logical_shape[-3];
     auto input_y = logical_shape[-2];

@@ -6,11 +6,6 @@
 
 #include "shape_base.hpp"
 
-#if TTNN_WITH_PYTHON_BINDINGS
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#endif
-
 namespace tt::tt_metal {
 
 class SimpleShape final : protected ShapeBase {

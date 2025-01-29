@@ -7,7 +7,6 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
-#include <dprint_server.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
@@ -18,6 +17,10 @@
 #include <device.hpp>
 #include <device_pool.hpp>
 #include <tt_cluster.hpp>
+
+#include "llrt.hpp"
+
+#include "dprint_server.hpp"
 
 namespace tt {
 

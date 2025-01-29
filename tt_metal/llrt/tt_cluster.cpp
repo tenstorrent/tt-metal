@@ -41,7 +41,7 @@
 #include "tracy/Tracy.hpp"
 #include "umd/device/tt_simulation_device.h"
 
-#include <debug/sanitize_noc_host.hpp>
+#include "sanitize_noc_host.hpp"
 #include <rtoptions.hpp>
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <core_coord.hpp>
@@ -447,6 +447,18 @@ CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(chip_id_t ch
     tt::umd::CoreCoord translated_coord =
         soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
+}
+
+CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
+    chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type, bool no_warn) const {
+    if (!no_warn) {
+        log_warning(
+            tt::LogDevice,
+            "Conversion requested to Physical Coordinates. Please note that Physical Coordinates are not expected to "
+            "be used in tt-metal APIs.");
+    }
+    auto& soc_desc = this->get_soc_desc(chip_id);
+    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
 }
 
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {

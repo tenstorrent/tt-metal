@@ -17,7 +17,7 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 #include <fmt/base.h>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <tt_cluster.hpp>
 
 #include <core_coord.hpp>
@@ -306,20 +306,24 @@ void WatcherDeviceReader::Dump(FILE* file) {
 void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_eth_core) {
     // Watcher only treats ethernet + worker cores.
     bool is_eth_core = (logical_core.type == CoreType::ETH);
-    CoreDescriptor core;
-    core.coord = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-    core.type = logical_core.type;
+    CoreDescriptor virtual_core;
+    virtual_core.coord = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+    virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
     string core_type = is_eth_core ? "ethnet" : "worker";
-    string core_str = fmt::format(
-        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2})",
-        device->id(),
-        core_type,
+    string core_coord_str = fmt::format(
+        "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
         logical_core.coord.y,
-        core.coord.x,
-        core.coord.y);
+        virtual_core.coord.x,
+        virtual_core.coord.y);
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_phys_coords()) {
+        CoreCoord phys_core = tt::Cluster::instance().get_physical_coordinate_from_logical_coordinates(
+            device->id(), logical_core.coord, logical_core.type, true);
+        core_coord_str += fmt::format(" phys(x={:2},y={:2})", phys_core.x, phys_core.y);
+    }
+    string core_str = fmt::format("Device {} {} {}", device->id(), core_type, core_coord_str);
     fprintf(f, "%s: ", core_str.c_str());
 
     // Ethernet cores have a different mailbox base addr
@@ -333,7 +337,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     }
 
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, mailbox_addr, sizeof(mailboxes_t));
+    data = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core.coord, mailbox_addr, sizeof(mailboxes_t));
     mailboxes_t* mbox_data = (mailboxes_t*)(&data[0]);
     // Get the launch message buffer read pointer.
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
@@ -343,7 +347,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }
     // Validate these first since they are used in diagnostic messages below.
-    ValidateKernelIDs(core, &(mbox_data->launch[launch_msg_read_ptr]));
+    ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
@@ -351,39 +355,39 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_status_disabled()) {
-            DumpWaypoints(core, mbox_data, false);
+            DumpWaypoints(virtual_core, mbox_data, false);
         }
         // Ethernet cores have firmware that starts at address 0, so no need to check it for a
         // magic value.
         if (!is_eth_core) {
-            DumpL1Status(core, &mbox_data->launch[launch_msg_read_ptr]);
+            DumpL1Status(virtual_core, &mbox_data->launch[launch_msg_read_ptr]);
         }
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_noc_sanitize_disabled()) {
             const auto NUM_NOCS_ = tt::tt_metal::hal.get_num_nocs();
             for (uint32_t noc = 0; noc < NUM_NOCS_; noc++) {
-                DumpNocSanitizeStatus(core, core_str, mbox_data, noc);
+                DumpNocSanitizeStatus(virtual_core, core_str, mbox_data, noc);
             }
         }
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_assert_disabled()) {
-            DumpAssertStatus(core, core_str, mbox_data);
+            DumpAssertStatus(virtual_core, core_str, mbox_data);
         }
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_pause_disabled()) {
-            DumpPauseStatus(core, core_str, mbox_data);
+            DumpPauseStatus(virtual_core, core_str, mbox_data);
         }
     }
 
     // Ethernet cores don't use the launch message/sync reg
     if (!is_eth_core) {
         // Dump state always available
-        DumpLaunchMessage(core, mbox_data);
+        DumpLaunchMessage(virtual_core, mbox_data);
         if (tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
             // Reading registers while running can cause hangs, only read if
             // requested explicitly
-            DumpSyncRegs(core);
+            DumpSyncRegs(virtual_core);
         }
     } else {
         fprintf(f, "rmsg:");
-        DumpRunState(core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
+        DumpRunState(virtual_core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
         fprintf(f, " h_id:%d ", mbox_data->launch[launch_msg_read_ptr].kernel_config.host_assigned_id);
     }
 
@@ -405,10 +409,10 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // Ring buffer at the end because it can print a bunch of data, same for stack usage
     if (enabled) {
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_stack_usage_disabled()) {
-            DumpStackUsage(core, mbox_data);
+            DumpStackUsage(virtual_core, mbox_data);
         }
         if (!tt::llrt::RunTimeOptions::get_instance().watcher_ring_buffer_disabled()) {
-            DumpRingBuffer(core, mbox_data, false);
+            DumpRingBuffer(virtual_core, mbox_data, false);
         }
     }
 

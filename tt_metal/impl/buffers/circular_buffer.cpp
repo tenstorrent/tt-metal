@@ -5,7 +5,7 @@
 #include <circular_buffer.hpp>
 
 #include <host_api.hpp>
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include <buffer.hpp>
 #include <global_circular_buffer_impl.hpp>
 #include <tt_metal.hpp>
@@ -15,7 +15,7 @@
 namespace {
 
 inline void GetBufferAddress(const tt::tt_metal::Buffer* buffer, uint32_t* address_on_host) {
-    EnqueueGetBufferAddr(buffer->device()->command_queue(), address_on_host, buffer, false);
+    EnqueueGetBufferAddr(address_on_host, buffer, false);
 }
 
 }  // namespace

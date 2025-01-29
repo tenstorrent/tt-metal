@@ -188,7 +188,7 @@ TEST_F(DeviceFixture, TensixDirectedStreamRegWriteRead) {
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0});
 
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t value_to_write = 0x1234;
         for (uint32_t x = 0; x < logical_grid_size.x; x++) {
             for (uint32_t y = 0; y < logical_grid_size.y; y++) {
