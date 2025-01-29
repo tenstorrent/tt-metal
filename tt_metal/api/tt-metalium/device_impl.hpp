@@ -176,9 +176,6 @@ public:
 
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
 
-    bool dispatch_s_enabled() const override;
-    bool distributed_dispatcher() const override;
-    NOC dispatch_go_signal_noc() const override;
     size_t get_device_kernel_defines_hash() override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
