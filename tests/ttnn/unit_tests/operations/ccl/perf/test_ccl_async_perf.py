@@ -11,6 +11,9 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
 from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_async import (
     run_reduce_scatter_test,
 )
+from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
+    run_all_reduce_test,
+)
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
@@ -219,4 +222,72 @@ def test_reduce_scatter_async_t3000(
         enable_async=enable_async,
         topology=ttnn.Topology.Linear,
         trace_mode=trace_mode,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (4, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 1, 32, 4096]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("enable_async", [True])
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1824800}], indirect=True)
+def test_all_reduce_async_t3000(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    use_program_cache,
+    function_level_defaults,
+    enable_async,
+    num_iters=20,
+):
+    run_all_reduce_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        use_program_cache,
+        function_level_defaults,
+        num_iters=num_iters,
+        enable_async=enable_async,
+        enable_persistent_fabric=True,
+        create_persistent_fabric=True,
+        teardown_persistent_fabric=True,
+        trace_mode=True,
     )
