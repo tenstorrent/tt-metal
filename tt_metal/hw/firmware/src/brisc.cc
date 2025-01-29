@@ -40,6 +40,8 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
+#define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
+
 #ifdef NCRISC_HAS_IRAM
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
 #else
@@ -279,7 +281,7 @@ void init_sync_registers() {
 }
 
 inline void init_ncrisc_iram() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     uint16_t fw_size16 = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.ncrisc_kernel_size16;
     ncrisc_kernel_start_offset16 = fw_size16;
 
