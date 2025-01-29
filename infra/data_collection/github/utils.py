@@ -96,7 +96,7 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
         "timed out": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
-        "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE)
+        "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -115,7 +115,7 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
         )
         if is_generic_setup_failure:
             return str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
-    
+
     # generic catch-all
     return str(InfraErrorV1.GENERIC_FAILURE)
 
@@ -123,7 +123,7 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
 def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
 
     failure_signature, failure_description = None, None
-    
+
     # Don't return any failure info if job passed
     if github_job["conclusion"] == "success":
         return failure_signature, failure_description
@@ -263,12 +263,14 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
         "docker_image": docker_image,
         "github_job_link": github_job_link,
         "failure_signature": failure_signature,
-        "failure_description": failure_description
+        "failure_description": failure_description,
     }
 
 
 def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
-    return list(map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"]))
+    return list(
+        map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
+    )
 
 
 def get_github_partial_benchmark_json_filenames():

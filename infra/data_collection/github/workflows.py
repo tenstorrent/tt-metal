@@ -118,7 +118,7 @@ def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int)
     github_job_ids_to_annotation_jsons = {}
     for annot_json_file in annot_json_files:
         annot_json_info = None
-        with open(annot_json_file, 'r') as f:
+        with open(annot_json_file, "r") as f:
             annot_json_info = json.load(f)
         if annot_json_info:
             # Map job id to annotation info (list of dict)
