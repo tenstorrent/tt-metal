@@ -13,6 +13,7 @@ namespace tt::tt_metal::distributed {
 // Use this definition for now, since CoreRange contains several utility functions required
 // in the MeshWorkload context. CoreRange can eventually be renamed to Range2D.
 using LogicalDeviceRange = CoreRange;
+using DeviceCoord = CoreCoord;
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
 class MeshCommandQueue;
