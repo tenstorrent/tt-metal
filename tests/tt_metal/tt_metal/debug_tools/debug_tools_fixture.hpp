@@ -9,6 +9,8 @@
 #include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
+#include "dprint_server.hpp"
+
 class DebugToolsFixture : public DispatchFixture {
    protected:
     bool watcher_previous_enabled;
