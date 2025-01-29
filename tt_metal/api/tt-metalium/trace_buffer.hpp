@@ -11,12 +11,15 @@
 #include <utility>
 #include <variant>
 
-#include "buffer.hpp"
 #include "sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
-namespace detail {
+// Forward decl to avoid including header
+inline namespace v0 {
+class Buffer;
+}
+
 struct TraceDescriptor {
     struct Descriptor {
         uint32_t num_completion_worker_cores = 0;
@@ -30,13 +33,12 @@ struct TraceDescriptor {
     std::vector<SubDeviceId> sub_device_ids;
     std::vector<uint32_t> data;
 };
-}  // namespace detail
 
 struct TraceBuffer {
-    std::shared_ptr<detail::TraceDescriptor> desc;
+    std::shared_ptr<TraceDescriptor> desc;
     std::shared_ptr<Buffer> buffer;
 
-    TraceBuffer(std::shared_ptr<detail::TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
+    TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer);
     ~TraceBuffer();
 };
 

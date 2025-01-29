@@ -160,7 +160,7 @@ class EnqueueTraceCommand : public Command {
     Buffer& buffer;
     IDevice* device;
     SystemMemoryManager& manager;
-    std::shared_ptr<detail::TraceDescriptor>& descriptor;
+    std::shared_ptr<TraceDescriptor>& descriptor;
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed;
     bool clear_count;
     NOC noc_index;
@@ -170,7 +170,7 @@ class EnqueueTraceCommand : public Command {
         uint32_t command_queue_id,
         IDevice* device,
         SystemMemoryManager& manager,
-        std::shared_ptr<detail::TraceDescriptor>& descriptor,
+        std::shared_ptr<TraceDescriptor>& descriptor,
         Buffer& buffer,
         std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
         NOC noc_index,
