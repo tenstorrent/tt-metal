@@ -43,11 +43,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperati
             head_dim,
             overlap_qk_coregrid_val,
             input_on_subcoregrids,
-            batch_offset,
             slice_size,
             memory_config.value_or(input_tensor.memory_config())},
         {input_tensor},
-        {},
+        {batch_offset},
         optional_outputs,
         queue_id);
     return {out.at(0), out.at(1), out.at(2)};

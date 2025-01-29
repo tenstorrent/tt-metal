@@ -56,22 +56,24 @@ struct NLPCreateHeadsDecodeDeviceOperation {
     const uint32_t head_dim;
     const bool overlap_qk_coregrid;
     const bool input_on_subcoregrids;
-    const std::optional<const Tensor>& batch_offset;
     std::optional<const uint32_t> slice_size;
     MemoryConfig output_mem_config;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
     static constexpr auto attribute_names = std::forward_as_tuple(
         "num_q_heads",
         "num_kv_heads",
         "head_dim",
         "overlap_qk_coregrid",
         "input_on_subcoregrids",
-        "batch_offset",
         "slice_size",
         "output_mem_config");
     const auto attribute_values() const {
@@ -81,7 +83,6 @@ struct NLPCreateHeadsDecodeDeviceOperation {
             this->head_dim,
             this->overlap_qk_coregrid,
             this->input_on_subcoregrids,
-            this->batch_offset,
             this->slice_size,
             this->output_mem_config);
     }

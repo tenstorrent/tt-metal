@@ -10,10 +10,13 @@
 namespace ttnn::operations::experimental::transformer {
 
 // Generic NLP CreateHeads op for decode
-void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
+void NLPCreateHeadsDecodeDeviceOperation::validate(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_shape();
+    const auto& batch_offset = optional_input_tensors.at(0);
     // TODO: Rewrite validation for this decode case
     // NOTE: Checks for head_dim and shape[3] is done in nlp_create_qkv_heads because it's needed to infer head_dim
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
@@ -54,11 +57,11 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
                 "We don't support partial heads in shards when q and k heads are not overlapping coregrid");
         }
         TT_FATAL(
-            !(this->batch_offset.has_value() ^ this->slice_size.has_value()),
+            !(batch_offset.has_value() ^ this->slice_size.has_value()),
             "Both batch_offset and slice_size must be provided or neither");
-        if (this->batch_offset.has_value() && this->slice_size.has_value()) {
-            TT_FATAL(this->batch_offset.value().get_shape()[0] == 1, "batch_offset must be unary tensor");
-            uint32_t device_batch_offset = static_cast<uint32_t>(this->batch_offset.value().to_vector<int32_t>()[0]);
+        if (batch_offset.has_value() && this->slice_size.has_value()) {
+            TT_FATAL(batch_offset.value().get_shape()[0] == 1, "batch_offset must be unary tensor");
+            uint32_t device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
             TT_FATAL(
                 device_batch_offset + this->slice_size.value() <= num_users,
                 "Batch offset + slice size should be less than or equal to num_users");
@@ -113,7 +116,7 @@ std::vector<tt::tt_metal::LegacyShape> NLPCreateHeadsDecodeDeviceOperation::comp
     const auto input_shape = input_tensor.get_legacy_shape();
 
     auto batch = input_tensor.get_shape()[2];
-    if (this->batch_offset.has_value() && this->slice_size.has_value()) {
+    if (this->slice_size.has_value()) {
         batch = this->slice_size.value();
     }
     auto head_dim = this->head_dim;
@@ -188,10 +191,12 @@ std::vector<Tensor> NLPCreateHeadsDecodeDeviceOperation::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-
+    auto& batch_offset = optional_input_tensors.at(0);
     CoreCoord compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     return multi_core_nlp_create_qkv_heads_decode(
         input_tensor,
@@ -200,7 +205,7 @@ operation::ProgramWithCallbacks NLPCreateHeadsDecodeDeviceOperation::create_prog
         this->head_dim,
         this->overlap_qk_coregrid,
         this->input_on_subcoregrids,
-        this->batch_offset,
+        batch_offset,
         this->slice_size,
         output_tensors,
         compute_with_storage_grid_size);
