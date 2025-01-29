@@ -104,13 +104,14 @@ experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinat
     }
     return coord_info;
 }
-template <uint32_t number_of_cores>
+template <typename SHARDING_INFO_OBJECT>
 std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
     // Gets the shard_array from the runtime arguments
     // returns a pair where .first holds the shard array map
     // and .second holds the new rt_index
+    constexpr SHARDING_INFO_OBJECT CONSTANT_ARGS{};
     const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_index));
-    constexpr uint32_t incrementation = (number_of_cores - 1) / 2 + 1;
+    constexpr uint32_t incrementation = (CONSTANT_ARGS.number_of_cores - 1) / 2 + 1;
     return std::pair<const uint32_t* const, uint32_t>(map, rt_index + incrementation);
 }
 
@@ -134,7 +135,8 @@ std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
     defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
 
     It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::parse_map
-function ex. auto mapping = parse_map<NUMBER_OF_CORES>(rt_index); const uint32_t* const shard_array_map = mapping.first;
+function which requires the Sharded_Info class object ex. auto mapping = parse_map<tensor_1_shard_info>(rt_index); const
+uint32_t* const shard_array_map = mapping.first;
 //Contains the shard array map rt_index = mapping.second;//contains the new runtime index
 
 In the program factory you can create an vector containing the runtime arguments extracted by this function using the
