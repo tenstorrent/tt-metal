@@ -91,7 +91,6 @@ def return_first_string_starts_with(starting_string, strings):
 
 
 def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
-
     error_snippet_to_signature_mapping = {
         "timed out": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
@@ -121,7 +120,6 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
 
 
 def get_failure_signature_and_description_from_annotations(github_job, github_job_id_to_annotations):
-
     failure_signature, failure_description = None, None
 
     # Don't return any failure info if job passed

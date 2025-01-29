@@ -110,7 +110,6 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
 
 
 def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
-
     # Read <job_id>_annotations.json inside the logs dir
     logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
     annot_json_files = logs_dir.glob("*_annotations.json")
