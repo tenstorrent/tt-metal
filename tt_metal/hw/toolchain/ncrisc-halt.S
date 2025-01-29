@@ -18,8 +18,8 @@
   no need to save caller saves regs or the gp or tp
 */
 
-/* save 13 registers */
-#define CONTEXT_SIZE (13 * 4)
+/* save 13 registers, but round up to keep stack 16-byte aligned */
+#define CONTEXT_SIZE (16 * 4)
 
 .align 4
 .func
