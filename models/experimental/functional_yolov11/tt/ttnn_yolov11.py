@@ -9,6 +9,12 @@ from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 import torch
 
 
+def p(x, s="tensor"):
+    print(f"{s} shape is :", x.shape)
+    print(f"{s} layout is :", x.layout)
+    print(f"{s}  memory_confg is :", x.memory_config())
+
+
 class Yolov11_Conv2D:
     def __init__(
         self,
@@ -107,7 +113,7 @@ class Yolov11_Conv2D:
         return x
 
 
-def Yolov11_shard_SiLU(device, x, ncores=64):
+def get_sharded_mem_config(device, x, ncores=64):
     input_2d_height = x.shape.with_tile_padding()[2]
     input_2d_width = x.shape.with_tile_padding()[3]
 
@@ -122,9 +128,12 @@ def Yolov11_shard_SiLU(device, x, ncores=64):
     shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
 
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
+    return in_sharded_mem_config
 
+
+def Yolov11_shard_SiLU(device, x):
+    in_sharded_mem_config = get_sharded_mem_config(device, x)
     x = ttnn.to_memory_config(x, memory_config=in_sharded_mem_config)
-
     x = ttnn.silu(x, memory_config=in_sharded_mem_config)
     return x
 
@@ -137,16 +146,17 @@ class Conv:
     def __call__(self, device, x):
         if self.enable_act:
             x = self.conv(x)
-            if x.is_sharded():
-                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            x = ttnn.silu(x)
+            x = Yolov11_shard_SiLU(device, x)
+            # if x.is_sharded():
+            #     x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            # x = ttnn.silu(x)
 
         else:
             x = self.conv(x)
         return x
 
 
-class Bottleneck:
+class Bottleneck:  # all ops are h-sharded
     def __init__(self, device, parameter, conv_pt):
         self.cv1 = Conv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = Conv(device, parameter.cv2, conv_pt.cv2)
@@ -167,8 +177,12 @@ class SPPF:
 
     def __call__(self, device, x):
         x = self.cv1(device, x)
+        # print("x detials", x.shape, x.layout, x.memory_config())
         if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            tmp = x.memory_config()
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            # x = ttnn.to_memory_config(x,memory_config =tmp)
         x1 = x
         m1 = ttnn.max_pool2d(
             x,
@@ -180,10 +194,7 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
-
         m2 = ttnn.max_pool2d(
             m1,
             batch_size=self.parameter.cv2.conv.batch_size,
@@ -194,10 +205,7 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
-
         m3 = ttnn.max_pool2d(
             m2,
             batch_size=self.parameter.cv2.conv.batch_size,
@@ -208,20 +216,18 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
-
+        # print("pools config", m1.memory_config(), m2.memory_config(), m3.memory_config())
         if x1.is_sharded():
-            x1 = ttnn.sharded_to_interleaved(x1, ttnn.DRAM_MEMORY_CONFIG)
+            x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
         if m2.is_sharded():
-            m2 = ttnn.sharded_to_interleaved(m2, ttnn.DRAM_MEMORY_CONFIG)
+            m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
         if m3.is_sharded():
-            m3 = ttnn.sharded_to_interleaved(m3, ttnn.DRAM_MEMORY_CONFIG)
+            m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
         if m1.is_sharded():
-            m1 = ttnn.sharded_to_interleaved(m1, ttnn.DRAM_MEMORY_CONFIG)
-        y = ttnn.concat([x1, m1, m2, m3], dim=-1)
-
+            m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # print("concat config", y.memory_config())
         x = self.cv2(device, y)
         x = x[:, :, :49, :]
         ttnn.deallocate(x1)
@@ -245,14 +251,58 @@ class C3K:
 
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
+        # sharded l1 approach
+        # sharded_mem_concat = get_sharded_mem_config(device,x2)
+        # k2 = ttnn.to_memory_config(k2,memory_config=sharded_mem_concat)
+        # x2 = ttnn.to_memory_config(x2,memory_config=sharded_mem_concat)
+        # k2 = ttnn.to_layout(k2,layout=ttnn.ROW_MAJOR_LAYOUT)
+        # x2 = ttnn.to_layout(x2,layout=ttnn.ROW_MAJOR_LAYOUT)
+        # x = ttnn.concat((k2, x2), 3, memory_config=sharded_mem_concat) #Cannot set to globally allocated buffer. Circular buffer size 2048 B exceeds allocated L1 buffer size of 0
 
-        if x2.is_sharded():
-            x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
-        if k2.is_sharded():
-            k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
+        # concat on l1(interleaved)
+        print("sharded tensors are", k2.memory_config(), x2.memory_config())
+        # p(k2,"k2")
+        # p(x2,"x2")
+        # if x2.is_sharded():
+        #     x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
+        # if k2.is_sharded():
+        #     k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # creating shard config here itself approach
+
+        print("before", k2.memory_config().shard_spec.grid, x2.memory_config().shard_spec.grid)
+        inputs_sharded_config = ttnn.create_sharded_memory_config(
+            [32, 32],
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        k2 = ttnn.to_memory_config(k2, memory_config=inputs_sharded_config)
+        x2 = ttnn.to_memory_config(x2, memory_config=inputs_sharded_config)
+        k2 = ttnn.to_layout(k2, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x2 = ttnn.to_layout(x2, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # k2.memory_config().shard_spec.grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
+        # x2.memory_config().shard_spec.grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
+        print("after", k2.memory_config(), x2.memory_config())
+        sharded_memory_config_concat = ttnn.create_sharded_memory_config(
+            [98, 64],
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        print("output config is", sharded_memory_config_concat)
+        # # print("sharded config and inputs are is", sharded_memory_config_concat,k2.memory_config(),x2.memory_config())
+        x = ttnn.concat((k2, x2), 3, memory_config=sharded_memory_config_concat)
+        torch.save(
+            ttnn.to_torch(x).reshape(1, 14, 14, 64).permute(0, 3, 1, 2),
+            "/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/ttnn_out.pth",
+        )
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.to_layout(x,layout=ttnn.TILE_LAYOUT)
+        print("shape of oncat", x.shape, k2.shape, x2.shape)
         x = self.cv3(device, x)
+        print("output shape is ", x.shape)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
         ttnn.deallocate(k1)
@@ -291,6 +341,12 @@ class C3k2:
                 y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
             if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                 y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
+
+            # memory_config_concat = get_sharded_mem_config(device,y3)
+            # y1 = ttnn.to_memory_config(y1,memory_config=memory_config_concat)
+            # y2 = ttnn.to_memory_config(y2,memory_config=memory_config_concat)
+            # y3 = ttnn.to_memory_config(y3,memory_config=memory_config_concat)
+            # x = ttnn.concat((y1, y2, y3), 3, memory_config=memory_config_concat)
 
             x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -344,14 +400,27 @@ class Attention:
         self.scale = self.key_dim**-0.5
 
     def __call__(self, device, x, batch_size=1):
+        # print("input config of attetnion", x.shape, x.layout, x.memory_config())
         qkv = self.qkv(device, x)  # [1, 1, 49[64], 256]
+        # print("qkx alyout",qkv.memory_config())
         qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))  # [1,256,1,49]
+        # shape of tens in pipeline ttnn.Shape([1, 256, 1[32], 49[64]]) Layout.TILE MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)
+        # print("shape of tens in pipeline", qkv.shape, qkv.layout, qkv.memory_config(), qkv.dtype)
         qkv = ttnn.to_torch(qkv)
-        qkv = ttnn.from_torch(qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        qkv = ttnn.from_torch(
+            qkv, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        # qkv = ttnn.to_dtype(qkv,dtype=ttnn.bfloat16)
         qkv = ttnn.reshape(
             qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1])
         )  # [1,2,128,49]
+
+        # qkv_sh_mem = get_sharded_mem_config(device,qkv)
+        # qkv = ttnn.to_memory_config(qkv,memory_config=qkv_sh_mem)
+        # q = ttnn.slice(qkv, [0, 0, 0, 0], [qkv.shape[0],qkv.shape[1],self.key_dim,qkv.shape[3]],memory_config=qkv_sh_mem)
+        # k = ttnn.slice(qkv, [0,0,self.key_dim,0],[qkv.shape[0],qkv.shape[1],self.head_dim,qkv.shape[3]],memory_config=qkv_sh_mem)
+        # v = ttnn.slice(qkv, [0, 0,self.head_dim,0],[qkv.shape[0],qkv.shape[1],self.key_dim+self.head_dim,qkv.shape[3]],memory_config=qkv_sh_mem)
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
             qkv[:, :, self.key_dim : self.head_dim, :],
@@ -359,17 +428,21 @@ class Attention:
         )  # ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 64, 49[64]])
 
         q_permuted = ttnn.permute(q, (0, 1, 3, 2))  # ttnn.Shape([1, 2, 49[64]],32)
-        attn = ttnn.matmul(q_permuted, k)
+        # q_permuted = ttnn.to_memory_config(q_permuted,memory_config=qkv.memory_config())
+        # k = ttnn.to_memory_config(k,memory_config=qkv.memory_config())
+        # print("q,k,v,qp confgis",k.memory_config(),k.shape,q_permuted.memory_config(),q_permuted.shape)
+        # print("1st tensor shard shape[1] and ",q_permuted.shape,q_permuted.memory_config().shard_spec)
+        attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn = ttnn.multiply(attn, self.scale)  # ([1, 2, 49, 49])
         attn = ttnn.softmax(attn, dim=-1)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        x1 = ttnn.matmul(v, attn)  # [1, 2, 64, 49[64]]
+        x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)  # [1, 2, 64, 49[64]]
         x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
         v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))  # [1,1,128, 49[64]]
         v = ttnn.permute(v, (0, 1, 3, 2))
         x2 = self.pe(device=device, x=v)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x1 + x2
 
@@ -394,10 +467,15 @@ class PSABlock:
     def __call__(self, device, x):
         x1 = x
         x = self.attn(device, x)
+        mem_add_sh_cfg = get_sharded_mem_config(device, x)
+        x = ttnn.to_memory_config(x, memory_config=mem_add_sh_cfg)
+        x1 = ttnn.to_memory_config(x1, memory_config=mem_add_sh_cfg)
         x = x1 + x
         x1 = x
         x = self.ffn_conv1(device, x)
         x = self.ffn_conv2(device, x)
+        x = ttnn.to_memory_config(x, memory_config=mem_add_sh_cfg)
+        x1 = ttnn.to_memory_config(x1, memory_config=mem_add_sh_cfg)
         return x + x1
 
 
@@ -409,9 +487,12 @@ class C2PSA:
         self.psablock = PSABlock(device, parameter.m[0], conv_pt.m[0])
 
     def __call__(self, device, x):
-        x = self.cv1(device, x)  # (1,1,49,256)
+        x = self.cv1(device, x)  # (1,1,49,256) #.99
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         a, b = x[:, :, :, : int(self.out_channel_0 / 2)], x[:, :, :, int(self.out_channel_0 / 2) :]
-        x = self.psablock(device, b)
+        # torch.save(ttnn.to_torch(a).reshape(1,7,7,128).permute(0,3,1,2),"/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/ttnn_out.pth")
+        x = self.psablock(device, b)  # -0.01
+        a = ttnn.sharded_to_interleaved(a, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, x)
@@ -453,6 +534,7 @@ class Detect:
         self.cv3_2_2_0 = Yolov11_Conv2D(parameter.cv3[2][2], conv_pt.cv3[2][2], device=device, is_detect=True)
 
         self.dfl = Yolov11_Conv2D(parameter.dfl.conv, conv_pt.dfl.conv, device=device, is_dfl=True)
+
         self.anchors = conv_pt.anchors
         self.strides = conv_pt.strides
 
@@ -485,7 +567,9 @@ class Detect:
         x6 = self.cv3_2_1_0(device, x6)
         x6 = self.cv3_2_1_1(device, x6)
         x6 = self.cv3_2_2_0(x6)  # 0.986
-
+        # print("1st configs are", x1.memory_config(), x4.memory_config())
+        # print("2st configs are", x2.memory_config(), x5.memory_config())
+        # print("3st configs are", x3.memory_config(), x6.memory_config())
         x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
         x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -493,16 +577,26 @@ class Detect:
         x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
         x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        y1 = ttnn.concat((x1, x4), -1)
-        y2 = ttnn.concat((x2, x5), -1)
-        y3 = ttnn.concat((x3, x6), -1)
-
+        # sharded_memory_config_concat = ttnn.create_sharded_memory_config(
+        #     [x1.memory_config().shard_spec.shape[0],x1.memory_config().shard_spec.shape[1]],
+        #     core_grid=x1.memory_config().shard_spec.grid,
+        #     strategy=ttnn.ShardStrategy.HEIGHT,
+        #     use_height_and_width_as_shard_shape=True,
+        # )
+        # x1 = ttnn.to_memory_config(x1,memory_config=sharded_memory_config_concat)
+        # x4 = ttnn.to_memory_config(x4,memory_config=sharded_memory_config_concat)
+        y1 = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=2)], [(x=0,y=3) - (x=0,y=3)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt)) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=2)], [(x=0,y=3) - (x=0,y=3)]},shape={32, 96},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+        y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=6,y=0)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt)) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=6,y=0)]},shape={32, 96},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+        y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=1,y=0)]},shape={32, 64},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt)) MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=1,y=0)]},shape={32, 96},orientation=ShardOrientation::ROW_MAJOR,halo=0,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
         y1_reshaped = ttnn.reshape(y1, (y1.shape[0], y1.shape[2], y1.shape[-1]))  # 0.9992
         y2_reshaped = ttnn.reshape(y2, (y2.shape[0], y2.shape[2], y2.shape[-1]))  # 0.99908
         y3_reshaped = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))  # 0.993
 
         y_all = [y1_reshaped, y2_reshaped, y3_reshaped]
-        y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1)  # 0.998
+        y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.998
         ya, yb = y[:, :, :64], y[:, :, 64:144]  # 0.991, 0.97
 
         ya = ttnn.permute(ya, (0, 2, 1))
@@ -532,29 +626,13 @@ class Detect:
 
         z2 = ttnn.div(z2, 2)  # 0.9995
 
-        z = ttnn.concat((z2, z1), dim=1)
+        z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)  # 0.9998
-
-        # yb = ttnn.to_layout(yb, layout=ttnn.TILE_LAYOUT)
-        # return yb
-        # yb = ttnn.to_torch(yb)
-        # torch.save(yb, "yb.pt")
-        # yb = torch.sigmoid(yb)
-        # yb = ttnn.from_torch(yb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        # a = torch.load("yb.pt")
-        # yb = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # a_ttnn = ttnn.sigmoid(a_ttnn)
-        # print(yb.shape, yb.memory_config(), yb.get_layout(), yb.get_dtype())
-        # yb = ttnn.to_device(yb, device = device)
 
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
         z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
-        print(
-            z.shape,
-            yb.shape,
-        )
         out = ttnn.concat((z, yb), dim=1)
         return out
 
@@ -623,14 +701,19 @@ class YoloV11:
         x = ttnn.upsample(x, scale_factor=2)  # 11
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # print("X AND X6", x.memory_config(), x6.memory_config())
         x = ttnn.concat((x, x6), -1)  # 12
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_5(self.device, x)  # 13
         x13 = x
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         x = ttnn.upsample(x, scale_factor=2)  # 14
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
+        x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat((x, x4), -1)  # 15
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
@@ -640,6 +723,8 @@ class YoloV11:
         x13 = ttnn.from_device(x13)
         x13 = ttnn.to_dtype(x13, ttnn.bfloat8_b)
         x13 = ttnn.to_device(x13, self.device)
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x13 = ttnn.sharded_to_interleaved(x13, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((x, x13), -1)  # 18
         x = self.c3k2_7(self.device, x)  # 19
         x19 = x
@@ -648,8 +733,21 @@ class YoloV11:
         x10 = ttnn.from_device(x10)
         x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
         x10 = ttnn.to_device(x10, self.device)
+        p(x, "x")
+        p(x, "x10")
+        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x10 = ttnn.sharded_to_interleaved(x10, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((x, x10), -1)  # 21
         x = self.c3k2_8(self.device, x)  # 22
         x22 = x
+        # p(x22, "x22")
+        # torch.save(
+        #     ttnn.to_torch(x).reshape(1, 7, 7, 256).permute(0, 3, 1, 2),
+        #     "/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/ttnn_out.pth",
+        # )
+        # x16 =ttnn.sharded_to_interleaved(x16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x19 = ttnn.sharded_to_interleaved(x19, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x22 = ttnn.sharded_to_interleaved(x22, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # print("inputs are",x16.memory_config(),x19.memory_config(),x22.memory_config())
         x = self.detect(self.device, x16, x19, x22)
         return x

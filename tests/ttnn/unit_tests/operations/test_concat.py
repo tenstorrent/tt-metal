@@ -309,3 +309,54 @@ def test_concat_5d(device, dim):
     ttnn_result = ttnn.concat([ttnn_input_tensor, ttnn_input_tensor], dim=dim)
     ttnn_result = ttnn.to_torch(ttnn_result)
     assert_with_pcc(torch_result, ttnn_result, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "inputs, output_shard_shape, shard_grid, strategy, layout",
+    (
+        (
+            [((1, 1, 160, 32), (32, 32)), ((1, 1, 160, 32), (32, 32))],
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.TILE_LAYOUT,
+        ),
+    ),
+)
+def test_sharded_concat_yolov11(device, inputs, output_shard_shape, shard_grid, strategy, layout):
+    def _gen_inputs(input_specs):
+        input_tensors = []
+        for input_spec in input_specs:
+            shape, shard_shape = input_spec
+            input_sharded_memory_config = ttnn.create_sharded_memory_config(
+                shard_shape,
+                core_grid=shard_grid,
+                strategy=strategy,
+                use_height_and_width_as_shard_shape=True,
+            )
+            torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+            input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_memory_config)
+            input_tensors.append((torch_input_tensor, input_tensor))
+        return input_tensors
+
+    output_sharded_memory_config = ttnn.create_sharded_memory_config(
+        output_shard_shape,
+        core_grid=shard_grid,
+        strategy=strategy,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_tensors = _gen_inputs(inputs)
+    print("1st tensor is", input_tensors[0][1].memory_config())
+    print("2nd tensor is", input_tensors[1][1].memory_config())
+    print(
+        "input configs and output are",
+        input_tensors[0][1].memory_config(),
+        input_tensors[1][1].memory_config(),
+        output_sharded_memory_config,
+    )
+    torch_output_tensor = torch.concat([torch_tensor for torch_tensor, _ in input_tensors], dim=3)
+    output = ttnn.concat([tensor for _, tensor in input_tensors], dim=3, memory_config=output_sharded_memory_config)
+    output = ttnn.to_torch(output)
+    assert_with_pcc(torch_output_tensor, output, 0.99)

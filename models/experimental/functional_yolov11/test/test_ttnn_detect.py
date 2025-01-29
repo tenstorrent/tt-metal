@@ -12,6 +12,7 @@ from models.experimental.functional_yolov11.tt.model_preprocessing import (
 from models.experimental.functional_yolov11.reference.yolov11 import Detect as torch_detect
 from models.experimental.functional_yolov11.tt.ttnn_yolov11 import Detect as ttnn_detect
 from ttnn.model_preprocessing import preprocess_model_parameters
+from models.experimental.functional_yolov11.tt.ttnn_yolov11 import get_sharded_mem_config
 import math
 
 
@@ -73,6 +74,10 @@ def test_yolo_v11_detect(
     ttnn_input_2 = ttnn.to_layout(ttnn_input_2, layout=ttnn.TILE_LAYOUT)
     ttnn_input_3 = ttnn.to_device(ttnn_input_3, device=device)
     ttnn_input_3 = ttnn.to_layout(ttnn_input_3, layout=ttnn.TILE_LAYOUT)
+    shard_config = get_sharded_mem_config(device, ttnn_input_1)
+    # ttnn_input_1 = ttnn.to_memory_config(ttnn_input_1, memory_config=shard_config)
+    # ttnn_input_2 = ttnn.to_memory_config(ttnn_input_2, memory_config=shard_config)
+    # ttnn_input_3 = ttnn.to_memory_config(ttnn_input_3, memory_config=shard_config)
     torch_output = torch_module(torch_input_1, torch_input_2, torch_input_3)
     parameters = create_yolov11_model_parameters_detect(
         torch_module, torch_input_1, torch_input_2, torch_input_3, device=device
