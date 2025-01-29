@@ -27,6 +27,9 @@ L1_MEMORY_CONFIG = ttnn._ttnn.types.L1_MEMORY_CONFIG
 L1_BLOCK_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.BLOCK_SHARDED, BufferType.L1)
 L1_HEIGHT_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.HEIGHT_SHARDED, BufferType.L1)
 L1_WIDTH_SHARDED_MEMORY_CONFIG = MemoryConfig(TensorMemoryLayout.WIDTH_SHARDED, BufferType.L1)
+HEIGHT_SHARDED_LAYOUT = TensorMemoryLayout.HEIGHT_SHARDED
+BLOCK_SHARDED_LAYOUT = TensorMemoryLayout.BLOCK_SHARDED
+WIDTH_SHARDED_LAYOUT = TensorMemoryLayout.WIDTH_SHARDED
 
 Layout = ttnn._ttnn.tensor.Layout
 ROW_MAJOR_LAYOUT = Layout.ROW_MAJOR
