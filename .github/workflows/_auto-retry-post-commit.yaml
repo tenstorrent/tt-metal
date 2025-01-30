@@ -54,7 +54,7 @@ jobs:
         run: |
           MAX_ATTEMPTS=3
           read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
-          if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt_number }}" == "$MAX_ATTEMPTS" ]]; then
+          if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
           elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
