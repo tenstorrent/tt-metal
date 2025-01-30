@@ -64,8 +64,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_shape().value;
-    const auto input_shape_without_padding = input.get_shape().value.without_padding();
+    const auto input_shape = input.get_padded_shape();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;

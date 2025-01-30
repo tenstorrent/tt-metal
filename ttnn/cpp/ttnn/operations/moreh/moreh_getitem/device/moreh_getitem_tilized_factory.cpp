@@ -42,10 +42,11 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_shape();
-    auto input_shape_without_padding = input_shape.value.without_padding();
-    auto output_shape = output.get_shape();
-    auto output_shape_without_padding = output_shape.value.without_padding();
+    auto input_shape = input.get_padded_shape();
+    auto input_shape_without_padding = input.get_logical_shape();
+    auto output_shape = output.get_padded_shape();
+    auto output_shape_without_padding = output.get_logical_shape();
+    ;
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -57,7 +58,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto input_dim_offset = 5 - input_shape.rank();
     for (auto index = 0; index < input_shape.rank(); index++) {
         new_input_shape[index + input_dim_offset] = input_shape_without_padding[index];
-        new_input_padded_shape[index + input_dim_offset] = input_shape.value[index];
+        new_input_padded_shape[index + input_dim_offset] = input_shape[index];
     }
 
     new_output_shape.fill(1);
@@ -65,7 +66,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
     auto output_dim_offset = 5 - input_shape.rank();
     for (auto index = 0; index < output_shape.rank(); index++) {
         new_output_shape[index + output_dim_offset] = output_shape_without_padding[index];
-        new_output_padded_shape[index + output_dim_offset] = output_shape.value[index];
+        new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }
 
     ttnn::Shape input_5d_shape(new_input_shape, new_input_padded_shape);
@@ -98,7 +99,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].unit_size = index.element_size();
         }
 
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        uint32_t index_size = index_tensors[0].get_logical_shape()[-1];
 
         uint32_t input_unit_size = input.element_size();
         uint32_t output_unit_size = output.element_size();
@@ -333,9 +334,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             index_info[dim].is_defined = true;
             index_info[dim].address = index_tensors[i].buffer()->address();
             index_info[dim].is_dram = is_dram(index_tensors[i]);
-            index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
+            index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
         }
-        uint32_t index_size = index_tensors[0].get_shape().value.without_padding()[-1];
+        uint32_t index_size = index_tensors[0].get_logical_shape()[-1];
 
         uint32_t input_unit_size = 16 * input.element_size();
         uint32_t output_unit_size = 16 * output.element_size();

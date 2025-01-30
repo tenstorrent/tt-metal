@@ -37,8 +37,8 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
     const CoreRange allCores({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     auto core_range = allCores;
 
-    auto input_shape = input.get_shape();
-    auto output_shape = output.get_shape();
+    auto input_shape = input.get_logical_shape();
+    auto output_shape = output.get_logical_shape();
 
     std::array<uint32_t, 5> new_input_shape{};
     std::array<uint32_t, 5> new_output_shape{};
@@ -73,10 +73,10 @@ MorehGetItemOperation::MorehGetItemRmFactory::cached_program_t MorehGetItemOpera
         index_info[dim].is_defined = true;
         index_info[dim].address = index_tensors[i].buffer()->address();
         index_info[dim].is_dram = is_dram(index_tensors[i]);
-        index_info[dim].unit_size = index.get_shape().value[-1] * index.element_size();
+        index_info[dim].unit_size = index.get_padded_shape()[-1] * index.element_size();
     }
 
-    uint32_t index_size = index_tensors.front().get_shape().value[-1];
+    uint32_t index_size = index_tensors.front().get_padded_shape()[-1];
 
     uint32_t input_unit_size = input_5d_shape[-1] * input_5d.element_size();
     uint32_t output_unit_size = input_unit_size;
