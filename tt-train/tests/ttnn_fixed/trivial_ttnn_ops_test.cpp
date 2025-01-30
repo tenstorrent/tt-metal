@@ -17,9 +17,31 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
+namespace {
+
+auto check_board_is_n300() {
+    return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
+}
+
+}  // namespace
 class TrivialTnnFixedTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        ttml::autograd::ctx().open_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class TrivialTnnFixedDistributedTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!check_board_is_n300()) {
+            GTEST_SKIP() << "Skipping N300 specific tests";
+        }
+        ttml::autograd::ctx().set_mesh_shape({1, 2});
         ttml::autograd::ctx().open_device();
     }
 
@@ -237,5 +259,59 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         }
 
         EXPECT_NEAR(expected_value, resulting_vector[i], eps);
+    }
+}
+
+TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    uint32_t size = 64U;
+    std::vector<float> data(size);
+    std::iota(data.begin(), data.end(), 0);
+    auto shape = ttml::core::create_shape({1, 1, size, 1});
+    auto tensor = ttml::core::from_vector(data, shape, device);
+
+    auto scattered_tensor = ttml::ttnn_fixed::scatter(tensor, /* dim */ 2);
+
+    auto mesh_shape = device->shape();
+    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
+
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+
+    auto tensor_0 = xtensors_back[0];
+    auto tensor_1 = xtensors_back[1];
+
+    EXPECT_EQ(tensor_0.shape()[2], size / 2);
+    EXPECT_EQ(tensor_1.shape()[2], size / 2);
+    for (int i = 0; i < size / 2; ++i) {
+        EXPECT_EQ(tensor_0(0, 0, i, 0), i);
+        EXPECT_EQ(tensor_1(0, 0, i, 0), i + size / 2);
+    }
+}
+
+TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    uint32_t size = 64U;
+    std::vector<float> data(size);
+    std::iota(data.begin(), data.end(), 0);
+    auto shape = ttml::core::create_shape({1, 1, 1, size});
+    auto tensor = ttml::core::from_vector(data, shape, device);
+
+    auto scattered_tensor = ttml::ttnn_fixed::scatter(tensor, /* dim */ 3);
+
+    auto mesh_shape = device->shape();
+    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
+
+    auto xtensors_back = ttml::core::to_xtensor(scattered_tensor, identity_composer);
+
+    auto tensor_0 = xtensors_back[0];
+    auto tensor_1 = xtensors_back[1];
+
+    EXPECT_EQ(tensor_0.shape()[3], size / 2);
+    EXPECT_EQ(tensor_1.shape()[3], size / 2);
+    for (int i = 0; i < size / 2; ++i) {
+        EXPECT_EQ(tensor_0(0, 0, 0, i), i);
+        EXPECT_EQ(tensor_1(0, 0, 0, i), i + size / 2);
     }
 }
