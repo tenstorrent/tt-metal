@@ -34,13 +34,14 @@ public:
 
     virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;
-    virtual void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) = 0;
-    virtual void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) = 0;
 
     virtual void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
         const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) = 0;
+
+    virtual void set_go_signal_noc_data_and_dispatch_sems(
+        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
 
     virtual uint32_t id() const = 0;
     virtual std::optional<uint32_t> tid() const = 0;

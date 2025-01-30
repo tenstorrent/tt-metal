@@ -79,11 +79,8 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
     set_device_thread_affinity(this->completion_queue_thread, this->completion_queue_reader_core);
-
-    for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
-        this->expected_num_workers_completed[i] = 0;
-    }
-    reset_config_buffer_mgr(DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
+    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+        this->config_buffer_mgr, this->expected_num_workers_completed, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -91,35 +88,6 @@ uint32_t HWCommandQueue::id() const { return this->id_; }
 std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager; }
-
-void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
-    // Not needed for regular dispatch kernel
-    if (!DispatchQueryManager::instance().dispatch_s_enabled()) {
-        return;
-    }
-    uint32_t cmd_sequence_sizeB = hal.get_alignment(HalMemType::HOST);
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    command_sequence.add_dispatch_set_num_worker_sems(num_worker_sems, DispatcherSelect::DISPATCH_SLAVE);
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-    this->manager.fetch_queue_reserve_back(this->id_);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-}
-
-void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
-    uint32_t pci_alignment = hal.get_alignment(HalMemType::HOST);
-    uint32_t cmd_sequence_sizeB = align(
-        sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    DispatcherSelect dispatcher_for_go_signal = DispatchQueryManager::instance().dispatch_s_enabled()
-                                                    ? DispatcherSelect::DISPATCH_SLAVE
-                                                    : DispatcherSelect::DISPATCH_MASTER;
-    command_sequence.add_dispatch_set_go_signal_noc_data(go_signal_noc_data, dispatcher_for_go_signal);
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-    this->manager.fetch_queue_reserve_back(this->id_);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-}
 
 uint32_t HWCommandQueue::get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const {
     TT_FATAL(
@@ -136,99 +104,34 @@ void HWCommandQueue::set_expected_num_workers_completed_for_sub_device(
     this->expected_num_workers_completed[sub_device_index] = num_workers;
 }
 
-void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_state) {
-    auto num_sub_devices = device_->num_sub_devices();
-    uint32_t go_signals_cmd_size = 0;
-    if (reset_launch_msg_state) {
-        uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-        go_signals_cmd_size = align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment) * num_sub_devices;
-    }
-    uint32_t cmd_sequence_sizeB =
-        reset_launch_msg_state * DispatchQueryManager::instance().dispatch_s_enabled() *
-            hal.get_alignment(
-                HalMemType::HOST) +  // dispatch_d -> dispatch_s sem update (send only if dispatch_s is running)
-        go_signals_cmd_size +        // go signal cmd
-        (hal.get_alignment(
-             HalMemType::HOST) +  // wait to ensure that reset go signal was processed (dispatch_d)
-                                  // when dispatch_s and dispatch_d are running on 2 cores, workers update dispatch_s.
-                                  // dispatch_s is responsible for resetting worker count and giving dispatch_d the
-                                  // latest worker state. This is encapsulated in the dispatch_s wait command (only to
-                                  // be sent when dispatch is distributed on 2 cores)
-         DispatchQueryManager::instance().distributed_dispatcher() * hal.get_alignment(HalMemType::HOST)) *
-            num_sub_devices;
-    void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->id_);
-    HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
-    bool clear_count = true;
-    DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
-    uint32_t dispatch_message_base_addr =
-        DispatchMemMap::get(dispatch_core_type)
-            .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    if (reset_launch_msg_state) {
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
-            uint16_t index_bitmask = 0;
-            for (uint32_t i = 0; i < num_sub_devices; ++i) {
-                index_bitmask |= 1 << i;
-            }
-            command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
-            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SLAVE;
-        }
-        go_msg_t reset_launch_message_read_ptr_go_signal;
-        reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core_.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core_.y;
-        for (uint32_t i = 0; i < num_sub_devices; ++i) {
-            reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-                (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
-            uint32_t dispatch_message_addr =
-                dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
-            // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
-            command_sequence.add_dispatch_go_signal_mcast(
-                expected_num_workers_completed[i],
-                *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
-                dispatch_message_addr,
-                device_->num_noc_mcast_txns({i}),
-                device_->num_noc_unicast_txns({i}),
-                device_->noc_data_start_index({i}),
-                dispatcher_for_go_signal);
-            expected_num_workers_completed[i] += device_->num_worker_cores(HalProgrammableCoreType::TENSIX, {i});
-            expected_num_workers_completed[i] += device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, {i});
-        }
-    }
-    // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed
-    // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
-    // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
-    for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(i);
-        if (DispatchQueryManager::instance().distributed_dispatcher()) {
-            command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, expected_num_workers_completed[i], clear_count, false, true, 1);
-        }
-        command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, expected_num_workers_completed[i], clear_count);
-    }
-    this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->id_);
-    this->manager.fetch_queue_reserve_back(this->id_);
-    this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id_);
-
-    if (clear_count) {
-        std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_sub_devices, 0);
-    }
-}
-
 void HWCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
     // Currently each one will be pushed into its own prefetch entry
-    this->reset_worker_dispatch_state_on_device(reset_launch_msg_state);
-    this->set_num_worker_sems_on_dispatch(num_sub_devices);
-    this->set_go_signal_noc_data_on_dispatch(go_signal_noc_data);
-    this->reset_config_buffer_mgr(num_sub_devices);
+    program_dispatch::reset_worker_dispatch_state_on_device(
+        device_,
+        this->manager,
+        id_,
+        this->virtual_enqueue_program_dispatch_core_,
+        this->expected_num_workers_completed,
+        reset_launch_msg_state);
+    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager, id_, num_sub_devices);
+    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, go_signal_noc_data, this->manager, id_);
+    // expected_num_workers_completed is reset on the dispatcher, as part of this step - this must be reflected
+    // on host, along with the config_buf_manager being reset, since we wait for all programs across SubDevices
+    // to complete as part of resetting the worker state
+    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+        this->config_buffer_mgr, this->expected_num_workers_completed, device_->num_sub_devices());
     if (reset_launch_msg_state) {
         this->manager.reset_worker_launch_message_buffer_state(num_sub_devices);
     }
+}
+
+void HWCommandQueue::set_go_signal_noc_data_and_dispatch_sems(
+    uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) {
+    program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager, id_, num_dispatch_sems);
+    program_dispatch::set_go_signal_noc_data_on_dispatch(device_, noc_mcast_unicast_data, this->manager, id_);
 }
 
 HWCommandQueue::~HWCommandQueue() {
@@ -783,12 +686,5 @@ void HWCommandQueue::terminate() {
 }
 
 WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr[index]; }
-
-void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
-    for (uint32_t i = 0; i < num_entries; ++i) {
-        this->config_buffer_mgr[i] = WorkerConfigBufferMgr();
-        program_dispatch::initialize_worker_config_buf_mgr(this->config_buffer_mgr[i]);
-    }
-}
 
 }  // namespace tt::tt_metal
