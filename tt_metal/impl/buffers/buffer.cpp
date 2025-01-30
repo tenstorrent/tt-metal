@@ -11,7 +11,7 @@
 #include <allocator.hpp>
 #include <device.hpp>
 #include <types.hpp>
-
+#include <graph_tracking.hpp>
 #include <algorithm>
 #include <atomic>
 #include <mutex>
@@ -21,9 +21,68 @@
 #include "fmt/base.h"
 #include <reflection.hpp>
 
-namespace tt {
+#include "tracy/Tracy.hpp"
 
-namespace tt_metal {
+namespace tt::tt_metal {
+
+namespace {
+
+DeviceAddr AllocateBufferImpl(Buffer* buffer) {
+    if (GraphTracker::instance().hook_allocate(buffer)) {
+        GraphTracker::instance().track_allocate(buffer);
+        return 0;
+    }
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(
+            *(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+
+    DeviceAddr allocated_addr = buffer->allocator()->allocate_buffer(buffer);
+
+    // Assertion here because buffer class returns a u32 when address is queried
+    // Requires updating all use cases of buffer address to accept a u64 to remove
+    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
+
+    GraphTracker::instance().track_allocate(buffer);
+
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
+        TracyAllocN(
+            reinterpret_cast<const void*>(allocated_addr),
+            buffer->size(),
+            get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
+    return allocated_addr;
+}
+
+void DeallocateBufferImpl(Buffer* buffer) {
+    GraphTracker::instance().track_deallocate(buffer);
+    if (GraphTracker::instance().hook_deallocate(buffer)) {
+        return;
+    }
+
+#if defined(TRACY_ENABLE)
+    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
+        TracyFreeN(
+            reinterpret_cast<const void*>(buffer->address()),
+            get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
+    }
+#endif
+    if (buffer->sub_device_manager_id().has_value()) {
+        TT_FATAL(
+            *(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
+            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
+            *buffer->sub_device_manager_id(),
+            buffer->device()->get_active_sub_device_manager_id());
+    }
+    buffer->allocator()->deallocate_buffer(buffer);
+}
+
+}  // namespace
 
 std::atomic<size_t> Buffer::next_unique_id = 0;
 
@@ -273,7 +332,7 @@ std::shared_ptr<Buffer> Buffer::create(
 
     buffer->device_->push_work([buffer] {
         try {
-            buffer->address_ = detail::AllocateBuffer(buffer.get());
+            buffer->address_ = AllocateBufferImpl(buffer.get());
         } catch(...) {
             std::unique_lock lock(buffer->allocation_mutex_);
             buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
@@ -336,7 +395,7 @@ void Buffer::deallocate_impl() {
 
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
-        detail::DeallocateBuffer(this);
+        DeallocateBufferImpl(this);
     }
 
     allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
@@ -540,8 +599,7 @@ void v1::ReadFromShard(const BufferHandle& buffer, stl::Span<std::byte> host_buf
     detail::ReadShard(*buffer, reinterpret_cast<std::uint8_t *>(host_buffer.data()), core_id);
 }
 
-}  // namespace tt_metal
-}  // namespace tt
+}  // namespace tt::tt_metal
 
 namespace tt::stl::json {
 tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann::json &json_object) const {

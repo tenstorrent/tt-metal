@@ -864,61 +864,6 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode) 
     program.compile(device, fd_bootloader_mode);
 }
 
-DeviceAddr AllocateBuffer(Buffer* buffer) {
-    if (GraphTracker::instance().hook_allocate(buffer)) {
-        GraphTracker::instance().track_allocate(buffer);
-        return 0;
-    }
-    if (buffer->sub_device_manager_id().has_value()) {
-        TT_FATAL(
-            *(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
-            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
-            *buffer->sub_device_manager_id(),
-            buffer->device()->get_active_sub_device_manager_id());
-    }
-
-    DeviceAddr allocated_addr = buffer->allocator()->allocate_buffer(buffer);
-
-    // Assertion here because buffer class returns a u32 when address is queried
-    // Requires updating all use cases of buffer address to accept a u64 to remove
-    TT_ASSERT(allocated_addr <= std::numeric_limits<uint32_t>::max());
-
-    GraphTracker::instance().track_allocate(buffer);
-
-#if defined(TRACY_ENABLE)
-    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
-        TracyAllocN(
-            reinterpret_cast<void const*>(allocated_addr),
-            buffer->size(),
-            get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
-    }
-#endif
-    return allocated_addr;
-}
-
-void DeallocateBuffer(Buffer* buffer) {
-    GraphTracker::instance().track_deallocate(buffer);
-    if (GraphTracker::instance().hook_deallocate(buffer)) {
-        return;
-    }
-
-#if defined(TRACY_ENABLE)
-    if (tt::llrt::RunTimeOptions::get_instance().get_profiler_buffer_usage_enabled()) {
-        TracyFreeN(
-            reinterpret_cast<void const*>(buffer->address()),
-            get_buffer_location_name(buffer->buffer_type(), buffer->device()->id()));
-    }
-#endif
-    if (buffer->sub_device_manager_id().has_value()) {
-        TT_FATAL(
-            *(buffer->sub_device_manager_id()) == buffer->device()->get_active_sub_device_manager_id(),
-            "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
-            *buffer->sub_device_manager_id(),
-            buffer->device()->get_active_sub_device_manager_id());
-    }
-    buffer->allocator()->deallocate_buffer(buffer);
-}
-
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
     if (tt::tt_metal::detail::InWorkerThread()) {
         // Early exit if in a worker thread, since waiting for the worker
