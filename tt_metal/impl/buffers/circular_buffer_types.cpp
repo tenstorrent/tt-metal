@@ -27,6 +27,31 @@ CircularBufferConfig::CircularBufferConfig(
     this->set_config(data_format_spec);
 }
 
+// For flatbuffer deserialization, set all private members.
+CircularBufferConfig::CircularBufferConfig(
+    uint32_t total_size,
+    std::optional<uint32_t> globally_allocated_address,
+    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
+    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
+    const std::unordered_set<uint8_t>& buffer_indices,
+    const std::unordered_set<uint8_t>& local_buffer_indices,
+    const std::unordered_set<uint8_t>& remote_buffer_indices,
+    bool dynamic_cb,
+    uint32_t max_size,
+    uint32_t buffer_size) :
+    total_size_(total_size),
+    globally_allocated_address_(globally_allocated_address),
+    data_formats_(data_formats),
+    page_sizes_(page_sizes),
+    tiles_(tiles),
+    buffer_indices_(buffer_indices),
+    local_buffer_indices_(local_buffer_indices),
+    remote_buffer_indices_(remote_buffer_indices),
+    dynamic_cb_(dynamic_cb),
+    max_size_(max_size),
+    buffer_size_(buffer_size) {}
+
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
     if (buffer_index > NUM_CIRCULAR_BUFFERS - 1) {
         TT_THROW(
@@ -155,6 +180,12 @@ const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& CircularB
 const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
     return this->page_sizes_;
 }
+
+bool CircularBufferConfig::dynamic_cb() const { return this->dynamic_cb_; }
+
+uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
+
+uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
