@@ -59,7 +59,7 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    inline void insert_buffer(std::shared_ptr<Buffer> buffer_) { this->buffer = buffer_; }
+    inline void insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
     inline std::shared_ptr<Buffer> get_buffer() const { return this->buffer; }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
@@ -149,7 +149,7 @@ struct MultiDeviceHostStorage {
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
         DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<TensorSpec> specs_) :
-        strategy(strategy_), buffers(buffers_), specs(specs_) {}
+        strategy(strategy_), buffers(std::move(buffers_)), specs(std::move(specs_)) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage&& other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
     MultiDeviceHostStorage(const MultiDeviceHostStorage& other) {
