@@ -379,10 +379,11 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                     return;
                 }
 
-                TT_ASSERT(
-                    not this->tensor_attributes->main_thread_tensor and
+                if (not this->tensor_attributes->main_thread_tensor) {
+                    TT_ASSERT(
                         not this->tensor_attributes->main_thread_ref_count,
-                    "main_thread_ref_count for tensors created inside a worker thread must be 0");
+                        "main_thread_ref_count for tensors created inside a worker thread must be 0");
+                }
                 const uint32_t ref_count_to_use = get_tensor_ref_count(*this);
                 if ((force or ref_count_to_use == 1) and not this->tensor_attributes->deallocated) {
                     this->tensor_attributes->deallocated = true;
