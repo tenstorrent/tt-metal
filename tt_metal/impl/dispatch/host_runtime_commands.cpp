@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "command_queue_commands.hpp"
+#include "host_runtime_commands.hpp"
 
 #include <array>
 #include <chrono>
@@ -492,47 +492,6 @@ void EnqueueTerminateCommand::process() {
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
     this->manager.fetch_queue_reserve_back(this->command_queue_id);
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->command_queue_id);
-}
-
-void AddBufferToProgram(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    Program& program,
-    bool blocking) {
-    std::visit(
-        [&program](auto&& b) {
-            using buffer_type = std::decay_t<decltype(b)>;
-            if constexpr (std::is_same_v<buffer_type, std::shared_ptr<Buffer>>) {
-                program.add_buffer(b);
-            }
-        },
-        buffer);
-}
-
-void SetRuntimeArgs(
-    const std::shared_ptr<Kernel>& kernel,
-    const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
-    bool blocking) {
-    std::vector<uint32_t> resolved_runtime_args = {};
-    resolved_runtime_args.reserve(runtime_args_ptr->size());
-
-    for (const auto& arg : *(runtime_args_ptr)) {
-        std::visit(
-            [&resolved_runtime_args](auto&& a) {
-                using T = std::decay_t<decltype(a)>;
-                if constexpr (std::is_same_v<T, Buffer*>) {
-                    resolved_runtime_args.push_back(a->address());
-                } else {
-                    resolved_runtime_args.push_back(a);
-                }
-            },
-            arg);
-    }
-    kernel->set_runtime_args(core_coord, resolved_runtime_args);
-}
-
-void GetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking) {
-    *(static_cast<uint32_t*>(dst_buf_addr)) = buffer->address();
 }
 
 inline namespace v0 {

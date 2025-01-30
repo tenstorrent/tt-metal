@@ -95,19 +95,4 @@ public:
     virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
 
-// Temporarily here. Need to eliminate this
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-// Primitives used to place host only operations on the SW Command Queue.
-// These are used in functions exposed through tt_metal.hpp or host_api.hpp
-void GetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking);
-void SetRuntimeArgs(
-    const std::shared_ptr<Kernel>& kernel,
-    const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
-    bool blocking);
-void AddBufferToProgram(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    Program& program,
-    bool blocking);
-
 }  // namespace tt::tt_metal

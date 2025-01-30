@@ -59,7 +59,7 @@ namespace distributed {
 class JitBuildOptions;
 class EnqueueProgramCommand;
 class CommandQueue;
-// Must be removed. Only here because its a damn friend of a Program
+// Must be removed. Only here because its a friend of a Program
 class HWCommandQueue;
 
 namespace detail{

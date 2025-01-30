@@ -14,7 +14,6 @@
 // MUST REMOVE
 #include <program_impl.hpp>
 
-#include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 

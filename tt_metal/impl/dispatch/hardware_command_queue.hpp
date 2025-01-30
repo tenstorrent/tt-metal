@@ -10,12 +10,14 @@
 #include <thread>
 
 #include "command_queue.hpp"
-#include "command_queue_commands.hpp"
+#include "host_runtime_commands.hpp"
 #include "command_queue_interface.hpp"
 #include "lock_free_queue.hpp"
 #include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
 #include "trace_buffer.hpp"
+
+#include "tt_metal/impl/buffers/dispatch.hpp"
 
 namespace tt::tt_metal {
 
