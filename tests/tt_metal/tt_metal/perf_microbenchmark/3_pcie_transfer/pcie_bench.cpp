@@ -483,23 +483,23 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Readers)(benchmark::State& state
     state.counters["num_readers"] = state.range(2);
 }
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
-//     ->Name("Host_Write_HP_N_Readers")
-//     ->ArgsProduct({
-//         /*Total Size*/ {1_GB},
-//         /*Page Size*/ {4_KB, 16_KB, 32_KB},
-//         /*N Reader Kernels*/ {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},
-//         /*Cached Vector*/ {0},
-//     });
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
+    ->Name("Host_Write_HP_N_Readers")
+    ->ArgsProduct({
+        /*Total Size*/ {1_GB},
+        /*Page Size*/ {4_KB, 16_KB, 32_KB},
+        /*N Reader Kernels*/ {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},
+        /*Cached Vector*/ {0},
+    });
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
-//     ->Name("Host_Write_HP_N_Readers_HotVector")
-//     ->ArgsProduct({
-//         /*Total Size*/ {1_GB},
-//         /*Page Size*/ {4_KB, 16_KB, 32_KB},
-//         /*N Reader Kernels*/ {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},
-//         /*Cached Vector*/ {1},
-//     });
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
+    ->Name("Host_Write_HP_N_Readers_HotVector")
+    ->ArgsProduct({
+        /*Total Size*/ {1_GB},
+        /*Page Size*/ {4_KB, 16_KB, 32_KB},
+        /*N Reader Kernels*/ {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},
+        /*Cached Vector*/ {1},
+    });
 
 BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Threads)(benchmark::State& state) {
     const auto total_size = state.range(0);
@@ -519,15 +519,15 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Threads)(benchmark::State& state
     state.counters["num_threads"] = state.range(4);
 }
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
-//     ->Name("Host_Write_HP_N_Threads")
-//     ->ArgsProduct({
-//         /*Total Size*/ {1_GB},
-//         /*Page Size*/ {4_KB, 16_KB, 32_KB},
-//         /*M Reader Kernels*/ {0},
-//         /*Cached Vector*/ {0},
-//         /*N Threads*/ {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-//     });
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
+    ->Name("Host_Write_HP_N_Threads")
+    ->ArgsProduct({
+        /*Total Size*/ {1_GB},
+        /*Page Size*/ {4_KB, 16_KB, 32_KB},
+        /*M Reader Kernels*/ {0},
+        /*Cached Vector*/ {0},
+        /*N Threads*/ {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+    });
 
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
     ->Name("Host_Write_HP_N_Threads_HotVector")
