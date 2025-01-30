@@ -308,7 +308,9 @@ def test_nlp_create_qkv_heads_test(
     ids=["BFLOAT8_B", "BFLOAT16"],
 )
 @pytest.mark.parametrize("batch", (1,))
-@pytest.mark.parametrize("seq_len", (128, 1024, 30720, 131072))
+# Disabling 131072 seq_len case because of #17309
+# @pytest.mark.parametrize("seq_len", (128, 1024, 30720, 131072))
+@pytest.mark.parametrize("seq_len", (128, 1024, 30720))
 @pytest.mark.parametrize("head_dim", (128,))
 @pytest.mark.parametrize("num_q_heads", (32,))
 @pytest.mark.parametrize("num_kv_heads", (4,))

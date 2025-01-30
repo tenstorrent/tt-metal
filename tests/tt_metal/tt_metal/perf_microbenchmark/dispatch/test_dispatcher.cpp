@@ -386,8 +386,9 @@ void gen_cmds(
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
 void initialize_dram_banks(IDevice* device) {
-    auto num_banks = device->num_banks(BufferType::DRAM);
-    auto bank_size = device->bank_size(BufferType::DRAM);  // Or can hardcode to subset like 16MB.
+    const auto& allocator = device->allocator();
+    auto num_banks = allocator->get_num_banks(BufferType::DRAM);
+    auto bank_size = allocator->get_bank_size(BufferType::DRAM);  // Or can hardcode to subset like 16MB.
     auto fill = std::vector<uint32_t>(bank_size / sizeof(uint32_t), 0xBADDF00D);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
@@ -420,9 +421,6 @@ int main(int argc, char** argv) {
     try {
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-        CommandQueue& cq = device->command_queue();
-
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord spoof_prefetch_core = {0, 0};
