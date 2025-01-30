@@ -5,7 +5,6 @@
 #include "trivial_ttnn_ops.hpp"
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
