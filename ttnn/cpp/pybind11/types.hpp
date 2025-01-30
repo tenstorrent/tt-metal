@@ -59,12 +59,6 @@ void py_module(py::module& module) {
                 return ss.str();
             })
         .def_property_readonly("rank", [](const SimpleShape& self) -> std::size_t { return self.rank(); })
-        .def(
-            "with_tile_padding",
-            [](const SimpleShape& self) {
-                return TensorSpec(self, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{}))
-                    .padded_shape();
-            })
         .def("to_rank", [](const SimpleShape& self, std::size_t new_rank) {
             SmallVector<uint32_t> new_shape(new_rank, 1);
 

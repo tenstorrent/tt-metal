@@ -93,7 +93,7 @@ def _preprocess_golden_function_inputs(args, kwargs):
     shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
     input_tensor = input_tensor.reshape(input_tensor.padded_shape)
-    return (ttnn.to_torch(input_tensor), tuple(shape.with_tile_padding()), *args), kwargs
+    return (ttnn.to_torch(input_tensor), tuple(shape), *args), kwargs
 
 
 def _golden_function(input_tensor, shape: Union[ttnn.Shape, Tuple[int, ...]]) -> ttnn.Tensor:
@@ -107,9 +107,8 @@ def _postprocess_golden_function_outputs(output, args, kwargs):
     shape, args, kwargs = ttnn.reflection.pop_argument("shape", args, kwargs)
     shape = _preprocess_shape(input_tensor.shape, shape)
 
-    shape_with_tile_padding = shape.with_tile_padding()
     if tensor.layout == ttnn.TILE_LAYOUT:
-        *_, height, width = shape_with_tile_padding
+        *_, height, width = shape
         if height % ttnn.TILE_SIZE != 0 or width % ttnn.TILE_SIZE != 0:
             raise RuntimeError(
                 "ttnn.reshape: cannot reshape a tensor with TILE_LAYOUT to a shape that is not a multiple of TILE_SIZE on height and width!"
