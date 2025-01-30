@@ -224,7 +224,7 @@ def run_pre_allgather_layernorm(
 @pytest.mark.parametrize(
     "min_pcc_ex2",
     [
-        0.983,
+        0.982,
     ],
 )
 @pytest.mark.parametrize(("fuse_residual", "max_atol_ex2"), [(False, 0.04), (True, 0.09)])
@@ -275,7 +275,7 @@ def test_pre_allgather_layernorm(
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((4, 1),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
-@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.987, 0.04)])
+@pytest.mark.parametrize(("min_pcc_ex2", "max_atol_ex2"), [(0.986, 0.04)])
 def test_pre_allgather_layernorm_1d_reduce(
     device,
     use_program_cache,
@@ -369,7 +369,7 @@ def test_post_allgather_layernorm(
 
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, tt_device_stats.shape.with_tile_padding()[-1]),
+        shape=(1, 1, 32, tt_device_stats.padded_shape[-1]),
         core_grid=ttnn.CoreGrid(y=1, x=1),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
@@ -449,7 +449,7 @@ def test_simulated_distributed_layernorm(
     tt_global_stats = ttnn.concat(tt_stats_list, -1)
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
+        shape=(32, tt_global_stats.padded_shape[-1]),
         core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,

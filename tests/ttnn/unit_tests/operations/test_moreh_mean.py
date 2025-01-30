@@ -88,7 +88,7 @@ def run_moreh_mean_backward(
     # run ttnn
     ttnn_output_grad = create_ttnn_tilized_tensor(torch_output_grad, device, ttnn_dtype)
     if create_input_grad:
-        input_grad_shape = ttnn._ttnn.types.Shape(torch_input.shape)
+        input_grad_shape = tuple(torch_input.shape)
         ttnn_input_grad = ttnn.operations.moreh.mean_backward(
             ttnn_output_grad,
             dim=dim,

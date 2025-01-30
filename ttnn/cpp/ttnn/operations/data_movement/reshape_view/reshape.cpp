@@ -387,43 +387,48 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         );
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::Shape& shape
-     ) {
-        return invoke(tensor, shape,std::nullopt,0,std::nullopt);
-     }
-
-     ttnn::Tensor ReshapeViewOperation::invoke(
-         const ttnn::Tensor& tensor,
-         const ttnn::SimpleShape& shape,
-         const std::optional<MemoryConfig>& memory_config,
-         const uint8_t queue_id,
-         const std::optional<PadValue>& pad_value) {
-         return invoke(tensor, ttnn::Shape(shape.view()), memory_config, queue_id, pad_value);
-     }
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
+    return invoke(tensor, shape, std::nullopt, 0, std::nullopt);
+}
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape
-    ) {
+    const ttnn::SimpleShape& shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const uint8_t queue_id,
+    const std::optional<PadValue>& pad_value) {
+    return invoke(tensor, ttnn::Shape(shape.view()), memory_config, queue_id, pad_value);
+}
+
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
     return invoke(tensor, ttnn::Shape(shape.view()), std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    tt::stl::Span<const int32_t> shape_vector,
-    const std::optional<MemoryConfig> &memory_config,
+    const ttnn::SimpleShape& logical_shape,
+    const ttnn::SimpleShape& padded_shape,
+    const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
-    const std::optional<PadValue> &pad_value
-    ) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),memory_config,queue_id,pad_value);
+    const std::optional<PadValue>& pad_value) {
+    return invoke(tensor, ttnn::Shape(logical_shape.view(), padded_shape.view()), memory_config, queue_id, pad_value);
+}
+
+ttnn::Tensor ReshapeViewOperation::invoke(
+    const ttnn::Tensor& tensor, const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+    return invoke(tensor, ttnn::Shape(logical_shape.view(), padded_shape.view()), std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    tt::stl::Span<const int32_t> shape_vector
-    ) {
+    tt::stl::Span<const int32_t> shape_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const uint8_t queue_id,
+    const std::optional<PadValue>& pad_value) {
+    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),memory_config,queue_id,pad_value);
+}
+
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
     return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),std::nullopt,0,std::nullopt);
 }
 

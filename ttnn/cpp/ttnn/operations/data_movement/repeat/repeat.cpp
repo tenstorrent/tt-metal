@@ -20,7 +20,7 @@ namespace ttnn::operations::data_movement {
 ttnn::Tensor RepeatOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const Shape& repeat_dims,
+    const ttnn::SimpleShape& repeat_dims,
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto padded_input_shape = input_tensor.get_padded_shape();
     auto logical_input_shape = input_tensor.get_logical_shape();
@@ -40,7 +40,7 @@ ttnn::Tensor RepeatOperation::invoke(
             auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
             TT_FATAL(repeat_dims.rank() == input_rank, "Number of repeat dims must be equal to number of tensor dims");
             Tensor output = input_tensor;
-            for (uint32_t dim = 0; dim < repeat_dims.size(); ++dim) {
+            for (uint32_t dim = 0; dim < repeat_dims.rank(); ++dim) {
                 if (repeat_dims[dim] == 1) {
                     continue;
                 }
@@ -115,11 +115,13 @@ ttnn::Tensor RepeatOperation::invoke(
 }
 
 ttnn::Tensor RepeatOperation::invoke(
-    const ttnn::Tensor& input_tensor, const Shape& repeat_dims, const std::optional<MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SimpleShape& repeat_dims,
+    const std::optional<MemoryConfig>& memory_config) {
     return invoke(DefaultQueueId, input_tensor, repeat_dims, memory_config);
 }
 
-ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const Shape& repeat_dims) {
+ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& repeat_dims) {
     return invoke(DefaultQueueId, input_tensor, repeat_dims, std::nullopt);
 }
 
