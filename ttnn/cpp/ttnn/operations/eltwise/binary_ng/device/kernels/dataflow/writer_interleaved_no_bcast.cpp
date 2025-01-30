@@ -10,22 +10,23 @@
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    const uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t shard_width = get_arg_val<uint32_t>(4);
-    const uint32_t n_stride = get_arg_val<uint32_t>(5);
-    const uint32_t c_stride = get_arg_val<uint32_t>(6);
-    const uint32_t N = get_arg_val<uint32_t>(7);
-    const uint32_t C = get_arg_val<uint32_t>(8);
-    const uint32_t Ht = get_arg_val<uint32_t>(9);
-    const uint32_t Wt = get_arg_val<uint32_t>(10);
+    const uint32_t start_tile_id = get_arg_val<uint32_t>(2);
+    const uint32_t src_num_tiles = get_arg_val<uint32_t>(3);
+    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(4);
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(5);
+    const uint32_t n_stride = get_arg_val<uint32_t>(6);
+    const uint32_t c_stride = get_arg_val<uint32_t>(7);
+    const uint32_t N = get_arg_val<uint32_t>(8);
+    const uint32_t C = get_arg_val<uint32_t>(9);
+    const uint32_t Ht = get_arg_val<uint32_t>(10);
+    const uint32_t Wt = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_id_src = tt::CBIndex::c_1;
 #if SRC_SHARDED
-    cb_reserve_back(cb_id_src, num_tiles);
-    cb_push_back(cb_id_src, num_tiles);
+    cb_reserve_back(cb_id_src, src_num_tiles);
+    cb_push_back(cb_id_src, src_num_tiles);
 #else
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
@@ -55,7 +56,7 @@ void kernel_main() {
     uint32_t start_t = start_remaining % HtWt;
     uint32_t start_th = start_t / Wt;
     uint32_t start_tw = start_t % Wt;
-    uint32_t end_tw = has_sharding ? start_tw + shard_width : Wt;
+    uint32_t end_tw = has_sharding ? start_tw + dst_shard_width : Wt;
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_th * Wt;
@@ -63,10 +64,12 @@ void kernel_main() {
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
     uint32_t num_tiles_written = 0;
-    for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
-        for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_th = 0) {
-            for (uint32_t th = start_th; th < Ht && num_tiles_written < num_tiles; ++th) {
-                for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < num_tiles; ++tw, ++num_tiles_written) {
+    uint32_t dst_tile_offset = start_tile_id;
+    for (uint32_t n = start_n; n < N && num_tiles_written < dst_num_tiles; ++n, start_c = 0) {
+        for (uint32_t c = start_c; c < C && num_tiles_written < dst_num_tiles; ++c, start_th = 0) {
+            for (uint32_t th = start_th; th < Ht && num_tiles_written < dst_num_tiles; ++th) {
+                for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
+                     ++tw, ++num_tiles_written) {
 #if !SRC_SHARDED
                     // read a tile from src
                     cb_reserve_back(cb_id_src, onetile);
@@ -80,7 +83,7 @@ void kernel_main() {
                     // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                     cb_wait_front(cb_id_dst, onetile);
                     uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                    noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
+                    noc_async_write_tile(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_dst, onetile);
 #endif
@@ -88,7 +91,7 @@ void kernel_main() {
                 tile_offset += Wt;
                 if constexpr (has_sharding) {
                     // adjust the output tile offset since we had to skip parts of the row
-                    start_tile_id += (Wt - shard_width);
+                    dst_tile_offset += (Wt - dst_shard_width);
                 } else {
                     // otherwise, next row of tiles should start at the first column
                     start_tw = 0;
