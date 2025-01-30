@@ -466,7 +466,7 @@ void EnqueueAddBufferToProgram(
 void EnqueueSetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
     bool blocking) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());

@@ -205,7 +205,7 @@ void EnqueueGetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blo
 void EnqueueSetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
     bool blocking);
 void EnqueueAddBufferToProgram(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
