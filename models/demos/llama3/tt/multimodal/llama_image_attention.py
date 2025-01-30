@@ -60,8 +60,8 @@ class TtLlamaImageAttention(LightweightModule):
         wo_str = f"{state_dict_prefix}wo.weight"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % configuration.num_devices == 0
-        assert self.n_kv_heads % configuration.num_devices == 0
+        assert self.n_heads % self.num_devices == 0
+        assert self.n_kv_heads % self.num_devices == 0
 
         # Pad head_dim to multiple of 32
         def pad_head_dim(weight, heads_out=True):
@@ -87,7 +87,7 @@ class TtLlamaImageAttention(LightweightModule):
         wv_padded = pad_head_dim(self.state_dict[wv_str])
         wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
         wq_chunked, wk_chunked, wv_chunked = (
-            torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
+            torch.chunk(w, self.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
 
         self.wqkv = ttnn.as_tensor(
@@ -113,7 +113,7 @@ class TtLlamaImageAttention(LightweightModule):
                         ],
                         dim=-1,
                     )
-                    for i in range(configuration.num_devices)
+                    for i in range(self.num_devices)
                 ],
                 dim=-1,
             ),

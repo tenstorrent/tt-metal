@@ -65,8 +65,8 @@ class TtLlamaCrossAttention(LightweightModule):
         wo_str = f"{state_dict_prefix}wo.weight"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
-        assert self.n_heads % configuration.num_devices == 0
-        assert self.n_kv_heads % configuration.num_devices == 0
+        assert self.n_heads % self.num_devices == 0
+        assert self.n_kv_heads % self.num_devices == 0
 
         # TODO DRAM Shard the weights (see llama3 text)
         self.wq = ttnn.as_tensor(

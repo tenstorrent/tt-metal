@@ -85,7 +85,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
         lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
         total_splits = 8  # Arbitrary value which allows whole-tile splits in LM Head
-        num_splits = total_splits // self.configuration.num_devices
+        num_splits = total_splits // self.configuration.num_devices_tp
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)
 
         cache_name = lambda name, suffix, split: weight_cache_path / (state_dict_prefix + f"{name}{suffix}{split}")
@@ -341,7 +341,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            if self.configuration.num_devices > 1:
+            if self.configuration.num_devices_tp > 1:
                 output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
             outputs.append(output)
 

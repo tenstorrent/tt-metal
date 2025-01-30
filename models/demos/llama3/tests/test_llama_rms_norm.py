@@ -9,7 +9,13 @@ import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as RefRMSNorm
-from models.utility_functions import comp_pcc, comp_allclose, skip_for_parallelism, skip_for_batch_parallelism
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+    skip_for_parallelism,
+    skip_for_batch_parallelism,
+    skip_for_model_parallelism,
+)
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 
@@ -62,6 +68,10 @@ def test_llama_rms_norm_inference(
     skip, reason = skip_for_parallelism(
         mesh_device.get_num_devices() if mesh_device else 0, data_parallel, tensor_parallel
     )
+    if skip:
+        pytest.skip(reason)
+
+    skip, reason = skip_for_model_parallelism(data_parallel)
     if skip:
         pytest.skip(reason)
 

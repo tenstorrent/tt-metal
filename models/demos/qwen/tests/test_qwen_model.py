@@ -111,7 +111,7 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
         mesh_device,
-        model_args.num_devices_tp,
+        model_args.num_devices,
         start_pos=0,
     )
 
@@ -147,7 +147,7 @@ def test_qwen_model_inference(mesh_device, weights, layers, use_program_cache, r
         current_rot_mat, rot_matrix = get_single_rot_mat(
             model_args.head_dim,
             mesh_device,
-            model_args.num_devices_tp,
+            model_args.num_devices,
             start_pos=current_pos,
         )
         decode_input = model_args.prepare_inputs_ttnn_decode(
