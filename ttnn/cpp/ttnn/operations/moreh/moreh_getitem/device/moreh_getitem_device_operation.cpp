@@ -106,7 +106,6 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         // index_tensor: [(100), (100)]
         // index_dims = 1,2
         // output: (10, 1, 100, 40)
-        auto dim_offset = 5 - input_shape.rank();
         SmallVector<uint32_t> output_size_vec;
         for (int dim = 0; dim < output_shape.size(); dim++) {
             output_size_vec.push_back(output_shape[dim]);
@@ -114,16 +113,14 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
 
         auto index = index_tensors[0];
         uint32_t index_size = index.get_logical_shape()[-1];
-        uint32_t index_size_without_padding = index.get_logical_shape()[-1];
-
-        uint32_t last_dim = index_dims.back() + dim_offset;
 
         for (uint32_t i = 0; i < index_dims.size(); i++) {
             uint32_t out_put_dim = index_dims[i];
             output_size_vec[out_put_dim] = 1;
         }
+        output_size_vec[index_dims.back()] = index_size;
 
-        output_shape = ttnn::SimpleShape(output_size_vec);
+        output_shape = ttnn::SimpleShape(std::move(output_size_vec));
     } else {
         // compute output shape
         // ex)
@@ -151,7 +148,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
             }
         }
 
-        output_shape = ttnn::SimpleShape(output_size_vec);
+        output_shape = ttnn::SimpleShape(std::move(output_size_vec));
     }
     return TensorSpec(
         output_shape,
