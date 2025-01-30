@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "tt_metal/impl/dispatch/data_collection.hpp"
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
 namespace tt::tt_metal {
 namespace program_dispatch {
@@ -504,8 +505,10 @@ void generate_runtime_args_cmds(
         uint32_t num_packed_cmds = std::min(num_packed_cmds_in_seq, max_packed_cmds);
         uint32_t rt_payload_sizeB =
             get_runtime_payload_sizeB(num_packed_cmds, max_runtime_args_len, unicast, no_stride);
-        uint32_t cmd_sequence_sizeB = tt::align(sizeof(CQPrefetchCmd) + rt_payload_sizeB, pcie_alignment);
-        runtime_args_command_sequences.emplace_back(cmd_sequence_sizeB);
+        DeviceCommandCalculator calculator;
+        calculator.add_dispatch_write_packed<PackedSubCmd>(
+            num_packed_cmds, max_runtime_args_len * sizeof(uint32_t), packed_write_max_unicast_sub_cmds, no_stride);
+        runtime_args_command_sequences.emplace_back(calculator.write_offset_bytes());
         runtime_args_command_sequences.back().add_dispatch_write_packed<PackedSubCmd>(
             num_packed_cmds,
             l1_arg_base_addr,
@@ -517,6 +520,9 @@ void generate_runtime_args_cmds(
             offset_idx,
             no_stride,
             write_offset_index);
+        TT_ASSERT(
+            runtime_args_command_sequences.back().size_bytes() ==
+            runtime_args_command_sequences.back().write_offset_bytes());
 
         // Update kernel RTA pointers to point into the generated command
         // Future RTA updates through the API will update the command sequence directly
@@ -777,7 +783,8 @@ void assemble_runtime_args_commands(
 }
 
 template <typename PackedSubCmd>
-uint32_t insert_write_packed_payloads(
+void insert_write_packed_payloads(
+    DeviceCommandCalculator& calculator,
     const uint32_t num_sub_cmds,
     const uint32_t sub_cmd_sizeB,
     const uint32_t max_prefetch_command_size,
@@ -788,23 +795,21 @@ uint32_t insert_write_packed_payloads(
     const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
         aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
     uint32_t rem_num_sub_cmds = num_sub_cmds;
-    uint32_t cmd_payload_sizeB = 0;
-    uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     while (rem_num_sub_cmds != 0) {
         const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
         const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
         const uint32_t dispatch_cmd_sizeB =
             tt::align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
-        cmd_payload_sizeB += tt::align(sizeof(CQPrefetchCmd) + packed_cmd_payloads.back().second, pcie_alignment);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
+        calculator.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+            num_sub_cmds_in_cmd, sub_cmd_sizeB, packed_write_max_unicast_sub_cmds);
     }
-    return cmd_payload_sizeB;
 }
 
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
-    uint32_t cmd_sequence_sizeB = 0;
+    DeviceCommandCalculator calculator;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     NOC noc_index = dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
@@ -878,7 +883,8 @@ void assemble_device_commands(
                         transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
-            cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+            insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+                calculator,
                 unicast_sem_sub_cmds[i].size(),
                 unicast_sem_dst_size.back().second,
                 max_prefetch_command_size,
@@ -1007,14 +1013,9 @@ void assemble_device_commands(
         }
         uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         for (size_t i = 0; i < batched_dispatch_subcmds.size(); i++) {
-            cmd_sequence_sizeB += tt::align(
-                sizeof(CQPrefetchCmd) +
-                    tt::align(
-                        sizeof(CQDispatchCmd) +
-                            batched_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
-                        l1_alignment) +
-                    batched_cmd_data[i].back().end() - batched_cmd_data[i].front().start,
-                pcie_alignment);
+            calculator.add_dispatch_write_packed_large(
+                batched_dispatch_subcmds[i].size(),
+                batched_cmd_data[i].back().end() - batched_cmd_data[i].front().start);
 
             batched_dispatch_subcmds[i].back().flags |= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
         }
@@ -1052,8 +1053,8 @@ void assemble_device_commands(
         for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
             if (write_linear) {
                 kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
-                cmd_sequence_sizeB += 2 * hal.get_alignment(HalMemType::HOST);
                 constexpr bool flush_prefetch = false;
+                calculator.add_dispatch_write_linear<flush_prefetch>(0);
                 kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
                     num_mcast_dests,  // num_mcast_dests
                     noc_encoding,     // noc_xy_addr
@@ -1081,6 +1082,7 @@ void assemble_device_commands(
                     page_offset = kg_transfer_info.page_offsets[kernel_idx];
                 }
 
+                calculator.add_prefetch_relay_paged();
                 kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
                     true,  // is_dram
                     page_offset,
@@ -1150,13 +1152,8 @@ void assemble_device_commands(
     }
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     for (uint32_t i = 0; i < kernel_bins_dispatch_subcmds.size(); ++i) {
-        cmd_sequence_sizeB += tt::align(
-            ((sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd))) +
-                kernel_bins_dispatch_subcmds[i].size() * sizeof(CQDispatchWritePackedLargeSubCmd),
-            pcie_alignment);
-        cmd_sequence_sizeB += tt::align(
-            kernel_bins_prefetch_subcmds[i].size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) + sizeof(CQPrefetchCmd),
-            pcie_alignment);
+        calculator.add_dispatch_write_packed_large(kernel_bins_dispatch_subcmds[i].size());
+        calculator.add_prefetch_relay_paged_packed(kernel_bins_prefetch_subcmds[i].size());
     }
     std::vector<std::pair<const void*, uint32_t>> multicast_go_signal_data;
     std::vector<std::pair<const void*, uint32_t>> unicast_go_signal_data;
@@ -1192,7 +1189,8 @@ void assemble_device_commands(
         }
     }
     if (multicast_go_signal_sub_cmds.size() > 0) {
-        cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+        insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
+            calculator,
             multicast_go_signal_sub_cmds.size(),
             go_signal_sizeB,
             max_prefetch_command_size,
@@ -1228,19 +1226,14 @@ void assemble_device_commands(
     }
 
     if (unicast_go_signal_sub_cmds.size() > 0) {
-        cmd_sequence_sizeB += insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+        insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
+            calculator,
             unicast_go_signal_sub_cmds.size(),
             go_signal_sizeB,
             max_prefetch_command_size,
             packed_write_max_unicast_sub_cmds,
             unicast_go_signals_payload);
     }
-
-    // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier
-    // on dispatch_d if program is active) if not,  check if the program is active on workers. If active, have
-    // dispatch_d issue a write barrier
-    cmd_sequence_sizeB += (device->dispatch_s_enabled() || program_transfer_info.num_active_cores > 0) *
-                          hal.get_alignment(HalMemType::HOST);
 
     // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
     const auto& noc_data_start_idx = device->noc_data_start_index(
@@ -1249,9 +1242,17 @@ void assemble_device_commands(
         multicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_mcast_txns(sub_device_id) : 0;
     const auto& num_noc_unicast_txns =
         unicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_unicast_txns(sub_device_id) : 0;
-    cmd_sequence_sizeB += tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd), pcie_alignment);
+    if (device->dispatch_s_enabled()) {
+        calculator.add_notify_dispatch_s_go_signal_cmd();
+    } else {
+        // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
+        if (program_transfer_info.num_active_cores > 0) {
+            calculator.add_dispatch_wait();
+        }
+    }
+    calculator.add_dispatch_go_signal_mcast();
 
-    program_command_sequence.device_command_sequence = HostMemDeviceCommand(cmd_sequence_sizeB);
+    program_command_sequence.device_command_sequence = HostMemDeviceCommand(calculator.write_offset_bytes());
 
     auto& device_command_sequence = program_command_sequence.device_command_sequence;
 
