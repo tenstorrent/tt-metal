@@ -282,7 +282,7 @@ def run_test_create_min_width_shard(
         if isinstance(batch_offset, ttnn.Tensor):
             # convert ttnn.Tensor to torch tensor
             tensor = ttnn.to_torch(batch_offset)
-            batch_offset = tensor[0][0]
+            batch_offset = tensor[0]
         batch = slice_size
     q_heads_torch = proj_output[:, :, batch_offset : batch_offset + slice_size, : head_dim * n_local_heads].view(
         seq_len, batch, n_local_heads, head_dim

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "risc_attribs.h"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 void kernel_main() {

@@ -59,11 +59,7 @@ void NLPCreateHeadsDecodeDeviceOperation::validate(
             !(batch_offset.has_value() ^ this->slice_size.has_value()),
             "Both batch_offset and slice_size must be provided or neither");
         if (batch_offset.has_value() && this->slice_size.has_value()) {
-            TT_FATAL(batch_offset.value().get_shape()[0] == 1, "batch_offset must be unary tensor");
-            uint32_t device_batch_offset = static_cast<uint32_t>(batch_offset.value().to_vector<int32_t>()[0]);
-            TT_FATAL(
-                device_batch_offset + this->slice_size.value() <= num_users,
-                "Batch offset + slice size should be less than or equal to num_users");
+            TT_FATAL(batch_offset.value().get_logical_shape()[0] == 1, "batch_offset must be unary tensor");
             num_users = this->slice_size.value();
         }
 
