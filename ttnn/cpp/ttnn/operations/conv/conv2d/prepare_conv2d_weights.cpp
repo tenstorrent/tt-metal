@@ -726,6 +726,14 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
+    weight_tensor_ = ttnn::pad(
+        0,
+        weight_tensor_,
+        weights_channels_padded_shape.to_array_4D(),
+        tt::tt_metal::Array4D({0, 0, 0, 0}),
+        0.0f,
+        true,
+        std::nullopt);
 
     // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
@@ -792,15 +800,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             weight_tensor_,
             ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, final_out_channels_padded}));
     } else {
-        weight_tensor_ = ttnn::pad(
-            0,
-            weight_tensor_,
-            weights_channels_padded_shape.to_array_4D(),
-            tt::tt_metal::Array4D({0, 0, 0, 0}),
-            0.0f,
-            true,
-            std::nullopt);
-
         // Reshape the weights to 5D, and permute in 5D.
         weight_tensor_ = ttnn::reshape(
             weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
