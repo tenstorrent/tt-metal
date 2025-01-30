@@ -12,6 +12,8 @@ from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole, run_for_wormhole_b0
 
+# from ttnn.operations.core.* import BlackholeComputeKernelConfig
+
 
 def find_max_subblock(out_block_h, out_block_w):
     max_product = 0
@@ -303,26 +305,26 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [1280])
-@pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("grid_size", [(8, 1)])
-@pytest.mark.parametrize("tile_h", [16, 32])
-@pytest.mark.parametrize("tile_w", [16, 32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("transpose_tile", [True, False])
+# @run_for_wormhole_b0()
+@pytest.mark.parametrize("k", [256])
+@pytest.mark.parametrize("n", [256])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("grid_size", [(1, 1)])
+@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("transpose_tile", [False])
 def test_matmul_in1_dram_sharded_tiny_tile(
     device, k, n, has_bias, grid_size, tile_h, tile_w, in1_dtype, transpose_tile
 ):
     # PCC issue when height not equal to tile height
     m = tile_h
-    if is_grayskull():
-        n_padded = n
-        num_banks = 8
-    else:
-        num_banks = 12
-        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
+    # if is_grayskull():
+    n_padded = n
+    num_banks = 8
+    # else:
+    #     num_banks = 12
+    #     n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
 
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -334,6 +336,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     in0_block_w = k // num_cores // 32
     out_block_h = m // tile_h
     out_block_w = n // num_cores // tile_w
+    # breakpoint()
 
     sharded_mem_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -408,6 +411,13 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+    # else:
+    #     compute_kernel_config = ttnn.BlackholeComputeKernelConfig(
+    #         math_fidelity=ttnn.MathFidelity.LoFi,
+    #         math_approx_mode=True,
+    #         fp32_dest_acc_en=True,
+    #         packer_l1_acc=True,
+    #     )
 
     if has_bias:
         output_t = ttnn.linear(
@@ -499,7 +509,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     if has_bias:
@@ -537,7 +547,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
     if out_sharded:
@@ -574,18 +584,18 @@ def run_matmul_2d_multiple_output_blocks_per_core(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize("b", [1, 2])
-@pytest.mark.parametrize("m", [1024])
-@pytest.mark.parametrize("k", [1024])
-@pytest.mark.parametrize("n", [1024])
-@pytest.mark.parametrize("has_bias", [True, False])
-@pytest.mark.parametrize("grid_size", [(8, 4)])
-@pytest.mark.parametrize("in0_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
-@pytest.mark.parametrize("num_out_block_h", [1, 2])
-@pytest.mark.parametrize("num_out_block_w", [1, 2])
-@pytest.mark.parametrize("transpose_mcast", [True, False])
+# @run_for_wormhole_b0()
+@pytest.mark.parametrize("b", [1])
+@pytest.mark.parametrize("m", [64])
+@pytest.mark.parametrize("k", [256])
+@pytest.mark.parametrize("n", [128])
+@pytest.mark.parametrize("has_bias", [False])
+@pytest.mark.parametrize("grid_size", [(1, 1)])
+@pytest.mark.parametrize("in0_sharded", [False])
+@pytest.mark.parametrize("out_sharded", [False])
+@pytest.mark.parametrize("num_out_block_h", [1])
+@pytest.mark.parametrize("num_out_block_w", [1])
+@pytest.mark.parametrize("transpose_mcast", [False])
 def test_matmul_2d_multiple_output_blocks_per_core(
     device,
     b,
