@@ -105,18 +105,18 @@ run_n300_perf_tests(){
 
   run_common_perf_tests; fail+=$?
 
-  # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
   # Llama3.2-1B
   llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
   # Llama3.2-3B
   llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
-  # Llama3.2-11B
+  # Llama3.1-8B
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  # Llama3.2-11B (same tet weights as 8B)
   llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
 
-  # Run all Llama3 tests for 1B, 3B, 8B and 11B weights for N150
+  # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
     FAKE_DEVICE=N150 LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/demo/simple_text_demo.py --timeout 600; fail+=$?
     echo "LOG_METAL: Llama3 tests for $llama_dir completed on N150"
   done
