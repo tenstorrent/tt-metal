@@ -14,10 +14,10 @@
 namespace ttnn::operations::experimental::reshape {
 
 static MemoryConfig infer_output_memory_config(
-    const MemoryConfig& input_memory_config, const ttnn::SimpleShape& output_logical_shape) {
+    const MemoryConfig& input_memory_config, const ttnn::SimpleShape& output_padded_shape) {
     if (input_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto shard_spec = input_memory_config.shard_spec.value();
-        shard_spec.shape[1] = output_logical_shape[-1];  // update output shard to match new shard width
+        shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
         return MemoryConfig{input_memory_config.memory_layout, input_memory_config.buffer_type, shard_spec};
     } else {
         return input_memory_config;
@@ -29,7 +29,7 @@ Tensor tensor_reshape(
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
-    const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_logical_shape);
+    const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
     auto new_spec = ttnn::TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
