@@ -15,10 +15,6 @@ namespace {
 
 using MeshTensorTest = T3kMultiDeviceFixture;
 
-TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape, DataType dtype) {
-    return TensorSpec(shape, TensorLayout(dtype, Layout::ROW_MAJOR, MemoryConfig{}));
-}
-
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
         TensorSpec(ttnn::SimpleShape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
