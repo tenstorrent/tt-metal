@@ -177,9 +177,6 @@ def run_conv(
         memory_config=memory_config,
         return_output_dim=True,
     )
-    import numpy as np
-
-    np.save("out.npy", weights_device.cpu().to_torch().float().numpy())
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -360,7 +357,7 @@ def run_conv_with_split(
     "filter, pad",
     [
         [3, 1],
-        # [1, 0],
+        [1, 0],
         [5, 2],
     ],
 )
