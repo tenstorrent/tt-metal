@@ -293,6 +293,11 @@ def run_all_gather_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
+                print("Golden output: ", output_tensor)
+                print("My output: ", tt_output_tensor)
+                if enable_persistent_fabric and teardown_persistent_fabric:
+                    mesh_device.reset_sub_device_stall_group()
+                    teardown_fabric_interface(mesh_device)
             assert eq, f"{i} FAILED: {output}"
 
     if enable_persistent_fabric and teardown_persistent_fabric:
@@ -412,7 +417,7 @@ def test_all_gather(
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
-            (32, 128),
+            (32, 320),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
