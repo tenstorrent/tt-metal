@@ -10,7 +10,9 @@
 
 namespace tt::tt_metal {
 
+BufferType from_flatbuffer(flatbuffer::BufferType type);
+
 CircularBufferConfig from_flatbuffer(
-    const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
+    const flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
 
 }  // namespace tt::tt_metal

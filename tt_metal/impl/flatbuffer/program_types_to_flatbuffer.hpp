@@ -14,32 +14,32 @@
 
 namespace tt::tt_metal {
 
-std::pair<tt::tt_metal::flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ReaderDataMovementConfig& config);
 
-std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const WriterDataMovementConfig& config);
 
-flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg> create_runtime_arg(
+flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<Buffer*, uint32_t>& arg);
 
-flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>> to_flatbuffer(
+flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::RuntimeArg>>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(

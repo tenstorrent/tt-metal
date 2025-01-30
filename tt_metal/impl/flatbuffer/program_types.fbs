@@ -42,7 +42,7 @@ table ComputeConfig {
 }
 
 table EthernetConfig {
-  eth_mode: Eth;
+  eth_mode: EthMode;
   noc: NOC;
   processor: DataMovementProcessor;
   compile_args: [uint32]; // Array of compile arguments
@@ -56,11 +56,11 @@ union KernelConfig {
   EthernetConfig
 }
 
-table UInt32Value {
+struct UInt32Value {
   value: uint32;
 }
 
-table BufferGlobalId {
+struct BufferGlobalId {
   id: uint32;
 }
 

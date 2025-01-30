@@ -14,23 +14,18 @@
 
 namespace tt::tt_metal {
 
-tt::tt_metal::flatbuffer::BufferType to_flatbuffer(BufferType type);
+flatbuffer::DataMovementProcessor to_flatbuffer(DataMovementProcessor in);
+flatbuffer::NOC to_flatbuffer(NOC in);
+flatbuffer::NOC_MODE to_flatbuffer(NOC_MODE in);
+flatbuffer::EthMode to_flatbuffer(Eth in);
 
-tt::tt_metal::flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout);
-tt::tt_metal::flatbuffer::DataMovementProcessor to_flatbuffer(tt::tt_metal::DataMovementProcessor in);
+flatbuffer::MathFidelity to_flatbuffer(MathFidelity input);
+flatbuffer::UnpackToDestMode to_flatbuffer(UnpackToDestMode input);
+flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input);
 
-tt::tt_metal::flatbuffer::NOC to_flatbuffer(tt::tt_metal::NOC in);
-tt::tt_metal::flatbuffer::NOC_MODE to_flatbuffer(tt::tt_metal::NOC_MODE in);
-tt::tt_metal::flatbuffer::Eth to_flatbuffer(tt::tt_metal::Eth in);
+flatbuffer::Tile to_flatbuffer(const Tile& tile);
 
-tt::tt_metal::flatbuffer::MathFidelity to_flatbuffer(MathFidelity input);
-tt::tt_metal::flatbuffer::UnpackToDestMode to_flatbuffer(UnpackToDestMode input);
-tt::tt_metal::flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input);
-
-flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile> to_flatbuffer(
-    const Tile& tile, flatbuffers::FlatBufferBuilder& builder);
-
-flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile>>> to_flatbuffer(
+flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::Tile>>> to_flatbuffer(
     const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles, flatbuffers::FlatBufferBuilder& builder);
 
 }  // namespace tt::tt_metal

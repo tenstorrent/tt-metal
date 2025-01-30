@@ -7,24 +7,6 @@ enum Arch: uint {
   Blackhole = 2,
 }
 
-enum BufferType: ushort {
-  DRAM = 0,
-  L1 = 1,
-  SystemMemory = 2,
-  L1Small = 3,
-  Trace = 4,
-}
-
-enum TensorMemoryLayout: ushort {
-  None = 0,
-  Interleaved = 1,
-  SingleBank = 2,
-  HeightSharded = 3,
-  WidthSharded = 4,
-  BlockSharded = 5,
-}
-
-
 enum DataMovementProcessor : byte {
   RISCV_0,
   RISCV_1
@@ -40,7 +22,7 @@ enum NOC_MODE : byte {
   DM_DYNAMIC_NOC
 }
 
-enum Eth : ubyte {
+enum EthMode : ubyte {
   SENDER = 0,
   RECEIVER = 1,
   IDLE = 2
@@ -88,15 +70,8 @@ table DefineEntry {
   value: string;
 }
 
-
-table Tile {
-  tile_shape: [uint32]; // Shape of the tile (e.g., height, width)
-  face_shape: [uint32]; // Shape of the face
-  tile_hw: uint32;      // Tile hardware size
-  face_hw: uint32;      // Face hardware size
-  num_faces: uint32;    // Number of faces
-  partial_face: uint32; // Indicates if this is a partial face
-  narrow_tile: uint32;  // Indicates if this is a narrow tile
-  transpose_within_face: bool; // Transpose within each face
-  transpose_of_faces: bool;    // Transpose face order
-  }
+// Rather than serialize all members, use Tile constructor arguments.
+struct Tile {
+  tile_shape: [uint32:2];
+  transpose_tile: bool;
+}

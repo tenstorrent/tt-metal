@@ -6,11 +6,19 @@
 
 namespace tt::tt_metal {
 
-CircularBufferConfig from_flatbuffer(
-    const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer) {
-    if (!config_fb) {
-        throw std::runtime_error("Invalid CircularBufferConfig FlatBuffer object");
+BufferType from_flatbuffer(flatbuffer::BufferType type) {
+    switch (type) {
+        case flatbuffer::BufferType::DRAM: return BufferType::DRAM;
+        case flatbuffer::BufferType::L1: return BufferType::L1;
+        case flatbuffer::BufferType::SystemMemory: return BufferType::SYSTEM_MEMORY;
+        case flatbuffer::BufferType::L1Small: return BufferType::L1_SMALL;
+        case flatbuffer::BufferType::Trace: return BufferType::TRACE;
     }
+}
+
+CircularBufferConfig from_flatbuffer(
+    const flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer) {
+    TT_FATAL(config_fb, "Invalid CircularBufferConfig FlatBuffer object");
 
     // Create a CircularBufferConfig. Constructor doesn't matter much, since we serialized all
     // members, will deserialize them here to get fully formed object.
@@ -34,7 +42,12 @@ CircularBufferConfig from_flatbuffer(
         }
     }
 
-    config.tiles_ = from_flatbuffer(config_fb->tiles());
+    if (config_fb->tiles()) {
+        for (auto entry : *config_fb->tiles()) {
+            config.tiles_[entry->index()] = from_flatbuffer(entry->tile());
+        }
+    }
+
     config.shadow_global_buffer = shadow_global_buffer;
 
     if (config_fb->buffer_indices()) {

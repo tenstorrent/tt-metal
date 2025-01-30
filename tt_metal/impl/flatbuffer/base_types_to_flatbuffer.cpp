@@ -6,133 +6,87 @@
 
 namespace tt::tt_metal {
 
-// Original types defined in buffer_constants.hpp
-tt::tt_metal::flatbuffer::BufferType to_flatbuffer(BufferType type) {
-    switch (type) {
-        case BufferType::DRAM: return tt::tt_metal::flatbuffer::BufferType::DRAM;
-        case BufferType::L1: return tt::tt_metal::flatbuffer::BufferType::L1;
-        case BufferType::SYSTEM_MEMORY: return tt::tt_metal::flatbuffer::BufferType::SystemMemory;
-        case BufferType::L1_SMALL: return tt::tt_metal::flatbuffer::BufferType::L1Small;
-        case BufferType::TRACE: return tt::tt_metal::flatbuffer::BufferType::Trace;
-    }
-}
-
-// Original types defined in buffer_constants.hpp
-tt::tt_metal::flatbuffer::TensorMemoryLayout to_flatbuffer(TensorMemoryLayout layout) {
-    switch (layout) {
-        case TensorMemoryLayout::INTERLEAVED: return tt::tt_metal::flatbuffer::TensorMemoryLayout::Interleaved;
-        case TensorMemoryLayout::SINGLE_BANK: return tt::tt_metal::flatbuffer::TensorMemoryLayout::SingleBank;
-        case TensorMemoryLayout::HEIGHT_SHARDED: return tt::tt_metal::flatbuffer::TensorMemoryLayout::HeightSharded;
-        case TensorMemoryLayout::WIDTH_SHARDED: return tt::tt_metal::flatbuffer::TensorMemoryLayout::WidthSharded;
-        case TensorMemoryLayout::BLOCK_SHARDED: return tt::tt_metal::flatbuffer::TensorMemoryLayout::BlockSharded;
-    }
-}
-
 // Original types defined in data_types.hpp
-tt::tt_metal::flatbuffer::DataMovementProcessor to_flatbuffer(tt::tt_metal::DataMovementProcessor in) {
+flatbuffer::DataMovementProcessor to_flatbuffer(DataMovementProcessor in) {
     switch (in) {
-        case tt::tt_metal::DataMovementProcessor::RISCV_0:
-            return tt::tt_metal::flatbuffer::DataMovementProcessor::RISCV_0;
-        case tt::tt_metal::DataMovementProcessor::RISCV_1:
-            return tt::tt_metal::flatbuffer::DataMovementProcessor::RISCV_1;
+        case DataMovementProcessor::RISCV_0: return flatbuffer::DataMovementProcessor::RISCV_0;
+        case DataMovementProcessor::RISCV_1: return flatbuffer::DataMovementProcessor::RISCV_1;
     }
 }
 
-tt::tt_metal::flatbuffer::NOC to_flatbuffer(tt::tt_metal::NOC in) {
+flatbuffer::NOC to_flatbuffer(NOC in) {
     switch (in) {
-        case tt::tt_metal::NOC::NOC_0: return tt::tt_metal::flatbuffer::NOC::NOC_0;
-        case tt::tt_metal::NOC::NOC_1: return tt::tt_metal::flatbuffer::NOC::NOC_1;
+        case NOC::NOC_0: return flatbuffer::NOC::NOC_0;
+        case NOC::NOC_1: return flatbuffer::NOC::NOC_1;
     }
 }
 
-tt::tt_metal::flatbuffer::NOC_MODE to_flatbuffer(tt::tt_metal::NOC_MODE in) {
+flatbuffer::NOC_MODE to_flatbuffer(NOC_MODE in) {
     switch (in) {
-        case tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC: return tt::tt_metal::flatbuffer::NOC_MODE::DM_DEDICATED_NOC;
-        case tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC: return tt::tt_metal::flatbuffer::NOC_MODE::DM_DYNAMIC_NOC;
+        case NOC_MODE::DM_DEDICATED_NOC: return flatbuffer::NOC_MODE::DM_DEDICATED_NOC;
+        case NOC_MODE::DM_DYNAMIC_NOC: return flatbuffer::NOC_MODE::DM_DYNAMIC_NOC;
     }
 }
 
-tt::tt_metal::flatbuffer::Eth to_flatbuffer(tt::tt_metal::Eth in) {
+flatbuffer::EthMode to_flatbuffer(Eth in) {
     switch (in) {
-        case tt::tt_metal::Eth::SENDER: return tt::tt_metal::flatbuffer::Eth::SENDER;
-        case tt::tt_metal::Eth::RECEIVER: return tt::tt_metal::flatbuffer::Eth::RECEIVER;
-        case tt::tt_metal::Eth::IDLE: return tt::tt_metal::flatbuffer::Eth::IDLE;
+        case Eth::SENDER: return flatbuffer::EthMode::SENDER;
+        case Eth::RECEIVER: return flatbuffer::EthMode::RECEIVER;
+        case Eth::IDLE: return flatbuffer::EthMode::IDLE;
     }
 }
 
 // Original types defined in base_types.hpp
-tt::tt_metal::flatbuffer::MathFidelity to_flatbuffer(MathFidelity input) {
+flatbuffer::MathFidelity to_flatbuffer(MathFidelity input) {
     switch (input) {
-        case MathFidelity::LoFi: return tt::tt_metal::flatbuffer::MathFidelity::LoFi;
-        case MathFidelity::HiFi2: return tt::tt_metal::flatbuffer::MathFidelity::HiFi2;
-        case MathFidelity::HiFi3: return tt::tt_metal::flatbuffer::MathFidelity::HiFi3;
-        case MathFidelity::HiFi4: return tt::tt_metal::flatbuffer::MathFidelity::HiFi4;
-        case MathFidelity::Invalid: return tt::tt_metal::flatbuffer::MathFidelity::Invalid;
+        case MathFidelity::LoFi: return flatbuffer::MathFidelity::LoFi;
+        case MathFidelity::HiFi2: return flatbuffer::MathFidelity::HiFi2;
+        case MathFidelity::HiFi3: return flatbuffer::MathFidelity::HiFi3;
+        case MathFidelity::HiFi4: return flatbuffer::MathFidelity::HiFi4;
+        case MathFidelity::Invalid: return flatbuffer::MathFidelity::Invalid;
     }
 }
 
-tt::tt_metal::flatbuffer::UnpackToDestMode to_flatbuffer(UnpackToDestMode input) {
+flatbuffer::UnpackToDestMode to_flatbuffer(UnpackToDestMode input) {
     switch (input) {
-        case UnpackToDestMode::UnpackToDestFp32: return tt::tt_metal::flatbuffer::UnpackToDestMode::UnpackToDestFp32;
-        case UnpackToDestMode::Default: return tt::tt_metal::flatbuffer::UnpackToDestMode::Default;
+        case UnpackToDestMode::UnpackToDestFp32: return flatbuffer::UnpackToDestMode::UnpackToDestFp32;
+        case UnpackToDestMode::Default: return flatbuffer::UnpackToDestMode::Default;
     }
 }
 
 // Original types defined in tt_backend_api_types.hpp
-tt::tt_metal::flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input) {
+flatbuffer::DataFormat to_flatbuffer(tt::DataFormat input) {
     switch (input) {
-        case tt::DataFormat::Float32: return tt::tt_metal::flatbuffer::DataFormat::Float32;
-        case tt::DataFormat::Float16: return tt::tt_metal::flatbuffer::DataFormat::Float16;
-        case tt::DataFormat::Bfp8: return tt::tt_metal::flatbuffer::DataFormat::Bfp8;
-        case tt::DataFormat::Bfp4: return tt::tt_metal::flatbuffer::DataFormat::Bfp4;
-        case tt::DataFormat::Bfp2: return tt::tt_metal::flatbuffer::DataFormat::Bfp2;
-        case tt::DataFormat::Float16_b: return tt::tt_metal::flatbuffer::DataFormat::Float16_b;
-        case tt::DataFormat::Bfp8_b: return tt::tt_metal::flatbuffer::DataFormat::Bfp8_b;
-        case tt::DataFormat::Bfp4_b: return tt::tt_metal::flatbuffer::DataFormat::Bfp4_b;
-        case tt::DataFormat::Bfp2_b: return tt::tt_metal::flatbuffer::DataFormat::Bfp2_b;
-        case tt::DataFormat::Lf8: return tt::tt_metal::flatbuffer::DataFormat::Lf8;
-        case tt::DataFormat::Fp8_e4m3: return tt::tt_metal::flatbuffer::DataFormat::Fp8_e4m3;
-        case tt::DataFormat::Int8: return tt::tt_metal::flatbuffer::DataFormat::Int8;
-        case tt::DataFormat::Tf32: return tt::tt_metal::flatbuffer::DataFormat::Tf32;
-        case tt::DataFormat::UInt8: return tt::tt_metal::flatbuffer::DataFormat::UInt8;
-        case tt::DataFormat::UInt16: return tt::tt_metal::flatbuffer::DataFormat::UInt16;
-        case tt::DataFormat::Int32: return tt::tt_metal::flatbuffer::DataFormat::Int32;
-        case tt::DataFormat::UInt32: return tt::tt_metal::flatbuffer::DataFormat::UInt32;
-        case tt::DataFormat::RawUInt8: return tt::tt_metal::flatbuffer::DataFormat::RawUInt8;
-        case tt::DataFormat::RawUInt16: return tt::tt_metal::flatbuffer::DataFormat::RawUInt16;
-        case tt::DataFormat::RawUInt32: return tt::tt_metal::flatbuffer::DataFormat::RawUInt32;
-        case tt::DataFormat::Invalid: return tt::tt_metal::flatbuffer::DataFormat::Invalid;
+        case tt::DataFormat::Float32: return flatbuffer::DataFormat::Float32;
+        case tt::DataFormat::Float16: return flatbuffer::DataFormat::Float16;
+        case tt::DataFormat::Bfp8: return flatbuffer::DataFormat::Bfp8;
+        case tt::DataFormat::Bfp4: return flatbuffer::DataFormat::Bfp4;
+        case tt::DataFormat::Bfp2: return flatbuffer::DataFormat::Bfp2;
+        case tt::DataFormat::Float16_b: return flatbuffer::DataFormat::Float16_b;
+        case tt::DataFormat::Bfp8_b: return flatbuffer::DataFormat::Bfp8_b;
+        case tt::DataFormat::Bfp4_b: return flatbuffer::DataFormat::Bfp4_b;
+        case tt::DataFormat::Bfp2_b: return flatbuffer::DataFormat::Bfp2_b;
+        case tt::DataFormat::Lf8: return flatbuffer::DataFormat::Lf8;
+        case tt::DataFormat::Fp8_e4m3: return flatbuffer::DataFormat::Fp8_e4m3;
+        case tt::DataFormat::Int8: return flatbuffer::DataFormat::Int8;
+        case tt::DataFormat::Tf32: return flatbuffer::DataFormat::Tf32;
+        case tt::DataFormat::UInt8: return flatbuffer::DataFormat::UInt8;
+        case tt::DataFormat::UInt16: return flatbuffer::DataFormat::UInt16;
+        case tt::DataFormat::Int32: return flatbuffer::DataFormat::Int32;
+        case tt::DataFormat::UInt32: return flatbuffer::DataFormat::UInt32;
+        case tt::DataFormat::RawUInt8: return flatbuffer::DataFormat::RawUInt8;
+        case tt::DataFormat::RawUInt16: return flatbuffer::DataFormat::RawUInt16;
+        case tt::DataFormat::RawUInt32: return flatbuffer::DataFormat::RawUInt32;
+        case tt::DataFormat::Invalid: return flatbuffer::DataFormat::Invalid;
     }
 }
 
-flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile> to_flatbuffer(
-    const Tile& tile, flatbuffers::FlatBufferBuilder& builder) {
-    auto tile_shape_fb = builder.CreateVector(tile.get_tile_shape().data(), tile.get_tile_shape().size());
-    auto face_shape_fb = builder.CreateVector(tile.get_face_shape().data(), tile.get_face_shape().size());
+flatbuffer::Tile to_flatbuffer(const Tile& tile) {
+    TT_FATAL(tile.get_tile_shape().size() == 2, "Conversion to Flatbuffer expecting 2D Tile Shapes.");
+    std::array<uint32_t, 2> shape = {tile.get_tile_shape()[0], tile.get_tile_shape()[1]};
 
-    return tt::tt_metal::flatbuffer::CreateTile(
-        builder,
-        tile_shape_fb,
-        face_shape_fb,
-        tile.get_tile_hw(),
-        tile.get_face_hw(),
-        tile.get_num_faces(),
-        tile.get_partial_face(),
-        tile.get_narrow_tile(),
-        tile.get_transpose_within_face(),
-        tile.get_transpose_of_faces());
-}
-
-flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile>>> to_flatbuffer(
-    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles, flatbuffers::FlatBufferBuilder& builder) {
-    std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile>> tiles_fb;
-    for (const auto& tile_opt : tiles) {
-        if (tile_opt) {
-            tiles_fb.push_back(to_flatbuffer(*tile_opt, builder));
-        }
-    }
-
-    return builder.CreateVector(tiles_fb);
+    return flatbuffer::Tile(
+        flatbuffers::span<const uint32_t, 2>(shape), tile.get_transpose_within_face() && tile.get_transpose_of_faces());
 }
 
 }  // namespace tt::tt_metal

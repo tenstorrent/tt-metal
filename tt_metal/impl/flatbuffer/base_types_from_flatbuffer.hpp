@@ -14,21 +14,16 @@
 
 namespace tt::tt_metal {
 
-BufferType from_flatbuffer(tt::tt_metal::flatbuffer::BufferType type);
+DataMovementProcessor from_flatbuffer(flatbuffer::DataMovementProcessor in);
 
-tt::tt_metal::DataMovementProcessor from_flatbuffer(tt::tt_metal::flatbuffer::DataMovementProcessor in);
+NOC from_flatbuffer(flatbuffer::NOC in);
+NOC_MODE from_flatbuffer(flatbuffer::NOC_MODE in);
+Eth from_flatbuffer(flatbuffer::EthMode in);
 
-tt::tt_metal::NOC from_flatbuffer(tt::tt_metal::flatbuffer::NOC in);
-tt::tt_metal::NOC_MODE from_flatbuffer(tt::tt_metal::flatbuffer::NOC_MODE in);
-tt::tt_metal::Eth from_flatbuffer(tt::tt_metal::flatbuffer::Eth in);
+MathFidelity from_flatbuffer(flatbuffer::MathFidelity input);
+UnpackToDestMode from_flatbuffer(flatbuffer::UnpackToDestMode input);
+tt::DataFormat from_flatbuffer(flatbuffer::DataFormat input);
 
-MathFidelity from_flatbuffer(tt::tt_metal::flatbuffer::MathFidelity input);
-UnpackToDestMode from_flatbuffer(tt::tt_metal::flatbuffer::UnpackToDestMode input);
-tt::DataFormat from_flatbuffer(tt::tt_metal::flatbuffer::DataFormat input);
-
-Tile from_flatbuffer(const tt::tt_metal::flatbuffer::Tile* tile_fb);
-
-std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> from_flatbuffer(
-    const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile>>* tiles_fb);
+Tile from_flatbuffer(const flatbuffer::Tile& tile_fb);
 
 }  // namespace tt::tt_metal
