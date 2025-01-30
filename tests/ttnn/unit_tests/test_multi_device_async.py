@@ -84,7 +84,7 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+    from ttnn import ReplicateTensorToMesh
 
     pcie_mesh_device.enable_async(True)
 
@@ -100,9 +100,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
         )
         ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-        loopback_replicated_tensors = ttnn.to_torch(
-            ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(pcie_mesh_device)
-        )
+        loopback_replicated_tensors = ttnn.shardedtensor_to_tensorlist(ttnn_loop_back_tensor)
         for loopback_replicated_tensor in loopback_replicated_tensors:
             assert torch.all(full_tensor == loopback_replicated_tensor)
 

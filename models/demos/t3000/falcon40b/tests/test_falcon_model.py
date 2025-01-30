@@ -196,7 +196,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # output of model is replicated
-            tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
+            tensors = ttnn.shardedtensor_to_tensorlist(tt_out)
             tt_outs.append(tensors[0].squeeze(1))
 
         tt_out = torch.vstack(tt_outs)
