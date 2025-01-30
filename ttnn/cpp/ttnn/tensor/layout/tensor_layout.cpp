@@ -207,7 +207,7 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     return shard_spec_buffer;
 }
 
-size_t TensorLayout::compute_device_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
+size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
     Shape2D physical_size = compute_physical_shape(shape);
     // LOGICAL SHARDING
     if (memory_config_.shard_spec.has_value()) {
@@ -261,8 +261,7 @@ size_t TensorLayout::compute_device_buffer_size_bytes(const ttnn::SimpleShape& s
     return page_count * page_size_bytes;
 }
 
-size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
-    return TensorLayout::compute_device_buffer_size_bytes(shape);
+size_t TensorLayout::compute_host_buffer_size_bytes(const ttnn::SimpleShape& shape) const {
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);
     const auto width_remainder = physical_size.width() % page_shape.width();
