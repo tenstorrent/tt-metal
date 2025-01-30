@@ -1,0 +1,36 @@
+include "flatbuffer/base_types.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+table InterleavedBufferConfig {
+    device_id: int; // Device *device;
+    size: int; // Size in bytes
+    page_size: int; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    buffer_type: BufferType;
+    buffer_layout: TensorMemoryLayout;
+}
+
+struct CBConfigPageSize {
+  index: uint32;  // The index in the array
+  size: uint32;   // The page-size value for this index
+}
+
+struct CBConfigDataFormat {
+  index: uint32;  // The index in the array
+  format: DataFormat; // The data format for this index
+}
+
+table CircularBufferConfig {
+  total_size: uint32;
+  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  data_formats: [CBConfigDataFormat]; // Optional arrays are naturally nullable in FlatBuffers
+  page_sizes: [CBConfigPageSize]; // Mimic optional array in C++ by using KV map.
+  tiles: [Tile];
+  shadow_buf_global_id: uint32;
+  buffer_indices: [uint8];
+  local_buffer_indices: [uint8];
+  remote_buffer_indices: [uint8];
+  dynamic_cb: bool;
+  max_size: uint32;
+  buffer_size: uint32;
+}

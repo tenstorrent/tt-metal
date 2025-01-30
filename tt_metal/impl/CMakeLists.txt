@@ -44,13 +44,20 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
-set(FLATBUFFER_SCHEMAS) # Empty to start, coming soon.
-
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/binary.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/command.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
+)
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE})
     list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER_FILE})
@@ -64,6 +71,7 @@ target_link_libraries(
     PUBLIC
         common
         Tracy::TracyClient
+        FlatBuffers::FlatBuffers
     PRIVATE
         Boost::smart_ptr
         FlatBuffers::FlatBuffers
@@ -82,7 +90,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
+        # PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
