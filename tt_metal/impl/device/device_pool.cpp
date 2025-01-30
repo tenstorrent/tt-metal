@@ -7,6 +7,13 @@
 
 #include <numa.h>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dprint_server.hpp"
+#include "host_api.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
@@ -246,7 +253,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 

@@ -48,7 +48,7 @@ void MAIN {
 #ifndef SHORT_INIT
     reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #else
-    reduce_init_delta<at_start>(tt::CBIndex::c_16, tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init_delta<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader

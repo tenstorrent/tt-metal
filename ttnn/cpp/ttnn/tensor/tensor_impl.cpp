@@ -5,6 +5,7 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include <optional>
 
+#include "tt-metalium/mesh_buffer.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -50,7 +51,7 @@ uint32_t element_size_bytes(DataType dtype) {
     }
 }
 
-DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec) {
     auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
     auto page_size_bytes = tensor_spec.compute_page_size_bytes();
     auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
@@ -63,6 +64,22 @@ DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor
         memory_config.buffer_type,
         memory_config.memory_layout,
         shard_spec_buffer);
+}
+
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
+    const distributed::DeviceLocalBufferConfig device_local_buffer_config{
+        .page_size = tensor_spec.compute_page_size_bytes(),
+        .buffer_type = memory_config.buffer_type,
+        .buffer_layout = memory_config.memory_layout,
+        .shard_parameters = tensor_spec.compute_shard_spec_buffer(),
+    };
+    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = tensor_spec.compute_packed_buffer_size_bytes(),
+    };
+
+    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
 void validate_on_device_dtype_and_layout(
@@ -556,27 +573,12 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
 // ======================================================================================
 
 template <typename T, template <typename> typename BufferType>
-void write_data_to_device_buffer(CommandQueue& cq, const BufferType<T>& host_buffer, DeviceBuffer device_buffer) {
+void write_data_to_device_buffer(
+    CommandQueue& cq, const BufferType<T>& host_buffer, std::shared_ptr<Buffer> device_buffer) {
     ZoneScoped;
     // TODO(arakhmati): can we use generators in this function to go from `data_to_write` to `uint32_data`?
     // And effectively get rid of any additional allocation
-    if (CommandQueue::default_mode() == CommandQueue::CommandQueueMode::ASYNC) {
-        if constexpr (std::is_same_v<BufferType<T>, borrowed_buffer::Buffer<T>>) {
-            // When writing borrowed storage asynchronously, we have no control over when host memory is deallocated by
-            // the main thread. To ensure that worker threads enqueues the correct buffer, make a copy and caputre it in
-            // an owned buffer.
-            uint32_t borrowed_buf_size_words =
-                device_buffer->num_pages() * device_buffer->page_size() / sizeof(uint32_t);
-            const uint32_t* borrowed_buf_base = static_cast<const uint32_t*>(host_buffer.data());
-            std::vector<uint32_t> owned_copy_vec(borrowed_buf_base, borrowed_buf_base + borrowed_buf_size_words);
-            owned_buffer::Buffer<uint32_t> owned_copy(std::make_shared<std::vector<uint32_t>>(owned_copy_vec));
-            EnqueueWriteBuffer(cq, device_buffer, owned_copy.get_ptr(), false);
-        } else if constexpr (std::is_same_v<BufferType<T>, owned_buffer::Buffer<T>>) {
-            EnqueueWriteBuffer(cq, device_buffer, host_buffer.get_ptr(), false);
-        }
-    } else {
-        EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
-    }
+    EnqueueWriteBuffer(cq, device_buffer, host_buffer.data(), false);
 }
 
 template <typename T, template <typename> typename BufferType>
@@ -589,7 +591,7 @@ void write_data_to_device_buffer(const BufferType<T>& host_buffer, Buffer& devic
 }
 
 template <typename T, template <typename> typename BufferType>
-DeviceBuffer initialize_data_on_device(
+std::shared_ptr<Buffer> initialize_data_on_device(
     BufferType<T>& data_to_write,
     IDevice* device,
     const TensorSpec& tensor_spec,
@@ -609,9 +611,10 @@ DeviceBuffer initialize_data_on_device(
 }
 
 template <typename T>
-DeviceBuffer to_device_buffer(const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, uint8_t cq_id) {
+std::shared_ptr<Buffer> to_device_buffer(
+    const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, uint8_t cq_id) {
     return std::visit(
-        [&device, &tensor_spec, cq_id](auto&& storage) -> DeviceBuffer {
+        [&device, &tensor_spec, cq_id](auto&& storage) -> std::shared_ptr<Buffer> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
