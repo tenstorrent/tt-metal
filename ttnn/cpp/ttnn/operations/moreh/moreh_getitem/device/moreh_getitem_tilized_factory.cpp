@@ -69,8 +69,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }
 
-    ttnn::Shape input_5d_shape(new_input_shape, new_input_padded_shape);
-    ttnn::Shape output_5d_shape(new_output_shape, new_output_padded_shape);
+    ttnn::SimpleShape input_5d_shape(new_input_padded_shape);
+    ttnn::SimpleShape output_5d_shape(new_output_padded_shape);
 
     bool is_w_index_exist = false;
     for (auto dim : index_dims) {
@@ -79,8 +79,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
     }
 
-    auto input_5d_shape_without_padding = input_5d_shape.value.without_padding();
-    auto output_5d_shape_without_padding = output_5d_shape.value.without_padding();
+    ttnn::SimpleShape input_5d_shape_without_padding(new_input_shape);
+    ttnn::SimpleShape output_5d_shape_without_padding(new_output_shape);
 
     auto index_layout = index_tensors.front().get_layout();
     bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);
@@ -194,19 +194,19 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t num_alignment_width = div_up(output_5d_shape_without_padding[4], num_elements_per_alignment);
         uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
 
-        uint32_t input_num_tile_c = input_5d_shape.value[1];
-        uint32_t input_num_tile_d = input_5d_shape.value[2];
-        uint32_t input_num_tile_height = input_5d_shape.value[3] / TILE_HEIGHT;
-        uint32_t input_num_tile_width = input_5d_shape.value[4] / TILE_WIDTH;
+        uint32_t input_num_tile_c = input_5d_shape[1];
+        uint32_t input_num_tile_d = input_5d_shape[2];
+        uint32_t input_num_tile_height = input_5d_shape[3] / TILE_HEIGHT;
+        uint32_t input_num_tile_width = input_5d_shape[4] / TILE_WIDTH;
         uint32_t input_noc_id_stride_h = input_num_tile_width;
         uint32_t input_noc_id_stride_d = input_noc_id_stride_h * input_num_tile_height;
         uint32_t input_noc_id_stride_c = input_noc_id_stride_d * input_num_tile_d;
         uint32_t input_noc_id_stride_n = input_noc_id_stride_c * input_num_tile_c;
 
-        uint32_t output_num_tile_c = output_5d_shape.value[1];
-        uint32_t output_num_tile_d = output_5d_shape.value[2];
-        uint32_t output_num_tile_height = output_5d_shape.value[3] / TILE_HEIGHT;
-        uint32_t output_num_tile_width = output_5d_shape.value[4] / TILE_WIDTH;
+        uint32_t output_num_tile_c = output_5d_shape[1];
+        uint32_t output_num_tile_d = output_5d_shape[2];
+        uint32_t output_num_tile_height = output_5d_shape[3] / TILE_HEIGHT;
+        uint32_t output_num_tile_width = output_5d_shape[4] / TILE_WIDTH;
 
         uint32_t output_noc_id_stride_h = output_num_tile_width;
         uint32_t output_noc_id_stride_d = output_noc_id_stride_h * output_num_tile_height;
@@ -215,9 +215,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         uint32_t input_stick_idx_stride_w = 1;
         uint32_t input_stick_idx_stride_h = input_num_stick_width;
-        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape_without_padding[3];
+        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape_without_padding[2];
+        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape_without_padding[1];
 
         // Set Runtime Args
         auto core_x_offset = core_range.start_coord.x;
@@ -423,19 +423,19 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         uint32_t input_num_stick_width = div_up(input_5d_shape_without_padding[4], face_width);
         uint32_t output_num_stick_width = div_up(output_5d_shape_without_padding[4], face_width);
 
-        uint32_t input_num_tile_c = input_5d_shape.value[1];
-        uint32_t input_num_tile_d = input_5d_shape.value[2];
-        uint32_t input_num_tile_height = input_5d_shape.value[3] / TILE_HEIGHT;
-        uint32_t input_num_tile_width = input_5d_shape.value[4] / TILE_WIDTH;
+        uint32_t input_num_tile_c = input_5d_shape[1];
+        uint32_t input_num_tile_d = input_5d_shape[2];
+        uint32_t input_num_tile_height = input_5d_shape[3] / TILE_HEIGHT;
+        uint32_t input_num_tile_width = input_5d_shape[4] / TILE_WIDTH;
         uint32_t input_noc_id_stride_h = input_num_tile_width;
         uint32_t input_noc_id_stride_d = input_noc_id_stride_h * input_num_tile_height;
         uint32_t input_noc_id_stride_c = input_noc_id_stride_d * input_num_tile_d;
         uint32_t input_noc_id_stride_n = input_noc_id_stride_c * input_num_tile_c;
 
-        uint32_t output_num_tile_c = output_5d_shape.value[1];
-        uint32_t output_num_tile_d = output_5d_shape.value[2];
-        uint32_t output_num_tile_height = output_5d_shape.value[3] / TILE_HEIGHT;
-        uint32_t output_num_tile_width = output_5d_shape.value[4] / TILE_WIDTH;
+        uint32_t output_num_tile_c = output_5d_shape[1];
+        uint32_t output_num_tile_d = output_5d_shape[2];
+        uint32_t output_num_tile_height = output_5d_shape[3] / TILE_HEIGHT;
+        uint32_t output_num_tile_width = output_5d_shape[4] / TILE_WIDTH;
 
         uint32_t output_noc_id_stride_h = output_num_tile_width;
         uint32_t output_noc_id_stride_d = output_noc_id_stride_h * output_num_tile_height;
@@ -444,9 +444,9 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         uint32_t input_stick_idx_stride_w = 1;
         uint32_t input_stick_idx_stride_h = input_num_stick_width;
-        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape.value.without_padding()[3];
-        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape.value.without_padding()[2];
-        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape.value.without_padding()[1];
+        uint32_t input_stick_idx_stride_d = input_stick_idx_stride_h * input_5d_shape_without_padding[3];
+        uint32_t input_stick_idx_stride_c = input_stick_idx_stride_d * input_5d_shape_without_padding[2];
+        uint32_t input_stick_idx_stride_n = input_stick_idx_stride_c * input_5d_shape_without_padding[1];
 
         // Set Runtime Args
         auto core_x_offset = core_range.start_coord.x;
