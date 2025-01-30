@@ -16,13 +16,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
-namespace {
-
-auto check_board_is_n300() {
-    return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
-}
-
-}  // namespace
 class TrivialTnnFixedTest : public ::testing::Test {
 protected:
     void SetUp() override {
