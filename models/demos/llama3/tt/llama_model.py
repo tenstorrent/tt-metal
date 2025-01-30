@@ -120,13 +120,8 @@ class TtTransformer(LightweightModule):
         tokens_embd = self.embd(tokens)
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        tt_rot_mats_prefill = get_prefill_rot_mat(
-            self.args.head_dim,
-            self.mesh_device,
-            seq_len=S,
-            scale_factor=self.args.rope_scaling_factor,
-            start_pos=start_pos,
-        )
+        # Slice the rot mats to the prefill seqlen
+        tt_rot_mats_prefill = [self.rope_setup.cos_matrix[:, :, :S, :], self.rope_setup.sin_matrix[:, :, :S, :]]
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
