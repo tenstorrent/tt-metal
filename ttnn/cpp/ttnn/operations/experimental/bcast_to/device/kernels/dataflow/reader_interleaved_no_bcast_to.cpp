@@ -34,12 +34,13 @@ void kernel_main() {
     uint32_t start_t = start_remaining % HtWt;
 
     // this is the INPUT tile offset
-    uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
+    uint32_t tile_offset = start_n * n_stride + start_c * c_stride;
 
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
     // DPRINT << "broadcast_to reader, number of tile " << num_tiles << ENDL();
+    tile_offset += start_t;
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
