@@ -350,16 +350,27 @@ void RunTimeOptions::ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const s
         if (strstr(env_var_str, "TR2")) {
             riscv_mask |= RISCV_TR2;
         }
-        if (strstr(env_var_str, "TR")) {
+        if (strstr(env_var_str, "TR*")) {
             riscv_mask |= (RISCV_TR0 | RISCV_TR1 | RISCV_TR2);
         }
-        if (strstr(env_var_str, "ER")) {
-            riscv_mask |= RISCV_ER;
+        if (strstr(env_var_str, "ER0")) {
+            riscv_mask |= RISCV_ER0;
+        }
+        if (strstr(env_var_str, "ER1")) {
+            riscv_mask |= RISCV_ER1;
+        }
+        if (strstr(env_var_str, "ER*")) {
+            riscv_mask |= (RISCV_ER0 | RISCV_ER1);
+        }
+        if (riscv_mask == 0) {
+            TT_THROW(
+                "Invalid RISC selection: \"{}\". Valid values are BR,NC,TR0,TR1,TR2,TR*,ER0,ER1,ER*.", env_var_str);
         }
     } else {
         // Default is all RISCVs enabled.
         bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        riscv_mask = default_disabled ? 0 : (RISCV_ER | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
+        riscv_mask =
+            default_disabled ? 0 : (RISCV_ER0 | RISCV_ER1 | RISCV_BR | RISCV_TR0 | RISCV_TR1 | RISCV_TR2 | RISCV_NC);
     }
 
     feature_targets[feature].riscv_mask = riscv_mask;
