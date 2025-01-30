@@ -41,7 +41,8 @@ def str_to_float(x):
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(16, layouts=["TILE_LAYOUT"]),
-        "input_dtype": [ttnn.bfloat16],
+        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     },
 }
 
@@ -55,8 +56,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     if input_layout == "ROW_MAJOR_LAYOUT":
         return True, "Input to eltwise binary must be tilized"
-    if input_layout == "ROW_MAJOR_LAYOUT" and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
     if sharding_invalidated:
         return sharding_invalidated, output_str
 
@@ -69,7 +68,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_spec,
-    input_dtype,
+    grad_dtype,
+    input_a_dtype,
     *,
     device,
 ) -> list:
@@ -86,24 +86,24 @@ def run(
         shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
-    torch_grad_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_dtype
-    )(input_shape)
+    print(
+        f"{input_shape} {core_grid} {sharding_strategy} {shard_orientation} {tensor_hw_as_shard_shape} {grad_dtype} {input_a_dtype} {input_layout} {shard_height_mul_of_32}"
+    )
+
+    torch_grad_tensor = gen_func_with_cast_tt(partial(torch_random, low=-10, high=10, dtype=torch.float32), grad_dtype)(
+        input_shape
+    )
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-80, high=80, dtype=torch.float32), input_dtype
+        partial(torch_random, low=-80, high=80, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_a.retain_grad()
 
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-80, high=80, dtype=torch.float32), input_dtype
-    )(input_shape)
-    torch_input_tensor_b.requires_grad = True
-    torch_input_tensor_b.retain_grad()
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
-    golden_function = ttnn.get_golden_function(ttnn.logaddexp2_bw)
-    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, torch_input_tensor_b)
+    golden_function = ttnn.get_golden_function(ttnn.sub_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, scalar)
 
     sharded_config = ttnn.create_sharded_memory_config_(
         shape=input_shape,
@@ -116,7 +116,7 @@ def run(
 
     grad_tensor = ttnn.from_torch(
         torch_grad_tensor,
-        dtype=input_dtype,
+        dtype=grad_dtype,
         layout=input_layout,
         device=device,
         memory_config=sharded_config,
@@ -124,22 +124,17 @@ def run(
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
-        dtype=input_dtype,
+        dtype=input_a_dtype,
         layout=input_layout,
         device=device,
         memory_config=sharded_config,
     )
 
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_dtype,
-        layout=input_layout,
-        device=device,
-        memory_config=sharded_config,
-    )
-
-    start_time = start_measuring_time()
-    output_tensor = ttnn.logaddexp2_bw(grad_tensor, input_tensor_a, input_tensor_b, memory_config=sharded_config)
+    try:
+        start_time = start_measuring_time()
+        output_tensor = ttnn.sub_bw(grad_tensor, input_tensor_a, scalar, memory_config=sharded_config)
+    except Exception as e:
+        print(e)
 
     for i in range(len(output_tensor)):
         output_tensor[i] = ttnn.to_torch(output_tensor[i])
@@ -153,4 +148,5 @@ def run(
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     pcc[1] = str(pcc[1])
+    print(f"pcc {pcc}")
     return [pcc, e2e_perf]

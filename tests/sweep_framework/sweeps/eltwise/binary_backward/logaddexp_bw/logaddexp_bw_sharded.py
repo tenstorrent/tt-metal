@@ -86,8 +86,6 @@ def run(
         shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
-    # print(f"{input_shape} {core_grid} {sharding_strategy} {shard_orientation} {tensor_hw_as_shard_shape} {input_dtype} {input_layout} {shard_height_mul_of_32}")
-
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-10, high=10, dtype=torch.float32), input_dtype
     )(input_shape)
@@ -155,5 +153,4 @@ def run(
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     pcc[1] = str(pcc[1])
-    # print(f"pcc {pcc}")
     return [pcc, e2e_perf]
