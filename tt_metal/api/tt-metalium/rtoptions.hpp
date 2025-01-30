@@ -43,7 +43,8 @@ enum DebugHartFlags : unsigned int {
     RISCV_TR1 = 4,
     RISCV_TR2 = 8,
     RISCV_BR = 16,
-    RISCV_ER = 32
+    RISCV_ER0 = 32,
+    RISCV_ER1 = 64
 };
 
 // Enumerates the debug features that can be enabled at runtime. These features allow for
