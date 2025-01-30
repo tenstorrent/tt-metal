@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <device.hpp>
+#include <optional>
+#include "dispatch/kernel_config/fd_kernel.hpp"
 
 namespace tt::tt_metal {
 
@@ -34,5 +36,8 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_cq_program(tt::tt_meta
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);
+
+// Returns a FD Kernel by it's id.
+std::optional<const FDKernel*> get_fd_kernel(int id);
 
 }  // namespace tt::tt_metal

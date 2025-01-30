@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "prefetch.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernel_config/demux.hpp"
+#include "dispatch/kernel_config/mux.hpp"
 #include "dispatch_s.hpp"
 #include "eth_router.hpp"
 
@@ -59,7 +61,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (device_->using_fast_dispatch() && DispatchQueryManager::instance().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
             if (GetCoreType() == CoreType::WORKER) {
                 // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
@@ -184,12 +186,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
 void PrefetchKernel::GenerateDependentConfigs() {
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         // Upstream
+        // NONE
         TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
         // Downstream
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (device_->using_fast_dispatch() && DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
         } else {
             TT_ASSERT(downstream_kernels_.size() == 1);
@@ -214,7 +217,7 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 TT_FATAL(false, "Unrecognized downstream kernel.");
             }
         }
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (device_->using_fast_dispatch() && DispatchQueryManager::instance().dispatch_s_enabled()) {
             // Should have found dispatch_s in the downstream kernels
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {
@@ -225,34 +228,54 @@ void PrefetchKernel::GenerateDependentConfigs() {
         }
     } else if (static_config_.is_h_variant.value()) {
         // Upstream, just host so no dispatch core
+        // NONE
         TT_ASSERT(upstream_kernels_.size() == 0);
         dependent_config_.upstream_logical_core = UNUSED_LOGICAL_CORE;
         dependent_config_.upstream_cb_sem_id = 0;  // Used in prefetch_d only
 
-        // Downstream, expect just one ROUTER
+        // Downstream
+        // ROUTER or MUX or PREFETCH_D
         TT_ASSERT(downstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
-        dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
-        dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
-        uint32_t router_idx = router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
-        dependent_config_.downstream_cb_base =
-            (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
-            (router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4) * router_idx;
-        dependent_config_.downstream_cb_sem_id = router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
-        dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
+        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(downstream_kernels_[0])) {
+            dependent_config_.downstream_logical_core = router_kernel->GetLogicalCore();
+            dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
+            uint32_t router_idx =
+                router_kernel->GetUpstreamPort(this);  // Need the port that this connects to downstream
+            dependent_config_.downstream_cb_base =
+                (router_kernel->GetStaticConfig().rx_queue_start_addr_words.value() << 4) +
+                (router_kernel->GetStaticConfig().rx_queue_size_words.value() << 4) * router_idx;
+            dependent_config_.downstream_cb_sem_id =
+                router_kernel->GetStaticConfig().input_packetize_local_sem[router_idx];
+            dependent_config_.downstream_dispatch_s_cb_sem_id = 0;  // No downstream DISPATCH_S in this case
+        } else if (auto mux_kernel = dynamic_cast<MuxKernel*>(downstream_kernels_[0])) {
+        } else if (auto prefetch_d_kernel = dynamic_cast<PrefetchKernel*>(downstream_kernels_[0])) {
+        } else {
+            TT_FATAL(false, "PREFETCH_H got unexpected downstream kernel type.");
+        }
     } else if (static_config_.is_d_variant.value()) {
-        // Upstream, expect just one ROUTER
+        // Upstream
+        // ROUTER or DEMUX or PREFETCH_H
         TT_ASSERT(upstream_kernels_.size() == 1);
-        auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0]);
-        TT_ASSERT(router_kernel);
-        dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
-        int router_idx = router_kernel->GetDownstreamPort(this);
-        dependent_config_.upstream_cb_sem_id =
-            router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
+        if (auto router_kernel = dynamic_cast<EthRouterKernel*>(upstream_kernels_[0])) {
+            dependent_config_.upstream_logical_core = router_kernel->GetLogicalCore();
+            int router_idx = router_kernel->GetDownstreamPort(this);
+            dependent_config_.upstream_cb_sem_id =
+                router_kernel->GetStaticConfig().output_depacketize_local_sem[router_idx];
+        } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(upstream_kernels_[0])) {
+            dependent_config_.upstream_logical_core = demux_kernel->GetLogicalCore();
+            int idx = demux_kernel->GetDownstreamPort(this);
+            dependent_config_.upstream_cb_sem_id =
+                demux_kernel->GetStaticConfig().output_depacketize_local_sem_id[idx].value();
+        } else if (auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0])) {
+            dependent_config_.upstream_logical_core = prefetch_h_kernel->GetLogicalCore();
+            dependent_config_.upstream_cb_sem_id = prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+        } else {
+            TT_FATAL(false, "PREFETCH_D got unexpected upstream kernel type.");
+        }
 
-        // Downstream, expect a DISPATCH_D and s DISPATCH_S
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        // Downstream
+        // DISPATCH_D and DISPATCH_S if enabled
+        if (device_->using_fast_dispatch() && DispatchQueryManager::instance().dispatch_s_enabled()) {
             TT_ASSERT(downstream_kernels_.size() == 2);
         } else {
             TT_ASSERT(downstream_kernels_.size() == 1);
@@ -274,10 +297,10 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 dependent_config_.downstream_dispatch_s_cb_sem_id =
                     dispatch_s_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
             } else {
-                TT_FATAL(false, "Unrecognized downstream kernel.");
+                TT_FATAL(false, "PREFETCH_D got unexpected downstream kernel type.");
             }
         }
-        if (DispatchQueryManager::instance().dispatch_s_enabled()) {
+        if (device_->using_fast_dispatch() && DispatchQueryManager::instance().dispatch_s_enabled()) {
             // Should have found dispatch_s in the downstream kernels
             TT_ASSERT(found_dispatch && found_dispatch_s);
         } else {

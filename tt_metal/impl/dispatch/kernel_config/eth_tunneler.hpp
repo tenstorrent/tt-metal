@@ -43,15 +43,15 @@ public:
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;
-    CoreType GetCoreType() override {
+    CoreType GetCoreType() const override {
         // Tunneler kernel is the exception in that it's always on ethernet core even if dispatch is on tensix.
         return CoreType::ETH;
     }
     const eth_tunneler_static_config_t& GetStaticConfig() { return static_config_; }
-    bool IsRemote() { return is_remote_; }
+    bool IsRemote() const { return is_remote_; }
     void SetVCCount(uint32_t vc_count) { static_config_.vc_count = vc_count; }
-    uint32_t GetRouterQueueIdOffset(FDKernel* k, bool upstream);
-    uint32_t GetRouterId(FDKernel* k, bool upstream);
+    uint32_t GetRouterQueueIdOffset(const FDKernel* k, bool upstream) const;
+    uint32_t GetRouterId(const FDKernel* k, bool upstream) const;
 
 private:
     eth_tunneler_static_config_t static_config_;

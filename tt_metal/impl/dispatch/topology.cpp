@@ -747,4 +747,11 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
+std::optional<const FDKernel*> get_fd_kernel(int id) {
+    if (id >= node_id_to_kernel.size() || id < 0) {
+        return {};
+    }
+    return node_id_to_kernel[id];
+}
+
 }  // namespace tt::tt_metal
