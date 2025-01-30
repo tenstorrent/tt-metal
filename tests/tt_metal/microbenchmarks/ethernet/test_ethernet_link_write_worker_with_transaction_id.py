@@ -80,7 +80,7 @@ def profile_results(sample_size, sample_count, channel_count, num_writes_skip_ba
 @pytest.mark.parametrize("sample_count", [256])
 @pytest.mark.parametrize("channel_count", [18])
 @pytest.mark.parametrize("num_writes_skip_barrier", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
-@pytest.mark.parametrize("sample_size", [16, 128, 256, 512, 1024, 4096, 8192])
+@pytest.mark.parametrize("sample_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_write_worker_latency(sample_count, sample_size, channel_count, num_writes_skip_barrier):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
