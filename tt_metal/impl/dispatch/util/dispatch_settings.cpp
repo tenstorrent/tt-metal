@@ -10,7 +10,7 @@
 #include <dispatch_settings.hpp>
 #include <helpers.hpp>
 
-namespace tt::tt_metal::dispatch {
+namespace tt::tt_metal {
 
 DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs) {
     uint32_t prefetch_q_entries;
@@ -84,11 +84,11 @@ std::vector<std::string> DispatchSettings::get_errors() const {
 
     if (!num_hw_cqs_) {
         msgs.push_back(fmt::format("num_hw_cqs must be set to non zero\n"));
-    } else if (num_hw_cqs_ > DispatchConstants::MAX_NUM_HW_CQS) {
+    } else if (num_hw_cqs_ > DispatchSettings::MAX_NUM_HW_CQS) {
         msgs.push_back(fmt::format(
             "{} CQs specified. the maximum number for num_hw_cqs is {}\n",
             num_hw_cqs_,
-            DispatchConstants::MAX_NUM_HW_CQS));
+            DispatchSettings::MAX_NUM_HW_CQS));
     }
 
     if (prefetch_cmddat_q_size_ < 2 * prefetch_max_cmd_size_) {
@@ -114,4 +114,4 @@ DispatchSettings& DispatchSettings::build() {
     TT_THROW("Validation errors in dispatch_settings. Call validate() for a list of errors");
 }
 
-}  // namespace tt::tt_metal::dispatch
+}  // namespace tt::tt_metal

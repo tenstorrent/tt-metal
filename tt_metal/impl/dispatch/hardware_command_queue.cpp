@@ -96,10 +96,10 @@ HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint
     // Set the affinity of the completion queue reader.
     set_device_thread_affinity(this->completion_queue_thread, this->completion_queue_reader_core);
 
-    for (uint32_t i = 0; i < DispatchConstants::DISPATCH_MESSAGE_ENTRIES; i++) {
+    for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
         this->expected_num_workers_completed[i] = 0;
     }
-    reset_config_buffer_mgr(DispatchConstants::DISPATCH_MESSAGE_ENTRIES);
+    reset_config_buffer_mgr(DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
 }
 
 uint32_t HWCommandQueue::id() const { return this->id_; }
@@ -139,16 +139,16 @@ void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_alig
 
 uint32_t HWCommandQueue::get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const {
     TT_FATAL(
-        sub_device_index < DispatchConstants::DISPATCH_MESSAGE_ENTRIES,
-        "Expected sub_device_index to be less than DispatchConstants::DISPATCH_MESSAGE_ENTRIES");
+        sub_device_index < DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Expected sub_device_index to be less than DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
     return this->expected_num_workers_completed[sub_device_index];
 }
 
 void HWCommandQueue::set_expected_num_workers_completed_for_sub_device(
     uint32_t sub_device_index, uint32_t num_workers) {
     TT_FATAL(
-        sub_device_index < DispatchConstants::DISPATCH_MESSAGE_ENTRIES,
-        "Expected sub_device_index to be less than DispatchConstants::DISPATCH_MESSAGE_ENTRIES");
+        sub_device_index < DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+        "Expected sub_device_index to be less than DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
     this->expected_num_workers_completed[sub_device_index] = num_workers;
 }
 
@@ -643,10 +643,10 @@ void HWCommandQueue::read_completion_queue() {
                             ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id_);
                             thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
-                                (sizeof(CQDispatchCmd) + DispatchConstants::EVENT_PADDED_SIZE) / sizeof(uint32_t));
+                                (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
                             tt::Cluster::instance().read_sysmem(
                                 dispatch_cmd_and_event.data(),
-                                sizeof(CQDispatchCmd) + DispatchConstants::EVENT_PADDED_SIZE,
+                                sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
                                 read_ptr,
                                 mmio_device_id,
                                 channel);

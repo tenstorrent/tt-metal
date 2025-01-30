@@ -7,7 +7,7 @@
 #include "assert.hpp"
 #include "dispatch.hpp"
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -114,7 +114,7 @@ InterleavedBufferWriteDispatchParams initialize_interleaved_buf_dispatch_params(
 
     if (dispatch_params.write_partial_pages) {
         TT_FATAL(num_pages == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
-        uint32_t partial_size = DispatchConstants::BASE_PARTIAL_PAGE_SIZE;
+        uint32_t partial_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE;
         uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         while (dispatch_params.padded_buffer_size % partial_size != 0) {
             partial_size += pcie_alignment;
@@ -843,7 +843,7 @@ void copy_completion_queue_data_into_user_space(
 
         // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
         uint32_t bytes_xfered = std::min(remaining_bytes_to_read, bytes_avail_in_completion_queue);
-        uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchConstants::TRANSFER_PAGE_SIZE);
+        uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
 
         remaining_bytes_to_read -= bytes_xfered;
 

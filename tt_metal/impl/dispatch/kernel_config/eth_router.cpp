@@ -9,7 +9,7 @@
 #include <tt_metal.hpp>
 
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using namespace tt::tt_metal;
 
@@ -38,7 +38,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
 
         for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
             static_config_.input_packetize[idx] = 0x1;
-            static_config_.input_packetize_log_page_size[idx] = DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+            static_config_.input_packetize_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
             static_config_.input_packetize_local_sem[idx] =
                 tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
             dependent_config_.remote_rx_queue_id[idx] = 1;
@@ -74,7 +74,7 @@ void EthRouterKernel::GenerateStaticConfigs() {
         }
 
         for (int idx = 0; idx < static_config_.vc_count.value(); idx++) {
-            static_config_.output_depacketize_log_page_size[idx] = DispatchConstants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+            static_config_.output_depacketize_log_page_size[idx] = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
             static_config_.output_depacketize_remove_header[idx] = 0;
         }
     }

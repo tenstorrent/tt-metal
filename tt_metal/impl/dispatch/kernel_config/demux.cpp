@@ -9,7 +9,7 @@
 #include <tt_metal.hpp>
 
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using namespace tt::tt_metal;
 
@@ -33,7 +33,7 @@ void DemuxKernel::GenerateStaticConfigs() {
         FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
         static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-        static_config_.output_depacketize_cb_log_page_size[idx] = DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+        static_config_.output_depacketize_cb_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.output_depacketize_local_sem_id[idx] =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.output_depacketize_remove_header[idx] = 1;

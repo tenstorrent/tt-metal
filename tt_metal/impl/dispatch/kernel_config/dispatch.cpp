@@ -12,7 +12,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using namespace tt::tt_metal;
 
@@ -31,12 +31,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        static_config_.dispatch_cb_log_page_size = DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+        static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
-        static_config_.dispatch_cb_blocks = DispatchConstants::DISPATCH_BUFFER_SIZE_BLOCKS;
+        static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
         static_config_.completion_queue_base_addr = completion_queue_start_addr;
         static_config_.completion_queue_size = completion_queue_size;
@@ -53,8 +53,8 @@ void DispatchKernel::GenerateStaticConfigs() {
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
         static_config_.dispatch_s_sync_sem_base_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-        static_config_.max_num_worker_sems = DispatchConstants::DISPATCH_MESSAGE_ENTRIES;
-        static_config_.max_num_go_signal_noc_data_entries = DispatchConstants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+        static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+        static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
@@ -81,12 +81,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        static_config_.dispatch_cb_log_page_size = DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+        static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
-        static_config_.dispatch_cb_blocks = DispatchConstants::DISPATCH_BUFFER_SIZE_BLOCKS;
+        static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
         static_config_.completion_queue_base_addr = completion_queue_start_addr;
         static_config_.completion_queue_size = completion_queue_size;
@@ -127,12 +127,12 @@ void DispatchKernel::GenerateStaticConfigs() {
         uint32_t completion_queue_size = device_->sysmem_manager().get_completion_queue_size(cq_id_);
 
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base();
-        static_config_.dispatch_cb_log_page_size = DispatchConstants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
+        static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_dispatch_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
 
-        static_config_.dispatch_cb_blocks = DispatchConstants::DISPATCH_BUFFER_SIZE_BLOCKS;
+        static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = 0;  // These are unused for DISPATCH_D
         static_config_.completion_queue_base_addr = 0;
         static_config_.completion_queue_size = 0;
@@ -153,8 +153,8 @@ void DispatchKernel::GenerateStaticConfigs() {
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
         static_config_.dispatch_s_sync_sem_base_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
-        static_config_.max_num_worker_sems = DispatchConstants::DISPATCH_MESSAGE_ENTRIES;
-        static_config_.max_num_go_signal_noc_data_entries = DispatchConstants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+        static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+        static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
         static_config_.mcast_go_signal_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
         static_config_.unicast_go_signal_addr =
@@ -344,7 +344,7 @@ void DispatchKernel::ConfigureCore() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     uint32_t dispatch_message_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    for (uint32_t i = 0; i < DispatchConstants::DISPATCH_MESSAGE_ENTRIES; i++) {
+    for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
         uint32_t dispatch_s_sync_sem_addr =
             dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
         uint32_t dispatch_message_addr =

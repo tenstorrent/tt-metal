@@ -555,8 +555,8 @@ int main(int argc, char** argv) {
             0,                  // prefetch_downstream_buffer_pages
             num_compute_cores,  // max_write_packed_cores
             0,
-            DispatchConstants::DISPATCH_MESSAGE_ENTRIES,
-            DispatchConstants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             0,
             0,
             0,

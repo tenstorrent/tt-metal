@@ -17,7 +17,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -506,7 +506,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestPageLargerThanAndUnalignedToTran
     for (IDevice* device : devices_) {
         TestBufferConfig config = {
             .num_pages = num_round_robins * (device->allocator()->get_num_banks(BufferType::DRAM)),
-            .page_size = DispatchConstants::TRANSFER_PAGE_SIZE + 32,
+            .page_size = DispatchSettings::TRANSFER_PAGE_SIZE + 32,
             .buftype = BufferType::DRAM};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }

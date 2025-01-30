@@ -10,7 +10,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 using namespace tt::tt_metal;
 
@@ -24,7 +24,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
         uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base();
         if (GetCoreType() == CoreType::WORKER) {
             // dispatch_s is on the same Tensix core as dispatch_d. Shared resources. Offset CB start idx.
-            dispatch_s_buffer_base = dispatch_buffer_base + (1 << DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
+            dispatch_s_buffer_base = dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                                 my_dispatch_constants.dispatch_buffer_pages();
         } else {
             // dispatch_d and dispatch_s are on different cores. No shared resources: dispatch_s CB starts at base.
@@ -33,7 +33,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     }
 
     static_config_.cb_base = dispatch_s_buffer_base;
-    static_config_.cb_log_page_size = DispatchConstants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
+    static_config_.cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
     // used by dispatch_s to sync with prefetch
     static_config_.my_dispatch_cb_sem_id = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -49,8 +49,8 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.distributed_dispatcher = DispatchQueryManager::instance().distributed_dispatcher();
     static_config_.worker_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    static_config_.max_num_worker_sems = DispatchConstants::DISPATCH_MESSAGE_ENTRIES;
-    static_config_.max_num_go_signal_noc_data_entries = DispatchConstants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
+    static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+    static_config_.max_num_go_signal_noc_data_entries = DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES;
 }
 
 void DispatchSKernel::GenerateDependentConfigs() {
@@ -124,7 +124,7 @@ void DispatchSKernel::ConfigureCore() {
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM);
     uint32_t dispatch_message_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-    for (uint32_t i = 0; i < DispatchConstants::DISPATCH_MESSAGE_ENTRIES; i++) {
+    for (uint32_t i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
         uint32_t dispatch_s_sync_sem_addr =
             dispatch_s_sync_sem_base_addr + my_dispatch_constants.get_dispatch_message_offset(i);
         uint32_t dispatch_message_addr =

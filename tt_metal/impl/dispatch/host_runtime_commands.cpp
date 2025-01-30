@@ -193,7 +193,7 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     write_barrier(write_barrier) {}
 
 void EnqueueRecordEventCommand::process() {
-    std::vector<uint32_t> event_payload(DispatchConstants::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
+    std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = this->event_id;
 
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -202,7 +202,7 @@ void EnqueueRecordEventCommand::process() {
         this->device->num_hw_cqs();  // Device initialize asserts that there can only be a maximum of 2 HW CQs
     uint32_t packed_event_payload_sizeB =
         align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
-        (align(DispatchConstants::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
+        (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
     uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
     uint32_t num_worker_counters = this->sub_device_ids.size();
 
@@ -212,7 +212,7 @@ void EnqueueRecordEventCommand::process() {
         packed_write_sizeB +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event
                               // payload
         align(
-            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + DispatchConstants::EVENT_PADDED_SIZE,
+            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
             pcie_alignment);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -272,7 +272,7 @@ void EnqueueRecordEventCommand::process() {
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_hw_cqs,
         address,
-        DispatchConstants::EVENT_PADDED_SIZE,
+        DispatchSettings::EVENT_PADDED_SIZE,
         packed_event_payload_sizeB,
         unicast_sub_cmds,
         event_payloads,
@@ -280,7 +280,7 @@ void EnqueueRecordEventCommand::process() {
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
-        flush_prefetch, DispatchConstants::EVENT_PADDED_SIZE, true, event_payload.data());
+        flush_prefetch, DispatchSettings::EVENT_PADDED_SIZE, true, event_payload.data());
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
