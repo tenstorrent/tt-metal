@@ -32,7 +32,6 @@ def Conv(
     is_fused=True,
     is_dfl=False,
     is_detect_cv2=False,
-    width_shard=None,
 ):
     p = autopad(k, p, d)
 
@@ -60,9 +59,6 @@ def Conv(
 
     if block_shard:
         conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-
-    if width_shard:
-        conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -130,7 +126,7 @@ def Bottleneck(
     change_shard=None,
     deallocate_activation=False,
     output_layout=ttnn.TILE_LAYOUT,
-    in_tile=False,
+    tilize=False,
 ):
     cv1, out_h, out_w = Conv(
         device,
@@ -165,7 +161,7 @@ def Bottleneck(
 
     cv2 = ttnn.sharded_to_interleaved(cv2, ttnn.L1_MEMORY_CONFIG)
 
-    if not in_tile:
+    if tilize:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device)
 
     add = shortcut
@@ -190,7 +186,6 @@ def C2f(
     change_shard=None,
     deallocate_activation=False,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
-    width_shard=None,
 ):
     cv1, out_h, out_w = Conv(
         device,
@@ -205,13 +200,12 @@ def C2f(
         change_shard=change_shard,
         deallocate_activation=deallocate_activation,
         output_layout=output_layout,
-        width_shard=width_shard,
     )
 
     cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
     y = list(ttnn.split(cv1, 2, 3))
 
-    in_tile = False
+    to_tile = True
 
     for i in range(n):
         z = Bottleneck(
@@ -228,10 +222,10 @@ def C2f(
             act_block_h=act_block_h,
             change_shard=change_shard,
             deallocate_activation=deallocate_activation,
-            in_tile=in_tile,
+            tilize=to_tile,
         )
-        in_tile = True
         y.append(z)
+        to_tile = False
 
     y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT)
     y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT)
@@ -257,24 +251,13 @@ def C2f(
     return x, out_h, out_w
 
 
-def SPPF(device, x, parameters, path, in_h, in_w, k=5, output_layout=ttnn.ROW_MAJOR_LAYOUT, width_shard=False):
-    cv1, out_h, out_w = Conv(
-        device,
-        x,
-        parameters,
-        f"{path}.cv1",
-        in_h,
-        in_w,
-        1,
-        1,
-        width_shard=width_shard,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+def SPPF(device, x, parameters, path, in_h, in_w, k=5):
+    cv1, out_h, out_w = Conv(device, x, parameters, f"{path}.cv1", in_h, in_w, 1, 1)
 
     p = k // 2
 
     cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
-    # cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
+    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
 
     y = [cv1]
     for i in range(3):
@@ -297,9 +280,7 @@ def SPPF(device, x, parameters, path, in_h, in_w, k=5, output_layout=ttnn.ROW_MA
     for i in range(len(y)):
         ttnn.deallocate(y[i])
 
-    x, out_h, out_w = Conv(
-        device, x, parameters, f"{path}.cv2", out_h, out_w, 1, 1, change_shard=True, output_layout=output_layout
-    )
+    x, out_h, out_w = Conv(device, x, parameters, f"{path}.cv2", out_h, out_w, 1, 1, change_shard=True)
 
     return x, out_h, out_w
 
@@ -473,29 +454,17 @@ def DetectionModel(device, x, parameters):
         2,
         1,
         block_shard=False,
-        change_shard=False,
-        width_shard=True,
+        change_shard=True,
     )
 
-    # Conv_7 = ttnn.sharded_to_interleaved(Conv_7, ttnn.L1_MEMORY_CONFIG)
+    Conv_7 = ttnn.sharded_to_interleaved(Conv_7, ttnn.L1_MEMORY_CONFIG)
 
     C2f_8, out_h, out_w = C2f(
-        device,
-        Conv_7,
-        parameters,
-        "model.8",
-        out_h,
-        out_w,
-        n=3,
-        shortcut=True,
-        width_shard=True,
-        change_shard=False,
+        device, Conv_7, parameters, "model.8", out_h, out_w, n=3, shortcut=True, change_shard=True
     )
     ttnn.deallocate(Conv_7)
 
-    nine, out_h, out_w = SPPF(
-        device, C2f_8, parameters, "model.9", out_h, out_w, output_layout=ttnn.ROW_MAJOR_LAYOUT, width_shard=True
-    )  # inp shape 1,1,400,640 # used width shard
+    nine, out_h, out_w = SPPF(device, C2f_8, parameters, "model.9", out_h, out_w)
     ttnn.deallocate(C2f_8)
 
     SPPF_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
@@ -551,14 +520,10 @@ def DetectionModel(device, x, parameters):
     C2f_18, out_h, out_w = C2f(device, x, parameters, "model.18", out_h, out_w, n=3, shortcut=False)
     ttnn.deallocate(x)
 
-    # eighteen = ttnn.to_memory_config(C2f_18,memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
     C2f_18 = ttnn.sharded_to_interleaved(C2f_18, ttnn.L1_MEMORY_CONFIG)
     eighteen = ttnn.clone(C2f_18, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    Conv_19, out_h, out_w = Conv(
-        device, C2f_18, parameters, "model.19", out_h, out_w, 3, 2, 1, change_shard=True, block_shard=False
-    )
+    Conv_19, out_h, out_w = Conv(device, C2f_18, parameters, "model.19", out_h, out_w, 3, 2, 1, block_shard=True)
     ttnn.deallocate(C2f_18)
 
     Conv_19 = ttnn.sharded_to_interleaved(Conv_19, ttnn.L1_MEMORY_CONFIG)
