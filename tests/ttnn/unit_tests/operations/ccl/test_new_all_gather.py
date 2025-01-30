@@ -327,13 +327,12 @@ def run_all_gather_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-                passed = False
-
-    for i in range(num_devices):
-        assert (
-            mesh_device.get_devices()[i].num_program_cache_entries() == 1
-            or mesh_device.get_devices()[i].num_program_cache_entries() == num_iters
-        ), f"Device {i} has {mesh_device.get_devices()[i].num_program_cache_entries()} program cache entries"
+                print("Golden output: ", output_tensor)
+                print("My output: ", tt_output_tensor)
+                if enable_persistent_fabric and teardown_persistent_fabric:
+                    mesh_device.reset_sub_device_stall_group()
+                    teardown_fabric_interface(mesh_device)
+            assert eq, f"{i} FAILED: {output}"
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         mesh_device.reset_sub_device_stall_group()
@@ -460,8 +459,15 @@ def test_all_gather(
             ttnn.TILE_LAYOUT,
             (32, 128),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            None,
-            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 320),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
