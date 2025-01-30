@@ -86,8 +86,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     uint32_t mean_rstd_width = 0;
 
     if (mean_has_value) {
-        const auto mean_rstd_shape = mean->get_shape().value;
-        const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+        const auto mean_rstd_shape_without_padding = mean->get_logical_shape();
         mean_rstd_height = mean_rstd_shape_without_padding[-2];
         mean_rstd_width = mean_rstd_shape_without_padding[-1];
     }
