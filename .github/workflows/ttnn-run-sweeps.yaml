@@ -438,6 +438,7 @@ on:
           - eltwise.ternary_backward.addcdiv_bw
           - embedding.embedding
           - embedding_bw.embedding_bw
+          - embedding_bw.embedding_bw_output
           - fused.softmax_traces
           - fused.layer_norm_traces
           - reduction.backward.prod_bw.prod_bw
