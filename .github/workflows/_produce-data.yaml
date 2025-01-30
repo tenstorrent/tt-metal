@@ -47,6 +47,10 @@ on:
     types:
       - completed
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   produce-cicd-data:
     if: |
