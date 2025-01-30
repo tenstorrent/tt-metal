@@ -335,7 +335,8 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_num_pages = 3 * std::max(num_pages_per_packet, input_tensor_shard_num_pages);  // tripple buffering
+    uint32_t cb_base_num_pages = std::lcm(input_tensor_shard_num_pages, output_tensor_shard_num_pages);
+    uint32_t cb_num_pages = std::lcm(num_pages_per_packet, cb_base_num_pages);
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
