@@ -72,6 +72,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
+    preprocess_weights_on_device=True,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -134,6 +135,7 @@ def run_conv(
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        preprocess_weights_on_device=preprocess_weights_on_device,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

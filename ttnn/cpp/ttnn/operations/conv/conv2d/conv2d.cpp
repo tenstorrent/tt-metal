@@ -134,8 +134,7 @@ Result conv2d(
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
-            true,
-            is_non_tile_mul_width);
+            true);
 
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
             weight_tensor,
