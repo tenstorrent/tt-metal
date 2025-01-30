@@ -207,7 +207,7 @@ fi
 
 # If build-dir is not specified
 # Use build_type and enable_profiler setting to choose a default path
-if [ "build_dir" == "" ]; then
+if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
     if [ "$enable_profiler" = "ON" ]; then
         build_dir="${build_dir}_tracy"
