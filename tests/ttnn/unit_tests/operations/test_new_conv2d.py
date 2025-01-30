@@ -73,6 +73,7 @@ def run_conv(
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
+    preprocess_weights_on_device=True,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -150,6 +151,7 @@ def run_conv(
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        preprocess_weights_on_device=preprocess_weights_on_device,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -1369,6 +1371,7 @@ def test_sd_conv(
         shard_layout=shard_layout,
         fp32_accum=fp32_accum,
         packer_l1_acc=True,
+        preprocess_weights_on_device=True,
     )
 
 
@@ -2694,6 +2697,7 @@ def test_non_tile_multiple_height_conv_wh(
         fp32_accum=fp32_accum,
         has_bias=has_bias,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        preprocess_weights_on_device=True,
     )
 
 
@@ -2775,6 +2779,7 @@ def test_non_tile_multiple_width_conv_wh(
         config_override,
         use_shallow_conv_variant=(input_channels == 16),
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        preprocess_weights_on_device=True,
     )
 
 
