@@ -13,9 +13,12 @@ namespace tt {
 
 namespace tt_metal {
 
-Allocator::Allocator(const AllocatorConfig& alloc_config) : config_(alloc_config) {
+Allocator::Allocator(const AllocatorConfig& alloc_config) : config_(alloc_config) {}
+
+void Allocator::validate_bank_assignments() const {
     TT_ASSERT(not bank_id_to_dram_channel_.empty() and not dram_channel_to_bank_ids_.empty());
-    TT_ASSERT(not bank_id_to_logical_core_.empty() and not bank_id_to_logical_core_.empty());
+    TT_ASSERT(dram_channel_to_bank_ids_.size() == config_.num_dram_channels);
+    TT_ASSERT(not bank_id_to_logical_core_.empty() and not logical_core_to_bank_ids_.empty());
 }
 
 void Allocator::init_one_bank_per_channel() {
