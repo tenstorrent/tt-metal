@@ -14,11 +14,8 @@ namespace tt::tt_metal::distributed {
 MeshCommandQueue::MeshCommandQueue(MeshDevice* mesh_device, uint32_t id) {
     this->mesh_device_ = mesh_device;
     this->id_ = id;
-    for (int i = 0; i < dispatch_constants::DISPATCH_MESSAGE_ENTRIES; i++) {
-        config_buffer_mgr_[i] = tt::tt_metal::WorkerConfigBufferMgr();
-        program_dispatch::initialize_worker_config_buf_mgr(config_buffer_mgr_[i]);
-        expected_num_workers_completed_[i] = 0;
-    }
+    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+        config_buffer_mgr_, expected_num_workers_completed_, dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
     this->populate_virtual_program_dispatch_core();
     this->populate_dispatch_core_type();
 }

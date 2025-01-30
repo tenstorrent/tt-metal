@@ -86,8 +86,6 @@ public:
 
     void record_begin(const uint32_t tid, std::shared_ptr<TraceDescriptor> ctx);
     void record_end();
-    void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
-    void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
 
     void reset_worker_state(
         bool reset_launch_msg_state,
@@ -184,9 +182,6 @@ private:
     std::condition_variable reads_processed_cv;
     std::mutex reads_processed_cv_mutex;
     CoreType get_dispatch_core_type();
-
-    void reset_worker_dispatch_state_on_device(bool reset_launch_msg_state);
-    void reset_config_buffer_mgr(const uint32_t num_entries);
 
     void read_completion_queue();
 
