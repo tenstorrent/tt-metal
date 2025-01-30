@@ -7,6 +7,6 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
-tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& t, int dim);
+tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim);
 
 }  // namespace ttml::ttnn_fixed::distributed
