@@ -96,7 +96,7 @@ Tensor aggregate_as_tensor(
     } else {
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
-        std::unordered_map<int, DeviceBuffer> device_buffers;
+        std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;
         for (const auto& shard : tensor_shards) {
             IDevice* device = std::get<DeviceStorage>(shard.get_storage()).buffer->device();
             auto device_id = device->id();
@@ -116,7 +116,8 @@ Tensor aggregate_as_tensor(
                     shard_tile.get_width());
             }
         }
-        auto storage = MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), specs};
+        auto storage =
+            MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), specs, /*mesh_buffer_=*/nullptr};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     }
 }
@@ -247,7 +248,7 @@ Tensor create_multi_device_tensor(
     if (storage_type == StorageType::MULTI_DEVICE) {
         std::vector<int> ordered_device_ids;
         std::unordered_map<int, ttnn::TensorSpec> specs;
-        std::unordered_map<int, DeviceBuffer> device_buffers;
+        std::unordered_map<int, std::shared_ptr<Buffer>> device_buffers;
         for (const auto& tensor : tensors) {
             TT_ASSERT(
                 std::holds_alternative<DeviceStorage>(tensor.get_storage()),
@@ -260,7 +261,7 @@ Tensor create_multi_device_tensor(
             specs.insert({device_id, tensor.get_tensor_spec()});
         }
         return Tensor{
-            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs},
+            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs, /*mesh_buffer_=*/nullptr},
             TensorSpec(
                 tensors.at(0).get_logical_shape(),
                 TensorLayout::fromPaddedShape(

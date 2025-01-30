@@ -6,9 +6,9 @@
 
 namespace tt::tt_metal {
 
-std::vector<DeviceBuffer> MultiDeviceStorage::get_buffers() const {
+std::vector<std::shared_ptr<Buffer>> MultiDeviceStorage::get_buffers() const {
     std::lock_guard<std::mutex> lock(buffer_mtx);
-    std::vector<DeviceBuffer> buf_vec;
+    std::vector<std::shared_ptr<Buffer>> buf_vec;
     buf_vec.reserve(buffers.size());
     for (const auto& pair : buffers) {
         buf_vec.push_back(pair.second);
