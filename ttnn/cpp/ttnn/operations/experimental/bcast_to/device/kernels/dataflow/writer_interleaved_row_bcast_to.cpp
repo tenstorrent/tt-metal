@@ -36,10 +36,6 @@ void kernel_main() {
     uint32_t start_th = start_t / Wt;
     uint32_t start_tw = start_t % Wt;
 
-    // this is the INPUT tile offset
-    uint32_t tile_offset = start_n * n_stride + start_c * c_stride;
-    uint32_t next_batch_shift = n_stride - c_stride * C;
-
     uint32_t num_tiles_written = 0;
     // DPRINT << "broadcast_to writer row start, number of tile written " << num_tiles_written << ENDL();
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
@@ -58,8 +54,6 @@ void kernel_main() {
                     // ENDL();
                 }
             }
-            tile_offset += c_stride;
         }
-        tile_offset += next_batch_shift;
     }
 }
