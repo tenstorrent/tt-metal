@@ -1,0 +1,31 @@
+<div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: {{ window.location.pathname.split('/')[2] }}
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>{{ _('Versions') }}</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+window.fetch('https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json')
+    .then(response => response.json())
+    .then(data => {
+        const versionList = document.getElementById('versions');
+        const projectCode = window.location.pathname.split('/')[1];
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent.github.io/${projectCode}/${version}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    })
+    .catch(error => console.error('Error loading versions:', error));
+</script>
