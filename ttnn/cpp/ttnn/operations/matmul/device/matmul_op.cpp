@@ -176,10 +176,8 @@ inline uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
     uint32_t per_core_N,
     uint32_t in0_block_w,
-    uint32_t in0_single_tile_size,
-    uint32_t in1_single_tile_size,
-    uint32_t output_single_tile_size,
-    uint32_t in2_block_tiles,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     uint32_t interm_single_tile_size,
     uint32_t bias_single_tile_size) {
     // Circular Buffer sizes:
@@ -190,6 +188,19 @@ inline uint32_t get_estimated_size_of_cbs(
     // bias   CB: per_core_M * in0_block_w
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
+    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
+    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
+    uint32_t output_single_tile_size = in0_single_tile_size;
+    auto in0_buffer = input_tensor_a.buffer();
+    auto in0_tile = input_tensor_a.get_tensor_spec().tile();
+    uint32_t in2_block_tiles = 0;
+    uint32_t in0_shard_width_in_tiles = 0;
+    if (input_tensor_a.is_sharded()) {
+        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    }
+    in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_size = per_core_M * in0_block_w * 2 * in0_single_tile_size;
     uint32_t in1_size = per_core_N * in0_block_w * 2 * in1_single_tile_size;
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
@@ -217,26 +228,12 @@ inline bool can_cbs_fit_in_l1(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    auto in0_buffer = input_tensor_a.buffer();
-    auto in0_tile = input_tensor_a.get_tensor_spec().tile();
-    uint32_t in2_block_tiles = 0;
-    uint32_t in0_shard_width_in_tiles = 0;
-    if (input_tensor_a.is_sharded()) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
-    }
     uint32_t size = get_estimated_size_of_cbs(
         per_core_M,
         per_core_N,
         in0_block_w,
-        in0_single_tile_size,
-        in1_single_tile_size,
-        in0_single_tile_size,
-        in2_block_tiles,
+        input_tensor_a,
+        input_tensor_b,
         estimate_interm_tile_size(compute_kernel_config, output_dtype),
         bias_single_tile_size);
     return size < max_l1_space;
@@ -250,27 +247,13 @@ inline uint32_t get_per_core_factor(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const tt::tt_metal::DataType output_dtype) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    auto in0_buffer = input_tensor_a.buffer();
-    auto in0_tile = input_tensor_a.get_tensor_spec().tile();
-    uint32_t in2_block_tiles = 0;
-    uint32_t in0_shard_width_in_tiles = 0;
-    if (input_tensor_a.is_sharded()) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    }
     for (uint32_t per_core_factor = 16; per_core_factor > 1; per_core_factor /= 2) {
-        in2_block_tiles = in0_shard_width_in_tiles * per_core_factor;
         uint32_t size = get_estimated_size_of_cbs(
             per_core_factor,
             per_core_factor,
             in0_block_w,
-            in0_single_tile_size,
-            in1_single_tile_size,
-            in0_single_tile_size,
-            in2_block_tiles,
+            input_tensor_a,
+            input_tensor_b,
             estimate_interm_tile_size(compute_kernel_config, output_dtype),
             bias_single_tile_size);
         if (size < max_l1_space) {
@@ -290,29 +273,8 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
     uint32_t interm_cb_size,
     const bool adjust_in0_block_w) {
     uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor_b.get_dtype());
-    uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_data_format);  // use as estimate for output as well
-    uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_data_format);
-    // Short circuit to avoid additional work in most cases.
-    auto in0_buffer = input_tensor_a.buffer();
-    auto in0_tile = input_tensor_a.get_tensor_spec().tile();
-    uint32_t in2_block_tiles = 0;
-    uint32_t in0_shard_width_in_tiles = 0;
-    if (input_tensor_a.is_sharded()) {
-        in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-        in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
-    }
     uint32_t size = get_estimated_size_of_cbs(
-        per_core_M,
-        per_core_N,
-        in0_block_w,
-        in0_single_tile_size,
-        in1_single_tile_size,
-        in0_single_tile_size,
-        in2_block_tiles,
-        interm_cb_size,
-        bias_single_tile_size);
+        per_core_M, per_core_N, in0_block_w, input_tensor_a, input_tensor_b, interm_cb_size, bias_single_tile_size);
     if (size < max_l1_space) {
         return {per_core_M, per_core_N, in0_block_w};
     }
@@ -368,10 +330,8 @@ inline std::vector<uint32_t> get_multi_dim_per_core_factor(
                 per_core_factor_m,
                 per_core_factor_n,
                 per_core_factor_k,
-                in0_single_tile_size,
-                in1_single_tile_size,
-                in0_single_tile_size,
-                in2_block_tiles,
+                input_tensor_a,
+                input_tensor_b,
                 interm_cb_size,
                 bias_single_tile_size);
             if (size < max_l1_space) {
