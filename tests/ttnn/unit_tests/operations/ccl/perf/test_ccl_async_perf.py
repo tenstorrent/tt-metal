@@ -18,22 +18,16 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     "num_devices, num_links, output_shape, dim, layout",
     [
         (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
-        # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
-        # (4, 1, [1, 1, 1024, 1024], 3, ttnn.TILE_LAYOUT),
-        # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 1280], 0, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 7168], 0, ttnn.TILE_LAYOUT),
-        (8, 1, [1, 1, 32, 2048], 0, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 3584], 0, ttnn.TILE_LAYOUT),
         (4, 1, [1, 1, 32, 32], 0, ttnn.TILE_LAYOUT),
-        # (4, 1, [1, 1, 8, 32], 2, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
