@@ -9,7 +9,7 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-inline std::variant<CoreCoord, CoreRange, CoreRangeSet> FromFlatbuffer(
+inline std::variant<CoreCoord, CoreRange, CoreRangeSet> from_flatbuffer(
     const tt::tt_metal::flatbuffer::CoreSpec core_spec, const void* flatbuffer_union) {
     switch (core_spec) {
         case tt::tt_metal::flatbuffer::CoreSpec::CoreCoord: {
@@ -40,17 +40,17 @@ inline std::variant<CoreCoord, CoreRange, CoreRangeSet> FromFlatbuffer(
             }
             return CoreRangeSet{ranges};
         }
-        default: throw std::runtime_error("Unhandled CoreSpec type in FromFlatbuffer");
+        default: throw std::runtime_error("Unhandled CoreSpec type in from_flatbuffer");
     }
 }
 
-inline DataMovementConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::DataMovementConfig* fb_config) {
+inline DataMovementConfig from_flatbuffer(const tt::tt_metal::flatbuffer::DataMovementConfig* fb_config) {
     DataMovementConfig config;
 
     // Extract processor, noc, and noc_mode
-    config.processor = FromFlatbuffer(fb_config->processor());
-    config.noc = FromFlatbuffer(fb_config->noc());
-    config.noc_mode = FromFlatbuffer(fb_config->noc_mode());
+    config.processor = from_flatbuffer(fb_config->processor());
+    config.noc = from_flatbuffer(fb_config->noc());
+    config.noc_mode = from_flatbuffer(fb_config->noc_mode());
 
     // Extract compile_args
     auto fb_compile_args = fb_config->compile_args();
@@ -65,11 +65,11 @@ inline DataMovementConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::DataMov
     return config;
 }
 
-inline ComputeConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::ComputeConfig* fb_config) {
+inline ComputeConfig from_flatbuffer(const tt::tt_metal::flatbuffer::ComputeConfig* fb_config) {
     ComputeConfig config;
 
     // Extract math_fidelity and boolean flags
-    config.math_fidelity = FromFlatbuffer(fb_config->math_fidelity());
+    config.math_fidelity = from_flatbuffer(fb_config->math_fidelity());
     config.fp32_dest_acc_en = fb_config->fp32_dest_acc_en();
     config.dst_full_sync_en = fb_config->dst_full_sync_en();
     config.bfp8_pack_precise = fb_config->bfp8_pack_precise();
@@ -79,7 +79,7 @@ inline ComputeConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::ComputeConfi
     auto fb_unpack_modes = fb_config->unpack_to_dest_mode();
     config.unpack_to_dest_mode.reserve(fb_unpack_modes->size());
     for (auto fb_mode : *fb_unpack_modes) {
-        config.unpack_to_dest_mode.push_back(FromFlatbuffer(fb_mode));
+        config.unpack_to_dest_mode.push_back(from_flatbuffer(fb_mode));
     }
 
     // Extract compile_args
@@ -95,13 +95,13 @@ inline ComputeConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::ComputeConfi
     return config;
 }
 
-inline EthernetConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::EthernetConfig* fb_config) {
+inline EthernetConfig from_flatbuffer(const tt::tt_metal::flatbuffer::EthernetConfig* fb_config) {
     EthernetConfig config;
 
     // Extract eth_mode, noc, and processor
-    config.eth_mode = FromFlatbuffer(fb_config->eth_mode());
-    config.noc = FromFlatbuffer(fb_config->noc());
-    config.processor = FromFlatbuffer(fb_config->processor());
+    config.eth_mode = from_flatbuffer(fb_config->eth_mode());
+    config.noc = from_flatbuffer(fb_config->noc());
+    config.processor = from_flatbuffer(fb_config->processor());
 
     // Extract compile_args
     auto fb_compile_args = fb_config->compile_args();
@@ -116,21 +116,21 @@ inline EthernetConfig FromFlatbuffer(const tt::tt_metal::flatbuffer::EthernetCon
     return config;
 }
 
-inline std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> FromFlatbuffer(
+inline std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> from_flatbuffer(
     const tt::tt_metal::flatbuffer::KernelConfig config_type, const void* flatbuffer_union) {
     switch (config_type) {
         case tt::tt_metal::flatbuffer::KernelConfig::DataMovementConfig:
-            return FromFlatbuffer(static_cast<const tt::tt_metal::flatbuffer::DataMovementConfig*>(flatbuffer_union));
+            return from_flatbuffer(static_cast<const tt::tt_metal::flatbuffer::DataMovementConfig*>(flatbuffer_union));
         case tt::tt_metal::flatbuffer::KernelConfig::ComputeConfig:
-            return FromFlatbuffer(static_cast<const tt::tt_metal::flatbuffer::ComputeConfig*>(flatbuffer_union));
+            return from_flatbuffer(static_cast<const tt::tt_metal::flatbuffer::ComputeConfig*>(flatbuffer_union));
         case tt::tt_metal::flatbuffer::KernelConfig::EthernetConfig:
-            return FromFlatbuffer(static_cast<const tt::tt_metal::flatbuffer::EthernetConfig*>(flatbuffer_union));
-        default: throw std::runtime_error("Unhandled KernelConfig type in FromFlatbuffer.");
+            return from_flatbuffer(static_cast<const tt::tt_metal::flatbuffer::EthernetConfig*>(flatbuffer_union));
+        default: throw std::runtime_error("Unhandled KernelConfig type in from_flatbuffer.");
     }
 }
 
 // Convert from FB vector to Span of SubDeviceIds
-tt::stl::Span<const SubDeviceId> FromFlatBuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids) {
+tt::stl::Span<const SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids) {
     std::vector<SubDeviceId> sub_device_ids(fb_sub_device_ids ? fb_sub_device_ids->size() : 0);
 
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {

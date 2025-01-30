@@ -9,72 +9,72 @@
 namespace tt::tt_metal {
 inline namespace v0 {
 
-inline BufferType FromFlatbuffer(tt::tt_metal::flatbuffer::BufferType type) {
+inline BufferType from_flatbuffer(tt::tt_metal::flatbuffer::BufferType type) {
     switch (type) {
         case tt::tt_metal::flatbuffer::BufferType::DRAM: return BufferType::DRAM;
         case tt::tt_metal::flatbuffer::BufferType::L1: return BufferType::L1;
         case tt::tt_metal::flatbuffer::BufferType::SystemMemory: return BufferType::SYSTEM_MEMORY;
         case tt::tt_metal::flatbuffer::BufferType::L1Small: return BufferType::L1_SMALL;
         case tt::tt_metal::flatbuffer::BufferType::Trace: return BufferType::TRACE;
-        default: throw std::invalid_argument("Unknown BufferType value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown BufferType value in from_flatbuffer()");
     }
 }
 
-inline tt::tt_metal::DataMovementProcessor FromFlatbuffer(tt::tt_metal::flatbuffer::DataMovementProcessor in) {
+inline tt::tt_metal::DataMovementProcessor from_flatbuffer(tt::tt_metal::flatbuffer::DataMovementProcessor in) {
     switch (in) {
         case tt::tt_metal::flatbuffer::DataMovementProcessor::RISCV_0:
             return tt::tt_metal::DataMovementProcessor::RISCV_0;
         case tt::tt_metal::flatbuffer::DataMovementProcessor::RISCV_1:
             return tt::tt_metal::DataMovementProcessor::RISCV_1;
-        default: throw std::invalid_argument("Unknown DataMovementProcessor value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown DataMovementProcessor value in from_flatbuffer()");
     }
 }
 
-inline tt::tt_metal::NOC FromFlatbuffer(tt::tt_metal::flatbuffer::NOC in) {
+inline tt::tt_metal::NOC from_flatbuffer(tt::tt_metal::flatbuffer::NOC in) {
     switch (in) {
         case tt::tt_metal::flatbuffer::NOC::NOC_0: return tt::tt_metal::NOC::NOC_0;
         case tt::tt_metal::flatbuffer::NOC::NOC_1: return tt::tt_metal::NOC::NOC_1;
-        default: throw std::invalid_argument("Invalid NOC value passed to FromFlatbuffer");
+        default: throw std::invalid_argument("Invalid NOC value passed to from_flatbuffer");
     }
 }
 
-inline tt::tt_metal::NOC_MODE FromFlatbuffer(tt::tt_metal::flatbuffer::NOC_MODE in) {
+inline tt::tt_metal::NOC_MODE from_flatbuffer(tt::tt_metal::flatbuffer::NOC_MODE in) {
     switch (in) {
         case tt::tt_metal::flatbuffer::NOC_MODE::DM_DEDICATED_NOC: return tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
         case tt::tt_metal::flatbuffer::NOC_MODE::DM_DYNAMIC_NOC: return tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
-        default: throw std::invalid_argument("Unknown NOC_MODE value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown NOC_MODE value in from_flatbuffer()");
     }
 }
 
-inline tt::tt_metal::Eth FromFlatbuffer(tt::tt_metal::flatbuffer::Eth in) {
+inline tt::tt_metal::Eth from_flatbuffer(tt::tt_metal::flatbuffer::Eth in) {
     switch (in) {
         case tt::tt_metal::flatbuffer::Eth::SENDER: return tt::tt_metal::Eth::SENDER;
         case tt::tt_metal::flatbuffer::Eth::RECEIVER: return tt::tt_metal::Eth::RECEIVER;
         case tt::tt_metal::flatbuffer::Eth::IDLE: return tt::tt_metal::Eth::IDLE;
-        default: throw std::invalid_argument("Unknown Eth value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown Eth value in from_flatbuffer()");
     }
 }
 
-inline MathFidelity FromFlatbuffer(tt::tt_metal::flatbuffer::MathFidelity input) {
+inline MathFidelity from_flatbuffer(tt::tt_metal::flatbuffer::MathFidelity input) {
     switch (input) {
         case tt::tt_metal::flatbuffer::MathFidelity::LoFi: return MathFidelity::LoFi;
         case tt::tt_metal::flatbuffer::MathFidelity::HiFi2: return MathFidelity::HiFi2;
         case tt::tt_metal::flatbuffer::MathFidelity::HiFi3: return MathFidelity::HiFi3;
         case tt::tt_metal::flatbuffer::MathFidelity::HiFi4: return MathFidelity::HiFi4;
         case tt::tt_metal::flatbuffer::MathFidelity::Invalid: return MathFidelity::Invalid;
-        default: throw std::invalid_argument("Unknown MathFidelity value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown MathFidelity value in from_flatbuffer()");
     }
 }
 
-inline UnpackToDestMode FromFlatbuffer(tt::tt_metal::flatbuffer::UnpackToDestMode input) {
+inline UnpackToDestMode from_flatbuffer(tt::tt_metal::flatbuffer::UnpackToDestMode input) {
     switch (input) {
         case tt::tt_metal::flatbuffer::UnpackToDestMode::UnpackToDestFp32: return UnpackToDestMode::UnpackToDestFp32;
         case tt::tt_metal::flatbuffer::UnpackToDestMode::Default: return UnpackToDestMode::Default;
-        default: throw std::invalid_argument("Invalid UnpackToDestMode value passed to FromFlatbuffer");
+        default: throw std::invalid_argument("Invalid UnpackToDestMode value passed to from_flatbuffer");
     }
 }
 
-inline tt::DataFormat FromFlatbuffer(tt::tt_metal::flatbuffer::DataFormat input) {
+inline tt::DataFormat from_flatbuffer(tt::tt_metal::flatbuffer::DataFormat input) {
     switch (input) {
         case tt::tt_metal::flatbuffer::DataFormat::Float32: return tt::DataFormat::Float32;
         case tt::tt_metal::flatbuffer::DataFormat::Float16: return tt::DataFormat::Float16;
@@ -97,11 +97,11 @@ inline tt::DataFormat FromFlatbuffer(tt::tt_metal::flatbuffer::DataFormat input)
         case tt::tt_metal::flatbuffer::DataFormat::RawUInt16: return tt::DataFormat::RawUInt16;
         case tt::tt_metal::flatbuffer::DataFormat::RawUInt32: return tt::DataFormat::RawUInt32;
         case tt::tt_metal::flatbuffer::DataFormat::Invalid: return tt::DataFormat::Invalid;
-        default: throw std::invalid_argument("Unknown DataFormat value in FromFlatbuffer()");
+        default: throw std::invalid_argument("Unknown DataFormat value in from_flatbuffer()");
     }
 }
 
-inline Tile FromFlatbuffer(const tt::tt_metal::flatbuffer::Tile* tile_fb) {
+inline Tile from_flatbuffer(const tt::tt_metal::flatbuffer::Tile* tile_fb) {
     if (!tile_fb) {
         throw std::runtime_error("Invalid Tile FlatBuffer object");
     }
@@ -125,12 +125,12 @@ inline Tile FromFlatbuffer(const tt::tt_metal::flatbuffer::Tile* tile_fb) {
     return tile;
 }
 
-inline std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> FromFlatbuffer(
+inline std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> from_flatbuffer(
     const flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Tile>>* tiles_fb) {
     std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles = {};
     if (tiles_fb) {
         for (size_t i = 0; i < tiles_fb->size() && i < NUM_CIRCULAR_BUFFERS; ++i) {
-            tiles[i] = FromFlatbuffer(tiles_fb->Get(i));
+            tiles[i] = from_flatbuffer(tiles_fb->Get(i));
         }
     }
     return tiles;

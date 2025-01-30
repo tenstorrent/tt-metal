@@ -85,7 +85,7 @@ private:
     LightMetalCaptureContext& operator=(const LightMetalCaptureContext&) = delete;
 };
 
-TraceDescriptorByTraceIdOffset ToFlatbuffer(
+TraceDescriptorByTraceIdOffset to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const TraceDescriptor& trace_desc, uint32_t trace_id);
 
 }  // namespace v0

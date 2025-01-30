@@ -10,7 +10,7 @@
 
 namespace tt::tt_metal {
 
-inline flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> ToFlatbuffer(
+inline flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> to_flatbuffer(
     const tt::tt_metal::CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder) {
     // Note: std::optional not supported by FlatBuffers, so serialize it as a uint32_t with a default val 0
     auto global_address = config.globally_allocated_address_ ? *config.globally_allocated_address_ : 0;
@@ -19,7 +19,7 @@ inline flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> ToFla
     std::vector<tt::tt_metal::flatbuffer::CBConfigDataFormat> data_formats_vec;
     for (size_t i = 0; i < config.data_formats_.size(); i++) {
         if (config.data_formats_[i]) {
-            data_formats_vec.push_back({i, ToFlatbuffer(*config.data_formats_[i])});
+            data_formats_vec.push_back({i, to_flatbuffer(*config.data_formats_[i])});
         }
     }
     auto data_formats_fb = builder.CreateVectorOfStructs(data_formats_vec);
@@ -32,7 +32,7 @@ inline flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> ToFla
         }
     }
     auto page_sizes_fb = builder.CreateVectorOfStructs(page_sizes_vec);
-    auto tiles_fb = ToFlatbuffer(config.tiles_, builder);
+    auto tiles_fb = to_flatbuffer(config.tiles_, builder);
 
     // Optional shadow buffer for dynamically allocated CBs, get global_id or use 0 as none/nullptr.
     auto& ctx = LightMetalCaptureContext::Get();

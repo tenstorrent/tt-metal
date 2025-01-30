@@ -147,8 +147,8 @@ inline void CaptureCreateBuffer(std::shared_ptr<Buffer> buffer, const Interleave
         config.device->id(),
         config.size,
         config.page_size,
-        ToFlatbuffer(config.buffer_type),
-        ToFlatbuffer(config.buffer_layout));
+        to_flatbuffer(config.buffer_type),
+        to_flatbuffer(config.buffer_layout));
     auto cmd =
         tt::tt_metal::flatbuffer::CreateCreateBufferCommand(ctx.GetBuilder(), buffer_global_id, buffer_config_offset);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::CreateBufferCommand, cmd.Union());
@@ -249,8 +249,8 @@ inline void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub
     auto& ctx = LightMetalCaptureContext::Get();
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
 
-    // Use ToFlatbuffer to convert SubDeviceIds to FlatBuffer vector
-    auto fb_sub_device_ids = ToFlatbuffer(ctx.GetBuilder(), sub_device_ids);
+    // Use to_flatbuffer to convert SubDeviceIds to FlatBuffer vector
+    auto fb_sub_device_ids = to_flatbuffer(ctx.GetBuilder(), sub_device_ids);
 
     log_debug(
         tt::LogMetalTrace, "{}: cq_global_id: {} sub_devices: {}", __FUNCTION__, cq_global_id, sub_device_ids.size());
@@ -307,8 +307,8 @@ inline void CaptureCreateKernel(
 
     auto& fbb = ctx.GetBuilder();
     auto filename_offset = fbb.CreateString(file_name);
-    auto [core_spec_type, core_spec_offset] = ToFlatbuffer(fbb, core_spec);
-    auto [config_type, config_offset] = ToFlatbuffer(fbb, config);
+    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
+    auto [config_type, config_offset] = to_flatbuffer(fbb, config);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateCreateKernelCommand(
         fbb,
@@ -341,7 +341,7 @@ inline void CaptureSetRuntimeArgsUint32(
         runtime_args.size());
 
     auto& fbb = ctx.GetBuilder();
-    auto [core_spec_type, core_spec_offset] = ToFlatbuffer(fbb, core_spec);
+    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
     auto rt_args_offset = fbb.CreateVector(runtime_args.data(), runtime_args.size());
 
     auto cmd = tt::tt_metal::flatbuffer::CreateSetRuntimeArgsUint32Command(
@@ -357,8 +357,8 @@ inline void CaptureSetRuntimeArgs(
     auto& ctx = LightMetalCaptureContext::Get();
     auto& fbb = ctx.GetBuilder();
     uint32_t kernel_global_id = ctx.GetGlobalId(kernel.get());
-    auto [core_spec_type, core_spec_offset] = ToFlatbuffer(fbb, core_spec);
-    auto rt_args_offset = ToFlatbuffer(fbb, runtime_args);
+    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
+    auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
     log_debug(
         tt::LogMetalTrace,
         "{}(RuntimeArgs): kernel_global_id: {} rt_args_size: {}",
@@ -380,8 +380,8 @@ inline void CaptureCreateCircularBuffer(
     auto& fbb = ctx.GetBuilder();
     uint32_t cb_global_id = ctx.AddToMap(cb_handle);
     uint32_t program_global_id = ctx.GetGlobalId(&program);
-    auto [core_spec_type, core_spec_offset] = ToFlatbuffer(fbb, core_spec);
-    auto cb_config_offset = ToFlatbuffer(config, fbb);
+    auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
+    auto cb_config_offset = to_flatbuffer(config, fbb);
     log_debug(
         tt::LogMetalTrace,
         "{}: cb_global_id: {} program_global_id: {} ",

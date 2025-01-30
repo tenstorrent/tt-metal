@@ -6,14 +6,10 @@
 
 #include "buffer_types_generated.h"
 
-//////////////////////////////////////////////////////////////
-// From-flatbuffer helper functions                         //
-//////////////////////////////////////////////////////////////
-
 namespace tt::tt_metal {
 inline namespace v0 {
 
-inline CircularBufferConfig FromFlatbuffer(
+inline CircularBufferConfig from_flatbuffer(
     const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer) {
     if (!config_fb) {
         throw std::runtime_error("Invalid CircularBufferConfig FlatBuffer object");
@@ -31,7 +27,7 @@ inline CircularBufferConfig FromFlatbuffer(
 
     if (config_fb->data_formats()) {
         for (auto entry : *config_fb->data_formats()) {
-            config.data_formats_[entry->index()] = FromFlatbuffer(entry->format());
+            config.data_formats_[entry->index()] = from_flatbuffer(entry->format());
         }
     }
 
@@ -41,7 +37,7 @@ inline CircularBufferConfig FromFlatbuffer(
         }
     }
 
-    config.tiles_ = FromFlatbuffer(config_fb->tiles());
+    config.tiles_ = from_flatbuffer(config_fb->tiles());
     config.shadow_global_buffer = shadow_global_buffer;
 
     if (config_fb->buffer_indices()) {

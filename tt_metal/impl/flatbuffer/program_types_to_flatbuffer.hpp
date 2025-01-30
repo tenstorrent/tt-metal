@@ -11,7 +11,7 @@
 namespace tt::tt_metal {
 
 // Original types defined in core_coord.hpp
-inline std::pair<tt::tt_metal::flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec) {
     return std::visit(
         [&](auto&& spec) -> std::pair<tt::tt_metal::flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> {
@@ -36,14 +36,14 @@ inline std::pair<tt::tt_metal::flatbuffer::CoreSpec, ::flatbuffers::Offset<void>
                 auto core_range_set = tt::tt_metal::flatbuffer::CreateCoreRangeSet(builder, ranges_vector);
                 return {tt::tt_metal::flatbuffer::CoreSpec::CoreRangeSet, core_range_set.Union()};
             } else {
-                throw std::runtime_error("Unhandled variant type in ToFlatbuffer");
+                throw std::runtime_error("Unhandled variant type in to_flatbuffer");
             }
         },
         core_spec);
 }
 
 // Original types defined in kernel_types.hpp
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::DefineEntry>> defines_vector;
@@ -60,16 +60,16 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
     // Create the FlatBuffer DataMovementConfig object
     auto config_offset = tt::tt_metal::flatbuffer::CreateDataMovementConfig(
         builder,
-        ToFlatbuffer(config.processor),
-        ToFlatbuffer(config.noc),
-        ToFlatbuffer(config.noc_mode),
+        to_flatbuffer(config.processor),
+        to_flatbuffer(config.noc),
+        to_flatbuffer(config.noc_mode),
         compile_args_offset,
         defines_offset);
 
     return {tt::tt_metal::flatbuffer::KernelConfig::DataMovementConfig, config_offset.Union()};
 }
 
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::DefineEntry>> defines_vector;
@@ -83,7 +83,7 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
     // Convert unpack_to_dest_mode to FlatBuffer format
     std::vector<tt::tt_metal::flatbuffer::UnpackToDestMode> unpack_modes;
     for (const auto& mode : config.unpack_to_dest_mode) {
-        unpack_modes.push_back(ToFlatbuffer(mode));
+        unpack_modes.push_back(to_flatbuffer(mode));
     }
     auto unpack_modes_offset = builder.CreateVector(unpack_modes);
 
@@ -93,7 +93,7 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
     // Create the FlatBuffer ComputeConfig object
     auto config_offset = tt::tt_metal::flatbuffer::CreateComputeConfig(
         builder,
-        ToFlatbuffer(config.math_fidelity),
+        to_flatbuffer(config.math_fidelity),
         config.fp32_dest_acc_en,
         config.dst_full_sync_en,
         unpack_modes_offset,
@@ -105,7 +105,7 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
     return {tt::tt_metal::flatbuffer::KernelConfig::ComputeConfig, config_offset.Union()};
 }
 
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::DefineEntry>> defines_vector;
@@ -122,9 +122,9 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
     // Create the FlatBuffer EthernetConfig object
     auto config_offset = tt::tt_metal::flatbuffer::CreateEthernetConfig(
         builder,
-        ToFlatbuffer(config.eth_mode),
-        ToFlatbuffer(config.noc),
-        ToFlatbuffer(config.processor),
+        to_flatbuffer(config.eth_mode),
+        to_flatbuffer(config.noc),
+        to_flatbuffer(config.processor),
         compile_args_offset,
         defines_offset);
 
@@ -132,7 +132,7 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
 }
 
 // Generic function for variant, specialized for each type above.
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     return std::visit(
@@ -141,27 +141,27 @@ inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<voi
             if constexpr (
                 std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, ComputeConfig> ||
                 std::is_same_v<T, EthernetConfig>) {
-                return ToFlatbuffer(builder, cfg);
+                return to_flatbuffer(builder, cfg);
             } else {
-                throw std::runtime_error("Unhandled config type in ToFlatbuffer.");
+                throw std::runtime_error("Unhandled config type in to_flatbuffer.");
             }
         },
         config);
 }
 
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ReaderDataMovementConfig& config) {
     const DataMovementConfig& base_config = config;  // Cast to base
-    return ToFlatbuffer(builder, base_config);
+    return to_flatbuffer(builder, base_config);
 }
 
-inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> ToFlatbuffer(
+inline std::pair<tt::tt_metal::flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const WriterDataMovementConfig& config) {
     const DataMovementConfig& base_config = config;  // Cast to base
-    return ToFlatbuffer(builder, base_config);
+    return to_flatbuffer(builder, base_config);
 }
 
-inline flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg> createRuntimeArg(
+inline flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg> create_runtime_arg(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<Buffer*, uint32_t>& arg) {
     flatbuffers::Offset<void> value_offset;
     tt::tt_metal::flatbuffer::RuntimeArgValue value_type;
@@ -188,20 +188,19 @@ inline flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg> createRuntimeAr
     return tt::tt_metal::flatbuffer::CreateRuntimeArg(builder, value_type, value_offset);
 }
 
-inline flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>> ToFlatbuffer(
-    flatbuffers::FlatBufferBuilder& builder, const std::shared_ptr<RuntimeArgs>& runtime_args) {
+inline flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>>>
+to_flatbuffer(flatbuffers::FlatBufferBuilder& builder, const std::shared_ptr<RuntimeArgs>& runtime_args) {
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::RuntimeArg>> arg_offsets;
 
     for (const auto& arg : *runtime_args) {
-        auto runtime_arg_offset = createRuntimeArg(builder, arg);
-        arg_offsets.push_back(runtime_arg_offset);
+        arg_offsets.push_back(create_runtime_arg(builder, arg));
     }
 
     return builder.CreateVector(arg_offsets);
 }
 
 // Convert SubDeviceId::Id to uint8 array for FlatBuffer.
-inline flatbuffers::Offset<flatbuffers::Vector<uint8_t>> ToFlatbuffer(
+inline flatbuffers::Offset<flatbuffers::Vector<uint8_t>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     std::vector<uint8_t> fb_sub_device_ids(sub_device_ids.size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {

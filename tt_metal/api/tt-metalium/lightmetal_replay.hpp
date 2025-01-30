@@ -62,7 +62,7 @@ public:
     std::optional<TraceDescriptor> GetTraceByTraceId(uint32_t target_trace_id);
 
     // fromFlatBuffer that need class state
-    std::shared_ptr<RuntimeArgs> FromFlatbufferRtArgs(const FlatbufferRuntimeArgVector flatbuffer_args);
+    std::shared_ptr<RuntimeArgs> from_flatbufferRtArgs(const FlatbufferRuntimeArgVector flatbuffer_args);
 
     // Execute the stored LightMetal binary
     bool ExecuteLightMetalBinary();

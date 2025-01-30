@@ -24,7 +24,7 @@ inline namespace v0 {
 // Helper Functions                 //
 //////////////////////////////////////
 
-TraceDescriptor FromFlatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor* fb_desc) {
+TraceDescriptor from_flatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor* fb_desc) {
     if (!fb_desc) {
         std::cerr << "TraceDescriptor is null." << std::endl;
         return {};
@@ -65,7 +65,7 @@ TraceDescriptor FromFlatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor* 
 }
 
 // Needs access to BufferMap, so part of LightMetalReplay class
-std::shared_ptr<RuntimeArgs> LightMetalReplay::FromFlatbufferRtArgs(const FlatbufferRuntimeArgVector flatbuffer_args) {
+std::shared_ptr<RuntimeArgs> LightMetalReplay::from_flatbufferRtArgs(const FlatbufferRuntimeArgVector flatbuffer_args) {
     auto runtime_args = std::make_shared<RuntimeArgs>();
 
     for (const auto& flatbuffer_arg : *flatbuffer_args) {
@@ -146,7 +146,7 @@ std::optional<TraceDescriptor> LightMetalReplay::GetTraceByTraceId(uint32_t targ
     if (const auto* trace_descriptors = fb_binary_ ? fb_binary_->trace_descriptors() : nullptr) {
         if (const auto* fb_trace_desc_by_id = trace_descriptors->LookupByKey(target_trace_id)) {
             if (const auto* fb_desc = fb_trace_desc_by_id->desc()) {
-                return FromFlatbuffer(fb_desc);
+                return from_flatbuffer(fb_desc);
             }
         }
     }
@@ -387,7 +387,7 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::CreateBufferComma
                 .device = this->device_,
                 .size = cmd->config()->size(),
                 .page_size = cmd->config()->page_size(),
-                .buffer_type = FromFlatbuffer(cmd->config()->buffer_type())};
+                .buffer_type = from_flatbuffer(cmd->config()->buffer_type())};
 
             auto buffer = CreateBuffer(config);
             AddBufferToMap(cmd->global_id(), buffer);
@@ -463,7 +463,7 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::EnqueueReadBuffer
 void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(Finish) cq_global_id: {}", cmd->cq_global_id());
     CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    auto sub_device_ids = FromFlatBuffer(cmd->sub_device_ids());
+    auto sub_device_ids = from_flatbuffer(cmd->sub_device_ids());
     Finish(cq, sub_device_ids);
 }
 
@@ -502,8 +502,8 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::CreateKernelComma
             "Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
     }
 
-    auto core_spec = FromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
-    auto kernel_config = FromFlatbuffer(cmd->config_type(), cmd->config());
+    auto core_spec = from_flatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto kernel_config = from_flatbuffer(cmd->config_type(), cmd->config());
     auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
     AddKernelHandleToMap(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
@@ -527,7 +527,7 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUin
 
     // API expects a span so create from flatbuffer vector.
     stl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
-    auto core_spec = FromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto core_spec = from_flatbuffer(cmd->core_spec_type(), cmd->core_spec());
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
 
@@ -537,8 +537,8 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCom
         "LightMetalReplay(SetRuntimeArgs). kernel_global_id: {} rt_args_size: {}",
         cmd->kernel_global_id(),
         cmd->args()->size());
-    auto core_spec = FromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
-    auto runtime_args = FromFlatbufferRtArgs(cmd->args());
+    auto core_spec = from_flatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto runtime_args = from_flatbufferRtArgs(cmd->args());
     auto kernel = GetKernelFromMap(cmd->kernel_global_id());
     if (!kernel) {
         throw std::runtime_error(
@@ -559,9 +559,9 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
             "Program with global_id: " + std::to_string(cmd->program_global_id()) + " not previously created");
     }
 
-    auto core_spec = FromFlatbuffer(cmd->core_spec_type(), cmd->core_spec());
+    auto core_spec = from_flatbuffer(cmd->core_spec_type(), cmd->core_spec());
 
-    // Convert global_id to optional Shadow Buffer here to keep FromFlatbuffer standalone function.
+    // Convert global_id to optional Shadow Buffer here to keep from_flatbuffer standalone function.
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
     auto shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
 
@@ -574,7 +574,7 @@ void LightMetalReplay::Execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
         shadow_global_buffer = shadow_buf.get();  // Set the raw pointer
     }
 
-    auto config = FromFlatbuffer(cmd->config(), shadow_global_buffer);
+    auto config = from_flatbuffer(cmd->config(), shadow_global_buffer);
     auto cb_handle = CreateCircularBuffer(*program, core_spec, config);
     AddCBHandleToMap(cmd->global_id(), cb_handle);
 }

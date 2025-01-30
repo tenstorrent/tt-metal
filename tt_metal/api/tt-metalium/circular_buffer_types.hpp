@@ -28,9 +28,9 @@ namespace tt::tt_metal {
 inline namespace v0 {
 class CircularBufferConfig;
 }
-flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> ToFlatbuffer(
+flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> to_flatbuffer(
     const tt::tt_metal::CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder);
-CircularBufferConfig FromFlatBuffer(const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb);
+CircularBufferConfig from_flatbuffer(const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb);
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -39,9 +39,9 @@ inline namespace v0 {
 using CBHandle = uintptr_t;
 
 class CircularBufferConfig {
-    friend flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> tt::tt_metal::ToFlatbuffer(
+    friend flatbuffers::Offset<tt::tt_metal::flatbuffer::CircularBufferConfig> tt::tt_metal::to_flatbuffer(
         const tt::tt_metal::CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder);
-    friend CircularBufferConfig FromFlatbuffer(
+    friend CircularBufferConfig from_flatbuffer(
         const tt::tt_metal::flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer);
 
 public:

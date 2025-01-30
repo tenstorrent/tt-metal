@@ -38,7 +38,7 @@ std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::Command>>& LightMetalC
 }
 
 void LightMetalCaptureContext::CaptureTraceDescriptor(const TraceDescriptor& trace_desc, const uint32_t tid) {
-    trace_descs_vec_.push_back(ToFlatbuffer(builder_, trace_desc, tid));
+    trace_descs_vec_.push_back(to_flatbuffer(builder_, trace_desc, tid));
 }
 
 // Create final flatbuffer binary from the built up data and return to caller as blob.
@@ -195,7 +195,7 @@ uint32_t LightMetalCaptureContext::GetGlobalId(const CBHandle handle) {
 ////////////////////////////////////////////
 
 // Serialize tt-metal traceDescriptor and trace_id to flatbuffer format.
-TraceDescriptorByTraceIdOffset ToFlatbuffer(
+TraceDescriptorByTraceIdOffset to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const TraceDescriptor& trace_desc, const uint32_t trace_id) {
     // Serialize the trace_data vector
     auto trace_data_offset = builder.CreateVector(trace_desc.data);
