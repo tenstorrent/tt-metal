@@ -285,6 +285,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    auto a_dtype = a.get_dtype();
+    auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
     auto is_sfpu_op = operation_attributes.is_sfpu;
 
     auto program = CreateProgram();
@@ -466,11 +468,16 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    bool is_bf16 = (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16);
+
+    tt::log_info(tt::LogOp, "******** is_bf16 : {}", is_bf16);
     if (is_sfpu_op) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src0_cb_index] = !is_bf16 ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        unpack_to_dest_mode[src1_cb_index] = !is_bf16 ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        unpack_to_dest_mode[src0interim_cb_index] =
+            !is_bf16 ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        unpack_to_dest_mode[src1interim_cb_index] =
+            !is_bf16 ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
     }
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();

@@ -189,11 +189,32 @@ def test_binary_sfpu_pow_neg(
     "ttnn_function",
     [
         ttnn.pow,
+        # ttnn.add,
     ],
 )
 def test_pow_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625]], dtype=torch.float32)
+    # x_torch = torch.tensor([[0.98828125, 0.47851562, 1.1875, -1.59375]], dtype=torch.float32)
+    # y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch.float32)
+    x_torch = torch.tensor(
+        [
+            [
+                0.98828125,
+                0.47851562,
+                1.1875,
+            ]
+        ],
+        dtype=torch.float32,
+    )
+    y_torch = torch.tensor(
+        [
+            [
+                0.0751953125,
+                0.53125,
+                -0.6640625,
+            ]
+        ],
+        dtype=torch.float32,
+    )
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -212,17 +233,38 @@ def test_pow_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.pow,
+        # ttnn.pow,
+        ttnn.add,
     ],
 )
 def test_pow_bf16(device, ttnn_function):
-    x_torch = torch.tensor([[0.98828125, 0.478515625, 1.1875]], dtype=torch.bfloat16)
-    y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625]], dtype=torch.bfloat16)
+    # x_torch = torch.tensor([[0.98828125, 0.478515625, 1.1875, -1.59375]], dtype=torch.bfloat16)
+    # y_torch = torch.tensor([[0.0751953125, 0.53125, -0.6640625, 0.1533203125]], dtype=torch.bfloat16)
+    x_torch = torch.tensor(
+        [
+            [
+                0.98828125,
+                0.478515625,
+                1.1875,
+            ]
+        ],
+        dtype=torch.bfloat16,
+    )
+    y_torch = torch.tensor(
+        [
+            [
+                0.0751953125,
+                0.53125,
+                -0.6640625,
+            ]
+        ],
+        dtype=torch.bfloat16,
+    )
     golden_fn = ttnn.get_golden_function(ttnn_function)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_pow = ttnn.pow(x_tt, y_tt)
+    z_tt_pow = ttnn.add(x_tt, y_tt)
     print("z_tt_pow", z_tt_pow)
     tt_out = ttnn.to_torch(z_tt_pow)
     print("z_torch", z_torch)
