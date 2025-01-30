@@ -79,13 +79,12 @@ done
 # libmpc, libmfpr, libgmp, libz
 # For the time being it will be assumed that these packages come from the base Ubuntu image
 
-# Don't really need the dev package for libhwloc here, but this is simpler for now
-
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
      python3-pip \
      libhwloc-dev \
+     libnuma-dev \
      libc++1-17 \
      libc++abi1-17 \
     )
