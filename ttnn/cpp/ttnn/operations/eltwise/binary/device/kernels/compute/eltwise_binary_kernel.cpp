@@ -7,7 +7,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "debug/dprint.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -134,8 +133,7 @@ void MAIN {
             pack_tile(i, cb_out0);
         }
         tile_regs_release();
-        DPRINT << "Printing out CB: " << ENDL();
-        DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
+
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
