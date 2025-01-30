@@ -128,7 +128,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     bool reset_launch_msg_state);
 
 void set_num_worker_sems_on_dispatch(

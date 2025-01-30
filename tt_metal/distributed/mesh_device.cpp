@@ -590,6 +590,7 @@ void MeshDevice::set_trace_buffers_size(uint32_t size) {
 void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
     TT_THROW("load_trace() is not supported on MeshDevice - use individual devices instead");
     reference_device()->load_trace(cq_id, trace_id, trace_desc);
+}
 
 DispatchCoreConfig MeshDevice::get_dispatch_core_config() {
     return validate_and_get_reference_value(

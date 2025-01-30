@@ -1843,7 +1843,7 @@ void reset_worker_dispatch_state_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id,
     CoreCoord dispatch_core,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    const std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
     auto num_sub_devices = device->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
@@ -1868,10 +1868,12 @@ void reset_worker_dispatch_state_on_device(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     bool clear_count = true;
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    const auto& dispatch_core_config = device->get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     uint32_t dispatch_message_base_addr =
         dispatch_constants::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> num_workers_to_incr;
     if (reset_launch_msg_state) {
         if (device->dispatch_s_enabled()) {
             uint16_t index_bitmask = 0;
@@ -1899,8 +1901,8 @@ void reset_worker_dispatch_state_on_device(
                 device->num_noc_unicast_txns({i}),
                 device->noc_data_start_index({i}),
                 dispatcher_for_go_signal);
-            expected_num_workers_completed[i] += device->num_worker_cores(HalProgrammableCoreType::TENSIX, {i});
-            expected_num_workers_completed[i] += device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, {i});
+            num_workers_to_incr[i] = device->num_worker_cores(HalProgrammableCoreType::TENSIX, {i}) +
+                                     device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, {i});
         }
     }
     // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed
@@ -1911,10 +1913,16 @@ void reset_worker_dispatch_state_on_device(
             dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
         if (device->distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
-                false, dispatch_message_addr, expected_num_workers_completed[i], clear_count, false, true, 1);
+                false,
+                dispatch_message_addr,
+                expected_num_workers_completed[i] + num_workers_to_incr[i],
+                clear_count,
+                false,
+                true,
+                1);
         }
         command_sequence.add_dispatch_wait(
-            false, dispatch_message_addr, expected_num_workers_completed[i], clear_count);
+            false, dispatch_message_addr, expected_num_workers_completed[i] + num_workers_to_incr[i], clear_count);
     }
     manager.issue_queue_push_back(cmd_sequence_sizeB, cq_id);
     manager.fetch_queue_reserve_back(cq_id);
