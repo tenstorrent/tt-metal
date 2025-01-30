@@ -125,7 +125,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     // parallelize y
     auto [num_cores_y, per_core_tiles_y] = tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(
-        num_tiles_dim_3, num_cores_y_limit, /*request_even=*/true);
+        num_tiles_dim_3, num_cores_y_limit, /*request_even=*/(num_tiles_dim_3 > 1));
 
     // parallelize x
     auto [num_cores_x, per_core_tiles_x] =
