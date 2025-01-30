@@ -25,7 +25,6 @@ jobs:
         arch: [grayskull]
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      DOCS_VERSION: ${{ inputs.version }}
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
@@ -62,7 +61,7 @@ jobs:
       - name: Prepare artifact - move output
         run: |
           mkdir gh_pages
-          mv docs/build/html gh_pages/$DOCS_VERSION
+          mv docs/build/html gh_pages/${{ inputs.version }}
       - name: Prepare artifact - create .nojekyll
         run: |
           touch gh_pages/.nojekyll
@@ -76,8 +75,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gh-pages
-          target-folder: $DOCS_VERSION
-          folder: ./gh_pages/$DOCS_VERSION
+          target-folder: ${{ inputs.version }}
+          folder: ./gh_pages/${{ inputs.version }}
           force: false
       - name: Delete artifact if deployment failed
         # When the deployment API call fails, the artifacts are not cleaned up correctly
