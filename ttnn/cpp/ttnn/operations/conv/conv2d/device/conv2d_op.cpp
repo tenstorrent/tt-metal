@@ -141,7 +141,7 @@ Tensor optimized_conv_new(
             IDevice* device = a.device();
 
             optimized_conv_op.pre_op_l1_allocation_size_bytes =
-                device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+                device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
             return operation::run_without_autoformat(optimized_conv_op, input_tensors, optional_input_tensors);
         },
         {a, b},
@@ -321,7 +321,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         use_non_tile_height);
 
     const uint32_t post_op_l1_stats =
-        device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
     auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
