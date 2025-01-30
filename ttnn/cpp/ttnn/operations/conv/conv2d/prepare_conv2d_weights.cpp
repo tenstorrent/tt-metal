@@ -809,7 +809,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         auto weight_block_h_datums = weight_block_h_ntiles * constants::TILE_HEIGHT;
         if ((weight_block_h_datums > (window_w * in_channels_padded)) &&
             (input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED)) {
-            log_info("Applying weight block height padding");
             weight_tensor_ = ttnn::reshape(
                 weight_tensor_, ttnn::Shape({1, window_h, window_w * in_channels_padded, out_channels_padded}));
             weight_tensor_ = ttnn::pad(
@@ -835,18 +834,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         weights_bias_dtype,
         true);
 
-    // weight_tensor_ = tt::tt_metal::convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    //     weight_tensor_, weight_block_h_ntiles, weight_block_w_ntiles, weights_bias_dtype);
-    // } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-    //     weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    //         weight_tensor_, num_cores_channels, weights_bias_dtype);
-    // } else {
-    //     weight_tensor_ =
-    //         ttnn::reshape(weight_tensor_, ttnn::Shape({out_channels_padded, in_channels_padded * window_h *
-    //         window_w}));
-
-    // }
-
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
     int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
@@ -858,12 +845,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             std::array<uint32_t, 2>{0, 0},
             std::array<uint32_t, 2>{0, weight_matrix_height_padding},
             std::array<uint32_t, 2>{0, out_channel_padding}});
-    log_debug(
-        "Weight Matrix Logical shape {}, Padded shape {}", target_shape.logical_shape(), target_shape.padded_shape());
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
-
-    // if(parameters_on_device)
-    //     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();

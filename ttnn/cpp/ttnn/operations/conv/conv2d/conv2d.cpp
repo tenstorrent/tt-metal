@@ -142,7 +142,6 @@ Result conv2d(
                 true,
                 is_non_tile_mul_width);
         } else {
-            std::cout << "prepare_conv_weights_biases_on_device" << std::endl;
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_on_device(
                 weight_tensor,
                 bias_tensor,
