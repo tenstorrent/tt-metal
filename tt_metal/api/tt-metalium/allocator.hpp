@@ -77,6 +77,8 @@ protected:
     void init_one_bank_per_l1();
     void init_compute_and_storage_l1_bank_manager();
 
+    void validate_bank_assignments() const;
+
 private:
     void verify_safe_allocation() const;
 
