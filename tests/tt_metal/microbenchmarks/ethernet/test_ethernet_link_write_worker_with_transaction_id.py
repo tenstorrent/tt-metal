@@ -11,6 +11,8 @@ import csv
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
+from models.utility_functions import is_grayskull
+
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
@@ -77,6 +79,7 @@ def profile_results(sample_size, sample_count, channel_count, num_writes_skip_ba
     return main_loop_latency
 
 
+@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("sample_count", [256])
 @pytest.mark.parametrize("channel_count", [18])
 @pytest.mark.parametrize("num_writes_skip_barrier", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
