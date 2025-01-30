@@ -15,7 +15,7 @@
 namespace {
 
 inline void GetBufferAddress(const tt::tt_metal::Buffer* buffer, uint32_t* address_on_host) {
-    EnqueueGetBufferAddr(address_on_host, buffer, false);
+    GetBufferAddr(address_on_host, buffer, false);
 }
 
 }  // namespace

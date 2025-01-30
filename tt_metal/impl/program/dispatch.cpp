@@ -5,7 +5,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
+#include <command_queue.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <tt_align.hpp>

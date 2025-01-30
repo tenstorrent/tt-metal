@@ -6,7 +6,7 @@
 
 #include <command_queue_interface.hpp>
 #include <sub_device_types.hpp>
-#include <hardware_command_queue.hpp>  // Need this for ReadBufferDesriptor -> this should be moved to a separate header
+#include <command_queue.hpp>
 #include "buffer.hpp"
 
 namespace tt::tt_metal {
@@ -72,7 +72,7 @@ void copy_interleaved_buffer_to_completion_queue(
     CoreType dispatch_core_type);
 
 void copy_completion_queue_data_into_user_space(
-    const detail::ReadBufferDescriptor& read_buffer_descriptor,
+    const ReadBufferDescriptor& read_buffer_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint32_t cq_id,
@@ -82,9 +82,9 @@ void copy_completion_queue_data_into_user_space(
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
 
-std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
+std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
-std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
+std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, BufferReadDispatchParams& dispatch_params, Buffer& buffer);
 
 }  // namespace buffer_dispatch

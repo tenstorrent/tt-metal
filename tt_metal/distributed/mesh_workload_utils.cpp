@@ -4,7 +4,6 @@
 
 #include <host_api.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 
 #include "tt_metal/impl/program/dispatch.hpp"
 

@@ -251,18 +251,18 @@ inline void SetRuntimeArgsImpl(
         [&](auto&& core_spec) {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                EnqueueSetRuntimeArgs(kernel, core_spec, runtime_args, blocking);
+                SetRuntimeArgs(kernel, core_spec, runtime_args, blocking);
             } else if constexpr (std::is_same_v<T, CoreRange>) {
                 for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
                     for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
-                        EnqueueSetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
+                        SetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 for (const auto& core_range : core_spec.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            EnqueueSetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
+                            SetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
                         }
                     }
                 }
@@ -278,7 +278,7 @@ inline void SetRuntimeArgsImpl(
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
-        EnqueueSetRuntimeArgs(kernel, core_spec[i], runtime_args[i], blocking);
+        SetRuntimeArgs(kernel, core_spec[i], runtime_args[i], blocking);
     }
 }
 
@@ -1257,7 +1257,7 @@ void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
-    EnqueueAddBufferToProgram(buffer, program, false);
+    AddBufferToProgram(buffer, program, false);
 }
 
 void SetRuntimeArgs(
