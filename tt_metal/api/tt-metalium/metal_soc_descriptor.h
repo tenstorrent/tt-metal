@@ -15,8 +15,8 @@
 */
 struct metal_SocDescriptor : public tt_SocDescriptor {
 public:
-    std::vector<CoreCoord> view_worker_dram_core;   // per channel preferred worker endpoint
-    std::vector<CoreCoord> view_eth_dram_core;      // per dram view preferred eth endpoint
+    std::vector<CoreCoord> view_worker_dram_cores;  // per channel preferred worker endpoint
+    std::vector<CoreCoord> view_eth_dram_cores;     // per dram view preferred eth endpoint
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
     std::vector<CoreCoord> logical_ethernet_cores;
     uint64_t dram_core_size;
