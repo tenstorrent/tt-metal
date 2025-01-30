@@ -47,6 +47,10 @@ on:
     types:
       - completed
 
+concurrency:
+  group: produce-data
+  cancel-in-progress: false
+
 jobs:
   produce-cicd-data:
     if: |
