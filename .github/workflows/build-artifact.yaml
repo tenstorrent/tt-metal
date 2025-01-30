@@ -139,6 +139,10 @@ jobs:
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
             fi
+
+            [ -n "$(find . -maxdepth 1 -type d -name 'build*' -print -quit)" ] &&
+              { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
+
             nice -n 19 $build_command
             ccache -s > build/ccache.stats
       - name: Publish Ccache summary

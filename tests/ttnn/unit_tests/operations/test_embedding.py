@@ -412,7 +412,7 @@ def test_tg_llama_sharded_embedding(
     output_tensor = ttnn.embedding(input_tensor, weights, layout=ttnn.TILE_LAYOUT, memory_config=output_mem_config)
     output_tensor = ttnn.reshape(
         output_tensor,
-        ttnn.Shape((batch_size, 1, hidden_embedding_dim), (batch_size, sentence_size, hidden_embedding_dim)),
+        ttnn.Shape((batch_size, 1, hidden_embedding_dim)),
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(output_tensor, torch_output_tensor[:, 0, :].unsqueeze(1))

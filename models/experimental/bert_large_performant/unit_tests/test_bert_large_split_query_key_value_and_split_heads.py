@@ -45,9 +45,9 @@ def run_split_query_key_value_and_split_heads_test(device, batch, dtype, in0_mem
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.get_dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.get_dtype()}")
 
-    assert q.shape.with_tile_padding() == [batch, 16, 384, 64]
-    assert k.shape.with_tile_padding() == [batch, 16, 64, 384]
-    assert v.shape.with_tile_padding() == [batch, 16, 384, 64]
+    assert q.padded_shape == [batch, 16, 384, 64]
+    assert k.padded_shape == [batch, 16, 64, 384]
+    assert v.padded_shape == [batch, 16, 384, 64]
 
     pyt_got_back_rm_q = ttnn.to_torch(q)
     pyt_got_back_rm_k = ttnn.to_torch(k)
