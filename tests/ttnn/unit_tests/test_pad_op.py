@@ -24,9 +24,6 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
     assert output_tt.shape == torch.Size(padshape)
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
-    print(shape_diff)
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
     passing = torch.equal(output_tt, output_torch)
-    print("output_tt: ", output_tt)
-    print("output_torch: ", output_torch)
     assert passing
