@@ -108,7 +108,7 @@ ttnn::Tensor SliceOperation::invoke(
         }
         rm_only = !no_step || !aligned_begins || !aligned_ends || one_dimensional;
         if (rm_only) {
-            TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Strided slice is not supported for BFLOAT8 tensors");
+            TT_FATAL(input.get_dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
             input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
         }
     }
