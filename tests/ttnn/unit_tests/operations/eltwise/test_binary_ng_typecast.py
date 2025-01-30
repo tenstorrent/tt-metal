@@ -53,6 +53,7 @@ binary_fns = {
 )
 # No typecast on inputs and optional output
 def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
@@ -80,7 +81,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
-    assert status >= 0.99
+    assert status >= 0.999
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -103,6 +104,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
 )
 # Typecast on both inputs and optional output
 def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
+    torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
@@ -629,6 +631,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
 # Typecast on both input and optional tensor
 def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
+    torch.manual_seed(0)
     a_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
