@@ -64,12 +64,12 @@ Set up the environment variables and invoke our build scripts. Note that for
 source builds, you must set these environment variables every time.
 
 ```sh
-export ARCH_NAME=<ARCH_NAME>
+export ARCH_NAME=<ARCH_NAME> # See below for ARCH_NAME examples
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ./build_metal.sh
 
-# If you would like an out-of-the-box virtual environment to use,
+# See NOTE below on Python Environments for alternative to OOTB venv 
 ./create_venv.sh
 source python_env/bin/activate
 ```
