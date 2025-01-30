@@ -74,47 +74,38 @@ def run(
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
-    try:
-        torch_grad_tensor = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
-        )(input_shape)
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(input_shape)
-        torch_input_tensor_a.requires_grad = True
+    torch_grad_tensor = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
+    )(input_shape)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_a.requires_grad = True
 
-        scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
+    golden_function = ttnn.get_golden_function(ttnn.sub_bw)
+    torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, scalar)[0]
 
-        print(
-            f"{input_shape} {grad_dtype} {input_a_dtype} {input_layout} {grad_memory_config} {input_a_memory_config} {output_memory_config}"
-        )
+    grad_tensor = ttnn.from_torch(
+        torch_grad_tensor,
+        dtype=grad_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=grad_memory_config,
+    )
 
-        golden_function = ttnn.get_golden_function(ttnn.sub_bw)
-        torch_output_tensor = golden_function(torch_grad_tensor, torch_input_tensor_a, scalar)[0]
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=input_a_dtype,
+        layout=input_layout,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
 
-        grad_tensor = ttnn.from_torch(
-            torch_grad_tensor,
-            dtype=grad_dtype,
-            layout=input_layout,
-            device=device,
-            memory_config=grad_memory_config,
-        )
-
-        input_tensor_a = ttnn.from_torch(
-            torch_input_tensor_a,
-            dtype=input_a_dtype,
-            layout=input_layout,
-            device=device,
-            memory_config=input_a_memory_config,
-        )
-
-        start_time = start_measuring_time()
-        output_tensor = ttnn.sub_bw(grad_tensor, input_tensor_a, scalar, memory_config=output_memory_config)[0]
-        output_tensor = ttnn.to_torch(output_tensor)
-        e2e_perf = stop_measuring_time(start_time)
-    except Exception as e:
-        print(e)
+    start_time = start_measuring_time()
+    output_tensor = ttnn.sub_bw(grad_tensor, input_tensor_a, scalar, memory_config=output_memory_config)[0]
+    output_tensor = ttnn.to_torch(output_tensor)
+    e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    print(pcc)
     return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]

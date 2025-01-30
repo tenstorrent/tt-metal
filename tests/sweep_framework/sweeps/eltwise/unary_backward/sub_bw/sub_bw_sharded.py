@@ -86,10 +86,6 @@ def run(
         shard_height_mul_of_32,
     ) = parse_sharding_spec(input_spec)
 
-    print(
-        f"{input_shape} {core_grid} {sharding_strategy} {shard_orientation} {tensor_hw_as_shard_shape} {grad_dtype} {input_a_dtype} {input_layout} {shard_height_mul_of_32}"
-    )
-
     torch_grad_tensor = gen_func_with_cast_tt(partial(torch_random, low=-10, high=10, dtype=torch.float32), grad_dtype)(
         input_shape
     )
@@ -130,11 +126,8 @@ def run(
         memory_config=sharded_config,
     )
 
-    try:
-        start_time = start_measuring_time()
-        output_tensor = ttnn.sub_bw(grad_tensor, input_tensor_a, scalar, memory_config=sharded_config)
-    except Exception as e:
-        print(e)
+    start_time = start_measuring_time()
+    output_tensor = ttnn.sub_bw(grad_tensor, input_tensor_a, scalar, memory_config=sharded_config)
 
     for i in range(len(output_tensor)):
         output_tensor[i] = ttnn.to_torch(output_tensor[i])
@@ -148,5 +141,4 @@ def run(
         pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     pcc[1] = str(pcc[1])
-    print(f"pcc {pcc}")
     return [pcc, e2e_perf]
