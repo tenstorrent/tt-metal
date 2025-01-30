@@ -258,12 +258,17 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
                     return {input_tensor.get_tensor_spec()};
                 }
 
+                auto mem_config = this->output_mem_config;
+                if (!mem_config.shard_spec.has_value()) {
+                    mem_config.shard_spec = input_tensor.shard_spec().value();
+                }
+
                 return {ttnn::TensorSpec(
                     output_shape,
                     TensorLayout::fromLegacyPaddedShape(
                         this->dtype.value_or(input_tensor.get_dtype()),
                         PageConfig(Layout::TILE),
-                        this->output_mem_config,
+                        mem_config,
                         ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
             } else {
                 return {TensorSpec(
