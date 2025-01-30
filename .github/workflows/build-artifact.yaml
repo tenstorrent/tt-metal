@@ -63,7 +63,7 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
     needs: build-docker-image
-    timeout-minutes: 30
+    timeout-minutes: 90 # FIXME(17001): Revert this to 30m after we solve the network issue
     env:
       SILENT: 0
       VERBOSE: 1
