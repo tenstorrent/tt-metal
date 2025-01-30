@@ -74,11 +74,11 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4.0.4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          target_branch: gh-pages
-          target_folder: $DOCS_VERSION
-          publish_dir: ./gh_pages/$DOCS_VERSION
-          force_orphan: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gh-pages
+          target-folder: $DOCS_VERSION
+          folder: ./gh_pages/$DOCS_VERSION
+          force: false
       - name: Delete artifact if deployment failed
         # When the deployment API call fails, the artifacts are not cleaned up correctly
         # and the next attempt (!) run will cause an error.
