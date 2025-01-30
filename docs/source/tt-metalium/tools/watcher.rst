@@ -54,6 +54,10 @@ Watcher features can be disabled individually using the following environment va
    # debug tools on dispatch kernels.
    export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
+   # If you need to see the physical coordinates in the watcher log (note that physical coordinates are not expected
+   # to be used in host-side code).
+   export TT_METAL_WATCHER_PHYS_COORDS=1
+
 Details
 -------
 
