@@ -120,30 +120,29 @@ uint32_t num_buffers_in_tensor(const Tensor& tensor) {
 
 Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index) {
     ZoneScopedN("GetShardForDevice");
-    Tensor shard = Tensor();
     auto& storage = tensor.tensor_attributes->storage;
-    std::visit(
-        [target_device, buffer_index, &tensor, &shard](auto&& s) {
+    return std::visit(
+        [target_device, buffer_index, &tensor](auto&& s) {
             using T = std::decay_t<decltype(s)>;
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                shard = Tensor{
+                return Tensor{
                     DeviceStorage{s.get_buffer_for_device(target_device)}, s.get_tensor_spec_for_device(target_device)};
             } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                shard =
-                    Tensor{OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
+                return Tensor{
+                    OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
             } else if constexpr (
                 std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage> ||
                 std::is_same_v<T, DeviceStorage>) {
-                shard = tensor;
+                return tensor;
             } else {
                 TT_THROW("get_shard_for_device only supports multi-device or device tensors");
+                return Tensor();
             }
         },
         storage);
-    return shard;
 }
 
 void insert_buffer_and_shape_for_device(
