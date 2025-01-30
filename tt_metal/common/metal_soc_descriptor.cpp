@@ -143,7 +143,20 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     this->view_eth_dram_core.clear();
     for (const auto& core_node : device_descriptor_yaml["dram_view_eth_endpoint"]) {
         if (core_node.IsScalar()) {
-            this->view_eth_dram_core.push_back(format_node(core_node.as<std::string>()));
+            tt_xy_pair dram_logical_coords = format_node(core_node.as<std::string>());
+            if (dram_logical_coords.x >= dram_cores.size()) {
+                TT_THROW(
+                    "DRAM channel {} does not exist in the device descriptor, but is specified in "
+                    "dram_view_eth_endpoint",
+                    dram_logical_coords.x);
+            }
+            if (dram_logical_coords.y >= dram_cores[dram_logical_coords.x].size()) {
+                TT_THROW(
+                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                    "dram_view_eth_endpoint",
+                    dram_logical_coords.y);
+            }
+            this->view_eth_dram_core.push_back(dram_cores[dram_logical_coords.x][dram_logical_coords.y]);
         } else {
             TT_THROW("Only NOC coords supported for dram_view_eth_endpoint cores");
         }

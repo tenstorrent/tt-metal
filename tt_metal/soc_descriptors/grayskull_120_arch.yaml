@@ -11,8 +11,10 @@ pcie:
 dram:
   [[1-0], [1-6], [4-0], [4-6], [7-0], [7-6], [10-0], [10-6]]
 
+# Coords for eth and worker dram endpoints are given in dram coordinates.
+# These are only simple dram arrays, so each coord references the only core in corresponding dram array.
 dram_view_eth_endpoint:
-  [ 1-0, 1-6, 4-0, 4-6, 7-0, 7-6, 10-0, 10-6 ]
+  [ 0-0, 1-0, 2-0, 3-0, 4-0, 5-0, 6-0, 7-0 ]
 
 dram_view_worker_endpoint:
   [ 0-0, 1-0, 2-0, 3-0, 4-0, 5-0, 6-0, 7-0 ]
