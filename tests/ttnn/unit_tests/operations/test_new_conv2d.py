@@ -427,7 +427,6 @@ def test_conv_features(
 
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
         pytest.skip("skipping due to pack_untilize_dst issue!")
-    pytest.skip("Skip WS")
 
     run_conv(
         device,
@@ -589,7 +588,6 @@ def test_conv_ws(
     auto_shard,
     tilized_input,
 ):
-    pytest.skip("Skip WS")
     if device.core_grid.y != 8:
         pytest.skip("Needs 8x8 Grid")
 
