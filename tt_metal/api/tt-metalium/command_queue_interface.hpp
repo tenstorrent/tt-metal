@@ -47,6 +47,9 @@ enum class CommandQueueHostAddrType : uint8_t {
 
 //
 // Dispatch Memory Map
+// Assigns each CommandQueueDeviceAddrType in a linear
+// order. The size of each address type and L1 base is
+// set by DispatchSettings.
 //
 class DispatchMemMap {
 public:
