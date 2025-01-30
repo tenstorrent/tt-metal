@@ -174,8 +174,10 @@ class TtTransformer(LightweightModule):
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
+        # Necessary padding to be full tile sized when on device
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
-            tokens.view(-1),
+            tokens,
             device=None,
             dtype=ttnn.uint32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
