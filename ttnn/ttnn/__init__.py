@@ -7,6 +7,7 @@ import json
 import importlib
 import os
 import pathlib
+import re
 from types import ModuleType
 
 from loguru import logger
@@ -58,7 +59,7 @@ def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
         normalized_config = {}
         for key in dir(CONFIG):
-            if "__" in key:
+            if re.match("^_.+_$", key):
                 continue
             value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
