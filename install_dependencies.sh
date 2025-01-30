@@ -204,10 +204,20 @@ install() {
     fi
 }
 
+cleanup() {
+    if [ $FLAVOR == "ubuntu" ]; then
+        rm -rf /var/lib/apt/lists/*
+    fi
+}
+
 update_package_list
 
 if [ $validate == 1 ]; then
     validate_packages
 else
     install
+fi
+
+if [ $docker == 1 ]; then
+    cleanup
 fi
