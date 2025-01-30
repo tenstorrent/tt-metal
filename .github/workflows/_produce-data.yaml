@@ -48,7 +48,7 @@ on:
       - completed
 
 concurrency:
-  group: produce-data
+  group: ${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
