@@ -20,6 +20,4 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
-
-tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& t, int dim);
 }  // namespace ttml::ttnn_fixed
