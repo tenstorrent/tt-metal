@@ -12,20 +12,19 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/common/constants.hpp"
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 

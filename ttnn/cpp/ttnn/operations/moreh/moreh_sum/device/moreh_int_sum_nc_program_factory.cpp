@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -22,7 +22,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::Device* device{input.device()};
+    tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.get_dtype())};

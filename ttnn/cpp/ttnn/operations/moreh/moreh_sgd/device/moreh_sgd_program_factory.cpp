@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -45,7 +45,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Device* device = param_in.device();
+    tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
     uint32_t core_w = grid.x;

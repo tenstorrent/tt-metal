@@ -116,7 +116,6 @@ parameters = {
                     ),
                     [64, 64],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
         ],
@@ -355,232 +354,6 @@ Options:
 
 `--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
 
-## Query Tool
-
-**NOTE: The environment variables ELASTIC_USERNAME and ELASTIC_PASSWORD must be set to connect to the Elasticsearch database which is used to store and retrieve test data.**
-
-This tool is used to query the database to see information on test vectors and test runs.
-
-You can specify which module, suite, or individual vector or run to query, and you will see varying levels of detail.
-
-The summary command will show the test status totals from the latest run by default, or all runs if `--all` is included in the command.
-
-The detail command will show a list of all individual test runs, which can be narrowed down by module and suite.
-
-The vector and result commands will show a detailed view of the data, including each input parameter for a test vector, or a long form exception for result.
-
-### Usage
-
-`sweeps_query.py [OPTIONS] COMMAND`
-
-Options:
-
-  `--module-name <sweep_name>`  Name of the sweep module to be queried.
-
-  `--suite-name <suite_name>`   Suite name to filter by.
-
-  `--vector-id <vector_id>`    Individual Vector ID to filter by.
-
-  `--run-id <run_id>`       Individual Run ID to filter by.
-
-  `--elastic <corp/cloud/custom_url>`   Default is `corp` which should be used on the internal VPN. Users on tt-cloud should set this to `cloud`. If there is a custom URL required, use `--elastic <custom_url>`.
-
-  `--all`               Displays total run statistics instead of the most recent run.
-
-  `--help`              Show this message and exit.
-
-Commands:
-  `detail`
-  `result`
-  `summary`
-  `vector`
-
-#### Examples
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add summary
-
-+------+------+-------------------------+-------------------+---------+
-|      | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
-+------+------+-------------------------+-------------------+---------+
-| dram |  16  |            0            |         0         |    0    |
-+------+------+-------------------------+-------------------+---------+
-|  l1  |  0   |            8            |         0         |    4    |
-+------+------+-------------------------+-------------------+---------+
-```
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name matmul_default_sharded --all summary
-
-+---------+------+-------------------------+-------------------+---------+
-|         | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
-+---------+------+-------------------------+-------------------+---------+
-| default | 192  |            0            |         0         |    0    |
-+---------+------+-------------------------+-------------------+---------+
-```
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --suite-name dram summary
-
-+----------------------+------+-------------------------+-------------------+---------+
-| vector_id            | PASS | FAIL (ASSERT/EXCEPTION) | FAIL (CRASH/HANG) | NOT RUN |
-+----------------------+------+-------------------------+-------------------+---------+
-| 41a9k5ABKWg1nzaMCbUo |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 51a9k5ABKWg1nzaMCbVF |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 5Fa9k5ABKWg1nzaMCbU- |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 5Va9k5ABKWg1nzaMCbVA |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 5la9k5ABKWg1nzaMCbVD |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 61a9k5ABKWg1nzaMCbVP |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 6Fa9k5ABKWg1nzaMCbVI |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 6Va9k5ABKWg1nzaMCbVL |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 6la9k5ABKWg1nzaMCbVN |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 71a9k5ABKWg1nzaMCbVZ |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 7Fa9k5ABKWg1nzaMCbVR |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 7Va9k5ABKWg1nzaMCbVU |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 7la9k5ABKWg1nzaMCbVW |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 8Fa9k5ABKWg1nzaMCbVa |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 8Va9k5ABKWg1nzaMCbVd |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-| 8la9k5ABKWg1nzaMCbVf |  1   |            0            |         0         |    0    |
-+----------------------+------+-------------------------+-------------------+---------+
-```
-
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add detail
-
-                        Sweep   Suite        Vector ID              Timestamp               Status                                              Details                                       Git Hash
----------------------- ------- ------- ---------------------- --------------------- ----------------------- -------------------------------------------------------------------------------- -----------
- t1bSmJABKWg1nzaMS7eo    add    dram    41a9k5ABKWg1nzaMCbUo   2024-07-09_18-47-13           PASS                                                 1.0                                         4e3cc801c
- uFbSmJABKWg1nzaMS7e5    add    dram    5Fa9k5ABKWg1nzaMCbU-   2024-07-09_18-47-13           PASS                                                 1.0                                         4e3cc801c
- uVbSmJABKWg1nzaMS7e7    add    dram    5Va9k5ABKWg1nzaMCbVA   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- ulbSmJABKWg1nzaMS7e9    add    dram    5la9k5ABKWg1nzaMCbVD   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- u1bSmJABKWg1nzaMS7fA    add    dram    51a9k5ABKWg1nzaMCbVF   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- vFbSmJABKWg1nzaMS7fC    add    dram    6Fa9k5ABKWg1nzaMCbVI   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- vVbSmJABKWg1nzaMS7fE    add    dram    6Va9k5ABKWg1nzaMCbVL   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- vlbSmJABKWg1nzaMS7fG    add    dram    6la9k5ABKWg1nzaMCbVN   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- v1bSmJABKWg1nzaMS7fI    add    dram    61a9k5ABKWg1nzaMCbVP   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- wFbSmJABKWg1nzaMS7fL    add    dram    7Fa9k5ABKWg1nzaMCbVR   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- wVbSmJABKWg1nzaMS7fN    add    dram    7Va9k5ABKWg1nzaMCbVU   2024-07-09_18-47-14           PASS                                                 1.0                                         4e3cc801c
- wlbSmJABKWg1nzaMS7fQ    add    dram    7la9k5ABKWg1nzaMCbVW   2024-07-09_18-47-15           PASS                                                 1.0                                         4e3cc801c
- w1bSmJABKWg1nzaMS7fS    add    dram    71a9k5ABKWg1nzaMCbVZ   2024-07-09_18-47-15           PASS                                                 1.0                                         4e3cc801c
- xFbSmJABKWg1nzaMS7fU    add    dram    8Fa9k5ABKWg1nzaMCbVa   2024-07-09_18-47-15           PASS                                                 1.0                                         4e3cc801c
- xVbSmJABKWg1nzaMS7fW    add    dram    8Va9k5ABKWg1nzaMCbVd   2024-07-09_18-47-15           PASS                                                 1.0                                         4e3cc801c
- xlbSmJABKWg1nzaMS7fY    add    dram    8la9k5ABKWg1nzaMCbVf   2024-07-09_18-47-15           PASS                                                 1.0                                         4e3cc801c
- x1bSmJABKWg1nzaMVbe2    add     l1     81a9k5ABKWg1nzaMCbVh   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../ttnn/cpp/ttnn/op_library/binary/bina                 4e3cc801c
- yFbSmJABKWg1nzaMVbfJ    add     l1     9Fa9k5ABKWg1nzaMCbV0   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../tt_metal/common/math.hpp:16: b > 0 b                 4e3cc801c
- yVbSmJABKWg1nzaMVbfM    add     l1     9Va9k5ABKWg1nzaMCbV3   2024-07-09_18-47-18          NOT_RUN          INVALID VECTOR: Broadcasting along width is not supported for row major layout   4e3cc801c
- ylbSmJABKWg1nzaMVbfN    add     l1     9la9k5ABKWg1nzaMCbWI   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../ttnn/cpp/ttnn/op_library/binary/bina                 4e3cc801c
- y1bSmJABKWg1nzaMVbfQ    add     l1     91a9k5ABKWg1nzaMCbWL   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../tt_metal/common/math.hpp:16: b > 0 b                 4e3cc801c
- zFbSmJABKWg1nzaMVbfT    add     l1     -Fa9k5ABKWg1nzaMCbWO   2024-07-09_18-47-18          NOT_RUN          INVALID VECTOR: Broadcasting along width is not supported for row major layout   4e3cc801c
- zVbSmJABKWg1nzaMVbfU    add     l1     -Va9k5ABKWg1nzaMCbWR   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../ttnn/cpp/ttnn/op_library/binary/bina                 4e3cc801c
- zlbSmJABKWg1nzaMVbfX    add     l1     -la9k5ABKWg1nzaMCbWU   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../tt_metal/common/math.hpp:16: b > 0 b                 4e3cc801c
- z1bSmJABKWg1nzaMVbfZ    add     l1     -1a9k5ABKWg1nzaMCbWW   2024-07-09_18-47-18          NOT_RUN          INVALID VECTOR: Broadcasting along width is not supported for row major layout   4e3cc801c
- 0FbSmJABKWg1nzaMVbfa    add     l1     _Fa9k5ABKWg1nzaMCbWZ   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../ttnn/cpp/ttnn/op_library/binary/bina                 4e3cc801c
- 0VbSmJABKWg1nzaMVbfc    add     l1     _Va9k5ABKWg1nzaMCbWb   2024-07-09_18-47-18   FAIL_ASSERT_EXCEPTION                 TT_FATAL @ ../tt_metal/common/math.hpp:16: b > 0 b                 4e3cc801c
- 0lbSmJABKWg1nzaMVbff    add     l1     _la9k5ABKWg1nzaMCbWd   2024-07-09_18-47-18          NOT_RUN          INVALID VECTOR: Broadcasting along width is not supported for row major layout   4e3cc801c
-```
-
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --suite-name dram detail
-
-    run_id              Sweep   Suite        Vector ID              Timestamp        Status   Details   Git Hash
----------------------- ------- ------- ---------------------- --------------------- -------- --------- -----------
- t1bSmJABKWg1nzaMS7eo    add    dram    41a9k5ABKWg1nzaMCbUo   2024-07-09_18-47-13    PASS      1.0     4e3cc801c
- uFbSmJABKWg1nzaMS7e5    add    dram    5Fa9k5ABKWg1nzaMCbU-   2024-07-09_18-47-13    PASS      1.0     4e3cc801c
- uVbSmJABKWg1nzaMS7e7    add    dram    5Va9k5ABKWg1nzaMCbVA   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- ulbSmJABKWg1nzaMS7e9    add    dram    5la9k5ABKWg1nzaMCbVD   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- u1bSmJABKWg1nzaMS7fA    add    dram    51a9k5ABKWg1nzaMCbVF   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- vFbSmJABKWg1nzaMS7fC    add    dram    6Fa9k5ABKWg1nzaMCbVI   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- vVbSmJABKWg1nzaMS7fE    add    dram    6Va9k5ABKWg1nzaMCbVL   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- vlbSmJABKWg1nzaMS7fG    add    dram    6la9k5ABKWg1nzaMCbVN   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- v1bSmJABKWg1nzaMS7fI    add    dram    61a9k5ABKWg1nzaMCbVP   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- wFbSmJABKWg1nzaMS7fL    add    dram    7Fa9k5ABKWg1nzaMCbVR   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- wVbSmJABKWg1nzaMS7fN    add    dram    7Va9k5ABKWg1nzaMCbVU   2024-07-09_18-47-14    PASS      1.0     4e3cc801c
- wlbSmJABKWg1nzaMS7fQ    add    dram    7la9k5ABKWg1nzaMCbVW   2024-07-09_18-47-15    PASS      1.0     4e3cc801c
- w1bSmJABKWg1nzaMS7fS    add    dram    71a9k5ABKWg1nzaMCbVZ   2024-07-09_18-47-15    PASS      1.0     4e3cc801c
- xFbSmJABKWg1nzaMS7fU    add    dram    8Fa9k5ABKWg1nzaMCbVa   2024-07-09_18-47-15    PASS      1.0     4e3cc801c
- xVbSmJABKWg1nzaMS7fW    add    dram    8Va9k5ABKWg1nzaMCbVd   2024-07-09_18-47-15    PASS      1.0     4e3cc801c
- xlbSmJABKWg1nzaMS7fY    add    dram    8la9k5ABKWg1nzaMCbVf   2024-07-09_18-47-15    PASS      1.0     4e3cc801c
- M1bZmJABKWg1nzaMM7hD    add    dram    41a9k5ABKWg1nzaMCbUo   2024-07-09_18-54-45    PASS      1.0     4e3cc801c
- NFbZmJABKWg1nzaMM7hI    add    dram    5Fa9k5ABKWg1nzaMCbU-   2024-07-09_18-54-46    PASS      1.0     4e3cc801c
- NVbZmJABKWg1nzaMM7hM    add    dram    5Va9k5ABKWg1nzaMCbVA   2024-07-09_18-54-46    PASS      1.0     4e3cc801c
- NlbZmJABKWg1nzaMM7hP    add    dram    5la9k5ABKWg1nzaMCbVD   2024-07-09_18-54-46    PASS      1.0     4e3cc801c
- N1bZmJABKWg1nzaMM7hR    add    dram    51a9k5ABKWg1nzaMCbVF   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- OFbZmJABKWg1nzaMM7hU    add    dram    6Fa9k5ABKWg1nzaMCbVI   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- OVbZmJABKWg1nzaMM7hV    add    dram    6Va9k5ABKWg1nzaMCbVL   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- OlbZmJABKWg1nzaMM7hX    add    dram    6la9k5ABKWg1nzaMCbVN   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- O1bZmJABKWg1nzaMM7hb    add    dram    61a9k5ABKWg1nzaMCbVP   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- PFbZmJABKWg1nzaMM7he    add    dram    7Fa9k5ABKWg1nzaMCbVR   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- PVbZmJABKWg1nzaMM7hg    add    dram    7Va9k5ABKWg1nzaMCbVU   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- PlbZmJABKWg1nzaMM7hi    add    dram    7la9k5ABKWg1nzaMCbVW   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- P1bZmJABKWg1nzaMM7hk    add    dram    71a9k5ABKWg1nzaMCbVZ   2024-07-09_18-54-47    PASS      1.0     4e3cc801c
- QFbZmJABKWg1nzaMM7hm    add    dram    8Fa9k5ABKWg1nzaMCbVa   2024-07-09_18-54-48    PASS      1.0     4e3cc801c
- QVbZmJABKWg1nzaMM7hp    add    dram    8Va9k5ABKWg1nzaMCbVd   2024-07-09_18-54-48    PASS      1.0     4e3cc801c
- QlbZmJABKWg1nzaMM7hq    add    dram    8la9k5ABKWg1nzaMCbVf   2024-07-09_18-54-48    PASS      1.0     4e3cc801c
-```
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --vector-id 6Va9k5ABKWg1nzaMCbVL vector
-
-{'sweep_name': 'add',
- 'timestamp': '2024-07-08_19-05-57',
- 'batch_sizes': '(1,)',
- 'height': '384',
- 'width': '4096',
- 'broadcast': 'w',
- 'input_a_dtype': 'DataType.BFLOAT16',
- 'input_b_dtype': 'DataType.BFLOAT16',
- 'input_a_layout': 'Layout.TILE',
- 'input_b_layout': 'Layout.TILE',
- 'input_b_memory_config': {'type': 'tt_lib.tensor.MemoryConfig',
-                           'memory_layout': 'TensorMemoryLayout.INTERLEAVED',
-                           'buffer_type': 'BufferType.DRAM'},
- 'input_a_memory_config': {'type': 'tt_lib.tensor.MemoryConfig',
-                           'memory_layout': 'TensorMemoryLayout.INTERLEAVED',
-                           'buffer_type': 'BufferType.DRAM'},
- 'output_memory_config': {'type': 'tt_lib.tensor.MemoryConfig',
-                          'memory_layout': 'TensorMemoryLayout.INTERLEAVED',
-                          'buffer_type': 'BufferType.DRAM'},
- 'suite_name': 'dram',
- 'status': 'VectorStatus.VALID'}
-```
-
-```
-$ python3 tests/sweep_framework/sweeps_query.py --elastic corp --module-name add --run-id TlbZmJABKWg1nzaMPbiV result
-
-{'sweep_name': 'add',
- 'suite_name': 'l1',
- 'vector_id': '_la9k5ABKWg1nzaMCbWd',
- 'status': 'TestStatus.NOT_RUN',
- 'message': 'INVALID VECTOR: Broadcasting along width is not supported for row '
-            'major layout',
- 'timestamp': '2024-07-09_18-54-51',
- 'git_hash': '4e3cc801c'}
-```
-
-## Database
-
-Elasticsearch instances are hosted on tt-corp and tt-cloud networks. Use the appropriate flag depending on your environment.
-
-Access credentials are shared separately.
-
-
 ## FAQ / Troubleshooting
 
 - If you see an error like the following, it means you did not set the `ELASTIC_USERNAME` and/or `ELASTIC_PASSWORD` environment variables:
@@ -611,3 +384,13 @@ ModuleNotFoundError: No module named 'elasticsearch'
 ```
 
 - TTNN class pybinds need to use the `tt_pybind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `py::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these pybinds.
+
+- Code within the `invalidate_vector` function or any code / generators used within `parameters` must NOT include any device code. These functions are intended to be run on CPU only, without access to a device. If you wish to filter tests by device architecture, see the [Device Fixture](#device-fixture) section.
+
+- Before merging new tests / modified tests to main, please verify that your changes can generate tests and execute by testing locally, and also using the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) pipeline with your branch and modified test(s) selected.
+
+## Database
+
+Elasticsearch instances are hosted on tt-corp and tt-cloud networks. Use the appropriate flag depending on your environment.
+
+Access credentials are shared separately.

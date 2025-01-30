@@ -112,21 +112,22 @@ ALWI void add_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
 
+// clang-format off
 /**
  * Associated init function that must be called before calling a bcast op.
  *
  * Return value: None
  *
  *
- * | Argument       | Description                                                   | Type          | Valid Range |
- * Required |
- * |----------------|---------------------------------------------------------------|---------------|------------------------------------------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31 | True |
- * | icb1           | The indentifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31 | True |
- * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31 | False |
+ * | Argument       | Description                                                   | Type          | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|---------------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t      | 0 to 31     | True     |
+ * | icb1           | The indentifier of the circular buffer (CB) containing B      | uint32_t      | 0 to 31     | True     |
+ * | ocb            | The indentifier of the circular buffer (CB) containing output | uint32_t      | 0 to 31     | False    |
  */
+ // clang-format on
 template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim>
-void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16) {
+void init_bcast(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     if constexpr (tBcastOp == ELWMUL) {
         MATH((llk_math_eltwise_binary_init<tBcastOp, tBcastDim, MATH_FIDELITY>()));
     } else {
@@ -159,6 +160,7 @@ ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
     UNPACK((llk_unpack_AB<tBcastDim>(icb0, icb1, itile0, itile1)));
 }
 
+// clang-format off
 /**
  * This documentation applies to either one of the 3 broadcast operation variants -
  * *add_tiles_bcast*, *sub_tiles_bcast* and *mul_tiles_bcast*.
@@ -189,18 +191,16 @@ ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  * DOX-TODO(AP): verify that the bcast tile is actually required to be filled
  * with zeros.
  *
- * | Argument       | Description                                              | Type          | Valid Range | Required
- * |
+ * | Argument       | Description                                              | Type          | Valid Range                                    | Required |
  * |----------------|----------------------------------------------------------|---------------|------------------------------------------------|----------|
- * | tBcastDim      | Broadcast dimension                                      | BroadcastType | One of Dim::R, Dim::C,
- * Dim::RC.                | True     | | in0_cb_id      | The identifier of the circular buffer (CB) containing A  |
- * uint32_t      | 0 to 31                                        | True     | | in1_cb_id      | The indentifier of the
- * circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     | |
- * in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the
- * size of the CB           | True     | | in1_tile_index | The index of tile B within the second CB                 |
- * uint32_t      | Must be less than the size of the CB           | True     | | dst_tile_index | The index of the tile
- * in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
+ * | tBcastDim      | Broadcast dimension                                      | BroadcastType | One of Dim::R, Dim::C, Dim::RC.                | True     | 
+ * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t      | 0 to 31                                        | True     | 
+ * | in1_cb_id      | The indentifier of the circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     | 
+ * | in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the size of the CB           | True     | 
+ * | in1_tile_index | The index of tile B within the second CB                 | uint32_t      | Must be less than the size of the CB           | True     | 
+ * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 template <BroadcastType tBcastDim>
 ALWI void add_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst);
@@ -226,7 +226,7 @@ ALWI void mul_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_rows to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init_with_operands<ELWADD, BroadcastType::ROW, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -235,7 +235,7 @@ ALWI void add_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_cols to be executed
  * correctly. Required to be called before add_tiles_bcast if using column as broadcast type
  */
-ALWI void add_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::COL>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -245,7 +245,7 @@ ALWI void add_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_bcast_scalar to be
  * executed correctly.
  */
-ALWI void add_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void add_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWADD, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -255,7 +255,7 @@ ALWI void add_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
@@ -278,7 +278,7 @@ ALWI void mul_tiles_bcast_scalar(uint32_t icb0, uint32_t icb1, uint32_t itile0, 
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for mul_bcast_cols to be executed
  * correctly.
  */
-ALWI void mul_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::COL, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -287,7 +287,7 @@ ALWI void mul_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
 /**
  * Performs a switch-from-another-op tile hw reconfiguration step needed for mul_bcast_rows to be executed correctly.
  */
-ALWI void mul_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_bcast_rows_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, BroadcastType::ROW, MATH_FIDELITY>()));
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
@@ -297,7 +297,7 @@ ALWI void mul_bcast_rows_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_bcast_cols to be executed
  * correctly.
  */
-ALWI void sub_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void sub_bcast_cols_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::COL, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::COL>(icb0, icb1)));
@@ -307,7 +307,7 @@ ALWI void sub_bcast_cols_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_scalar to be
  * executed correctly.
  */
-ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void sub_tiles_bcast_scalar_init_short(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::SCALAR, MATH_FIDELITY>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));

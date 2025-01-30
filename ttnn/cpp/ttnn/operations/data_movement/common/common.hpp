@@ -5,14 +5,14 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/types.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
+ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
@@ -170,8 +170,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape = std::nullopt,
-    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR,
-    bool halo = false);
+    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
 
 std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coord(
     const std::span<const uint32_t>& tensor_shape,

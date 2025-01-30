@@ -52,12 +52,12 @@ void PagedUpdateCacheDeviceOperation::validate(
     };
 
     const auto validateTensorShapes = [](const Tensor& cache_tensor, const Tensor& input_tensor) {
-        TT_FATAL(input_tensor.get_legacy_shape()[0] == 1, "Dim 0 of input tensor must be 1");
+        TT_FATAL(input_tensor.get_padded_shape()[0] == 1, "Dim 0 of input tensor must be 1");
         TT_FATAL(
             cache_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
             "Only interleaved cache is supported");
         TT_FATAL(
-            input_tensor.get_legacy_shape()[-1] == cache_tensor.get_legacy_shape()[-1],
+            input_tensor.get_padded_shape()[-1] == cache_tensor.get_padded_shape()[-1],
             "Last dim of input tensor must match last dim of cache tensor");
     };
 
@@ -69,11 +69,11 @@ void PagedUpdateCacheDeviceOperation::validate(
         if (!paged_cache) {
             if (share_cache) {
                 TT_FATAL(
-                    cache_tensor.get_legacy_shape()[0] == 1,
+                    cache_tensor.get_padded_shape()[0] == 1,
                     "Share cache feature expects cache tensor to have batch of 1");
             } else {
                 TT_FATAL(
-                    input_tensor.get_legacy_shape()[1] == cache_tensor.get_legacy_shape()[0],
+                    input_tensor.get_padded_shape()[1] == cache_tensor.get_padded_shape()[0],
                     "Expect batch in input tensor match the batch in cache tensor");
             }
         } else {
@@ -84,10 +84,10 @@ void PagedUpdateCacheDeviceOperation::validate(
             TT_FATAL(page_table.get_dtype() == DataType::INT32, "Error");
             TT_FATAL(page_table.get_layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                page_table.get_legacy_shape()[0] == input_tensor.get_legacy_shape()[1],
+                page_table.get_padded_shape()[0] == input_tensor.get_padded_shape()[1],
                 "Batch size between page_table and input_tensor must match");
             TT_FATAL(
-                page_table.get_legacy_shape()[1] <= cache_tensor.get_legacy_shape()[0],
+                page_table.get_padded_shape()[1] <= cache_tensor.get_padded_shape()[0],
                 "max_num_blocks_per_seq must be less than max_num_blocks");
         }
     };
@@ -104,7 +104,7 @@ void PagedUpdateCacheDeviceOperation::validate(
             const auto& update_idxs_tensor = optional_input_tensors.at(0).value();
             TT_FATAL(update_idxs_tensor.get_dtype() == DataType::INT32, "Error");
             TT_FATAL(update_idxs_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
-            num_indices = update_idxs_tensor.get_legacy_shape()[0];
+            num_indices = update_idxs_tensor.get_padded_shape()[0];
 
             TT_FATAL(update_idxs_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(update_idxs_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
@@ -112,16 +112,16 @@ void PagedUpdateCacheDeviceOperation::validate(
             num_indices = update_idxs.size();
         }
 
-        TT_FATAL(input_tensor.get_legacy_shape()[1] == num_indices, "Number of update_idxs should match batch size");
+        TT_FATAL(input_tensor.get_padded_shape()[1] == num_indices, "Number of update_idxs should match batch size");
     };
 
     const auto validateSharding = [](const Tensor& input_tensor) {
         TT_FATAL(input_tensor.is_sharded(), "Error");
         if (input_tensor.is_sharded()) {
             TT_FATAL(input_tensor.memory_config().memory_layout != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_legacy_shape()[-1], "Error");
+            TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.get_padded_shape()[-1], "Error");
             TT_FATAL(
-                (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) %
+                (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==
                     0,
                 "Error");
@@ -163,9 +163,9 @@ void PagedUpdateCacheDeviceOperation::validate(
         TT_FATAL(page_table_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
         TT_FATAL(page_table_tensor.get_dtype() == DataType::INT32, "Error");
 
-        auto cache_shape = cache_tensor.get_legacy_shape();
-        auto input_shape = input_tensor.get_legacy_shape();
-        auto page_table_shape = page_table_tensor.get_legacy_shape();
+        auto cache_shape = cache_tensor.get_padded_shape();
+        auto input_shape = input_tensor.get_padded_shape();
+        auto page_table_shape = page_table_tensor.get_padded_shape();
 
         TT_FATAL(batch_idx <= cache_shape[0], "Error");
         TT_FATAL(
@@ -205,13 +205,7 @@ void PagedUpdateCacheDeviceOperation::validate(
     }
 }
 
-const std::vector<tt::tt_metal::LegacyShape> PagedUpdateCacheDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
-    // Do nothing because it's an in-place operation
-    return {};
-}
-
-std::vector<Tensor> PagedUpdateCacheDeviceOperation::create_output_tensors(
+const std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // Do nothing because it's an in-place operation
     return {};

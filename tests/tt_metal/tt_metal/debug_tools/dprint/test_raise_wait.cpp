@@ -5,8 +5,8 @@
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for DPrint RAISE/WAIT between cores and riscs.
@@ -218,7 +218,7 @@ TestConstCharStrNC{4,4}
 TestStrBR{4,4}
 +++++++++++++++)";
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     // Set up program and command queue
     Program program = Program();
 
@@ -280,7 +280,7 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }
 
 TEST_F(DPrintFixture, TensixTestPrintRaiseWait) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

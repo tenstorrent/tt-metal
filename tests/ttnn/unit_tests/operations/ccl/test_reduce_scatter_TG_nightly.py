@@ -11,6 +11,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     create_and_load_sub_device_manager_with_fabric_interface,
     teardown_fabric_interface,
+    create_global_semaphore_with_same_address,
 )
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
@@ -157,6 +158,27 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         f"full_mesh_input_shape: {full_mesh_input_shape}, dim: {dim}, reduce_scatter_instances_concat_dim: {reduce_scatter_instances_concat_dim}, num_devices_per_line: {num_devices_per_line}"
     )
 
+    sub_device_stall_group = []
+    if use_reduce_scatter_async:
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
+        ccl_sub_device_crs = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        )
+        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+        worker_sub_device_id = ttnn.SubDeviceId(0)
+        if create_persistent_fabric:
+            logger.info("Create persistent fabric interface")
+            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
+                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
+            )
+            logger.info("Done Create persistent fabric interface")
+            sub_device_stall_group = [worker_sub_device_id]
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+        # create global semaphore handles
+        from_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+        to_remote_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    else:
+        worker_sub_device_id = None
     ##
     ## Compute golden
     ##
@@ -198,14 +220,13 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     if input_shard_spec is not None:
         output_shard_shape = list(input_shard_spec.shape)
         if dim == 3:
-            output_shard_shape[1] *= num_devices_per_line
+            output_shard_shape[1] //= num_devices_per_line
         else:
-            output_shard_shape[0] *= num_devices_per_line
+            output_shard_shape[0] //= num_devices_per_line
         output_shard_spec = ttnn.ShardSpec(
             input_shard_spec.grid,
             output_shard_shape,
             input_shard_spec.orientation,
-            False,
         )
     output_mem_config = ttnn.MemoryConfig(tensor_memory_layout, buffer_type=buffer_type, shard_spec=output_shard_spec)
     ttnn_tensor = ttnn.from_torch(
@@ -217,29 +238,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-
-    if use_reduce_scatter_async:
-        compute_grid_size = mesh_device.compute_with_storage_grid_size()
-        worker_sub_device = ttnn.SubDevice(
-            [
-                ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1)
-                        )
-                    }
-                )
-            ]
-        )
-        worker_sub_device_id = ttnn.SubDeviceId(0)
-        if create_persistent_fabric:
-            logger.info("Create persistent fabric interface")
-            mesh_sub_device_manager_id = create_and_load_sub_device_manager_with_fabric_interface(
-                mesh_device, [worker_sub_device], 0, 0, enable_persistent_fabric
-            )
-            logger.info("Done Create persistent fabric interface")
-    else:
-        worker_sub_device_id = None
 
     if trace_mode:
         ttnn_tensor_out = run_with_trace(
@@ -254,6 +252,7 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
             num_iter=num_iters,
         )
     else:
+        logger.info(f"Running {num_iters} iterations of reduce scatter")
         for _ in range(num_iters):
             if use_reduce_scatter_async:
                 ttnn_tensor_out = ttnn.experimental.reduce_scatter_async(
@@ -261,12 +260,13 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     dim=dim,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
+                    from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+                    to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
                     math_op=math_op,
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
                     subdevice_id=worker_sub_device_id,
-                    create_semaphore_handles=True,
                 )
             else:
                 ttnn_tensor_out = ttnn.reduce_scatter(
@@ -279,14 +279,13 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                 )
-        for d in mesh_device.get_devices():
-            if use_reduce_scatter_async and enable_persistent_fabric:
-                ttnn.synchronize_device(d, sub_device_ids=[worker_sub_device_id])
-            else:
-                ttnn.synchronize_device(d)
+            if enable_persistent_fabric:
+                ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         logger.info("Tearing down persistent fabric interface")
+        mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
         logger.info("Done tearing down persistent fabric interface")
 

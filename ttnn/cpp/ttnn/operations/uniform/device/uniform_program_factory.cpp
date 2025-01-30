@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
 
@@ -20,7 +20,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    Device* device = output.device();
+    IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
     auto core_h = grid.y;
 

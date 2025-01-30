@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "cpp/ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace experimental {
@@ -38,7 +37,7 @@ void AllGatherMatmul::validate(
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1,
+        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -219,7 +218,9 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     ttnn::operations::matmul::get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b,
+                    /*output_tile=*/std::nullopt,
+                    /*global_cb=*/std::nullopt});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

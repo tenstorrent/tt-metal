@@ -36,7 +36,7 @@ void MAIN {
     uint32_t bias_cb_id = tt::CBIndex::c_3;
 
 #ifdef FUSE_BIAS
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id);
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id, out_cb_id);
 #endif
 
     mm_init(in0_cb_id, in1_cb_id, out_cb_id);
@@ -100,7 +100,7 @@ void MAIN {
                         // Redundant wait since we know data was just pushed
                         cb_wait_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                         cb_wait_front(bias_cb_id, in1_per_core_w);
-                        add_bcast_rows_init_short();
+                        add_bcast_rows_init_short(mm_bias_intermediate_cb_id, bias_cb_id);
                         // reconfigure unpacker df for src B
                         reconfig_data_format(mm_bias_intermediate_cb_id, bias_cb_id);
                         // reconfigure packer df for out

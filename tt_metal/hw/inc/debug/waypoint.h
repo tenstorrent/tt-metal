@@ -15,7 +15,7 @@
 
 #include <utility>
 
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_WAYPOINT) && !defined(FORCE_WATCHER_OFF)
 #include <cstddef>

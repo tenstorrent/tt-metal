@@ -62,7 +62,8 @@ void dump_multi_device_host_storage(
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
             },
             storage.get_buffer(0));
-        output_stream.write(reinterpret_cast<const char*>(&storage.shapes.at(0)), sizeof(ttnn::Shape));
+        ttnn::Shape shape = storage.specs.at(0).shape();
+        output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
     } else {
         for (int i = 0; i < num_buffers; i++) {
             std::visit(
@@ -74,7 +75,8 @@ void dump_multi_device_host_storage(
                 },
                 storage.get_buffer(i));
         }
-        for (const auto& shape : storage.shapes) {
+        for (const auto& spec : storage.specs) {
+            auto shape = spec.shape();
             output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
         }
     }
@@ -90,14 +92,15 @@ OwnedStorage load_owned_storage(std::ifstream& input_stream) {
 }
 
 template <typename T>
-MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_stream, MeshDevice* mesh_device) {
+MultiDeviceHostStorage load_multi_device_host_storage(
+    std::ifstream& input_stream, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     std::size_t num_buffers = 0;
     DistributedTensorConfig strategy;
     input_stream.read(reinterpret_cast<char*>(&num_buffers), sizeof(std::size_t));
     input_stream.read(reinterpret_cast<char*>(&strategy), sizeof(DistributedTensorConfig));
 
     std::vector<OwnedBuffer> buffers;
-    std::vector<ttnn::Shape> shapes;
+    std::vector<ttnn::TensorSpec> specs;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::size_t size = 0;
         input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
@@ -106,11 +109,15 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
         input_stream.read(reinterpret_cast<char*>(buffer.begin()), sizeof(T) * size);
         input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
         buffers.push_back(buffer);
-        shapes.push_back(shape);
+        TensorSpec spec(
+            shape.logical_shape(),
+            TensorLayout::fromPaddedShape(
+                data_type, PageConfig(layout), MemoryConfig{}, shape.logical_shape(), shape.padded_shape()));
+        specs.push_back(spec);
 
         for (std::size_t i = 1; i < mesh_device->num_devices(); ++i) {
             buffers.push_back(owned_buffer::Buffer<T>{buffer.get_ptr()});
-            shapes.push_back(shape);
+            specs.push_back(spec);
         }
 
     } else {
@@ -126,11 +133,15 @@ MultiDeviceHostStorage load_multi_device_host_storage(std::ifstream& input_strea
         for (std::size_t i = 0; i < num_buffers; ++i) {
             auto shape = ttnn::Shape{};
             input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
-            shapes.push_back(shape);
+            TensorSpec spec(
+                shape.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    data_type, PageConfig(layout), MemoryConfig{}, shape.logical_shape(), shape.padded_shape()));
+            specs.push_back(spec);
         }
     }
 
-    return {strategy, buffers, shapes};
+    return {strategy, buffers, specs};
 }
 
 OwnedStorage load_owned_storage(std::ifstream& input_stream, DataType data_type) {
@@ -158,29 +169,30 @@ OwnedStorage load_owned_storage(std::ifstream& input_stream, DataType data_type)
 }
 
 MultiDeviceHostStorage load_multi_device_host_storage(
-    std::ifstream& input_stream, DataType data_type, MeshDevice* mesh_device) {
+    std::ifstream& input_stream, DataType data_type, Layout layout, MeshDevice* mesh_device) {
     if (data_type == DataType::UINT32 or data_type == DataType::BFLOAT8_B or data_type == DataType::BFLOAT4_B) {
         using T = std::uint32_t;
-        return load_multi_device_host_storage<T>(input_stream, mesh_device);
+        return load_multi_device_host_storage<T>(input_stream, data_type, layout, mesh_device);
     } else if (data_type == DataType::UINT16) {
         using T = std::uint16_t;
-        return load_multi_device_host_storage<T>(input_stream, mesh_device);
+        return load_multi_device_host_storage<T>(input_stream, data_type, layout, mesh_device);
     } else if (data_type == DataType::FLOAT32) {
         using T = float;
-        return load_multi_device_host_storage<T>(input_stream, mesh_device);
+        return load_multi_device_host_storage<T>(input_stream, data_type, layout, mesh_device);
     } else if (data_type == DataType::BFLOAT16) {
         using T = bfloat16;
-        return load_multi_device_host_storage<T>(input_stream, mesh_device);
+        return load_multi_device_host_storage<T>(input_stream, data_type, layout, mesh_device);
     } else {
         TT_THROW("Unsupported DataType");
     }
 }
 
 template <typename T>
-Storage load_storage(std::ifstream& input_stream, DataType data_type, StorageType storage_type, T device) {
+Storage load_storage(
+    std::ifstream& input_stream, DataType data_type, Layout layout, StorageType storage_type, T device) {
     if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
-            return load_multi_device_host_storage(input_stream, data_type, device);
+            return load_multi_device_host_storage(input_stream, data_type, layout, device);
         } else {
             TT_THROW("MeshDevice is required for MULTI_DEVICE_HOST storage");
         }
@@ -283,9 +295,14 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
             }
         }
 
-        auto storage = load_storage(input_stream, data_type, storage_type, device);
+        auto storage = load_storage(input_stream, data_type, layout, storage_type, device);
 
-        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        auto tensor = Tensor(
+            std::move(storage),
+            TensorSpec(
+                shape.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
             tensor = tensor.to(device, memory_config);
         } else if (has_memory_config) {
@@ -304,7 +321,12 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 
         auto storage = load_owned_storage(input_stream, data_type);
-        auto tensor = Tensor(std::move(storage), shape, data_type, layout);
+        auto tensor = Tensor(
+            std::move(storage),
+            TensorSpec(
+                shape.logical_shape(),
+                TensorLayout::fromPaddedShape(
+                    data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
             tensor = tensor.to(device);
         }
@@ -313,8 +335,8 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 }
 
 // Explicit instantiations
-Tensor load_tensor(const std::string& file_name, Device* device) {
-    return load_tensor_helper<Device*>(file_name, device);
+Tensor load_tensor(const std::string& file_name, IDevice* device) {
+    return load_tensor_helper<IDevice*>(file_name, device);
 }
 Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     return load_tensor_helper<MeshDevice*>(file_name, device);
@@ -337,7 +359,6 @@ void dump_memory_config(std::ostream& output_stream, const MemoryConfig& memory_
         }
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.shape), sizeof(std::array<uint32_t, 2>));
         output_stream.write(reinterpret_cast<const char*>(&shard_spec.orientation), sizeof(ShardOrientation));
-        output_stream.write(reinterpret_cast<const char*>(&shard_spec.halo), sizeof(bool));
     }
 }
 
@@ -355,8 +376,11 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
     BufferType buffer_type;
     bool has_shard_spec;
     input_stream.read(reinterpret_cast<char*>(&version_id), sizeof(std::uint8_t));
-    if (version_id != VERSION_ID) {
-        throw std::runtime_error(fmt::format("Unsupported version_id: {}", version_id));
+
+    // Allow only backward compatible versions
+    if (version_id > VERSION_ID) {
+        throw std::runtime_error(
+            fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
     }
     input_stream.read(reinterpret_cast<char*>(&memory_layout), sizeof(TensorMemoryLayout));
     input_stream.read(reinterpret_cast<char*>(&buffer_type), sizeof(BufferType));
@@ -368,7 +392,6 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
         std::set<CoreRange> core_ranges;
         std::array<uint32_t, 2> shape;
         ShardOrientation orientation;
-        bool halo;
 
         input_stream.read(reinterpret_cast<char*>(&num_core_ranges), sizeof(std::size_t));
         for (auto index = 0; index < num_core_ranges; index++) {
@@ -378,8 +401,12 @@ MemoryConfig load_memory_config(std::ifstream& input_stream) {
         }
         input_stream.read(reinterpret_cast<char*>(&shape), sizeof(std::array<uint32_t, 2>));
         input_stream.read(reinterpret_cast<char*>(&orientation), sizeof(ShardOrientation));
-        input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
-        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation, halo};
+        if (version_id <= 3) {
+            // Read halo for backward compatibility.
+            bool halo;
+            input_stream.read(reinterpret_cast<char*>(&halo), sizeof(bool));
+        }
+        shard_spec = {CoreRangeSet{core_ranges}, shape, orientation};
     }
     return MemoryConfig{memory_layout, buffer_type, shard_spec};
 }

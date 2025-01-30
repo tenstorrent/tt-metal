@@ -5,11 +5,11 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/rtoptions.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 namespace ttnn {
 
@@ -35,7 +35,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::CloseDevice(device_); }
 
-    tt::tt_metal::Device* device_;
+    tt::tt_metal::IDevice* device_;
     tt::ARCH arch_;
     size_t num_devices_;
 };
@@ -64,7 +64,7 @@ protected:
 
     void TearDown() override { tt::tt_metal::detail::CloseDevices(devs); }
 
-    std::map<chip_id_t, tt::tt_metal::Device*> devs;
+    std::map<chip_id_t, tt::tt_metal::IDevice*> devs;
     tt::ARCH arch_;
     size_t num_devices_;
 };

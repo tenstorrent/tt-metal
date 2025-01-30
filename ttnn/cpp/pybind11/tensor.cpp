@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "tensor.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include "cpp/pybind11/json_class.hpp"
 #include "export_enum.hpp"
 
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -18,7 +18,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "tt_metal/host_api.hpp"
 
 using namespace tt::tt_metal;
 
@@ -80,7 +79,8 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
         .value("L1", BufferType::L1)
-        .value("L1_SMALL", BufferType::L1_SMALL);
+        .value("L1_SMALL", BufferType::L1_SMALL)
+        .value("TRACE", BufferType::TRACE);
 
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
@@ -92,6 +92,10 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
 
     py::class_<tt::tt_metal::LegacyShape>(m_tensor, "Shape", R"doc(
         Class defining tensor shape
+    )doc");
+
+    py::class_<ttnn::TensorSpec>(m_tensor, "TensorSpec", R"doc(
+        Class defining the specification of Tensor
     )doc");
 
     tt_serializable_class<MemoryConfig>(m_tensor, "MemoryConfig", R"doc(
@@ -198,6 +202,12 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     py::implicitly_convertible<std::vector<uint32_t>, LegacyShape>();
 
+    auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
+    pyTensorSpec
+        .def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
+
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig
         .def(
@@ -268,18 +278,28 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     auto pyShardSpec = static_cast<py::class_<ShardSpec>>(m_tensor.attr("ShardSpec"));
     pyShardSpec
-        .def(py::init<>([](const CoreRangeSet& core_sets,
-                           const std::array<uint32_t, 2>& shard_shape,
-                           const ShardOrientation& shard_orientation,
-                           const bool& halo,
-                           const ShardMode& shard_mode) { return ShardSpec(core_sets, shard_shape, shard_orientation, halo, shard_mode); }),
-            py::arg("grid"), py::arg("shard_shape"), py::arg("shard_orientation"), py::arg("halo"), py::arg("shard_mode") = ShardMode::PHYSICAL)
-        .def(py::init<>([](const CoreRangeSet& core_sets,
-                           const std::array<uint32_t, 2>& shard_shape,
-                           const std::array<uint32_t, 2>& physical_shard_shape,
-                           const ShardOrientation& shard_orientation,
-                           const bool& halo) { return ShardSpec(core_sets, shard_shape, physical_shard_shape, shard_orientation, halo); }),
-            py::arg("grid"), py::arg("shard_shape"), py::arg("physical_shard_shape"), py::arg("shard_orientation"), py::arg("halo"))
+        .def(
+            py::init<>([](const CoreRangeSet& core_sets,
+                          const std::array<uint32_t, 2>& shard_shape,
+                          const ShardOrientation& shard_orientation,
+                          const ShardMode& shard_mode) {
+                return ShardSpec(core_sets, shard_shape, shard_orientation, shard_mode);
+            }),
+            py::arg("grid"),
+            py::arg("shard_shape"),
+            py::arg("shard_orientation"),
+            py::arg("shard_mode") = ShardMode::PHYSICAL)
+        .def(
+            py::init<>([](const CoreRangeSet& core_sets,
+                          const std::array<uint32_t, 2>& shard_shape,
+                          const std::array<uint32_t, 2>& physical_shard_shape,
+                          const ShardOrientation& shard_orientation) {
+                return ShardSpec(core_sets, shard_shape, physical_shard_shape, shard_orientation);
+            }),
+            py::arg("grid"),
+            py::arg("shard_shape"),
+            py::arg("physical_shard_shape"),
+            py::arg("shard_orientation"))
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
@@ -314,7 +334,7 @@ void tensor_mem_config_module(py::module& m_tensor) {
 
     m_tensor.def(
         "load_tensor",
-        py::overload_cast<const std::string&, Device*>(&load_tensor),
+        py::overload_cast<const std::string&, IDevice*>(&load_tensor),
         py::arg("file_name"),
         py::arg("device") = nullptr,
         R"doc(Load tensor to file)doc");

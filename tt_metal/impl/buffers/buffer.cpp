@@ -2,25 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <buffer.hpp>
 
 #include "tt_metal/buffer.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/allocator/allocator.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/types.hpp"
+#include <assert.hpp>
+#include <math.hpp>
+#include <tt_metal.hpp>
+#include <allocator.hpp>
+#include <device.hpp>
+#include <types.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <utility>
-#include "tt_metal/common/base.hpp"
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <buffer_constants.hpp>
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
-#include "tt_stl/reflection.hpp"
+#include <reflection.hpp>
 
 namespace tt {
 
@@ -206,7 +205,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     return buffer_page_mapping;
 }
 
-void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
+void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, IDevice *device, BufferType buffer_type, const std::optional<ShardSpecBuffer>& shard_parameters) {
     // No need to validate if we're using the global allocator or not sharding
     if (!sub_device_id.has_value()) {
         return;
@@ -219,7 +218,7 @@ void validate_sub_device_id(std::optional<SubDeviceId> sub_device_id, Device *de
 }
 
 Buffer::Buffer(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -243,9 +242,9 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->get_initialized_allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->get_initialized_allocator().get();
+        this->allocator_ = device->allocator().get();
     }
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
@@ -254,7 +253,7 @@ Buffer::Buffer(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
     const BufferType buffer_type,
@@ -294,7 +293,7 @@ std::shared_ptr<Buffer> Buffer::create(
 }
 
 std::shared_ptr<Buffer> Buffer::create(
-    Device *device,
+    IDevice* device,
     DeviceAddr address,
     DeviceAddr size,
     DeviceAddr page_size,
@@ -415,18 +414,24 @@ bool Buffer::is_trace() const {
 
 }
 
+bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
+
+bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
+    return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
+}
+
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
+    return allocator_->get_dram_channel_from_bank_id(bank_id);
 }
 
 CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
+    return allocator_->get_logical_core_from_bank_id(bank_id);
 }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
@@ -434,7 +439,7 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
 }
 
 DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     uint32_t offset;
     if (is_sharded(this->buffer_layout())) {
@@ -448,9 +453,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     return this->address() + offset;
 }
 
-uint32_t Buffer::alignment() const {
-    return this->allocator_->config.alignment;
-}
+uint32_t Buffer::alignment() const { return this->allocator_->get_config().alignment; }
 
 DeviceAddr Buffer::aligned_page_size() const {
     return align(page_size(), this->alignment());
@@ -460,7 +463,8 @@ DeviceAddr Buffer::aligned_size() const {
 }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
-    uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
+    uint32_t num_banks =
+        is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
@@ -491,8 +495,8 @@ std::optional<uint32_t> Buffer::num_cores() const {
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    allocator::bank_offset(*this->allocator_, this->buffer_type_, bank_id);
-    DeviceAddr base_page_address = this->address() + allocator::bank_offset(*this->allocator_, this->buffer_type_, bank_id);
+    allocator_->get_bank_offset(buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
@@ -549,14 +553,12 @@ tt_metal::ShardSpec from_json_t<tt_metal::ShardSpec>::operator()(const nlohmann:
             from_json<CoreRangeSet>(json_object.at("grid")),
             from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
             physical_shard_shape.value(),
-            from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-            from_json<bool>(json_object.at("halo"))};
+            from_json<tt_metal::ShardOrientation>(json_object.at("orientation"))};
     }
     return tt_metal::ShardSpec{
         from_json<CoreRangeSet>(json_object.at("grid")),
         from_json<std::array<uint32_t, 2>>(json_object.at("shape")),
         from_json<tt_metal::ShardOrientation>(json_object.at("orientation")),
-        from_json<bool>(json_object.at("halo")),
         shard_mode};
 }
 }

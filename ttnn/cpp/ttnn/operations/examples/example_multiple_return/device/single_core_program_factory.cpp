@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "example_multiple_return_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::examples {
 ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t
@@ -33,7 +33,7 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
 
     uint32_t num_tiles = input_tensor.volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::Device* device = input_tensor.device();
+    tt::tt_metal::IDevice* device = input_tensor.device();
 
     CoreCoord compute_with_storage_grid_size = {1, 1};
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

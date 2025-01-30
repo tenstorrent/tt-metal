@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/sub_device/sub_device.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 
@@ -27,8 +27,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto sharded_cores_1_vec = corerange_to_cores(sharded_cores_1, std::nullopt, true);
     auto sharded_cores_2_vec = corerange_to_cores(sharded_cores_2, std::nullopt, true);
 
-    ShardSpecBuffer shard_spec_buffer_1 = ShardSpecBuffer(
-        sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_1.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_1 =
+        ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t page_size_1 = 32;
     ShardedBufferConfig shard_config_1 = {
         nullptr,
@@ -40,8 +40,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto input_1 =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, shard_config_1.size / sizeof(uint32_t));
 
-    ShardSpecBuffer shard_spec_buffer_2 = ShardSpecBuffer(
-        sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, false, {1, 1}, {sharded_cores_2.num_cores(), 1});
+    ShardSpecBuffer shard_spec_buffer_2 =
+        ShardSpecBuffer(sharded_cores_2, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_2.num_cores(), 1});
     uint32_t page_size_2 = 64;
     ShardedBufferConfig shard_config_2 = {
         nullptr,
@@ -62,7 +62,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto device = devices_[0];
     auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
     auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
-    DeviceAddr l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
 
     shard_config_1.device = device;
@@ -133,8 +133,9 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBankIds) {
 
     auto cores_vec = corerange_to_cores(device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}));
     for (const auto& core : cores_vec) {
-        auto global_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core)[0];
-        auto sub_device_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core, SubDeviceId{0})[0];
+        auto global_bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
+        auto sub_device_bank_id =
+            device->allocator(SubDeviceId{0})->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
         EXPECT_EQ(global_bank_id, sub_device_bank_id);
     }
 }

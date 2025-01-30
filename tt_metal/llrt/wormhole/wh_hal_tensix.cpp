@@ -10,7 +10,7 @@
 
 #include "core_config.h"
 #include "dev_mem_map.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc/noc_parameters.h"
 
 #include "hal.hpp"
@@ -72,37 +72,57 @@ HalCoreInfoType create_tensix_mem_map() {
         std::uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
         processor_types.resize(num_processors);
         for (std::size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base, local_init;
+            DeviceAddr fw_base, local_init, fw_launch;
+            uint32_t fw_launch_value;
             switch (processor_class_idx) {
                 case 0: {
                     fw_base = MEM_BRISC_FIRMWARE_BASE;
                     local_init = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                } break;
+                    fw_launch = 0x0; // BRISC is hardcoded to have reset PC of 0
+                    fw_launch_value = generate_risc_startup_addr(fw_base);
+                }
+                break;
                 case 1: {
                     fw_base = MEM_NCRISC_FIRMWARE_BASE;
                     local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                } break;
+                    fw_launch = 0;//fix me;
+                    fw_launch_value = fw_base;
+                }
+                break;
                 case 2: {
                     switch (processor_type_idx) {
                         case 0: {
                             fw_base = MEM_TRISC0_FIRMWARE_BASE;
                             local_init = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0;// fix me;
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                         case 1: {
                             fw_base = MEM_TRISC1_FIRMWARE_BASE;
                             local_init = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0; // fix me;
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                         case 2: {
                             fw_base = MEM_TRISC2_FIRMWARE_BASE;
                             local_init = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH;
-                        } break;
+                            fw_launch = 0; //fix me
+                            fw_launch_value = fw_base;
+                        }
+                        break;
                     }
                 } break;
                 default: TT_THROW("Unexpected processor class {} for Blackhole Tensix", processor_class_idx);
             }
 
-            processor_types[processor_type_idx] =
-                HalJitBuildConfig{.fw_base_addr = fw_base, .local_init_addr = local_init};
+            processor_types[processor_type_idx] = HalJitBuildConfig{
+                .fw_base_addr = fw_base,
+                .local_init_addr = local_init,
+                .fw_launch_addr = fw_launch,
+                .fw_launch_addr_value = fw_launch_value
+            };
         }
         processor_classes[processor_class_idx] = processor_types;
     }

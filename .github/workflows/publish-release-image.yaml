@@ -19,7 +19,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     runs-on:
       - build-docker
       - in-service
@@ -37,12 +36,12 @@ jobs:
       - name: Download wheels
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
@@ -64,23 +63,19 @@ jobs:
         test_group:
           [
               {
-                arch: grayskull,
                 runs-on: ["cloud-virtual-machine", "E150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
               },
               {
-                arch: wormhole_b0,
                 runs-on: ["cloud-virtual-machine", "N150", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
               },
               {
-                arch: wormhole_b0,
                 runs-on: ["cloud-virtual-machine", "N300", "in-service"],
                 cmd: pytest tests/end_to_end_tests,
               },
           ]
     env:
-      ARCH_NAME: ${{ matrix.test_group.arch }}
       LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test_group.runs-on }}
     steps:
@@ -90,7 +85,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.test_group.arch }}
+          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release
           docker_version: ${{ inputs.version }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
@@ -100,7 +95,6 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     runs-on:
       - build-docker
       - in-service
@@ -123,7 +117,7 @@ jobs:
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release/${{ matrix.arch }}
+          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release
           TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
           docker pull $TAG_NAME
           echo "Tagging the image as " $REPO_IMAGE_NAME:$LATEST_TAG

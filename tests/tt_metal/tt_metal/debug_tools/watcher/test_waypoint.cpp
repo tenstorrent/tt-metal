@@ -4,8 +4,8 @@
 
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture* fixture, Device* device) {
+static void RunTest(WatcherFixture* fixture, IDevice* device) {
     // Set up program
     Program program = Program();
 
@@ -128,7 +128,10 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
-    auto check_core = [&](const CoreCoord &logical_core, const CoreCoord &phys_core, bool is_eth_core, bool is_active) {
+    auto check_core = [&](const CoreCoord& logical_core,
+                          const CoreCoord& virtual_core,
+                          bool is_eth_core,
+                          bool is_active) {
         vector<string> expected_waypoints;
         string expected;
         // Need to update the expected strings based on each core.
@@ -145,15 +148,17 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   X,   X,   X,   X  rmsg:* "
+                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   {},   X,   X,   X  rmsg:* "
                     "h_id:0 "
                     "k_id:{}",
                     device->id(),
                     logical_core.x,
                     logical_core.y,
-                    phys_core.x,
-                    phys_core.y,
+                    virtual_core.x,
+                    virtual_core.y,
                     waypoint,
+                    (device->arch() == ARCH::BLACKHOLE) ? "W" : "X",  // TODO (#15448): Uplift this when watcher device
+                                                                      // reader accounts for variable num eth riscs
                     k_id_s);
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -171,8 +176,8 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
                     device->id(),
                     logical_core.x,
                     logical_core.y,
-                    phys_core.x,
-                    phys_core.y,
+                    virtual_core.x,
+                    virtual_core.y,
                     waypoint,
                     waypoint,
                     waypoint,
@@ -192,20 +197,20 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
-            CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
-            check_core(logical_core, phys_core, false, false);
+            CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+            check_core(logical_core, virtual_core, false, false);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, phys_core, true, true);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            check_core(core, virtual_core, true, true);
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, phys_core, true, false);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            check_core(core, virtual_core, true, false);
         }
     }
 }
@@ -213,7 +218,7 @@ static void RunTest(WatcherFixture* fixture, Device* device) {
 }
 
 TEST_F(WatcherFixture, TestWatcherWaypoints) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
     }
 }

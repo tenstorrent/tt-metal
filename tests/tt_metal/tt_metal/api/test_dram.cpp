@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/command_queue.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/logger.hpp>
 
 using namespace tt;
 
@@ -23,7 +23,7 @@ struct DRAMConfig {
     tt_metal::DataMovementConfig data_movement_cfg;
 };
 
-bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
+bool dram_single_core_db(DispatchFixture* fixture, tt_metal::IDevice* device) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -85,7 +85,7 @@ bool dram_single_core_db(DispatchFixture* fixture, tt_metal::Device* device) {
 }
 
 bool dram_single_core(
-    DispatchFixture* fixture, tt_metal::Device* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
+    DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
     // Create a program
     tt_metal::Program program = CreateProgram();
 
@@ -124,7 +124,7 @@ bool dram_single_core(
 }
 
 bool dram_single_core_pre_allocated(
-    DispatchFixture* fixture, tt_metal::Device* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
+    DispatchFixture* fixture, tt_metal::IDevice* device, const DRAMConfig& cfg, std::vector<uint32_t> src_vec) {
     // Create a program
     tt_metal::Program program = CreateProgram();
 

@@ -10,12 +10,12 @@
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::graph {
 
 namespace {
-ttnn::Shape parse_shape(std::string_view shape_string) {
+ttnn::SimpleShape parse_shape(std::string_view shape_string) {
     // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
     auto start = shape_string.find('[') + 1;
     auto end = shape_string.find(']');
@@ -42,7 +42,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
         }
     }
 
-    return ttnn::Shape(shape);
+    return ttnn::SimpleShape(std::move(shape));
 }
 }  // namespace
 

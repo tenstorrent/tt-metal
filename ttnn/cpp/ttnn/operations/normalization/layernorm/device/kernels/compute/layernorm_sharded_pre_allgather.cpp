@@ -48,6 +48,12 @@ void MAIN {
     constexpr uint32_t scaler0 = 0;
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+#ifdef FUSE_PRE_ADD
+    constexpr uint32_t cb_in = tt::CBIndex::c_14;
+#else
+    constexpr uint32_t cb_in = cb_in0;
+#endif
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
@@ -59,9 +65,7 @@ void MAIN {
 
     constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials recieved from other cores
-    const uint32_t cb_reduction_out = is_second_stage_reader ? cb_out : cb_ex2;
-
-    binary_op_init_common(cb_in0, cb_in0, cb_x2);
+    const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -76,18 +80,52 @@ void MAIN {
     num_tiles_per_partial_result = 1;
 #endif
 
-    cb_wait_front(cb_scaler, 1);
+// pre-add x + y
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    add_tiles_init();
+    cb_reserve_back(cb_in, num_tiles_per_block);
+    for (uint32_t i = 0; i < block_h; i++) {
+        index_subblock_w_offset = 0;
+        for (uint32_t j = 0; j < num_subblocks_w; j++) {
+            tile_regs_acquire();
+            for (uint32_t w = 0; w < subblock_w; w++) {
+                index = w + index_subblock_w_offset + index_h_offset;
+                add_tiles(cb_in0, cb_in1, index, index, w);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < subblock_w; i++) {
+                pack_tile(i, cb_in);
+            }
+            tile_regs_release();
+            index_subblock_w_offset += subblock_w;
+        }
+        index_h_offset += block_w;
+    }
+    cb_push_back(cb_in, num_tiles_per_block);
+    cb_wait_front(cb_in, num_tiles_per_block);
+    pack_reconfig_data_format(cb_in, cb_x2);
+#else
+    binary_op_init_common(cb_in, cb_in, cb_x2);
+#endif
+
 #ifndef RMSNORM
-    reconfig_data_format_srcb(cb_in0, cb_scaler);
+    cb_wait_front(cb_scaler, 1);
+#ifdef FUSE_PRE_ADD
+    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
+#else
+    reconfig_data_format_srcb(cb_in, cb_scaler);
+#endif
     // E[x],
     index_h_offset = 0;
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_in0, cb_scaler, cb_ex_partial2);
 
     cb_reserve_back(cb_ex_partial2, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
-            reduce_tile(cb_in0, cb_scaler, w + index_h_offset, scaler0, dst0);
+            reduce_tile(cb_in, cb_scaler, w + index_h_offset, scaler0, dst0);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -95,9 +133,13 @@ void MAIN {
         tile_regs_release();
         index_h_offset += block_w;
     }
-    reduce_revert_delta();
+    reduce_revert_delta(cb_ex_partial2);
     cb_push_back(cb_ex_partial2, block_h);
-    reconfig_data_format_srcb(cb_scaler, cb_in0);
+    reconfig_data_format_srcb(cb_scaler, cb_in);
+#else
+#ifdef FUSE_PRE_ADD
+    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
+#endif
 #endif  // not RMSNORM
 
     // X^2
@@ -110,7 +152,7 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles(cb_in0, cb_in0, index, index, w);
+                mul_tiles(cb_in, cb_in, index, index, w);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -125,14 +167,17 @@ void MAIN {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    reconfig_data_format_srca(cb_in0, cb_x2);
-    reconfig_data_format_srcb(cb_in0, cb_scaler);
+    reconfig_data_format_srca(cb_in, cb_x2);
+    reconfig_data_format_srcb(cb_in, cb_scaler);
 
     cb_wait_front(cb_x2, num_tiles_per_block);
+#ifdef RMSNORM
+    cb_wait_front(cb_scaler, 1);
+#endif  // RMSNORM
 
     cb_reserve_back(cb_ex_partial2, block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
@@ -146,7 +191,7 @@ void MAIN {
         tile_regs_release();
         index_h_offset += block_w;
     }
-    reduce_revert_delta();
+    reduce_revert_delta(cb_ex_partial2);
     cb_pop_front(cb_x2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, block_h);
 
@@ -155,7 +200,7 @@ void MAIN {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
@@ -180,7 +225,7 @@ void MAIN {
 #endif
             tile_regs_release();
         }
-        reduce_revert_delta();
+        reduce_revert_delta(cb_reduction_out);
         cb_push_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
     }
 }

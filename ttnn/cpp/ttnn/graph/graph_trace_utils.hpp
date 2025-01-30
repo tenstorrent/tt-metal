@@ -11,6 +11,8 @@
 
 namespace ttnn::graph {
 
+enum class ExecutionStatus { Success, Error };
+
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 uint32_t extract_l1_output_buffer_allocation_size_per_core(
     const nlohmann::json& trace, size_t interleaved_storage_cores);
@@ -25,7 +27,7 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace);
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace);
 
 struct TensorInfo {
-    ttnn::Shape shape;
+    ttnn::SimpleShape shape;
     uint32_t size = 0;
     tt::tt_metal::BufferType type = tt::tt_metal::BufferType::DRAM;
 

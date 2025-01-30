@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_group_norm_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
@@ -135,7 +135,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
                            im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                           single_tile_size;
-    const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {

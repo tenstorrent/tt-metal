@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "debug/assert.h"
 
-#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -15,22 +15,23 @@ void kernel_main() {
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
     constexpr uint32_t St = get_compile_time_arg_val(2);    // full sequence length of kv cache in tiles
     constexpr uint32_t DHt = get_compile_time_arg_val(3);   // head dim
-    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(4);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(5);
-    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(6);          // num cores per batch
-    constexpr uint32_t num_cores = get_compile_time_arg_val(7);                    // num running cores in total
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));  // semaphore for reducer
-    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));   // semaphore for sender
-    constexpr bool is_out_sharded = get_compile_time_arg_val(10);
-    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(11);
-    constexpr uint32_t num_q_heads = get_compile_time_arg_val(12);
-    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(14);
-    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(15);
-    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(16);
-    constexpr uint32_t num_output_cores = get_compile_time_arg_val(17);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(18);
-    constexpr bool is_causal = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);  // number of tiles in seqlen of a k/v/mask chunk
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(5);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(6);
+    constexpr uint32_t num_cores_per_batch = get_compile_time_arg_val(7);          // num cores per batch
+    constexpr uint32_t num_cores = get_compile_time_arg_val(8);                    // num running cores in total
+    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));  // semaphore for reducer
+    uint32_t output_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));  // semaphore for sender
+    constexpr bool is_out_sharded = get_compile_time_arg_val(11);
+    constexpr uint32_t k_chunk_size = get_compile_time_arg_val(12);
+    constexpr uint32_t num_q_heads = get_compile_time_arg_val(13);
+    constexpr uint32_t num_kv_heads = get_compile_time_arg_val(14);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(15);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(16);
+    constexpr uint32_t num_reducer_cores = get_compile_time_arg_val(17);
+    constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
+    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(19);
+    constexpr bool is_causal = get_compile_time_arg_val(20) == 1;
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -144,7 +145,7 @@ void kernel_main() {
 
     // generate and send mask to compute if causal
     if constexpr (is_causal) {
-        generate_mask<cb_mask_in, PNHt>(k_num_chunks, PSt, cur_pos);
+        generate_mask<cb_mask_in, PNHt, Sk_chunk_t>(k_num_chunks, cur_pos);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
@@ -163,7 +164,7 @@ void kernel_main() {
             // cb_wait_front(cb_intermed_out, num_tiles_to_wait);
             constexpr uint32_t q_read_size = out_chunk_tiles * tile_bytes_intermed;
             constexpr uint32_t ml_read_size = PNHt * tile_bytes_intermed;
-            for (uint32_t block = 0; block < num_cores_to_wait + 1; ++block) {
+            for (uint32_t block = 0; block < num_cores_to_wait; ++block) {
                 cb_reserve_back(cb_out_o, out_chunk_tiles);
                 cb_reserve_back(cb_m_in, PNHt);
                 cb_reserve_back(cb_l_in, PNHt);
@@ -196,46 +197,17 @@ void kernel_main() {
 
         if constexpr (num_kv_heads > 1) {
             // if gqa, we will need to write partial outputs for each head
-            constexpr uint32_t TILE_WIDTH = 32;
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write
             // partial across phase
-            uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
-            uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;           // size of 16 elements (in a row)
+            constexpr uint32_t num_heads_to_write = num_q_heads / num_kv_heads;  // each head is one row in a tile
 
             if (!is_out_sharded) {
-                for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                    uint64_t out_writer_noc_addr = get_noc_addr(out_tile_id, out_writer);
-                    uint32_t l1_read_addr = get_read_ptr(cb_out) + tile * tile_bytes;
-
-                    // write partial output for each head
-                    for (uint32_t head = 0; head < num_heads_to_write; ++head) {
-                        uint32_t starting_row = cur_head * num_heads_to_write + head;
-                        uint32_t in_tile_offset_by_starting_head =
-                            starting_row < 16 ? starting_row * SUBTILE_LINE_BYTES
-                                              : (starting_row - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
-                        uint64_t out_writer_noc_addr_head = out_writer_noc_addr + in_tile_offset_by_starting_head;
-                        uint32_t l1_read_addr_head = l1_read_addr + in_tile_offset_by_starting_head;
-
-                        // Write first phase
-                        noc_async_write(l1_read_addr_head, out_writer_noc_addr_head, SUBTILE_LINE_BYTES);
-
-                        // Write second phase
-                        noc_async_write(
-                            l1_read_addr_head + 256 * ELEMENT_SIZE,
-                            out_writer_noc_addr_head + 256 * ELEMENT_SIZE,
-                            SUBTILE_LINE_BYTES);
-
-                        if (++barrier_count == barrier_threshold) {
-                            noc_async_writes_flushed();
-                            barrier_count = 0;
-                        }
-                    }
-
-                    ++out_tile_id;
-                }
+                barrier_count = write_partial_tiles_to_memory<cb_out, ELEMENT_SIZE, barrier_threshold>(
+                    out_tile_id, out_writer, barrier_count, cur_head, num_heads_to_write, out_chunk_tiles);
             }
             // sharded out case
             else if (do_output) {
+                constexpr uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;
                 // read from reducer cores
                 constexpr uint32_t num_reducers_per_output = num_reducer_cores / num_output_cores;
                 constexpr uint32_t num_reducers_to_wait = num_reducers_per_output - 1;
@@ -295,16 +267,8 @@ void kernel_main() {
         } else {
             // if mqa, we don't need to gather outputs for other heads so we can just write entire tiles to memory
             if (!is_out_sharded) {
-                uint32_t l1_read_addr = get_read_ptr(cb_out);
-                for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-                    noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
-                    ++out_tile_id;
-                    l1_read_addr += tile_bytes;
-                    if (++barrier_count == barrier_threshold) {
-                        noc_async_writes_flushed();
-                        barrier_count = 0;
-                    }
-                }
+                barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
+                    out_tile_id, out_writer, barrier_count);
             }
         }
         noc_async_write_barrier();

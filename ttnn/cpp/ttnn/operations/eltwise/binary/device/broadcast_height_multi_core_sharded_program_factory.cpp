@@ -5,10 +5,10 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-// #include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+// #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 // #include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::binary {
@@ -59,7 +59,7 @@ BinaryDeviceOperation::BroadcastHeightMultiCoreSharded::create(
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     auto all_cores = shard_spec.grid;

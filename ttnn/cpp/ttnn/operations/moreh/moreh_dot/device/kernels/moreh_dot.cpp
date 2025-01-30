@@ -41,16 +41,16 @@ void MAIN {
         ACQ();
         if (enable_reload) {
             cb_wait_front(tt::CBIndex::c_25, onetile);
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(tt::CBIndex::c_25);
             copy_tile(tt::CBIndex::c_25, 0, 0);
             cb_pop_front(tt::CBIndex::c_25, onetile);
         }
 
         cb_wait_front(tt::CBIndex::c_24, onetile);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(tt::CBIndex::c_24, tt::CBIndex::c_2, tt::CBIndex::c_16);
         reduce_tile(tt::CBIndex::c_24, tt::CBIndex::c_2, 0, 0, 0);
         cb_pop_front(tt::CBIndex::c_24, onetile);
-        reduce_revert_delta();
+        reduce_revert_delta(tt::CBIndex::c_16);
 
         if (last_out) {
             cb_reserve_back(tt::CBIndex::c_16, onetile);

@@ -5,12 +5,12 @@
 #include <ostream>
 #include "gtest/gtest.h"
 
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 #include "common_tensor_test_utils.hpp"
 
@@ -18,7 +18,7 @@
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::Device* device, const ttnn::SimpleShape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::SimpleShape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -86,7 +86,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 }
 
 using CombinationInputParams =
-    std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
+    std::tuple<ttnn::SimpleShape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
 class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
@@ -100,7 +100,7 @@ TEST_P(EmptyTensorTest, Combinations) {
         "Running test with shape={}, dtype={}, layout={}, memory_config={}", shape, dtype, layout, memory_config);
 
     if (layout == tt::tt_metal::Layout::ROW_MAJOR && dtype == tt::tt_metal::DataType::BFLOAT8_B) {
-        return;
+        GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
     auto tensor_layout =
@@ -108,15 +108,15 @@ TEST_P(EmptyTensorTest, Combinations) {
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape.logical_shape()) >= 650 * 1024) {
-            return;
+        if (tensor_layout.compute_page_size_bytes(shape) >= 500 * 1024) {
+            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
         }
     }
 
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
-    EXPECT_EQ(tensor.get_logical_shape(), shape.logical_shape());
+    EXPECT_EQ(tensor.get_logical_shape(), shape);
 
-    test_utils::test_tensor_on_device(shape.logical_shape(), tensor_layout, device_);
+    test_utils::test_tensor_on_device(shape, tensor_layout, device_);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -124,20 +124,20 @@ INSTANTIATE_TEST_SUITE_P(
     EmptyTensorTest,
     ::testing::Combine(
         ::testing::Values(
-            ttnn::Shape({}),
-            ttnn::Shape({0}),
-            ttnn::Shape({1}),
-            ttnn::Shape({1, 2}),
-            ttnn::Shape({1, 2, 3}),
-            ttnn::Shape({1, 2, 3, 4}),
-            // ttnn::Shape({0, 0, 0, 0}), fails with width sharded case
-            ttnn::Shape({1, 1, 1, 1}),
-            // ttnn::Shape({0, 1, 32, 32}), fails with width sharded case
-            ttnn::Shape({1, 1, 32, 32}),
-            ttnn::Shape({2, 1, 32, 32}),
-            ttnn::Shape({64, 1, 256, 1}),
-            ttnn::Shape({1, 1, 21120, 16}),
-            ttnn::Shape({1, 2, 3, 4, 5})),
+            ttnn::SimpleShape({}),
+            ttnn::SimpleShape({0}),
+            ttnn::SimpleShape({1}),
+            ttnn::SimpleShape({1, 2}),
+            ttnn::SimpleShape({1, 2, 3}),
+            ttnn::SimpleShape({1, 2, 3, 4}),
+            // ttnn::SimpleShape({0, 0, 0, 0}), fails with width sharded case
+            ttnn::SimpleShape({1, 1, 1, 1}),
+            // ttnn::SimpleShape({0, 1, 32, 32}), fails with width sharded case
+            ttnn::SimpleShape({1, 1, 32, 32}),
+            ttnn::SimpleShape({2, 1, 32, 32}),
+            ttnn::SimpleShape({64, 1, 256, 1}),
+            ttnn::SimpleShape({1, 1, 21120, 16}),
+            ttnn::SimpleShape({1, 2, 3, 4, 5})),
 
         ::testing::Values(
             tt::tt_metal::DataType::BFLOAT16,

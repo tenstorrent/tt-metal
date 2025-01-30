@@ -3,13 +3,10 @@
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
 [shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
 
-The following commands will build and execute the code for this example.
-Environment variables may be modified based on the latest
-specifications.
+To build and execute, you may use the following commands:
 ```bash
-    export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh --build-tests
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/shard_data_rm
 ```
 # Device setup
@@ -63,7 +60,7 @@ uint32_t shard_size = shard_height * shard_width;
 uint32_t input_unit_size = sizeof(uint32_t);
 uint32_t shard_width_bytes = shard_width * data_size;
 uint32_t num_units_per_row = shard_width * input_unit_size;
-uint32_t padded_offset_bytes = align(input_unit_size, device->get_allocator_alignment());
+uint32_t padded_offset_bytes = align(input_unit_size, device->allocator()->get_config().alignment);
 ```
 
 In order to shard the correct data segments to the respective core, we indicate the shard height, width, size, and other data for the kernel function.

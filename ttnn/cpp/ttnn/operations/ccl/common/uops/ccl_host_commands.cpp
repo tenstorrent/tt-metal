@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
-#include "tt_metal/tt_stl/overloaded.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/overloaded.hpp>
 
 #include <variant>
 namespace ttnn::ccl::cmd {
@@ -374,6 +374,117 @@ CclHostLowLevelWorkerCommand fabric_unicast_absolute_address_semaphore_inc(
 
         ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST,
         ttnn::ccl::cmd::UnicastCommandDestArgs(unicast_args));
+}
+
+
+// Noc Read/Write commands
+// Densely packs as many transfers as possible into a single packet
+static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(tt::stl::Span<noc_transfer_info> const& transfer_infos, size_t cb_size_bytes) {
+    std::vector<HostNocTransferBurstGrouping> transfer_burst_groupings;
+
+    size_t group_size_bytes = 0;
+    transfer_burst_groupings.push_back({});
+    for (size_t i = 0; i < transfer_infos.size(); i++) {
+        group_size_bytes += transfer_infos[i].noc_transfer_size_bytes;
+        bool create_new_group = group_size_bytes >= cb_size_bytes;
+        if (create_new_group) {
+            transfer_burst_groupings.push_back({});
+            group_size_bytes = 0;
+        }
+
+        auto &group = transfer_burst_groupings.back();
+        bool is_32B_aligned = (group_size_bytes & 0x1F) == 0;
+        if (!is_32B_aligned) {
+            group_size_bytes += 0x20 - (group_size_bytes & 0x1F);
+        }
+
+        group.num_transfers_per_packet++;
+        group.transfer_infos.push_back(transfer_infos[i]);
+    }
+
+    return transfer_burst_groupings;
+}
+
+CclHostLowLevelWorkerCommand local_noc_read_burst_to_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id
+) {
+    auto transfer_burst_groupings = densely_pack_noc_transfers(transfer_infos, cb_size_bytes);
+
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::NOC_READ_BURST,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::HostCclCommandNocTransferBurst{bank_base_address.absolute_address, transfer_infos.size(), transfer_burst_groupings}),
+        ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS,
+        ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{bank_base_address},
+        ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID,
+        ttnn::ccl::cmd::CclCommandAddrCircularBufferId{cb_id}
+    );
+}
+
+CclHostLowLevelWorkerCommand local_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id
+) {
+    auto transfer_burst_groupings = densely_pack_noc_transfers(transfer_infos, cb_size_bytes);
+
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::NOC_WRITE_BURST,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::HostCclCommandNocTransferBurst{bank_base_address.absolute_address, transfer_infos.size(), transfer_burst_groupings}),
+        ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID,
+        ttnn::ccl::cmd::CclCommandAddrCircularBufferId{cb_id},
+        ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS,
+        ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{bank_base_address}
+    );
+}
+
+[[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id,
+    UnicastCommandDestArgs const& unicast_args
+) {
+    auto transfer_burst_groupings = densely_pack_noc_transfers(transfer_infos, cb_size_bytes);
+
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::NOC_WRITE_BURST,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::HostCclCommandNocTransferBurst{bank_base_address.absolute_address, transfer_infos.size(), transfer_burst_groupings}),
+        ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID,
+        ttnn::ccl::cmd::CclCommandAddrCircularBufferId{cb_id},
+        ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS,
+        ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{bank_base_address},
+        ttnn::ccl::cmd::CclCommandCoreDescriptorType::NONE,
+        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNone(),
+        ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST,
+        ttnn::ccl::cmd::UnicastCommandDestArgs(unicast_args)
+    );
+}
+
+CclHostLowLevelWorkerCommand fabric_multicast_noc_write_burst_from_cb(
+    CclCommandAddrAbsoluteAddress const& bank_base_address,
+    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    size_t cb_size_bytes,
+    size_t cb_id,
+    MulticastCommandDestArgs const& multicast_args
+) {
+    auto transfer_burst_groupings = densely_pack_noc_transfers(transfer_infos, cb_size_bytes);
+
+    return CclHostLowLevelWorkerCommand(
+        CclCommandCode::NOC_WRITE_BURST,
+        ttnn::ccl::cmd::CclCommandArgs(ttnn::ccl::cmd::HostCclCommandNocTransferBurst{bank_base_address.absolute_address, transfer_infos.size(), transfer_burst_groupings}),
+        ttnn::ccl::cmd::CclCommandAddrType::CIRCULAR_BUFFER_ID,
+        ttnn::ccl::cmd::CclCommandAddrCircularBufferId{cb_id},
+        ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS,
+        ttnn::ccl::cmd::CclCommandAddrAbsoluteAddress{bank_base_address},
+        ttnn::ccl::cmd::CclCommandCoreDescriptorType::NONE,
+        ttnn::ccl::cmd::CclCommandCoreDescriptorTypeNone(),
+        ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST,
+        ttnn::ccl::cmd::MulticastCommandDestArgs(multicast_args)
+    );
 }
 
 }  // namespace uops

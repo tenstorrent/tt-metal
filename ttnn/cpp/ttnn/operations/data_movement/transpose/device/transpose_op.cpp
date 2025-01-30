@@ -5,9 +5,8 @@
 #include "transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/experimental/hal.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_exp.hpp>
 
 #include "transpose_program_factory.hpp"
 

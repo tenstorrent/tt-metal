@@ -5,7 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "logger.hpp"
 
 using namespace tt;
@@ -55,7 +55,7 @@ protected:
         }
     }
 
-    Device* device_;
+    IDevice* device_;
     Program program_;
 
 private:

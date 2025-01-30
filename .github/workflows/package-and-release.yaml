@@ -11,32 +11,32 @@ permissions:
   packages: write
 
 jobs:
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-    with:
-      build-docker: false
   build-artifact-profiler:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-      build-docker: false
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     secrets: inherit
-  single-card-device-perf:
-    needs: build-artifact-profiler
-    uses: ./.github/workflows/perf-device-models-impl.yaml
-    secrets: inherit
   t3000-demos:
     needs: build-artifact
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
+    secrets: inherit
+  t3000-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
+    secrets: inherit
+  tg-demos:
+    needs: build-artifact
+    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    secrets: inherit
+  tgg-model-perf:
+    needs: build-artifact
+    uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     secrets: inherit
   get-params:
     runs-on: ubuntu-latest
@@ -123,11 +123,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
@@ -139,17 +137,22 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Create archive with submodules
+        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
+        with:
+          output-files: tt-metalium.tar.gz
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ matrix.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
@@ -177,7 +180,9 @@ jobs:
             CHANGELOG.txt
             README.md
             INSTALLING.md
+            models/MODEL_UPDATES.md
             ttnn-*+*.whl
+            tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [

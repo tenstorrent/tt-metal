@@ -7,8 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedPartialDeviceOperation {
@@ -20,8 +20,7 @@ struct InterleavedToShardedPartialDeviceOperation {
     const tt::tt_metal::DataType output_dtype;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
-    std::vector<tt::tt_metal::LegacyShape> compute_output_shapes(const std::vector<Tensor>& input_tensors) const;
-    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 

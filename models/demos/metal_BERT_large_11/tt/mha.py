@@ -9,7 +9,6 @@ import torch
 from typing import Optional
 import ttnn
 from tt_lib.utils import pad_weight
-from models.utility_functions import torch2tt_tensor
 from models.demos.metal_BERT_large_11.tt import custom_matmuls
 
 
@@ -223,20 +222,20 @@ class TtMultiHeadAttentionModel:
             qkv_weight = pad_weight(qkv_weight)
             qkv_bias = pad_weight(qkv_bias)
 
-            qkv_weight = torch2tt_tensor(
+            qkv_weight = ttnn.from_torch(
                 qkv_weight,
-                device,
-                tt_layout=ttnn.TILE_LAYOUT,
-                tt_memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
-                tt_dtype=model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
+                model_config["OP1_FUSED_QKV_MM_WEIGHTS_DTYPE"],
+                layout=ttnn.Layout.TILE,
+                device=device,
+                memory_config=model_config["OP1_FUSED_QKV_MM_WEIGHTS_MEMCFG"],
             )
 
-            qkv_bias = torch2tt_tensor(
+            qkv_bias = ttnn.from_torch(
                 qkv_bias,
-                device,
-                tt_layout=ttnn.TILE_LAYOUT,
-                tt_memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
-                tt_dtype=model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
+                model_config["OP1_FUSED_QKV_MM_BIAS_DTYPE"],
+                layout=ttnn.Layout.TILE,
+                device=device,
+                memory_config=model_config["OP1_FUSED_QKV_MM_BIAS_MEMCFG"],
             )
 
         # Hidden dim

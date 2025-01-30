@@ -9,8 +9,7 @@
 #include <optional>
 #include <variant>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/command_queue.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
@@ -242,6 +241,8 @@ struct BinaryDeviceOperation {
         const operation_attributes_t& attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
+
+    static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor_a_arg,

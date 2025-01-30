@@ -4,13 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include "common/core_coord.hpp"
-#include "detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "impl/device/device.hpp"
-#include "impl/kernels/data_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "impl/program/program.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/program_impl.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
@@ -28,7 +28,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -56,7 +56,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
         tt_metal::CreateKernelFromString(
             program,
@@ -83,7 +83,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     }
     )";
 
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
             const chip_id_t device_id = device->id();

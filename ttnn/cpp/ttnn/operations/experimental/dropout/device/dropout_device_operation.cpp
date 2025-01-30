@@ -5,8 +5,7 @@
 #include "dropout_device_operation.hpp"
 
 #include <magic_enum/magic_enum.hpp>
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
@@ -119,7 +118,7 @@ tensor_return_value_t DropoutDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
     auto args_without_seed = args;
     args_without_seed.seed = 0;
     auto program_factory = select_program_factory(args, tensor_args);
@@ -128,7 +127,7 @@ tt::stl::hash::hash_t DropoutDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        compute_volume(input_shape));
+        input_shape.volume());
 
     return hash;
 }

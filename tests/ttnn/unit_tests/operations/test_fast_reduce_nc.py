@@ -140,7 +140,6 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device, use_program_cache):
                     32,  # head dim
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         test_tensor = ttnn.interleaved_to_sharded(test_tensor, test_mem_cfg)

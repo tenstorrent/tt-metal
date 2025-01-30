@@ -22,7 +22,7 @@ namespace ttml::ops {
 // it works only for 4D tensors and for the last dimension
 autograd::TensorPtr layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
-    auto tensor_shape = tensor->get_value().get_shape();
+    auto tensor_shape = tensor->get_value().get_logical_shape();
     auto mean = core::empty(
         core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
         &autograd::ctx().get_device(),
@@ -78,10 +78,10 @@ autograd::TensorPtr layernorm(
 
 autograd::TensorPtr composite_layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
-    auto tensor_shape = tensor->get_value().get_shape();
+    auto tensor_shape = tensor->get_value().get_logical_shape();
 
     auto shape = core::create_shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1});
-    auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+    auto mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().get_dtype());
     ttnn::moreh_mean(
         tensor->get_value(),
         3,  // last dimension
@@ -137,9 +137,9 @@ autograd::TensorPtr composite_layernorm(
         // dtensor = (dnorm - dnorm.mean(-1, keepdim=True) - norm * (dnorm * norm).mean(-1, keepdim=True)) * rstd
 
         // dnorm.mean(-1, keepdim=True)
-        auto dnorm_shape = dtensor_normalized.get_shape();
+        auto dnorm_shape = dtensor_normalized.get_logical_shape();
         auto shape = core::create_shape({dnorm_shape[0], dnorm_shape[1], dnorm_shape[2], 1});
-        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().dtype());
+        auto dnorm_mean = core::zeros(shape, &autograd::ctx().get_device(), tensor->get_value().get_dtype());
         ttnn::moreh_mean(
             dtensor_normalized,
             /* dim */ 3,

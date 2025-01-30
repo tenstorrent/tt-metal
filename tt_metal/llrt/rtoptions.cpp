@@ -10,8 +10,7 @@
 #include <cstring>
 #include <string>
 
-#include "impl/debug/dprint_server.hpp"
-#include "tools/profiler/profiler_state.hpp"
+#include <profiler_state.hpp>
 
 using std::vector;
 
@@ -168,6 +167,9 @@ void RunTimeOptions::ParseWatcherEnv() {
     const char* watcher_noinline_str = getenv("TT_METAL_WATCHER_NOINLINE");
     watcher_noinline = (watcher_noinline_str != nullptr);
 
+    const char* watcher_phys_str = getenv("TT_METAL_WATCHER_PHYS_COORDS");
+    watcher_phys_coords = (watcher_phys_str != nullptr);
+
     // Auto unpause is for testing only, no env var.
     watcher_auto_unpause = false;
 
@@ -300,6 +302,11 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
 
     // If the environment variable is not empty, parse it.
     while (env_var_str != nullptr) {
+        // Can also have "all"
+        if (strcmp(env_var_str, "all") == 0) {
+            feature_targets[feature].all_chips = true;
+            break;
+        }
         uint32_t chip;
         if (sscanf(env_var_str, "%d", &chip) != 1) {
             TT_THROW("Invalid {}", env_var_str);
@@ -311,9 +318,9 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
         }
     }
 
-    // Default is no chips are specified is chip 0.
+    // Default is no chips are specified is all
     if (chips.size() == 0) {
-        chips.push_back(0);
+        feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
 }

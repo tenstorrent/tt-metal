@@ -16,6 +16,7 @@ struct ExecuteLayerNormPreAllGather {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const DataType dtype = DataType::BFLOAT16,
+        const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
         const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);

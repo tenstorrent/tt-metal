@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_layer_norm_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -58,7 +58,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = input.device();
+    IDevice* device = input.device();
     Program program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -156,7 +156,8 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     const uint32_t cb_usage =
         (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t) * single_tile_size +
         (im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size;
-    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {

@@ -5,11 +5,11 @@
 #include <optional>
 
 #include "binary_device_operation.hpp"
-#include "impl/buffers/buffer.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -65,7 +65,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
 
     auto program = tt_metal::CreateProgram();
 
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();

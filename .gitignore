@@ -92,9 +92,6 @@ venv/
 # releases
 dist
 
-# exclude dtx generated files
-tt_metal/third_party/lfs/dtx_transform_outputs
-
 #exclude reports dir
 .reports/*
 

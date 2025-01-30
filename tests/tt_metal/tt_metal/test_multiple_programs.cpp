@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 using std::vector;
 using namespace tt;
@@ -45,7 +45,7 @@ std::map<string, string> get_defines(BinaryOpType::Enum op_type) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_one(
-    tt_metal::Device* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -98,7 +98,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> setup_program_two(
-    tt_metal::Device* device, const CoreCoord& core, uint32_t single_tile_size) {
+    tt_metal::IDevice* device, const CoreCoord& core, uint32_t single_tile_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -156,7 +156,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> se
 }
 
 void write_program_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     tt_metal::KernelHandle reader_kernel_id,
     tt_metal::KernelHandle writer_kernel_id,
@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

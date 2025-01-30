@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -85,7 +85,7 @@ std::vector<bfloat16> select_columns(std::vector<bfloat16> data, int M, int K, i
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device, int num_cores_r, int num_cores_c, int tensor_num_tiles, int block_num_tiles) {
+    tt_metal::IDevice* device, int num_cores_r, int num_cores_c, int tensor_num_tiles, int block_num_tiles) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
     int num_cores = num_cores_r * num_cores_c;
@@ -165,7 +165,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
 }
 
 bool write_runtime_args_to_device(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
@@ -293,7 +293,7 @@ std::vector<bfloat16> get_col_slice(
 }
 
 bool move_tiles_to_dram(
-    tt_metal::Device* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
+    tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, uint32_t dram_buffer_addr) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into u32
     int tile_size_bytes = 32 * 32 * 2;
@@ -366,7 +366,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

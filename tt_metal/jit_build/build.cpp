@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/build.hpp"
+#include <build.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -17,10 +17,10 @@
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include "tools/profiler/common.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <common.hpp>
+#include <profiler_state.hpp>
+#include <command_queue_interface.hpp>
+#include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;
@@ -162,19 +162,22 @@ void JitBuildEnv::init(
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "tt_metal " +
-                      "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ + "tt_metal/hw/inc " + "-I" +
-                      this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ + "tt_metal/hw/inc/debug " +
-                      "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" +
-                      this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ + "tt_metal/third_party/umd/device/" +
-                      this->arch_name_ + " " +  // TODO(fixme)
+    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
+                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
+                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
+                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
+                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
+                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
+                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/third_party/umd/device/api " +
+                      "-I" + this->root_ + "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
                       "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
                       this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
                       "tt_metal/third_party/tt_llk_" + this->arch_name_ +
                       "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
+                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
+                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
+                      "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -419,7 +422,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
                       "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/llk_io ";
+                      "/metal/llk_io " + "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
@@ -428,8 +431,41 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
-    switch (this->core_id_) {
+    // 0: core_id = 0 and not cooperative
+    // 1: core_id = 0 and cooperative
+    uint32_t build_class = (this->core_id_ << 1) | uint32_t(build_config.is_cooperative);
+
+    switch (build_class) {
         case 0: {
+            this->target_name_ = "active_erisc";
+            this->cflags_ =
+                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+
+            this->defines_ +=
+                "-DCOMPILE_FOR_ERISC "
+                "-DERISC "
+                "-DRISC_B0_HW ";
+
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
+            if (this->is_fw_) {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
+            }
+            this->lflags_ = env_.lflags_ + "-Os ";
+
+            if (this->is_fw_) {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_aerisc.ld ";
+            } else {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_aerisc.ld ";
+            }
+
+            break;
+        }
+        case 1: {
             this->target_name_ = "erisc";
             this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
 
@@ -437,9 +473,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
                 "-DRISC_B0_HW ";
-            if (this->is_fw_) {
-                this->defines_ += "-DLOADING_NOC=0 ";
-            }
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
@@ -463,9 +496,14 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                             "/tt_metal/hw/toolchain "
                             "-T" +
                             env_.root_ + linker_str;
+
             break;
         }
-        default: TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+        default:
+            TT_THROW(
+                "Invalid processor ID {} and cooperative scheme {} for Active Ethernet core.",
+                this->core_id_,
+                build_config.is_cooperative);
     }
     this->process_defines_at_compile = true;
 
@@ -727,6 +765,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
     sync_build_step(events);
+}
+
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
+    events.emplace_back(detail::async(build_func));
 }
 
 }  // namespace tt::tt_metal

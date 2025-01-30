@@ -14,10 +14,10 @@
 #include <thread>
 #include <unordered_map>
 
-#include "llrt/hal.hpp"
-#include "dev_msgs.h"
-#include "llrt/llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <hal.hpp>
+#include <dev_msgs.h>
+#include "llrt.hpp"
+#include <rtoptions.hpp>
 #include "debug/ring_buffer.h"
 #include "watcher_device_reader.hpp"
 
@@ -36,7 +36,7 @@ static std::atomic<bool> enabled = false;
 static std::atomic<bool> server_running = false;
 static std::atomic<int> dump_count = 0;
 static std::mutex watch_mutex;
-static std::map<Device*, watcher::WatcherDeviceReader> devices;
+static std::map<IDevice*, watcher::WatcherDeviceReader> devices;
 static string logfile_path = "generated/watcher/";
 static string logfile_name = "watcher.log";
 static FILE* logfile = nullptr;
@@ -204,7 +204,7 @@ static void watcher_loop(int sleep_usecs) {
 
 }  // namespace watcher
 
-void watcher_init(Device* device) {
+void watcher_init(IDevice* device) {
     std::vector<uint32_t> watcher_init_val;
     watcher_init_val.resize(sizeof(watcher_msg_t) / sizeof(uint32_t), 0);
     watcher_msg_t* data = reinterpret_cast<watcher_msg_t*>(&(watcher_init_val[0]));
@@ -281,31 +281,32 @@ void watcher_init(Device* device) {
                 std::vector<CoreCoord> delayed_cores =
                     tt::llrt::RunTimeOptions::get_instance().get_feature_cores(delay_feature)[core_type];
                 for (tt_xy_pair logical_core : delayed_cores) {
-                    CoreCoord phys_core;
+                    CoreCoord virtual_core;
                     bool valid_logical_core = true;
                     try {
-                        phys_core = device->virtual_core_from_logical_core(logical_core, core_type);
+                        virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     } catch (std::runtime_error& error) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
                         // Update the masks for the core
-                        if (debug_delays_val.find(phys_core) != debug_delays_val.end()) {
-                            debug_delays_val[phys_core].read_delay_riscv_mask |= delay_setup.read_delay_riscv_mask;
-                            debug_delays_val[phys_core].write_delay_riscv_mask |= delay_setup.write_delay_riscv_mask;
-                            debug_delays_val[phys_core].atomic_delay_riscv_mask |= delay_setup.atomic_delay_riscv_mask;
+                        if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
+                            debug_delays_val[virtual_core].read_delay_riscv_mask |= delay_setup.read_delay_riscv_mask;
+                            debug_delays_val[virtual_core].write_delay_riscv_mask |= delay_setup.write_delay_riscv_mask;
+                            debug_delays_val[virtual_core].atomic_delay_riscv_mask |=
+                                delay_setup.atomic_delay_riscv_mask;
                         } else {
-                            debug_delays_val.insert({phys_core, delay_setup});
+                            debug_delays_val.insert({virtual_core, delay_setup});
                         }
                     } else {
                         log_warning(
                             tt::LogMetal,
-                            "TT_METAL_{}_CORES included {} core with logical coordinates {} (physical coordinates {}), "
+                            "TT_METAL_{}_CORES included {} core with logical coordinates {} (virtual coordinates {}), "
                             "which is not a valid core on device {}. This coordinate will be ignored by {} feature.",
                             tt::llrt::RunTimeDebugFeatureNames[delay_feature],
                             tt::llrt::get_core_type_name(core_type),
                             logical_core.str(),
-                            valid_logical_core ? phys_core.str() : "INVALID",
+                            valid_logical_core ? virtual_core.str() : "INVALID",
                             device->id(),
                             tt::llrt::RunTimeDebugFeatureNames[delay_feature]);
                     }
@@ -363,15 +364,15 @@ void watcher_init(Device* device) {
         } else {
             continue;
         }
-        CoreCoord physical_core = device->ethernet_core_from_logical_core(eth_core);
-        if (debug_delays_val.find(physical_core) != debug_delays_val.end()) {
-            data->debug_insert_delays = debug_delays_val[physical_core];
+        CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        if (debug_delays_val.find(virtual_core) != debug_delays_val.end()) {
+            data->debug_insert_delays = debug_delays_val[virtual_core];
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
         tt::llrt::write_hex_vec_to_core(
             device->id(),
-            physical_core,
+            virtual_core,
             watcher_init_val,
             is_active_eth_core ? GET_WATCHER_ERISC_DEV_ADDR() : GET_WATCHER_IERISC_DEV_ADDR());
     }
@@ -379,7 +380,7 @@ void watcher_init(Device* device) {
     log_debug(LogLLRuntime, "Watcher initialized device {}", device->id());
 }
 
-void watcher_attach(Device* device) {
+void watcher_attach(IDevice* device) {
     const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 
     if (!watcher::enabled && tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
@@ -413,7 +414,7 @@ void watcher_attach(Device* device) {
             watcher::logfile, device, watcher::kernel_names, &watcher::set_watcher_exception_message));
 }
 
-void watcher_detach(Device* old) {
+void watcher_detach(IDevice* old) {
     {
         const std::lock_guard<std::mutex> lock(watcher::watch_mutex);
 

@@ -9,10 +9,10 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/reflection.hpp>
+#include "tools/profiler/op_profiler.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -22,7 +22,7 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
+IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (std::holds_alternative<DeviceStorage>(input_tensor.tensor_attributes->storage)) {
             return input_tensor.workers.at(0);
@@ -94,7 +94,7 @@ struct OldInfraDeviceOperation {
         const operation::OptionalTensors optional_output_tensors;
     };
 
-    using shape_return_value_t = std::vector<tt::tt_metal::LegacyShape>;
+    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
     using tensor_return_value_t = OutputTensors;
 
@@ -173,10 +173,10 @@ struct OldInfraDeviceOperation {
         validate_on_program_cache_miss(attributes, tensor_args);
     }
 
-    // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(
+    // Compute the output specs based on the operation attributes and tensor args
+    static spec_return_value_t compute_output_specs(
         const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-        return attributes.compute_output_shapes(tensor_args.input_tensors);
+        return attributes.compute_output_specs(tensor_args.input_tensors);
     }
 
     // Create the output tensors based on the operation attributes and tensor args
@@ -263,7 +263,7 @@ OutputTensors run_without_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
@@ -301,39 +301,20 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id);
 
-std::vector<LegacyShape> extract_legacy_shapes(
-    const std::
-        variant<std::vector<tt::tt_metal::LegacyShape>, std::vector<ttnn::SimpleShape>, std::vector<ttnn::TensorSpec>>&&
-            shapes,
+std::vector<SimpleShape> extract_padded_shapes(
+    const std::vector<ttnn::TensorSpec>& tensor_specs,
     const std::function<TensorLayout(size_t idx)>& layout_provider,
     const bool use_tensor_layout_from_tensor_spec) {
-    if (std::holds_alternative<std::vector<tt::tt_metal::LegacyShape>>(shapes)) {
-        return std::get<std::vector<tt::tt_metal::LegacyShape>>(std::move(shapes));
-    } else if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(shapes)) {
-        const auto& simple_shapes = std::get<std::vector<ttnn::SimpleShape>>(shapes);
-        std::vector<LegacyShape> legacy_shapes;
-        legacy_shapes.reserve(simple_shapes.size());
-        for (size_t idx = 0; idx < simple_shapes.size(); idx++) {
-            TensorLayout tensor_layout = layout_provider(idx);
-            legacy_shapes.emplace_back(
-                simple_shapes[idx].view(), tensor_layout.compute_padded_shape(simple_shapes[idx]).view());
-        }
-        return legacy_shapes;
-    } else if (std::holds_alternative<std::vector<ttnn::TensorSpec>>(shapes)) {
-        const auto& tensor_specs = std::get<std::vector<ttnn::TensorSpec>>(shapes);
-        std::vector<LegacyShape> legacy_shapes;
-        legacy_shapes.reserve(tensor_specs.size());
-        for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
-            const auto& tensor_spec = tensor_specs[idx];
-            TensorLayout tensor_layout =
-                use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
-            auto logical_shape = tensor_spec.logical_shape();
-            legacy_shapes.emplace_back(logical_shape.view(), tensor_layout.compute_padded_shape(logical_shape).view());
-        }
-        return legacy_shapes;
-    } else {
-        TT_THROW("extract_legacy_shapes only supports LegacyShape, SimpleShape, or TensorSpec");
+    std::vector<SimpleShape> padded_shapes;
+    padded_shapes.reserve(tensor_specs.size());
+    for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
+        const auto& tensor_spec = tensor_specs[idx];
+        TensorLayout tensor_layout =
+            use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
+        auto logical_shape = tensor_spec.logical_shape();
+        padded_shapes.push_back(tensor_layout.compute_padded_shape(logical_shape));
     }
+    return padded_shapes;
 }
 
 // To be deprecated/removed in favor of new implementation where ops specifically request how to format inputs/outputss
@@ -347,12 +328,12 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
-        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), pad_c);
+        auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape(), pad_c);
         auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
         if (pad_input) {
             formatted_input_tensors.push_back(
@@ -367,7 +348,7 @@ Tensors run_with_autoformat(
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
             auto& input_tensor = optional_input_tensor.value();
-            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_legacy_shape(), pad_c);
+            auto padded_input_shape = AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape(), pad_c);
             auto pad_input = not AutoFormat::check_input_tensor_format(input_tensor, padded_input_shape);
             if (pad_input) {
                 formatted_optional_input_tensors.push_back(
@@ -380,7 +361,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
+    auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,
@@ -388,7 +369,7 @@ Tensors run_with_autoformat(
         optional_output_tensors,
         cq_id);
 
-    auto legacy_output_shapes = extract_legacy_shapes(
+    auto padded_output_shapes = extract_padded_shapes(
         std::move(output_specs),
         [&](size_t idx) {
             auto tensor = output_tensors[idx];
@@ -396,14 +377,14 @@ Tensors run_with_autoformat(
         },
         /*use_tensor_layout_from_tensor_spec=*/true);
 
-    TT_ASSERT(output_tensors.size() == legacy_output_shapes.size());
+    TT_ASSERT(output_tensors.size() == padded_output_shapes.size());
 
     formatted_input_tensors.clear();
     formatted_optional_input_tensors.clear();
 
     for (auto i = 0; i < output_tensors.size(); ++i) {
         output_tensors[i] =
-            AutoFormat::format_output_tensor(output_tensors[i], legacy_output_shapes[i], device, Layout::TILE);
+            AutoFormat::format_output_tensor(output_tensors[i], padded_output_shapes[i], device, Layout::TILE);
     }
     return output_tensors;
 }
@@ -419,7 +400,7 @@ Tensors run_with_autoformat(
     uint8_t cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    Device* device = detail::get_device(input_tensors, optional_input_tensors);
+    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
     TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());
@@ -453,7 +434,7 @@ Tensors run_with_autoformat(
         }
     }
 
-    auto output_specs = operation.compute_output_shapes(input_tensors, optional_output_tensors);
+    auto output_specs = operation.compute_output_specs(input_tensors, optional_output_tensors);
     auto output_tensors = run<Tensors>(
         std::move(operation),
         formatted_input_tensors,
@@ -461,7 +442,7 @@ Tensors run_with_autoformat(
         optional_output_tensors,
         cq_id);
 
-    auto legacy_output_shapes = extract_legacy_shapes(
+    auto legacy_output_shapes = extract_padded_shapes(
         std::move(output_specs),
         [&](size_t idx) {
             auto tensor = output_tensors[idx];
@@ -500,7 +481,7 @@ void launch_with_autoformat(
 void validate_workers_and_storage(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs,
-    const std::vector<Device*>& workers) {
+    const std::vector<IDevice*>& workers) {
     bool single_device_storage = false;
     bool multi_device_storage = false;
     // Verify that storage types are consistent - cannot mix single and multi-device storage. For multi-device tensors,
@@ -541,12 +522,12 @@ void validate_workers_and_storage(
     }
 }
 
-std::vector<Device*> get_workers_for_op_output(
+std::vector<IDevice*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs,
     bool enable_autoformat_device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
-    std::vector<Device*> workers_for_op = {};
+    std::vector<IDevice*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
     // of workers used for the op (and assigned to the ouput) is the minimum
     // number of workers across all inputs. Additionally, in this case, at least

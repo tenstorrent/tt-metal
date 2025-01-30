@@ -7,7 +7,6 @@
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "tt_metal/host_api.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <cstdint>
 
@@ -19,15 +18,12 @@ void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<ttnn::SimpleShape> AllReduce::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    auto shape = input_tensors[0].get_logical_shape();
-    return std::vector<ttnn::SimpleShape>(input_tensors.size(), shape);
-}
-
-std::vector<Tensor> AllReduce::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    auto shape = input_tensor.get_logical_shape();
+    TensorSpec spec(
+        shape, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
+    return std::vector<ttnn::TensorSpec>(input_tensors.size(), spec);
 }
 
 operation::ProgramWithCallbacks AllReduce::create_program(
@@ -120,7 +116,7 @@ static Tensor all_gather_local_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     ttnn::ccl::Topology topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -168,7 +164,7 @@ static Tensor reduce_scatter_all_gather(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     auto shape = input_tensor.get_logical_shape();
     auto rank = shape.rank();
@@ -217,7 +213,7 @@ Tensor run_all_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
-    const std::vector<Device*>& devices,
+    const std::vector<IDevice*>& devices,
     const ttnn::ccl::Topology& topology) {
     switch (strategy) {
         case AllReduceStrategy::AllGatherLocalReduce:

@@ -25,11 +25,14 @@
 #include "watcher_common.h"
 
 #include "dataflow_cmd_bufs.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#ifndef ARCH_GRAYSKULL
+#include "eth_l1_address_map.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -108,11 +111,18 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
         }
     }
     if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space.
+        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space. Use worker grid size instead of noc
+        // size because virtual coords are continuous.
         if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
-            x <= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X + core_info->noc_size_x - 1) &&
+            x <= NOC_0_X(
+                     noc_id,
+                     core_info->noc_size_x,
+                     (uint32_t)VIRTUAL_TENSIX_START_X + core_info->worker_grid_size_x - 1) &&
             y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
-            y <= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->noc_size_y - 1)) {
+            y <= NOC_0_Y(
+                     noc_id,
+                     core_info->noc_size_y,
+                     (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->worker_grid_size_y - 1)) {
             is_virtual_coord = true;
             return AddressableCoreType::TENSIX;
         }
@@ -142,7 +152,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
     if (write && (addr < MEM_MAP_END)) {
-        return DebugSanitizeNocAddrUnderflow;
+        return DebugSanitizeNocAddrMailbox;
     }
 #endif
     return DebugSanitizeNocOK;
@@ -177,7 +187,8 @@ inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
     return DebugSanitizeNocOK;
 }
 
-inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len) {
+#ifndef ARCH_GRAYSKULL
+inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
@@ -187,8 +198,14 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len) {
     if (addr + len > MEM_ETH_BASE + MEM_ETH_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
+    if (write && (addr < eth_l1_mem::address_map::ERISC_MEM_MAILBOX_END)) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
     return DebugSanitizeNocOK;
 }
+#endif
 
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
@@ -337,7 +354,7 @@ uint32_t debug_sanitize_noc_addr(
                 multicast,
                 dir,
                 DEBUG_SANITIZE_NOC_TARGET,
-                debug_valid_eth_addr(noc_local_addr, noc_len));
+                debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
         }
 #endif
     } else if (core_type == AddressableCoreType::TENSIX) {
@@ -380,15 +397,14 @@ void debug_sanitize_noc_and_worker_addr(
 
     // Check worker addr and alignment, but these don't apply to regs.
     if (!debug_valid_reg_addr(worker_addr, len)) {
+        // Local addr needs to be checked depending on whether we're on eth or tensix.
+#if (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)) && !defined(ARCH_GRAYSKULL)
+        uint16_t return_code = debug_valid_eth_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#else
+        uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+#endif
         debug_sanitize_post_noc_addr_and_hang(
-            noc_id,
-            noc_addr,
-            worker_addr,
-            len,
-            multicast,
-            dir,
-            DEBUG_SANITIZE_NOC_LOCAL,
-            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ));
+            noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
 
         if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
             debug_sanitize_post_noc_addr_and_hang(

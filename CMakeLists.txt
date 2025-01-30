@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16..3.30)
+cmake_minimum_required(VERSION 3.18...3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -8,21 +8,6 @@ endif()
 ############################################
 # Project setup
 ############################################
-include(cmake/compilers.cmake)
-
-if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
-    message(STATUS "Setting C and C++ compiler from environment variables")
-    set(CMAKE_C_COMPILER $ENV{CMAKE_C_COMPILER})
-    set(CMAKE_CXX_COMPILER $ENV{CMAKE_CXX_COMPILER})
-endif()
-
-if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
-    message(STATUS "Using specifed C++ compiler: ${CMAKE_CXX_COMPILER}")
-    message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
-else()
-    message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
-endif()
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(version)
@@ -36,12 +21,19 @@ project(
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
+message(STATUS "Building Unified Library for all architectures, thanks to blozano-tt")
 
 if(${PROJECT_SOURCE_DIR} STREQUAL ${PROJECT_BINARY_DIR})
     message(
         FATAL_ERROR
         "CMake generation is not allowed within source directory!! Please set a build folder with '-B'!!"
     )
+endif()
+
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND CMAKE_TOOLCHAIN_FILE)
+    message(STATUS "CMAKE_TOOLCHAIN_FILE: ${CMAKE_TOOLCHAIN_FILE}")
+else()
+    message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
 endif()
 
 include(project_options)
@@ -51,22 +43,11 @@ include(clang-tidy)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-if(ENABLE_LIBCXX)
-    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-stdlib=libc++>)
-    #add_link_options(
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++>
-    #    $<$<LINK_LANG_AND_ID:CXX,Clang>:-lc++abi>
-    #)
-else()
+if(NOT ENABLE_LIBCXX)
     # required when linking with libstdc++ with clang and gcc
-    add_compile_options(-fsized-deallocation)
-endif()
-
-# Using below until we can move to CMake >= 3.18 for LINK_LANG_AND_ID
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND ENABLE_LIBCXX)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lc++ -lc++abi")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -lc++ -lc++abi")
+    add_compile_options($<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fsized-deallocation>)
 endif()
 
 include(CTest)
@@ -98,6 +79,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     endif()
 endif()
 
+include(compilers)
 CHECK_COMPILERS()
 
 if(NOT isMultiConfig AND NOT CMAKE_BUILD_TYPE IN_LIST CMAKE_CONFIGURATION_TYPES)
@@ -110,10 +92,14 @@ set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
+# We're not currently using C++20 modules, so don't bother scanning for them
+set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
+
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
 ############################################################################################################################
+message(STATUS "ENABLE_LIBCXX: ${ENABLE_LIBCXX}")
 message(STATUS "Build shared libs: ${BUILD_SHARED_LIBS}")
 message(STATUS "Build with ASAN: ${ENABLE_ASAN}")
 message(STATUS "Build with MSAN: ${ENABLE_MSAN}")
@@ -197,18 +183,12 @@ target_link_libraries(
     metal_common_libs
     INTERFACE
         dl
-        z
         pthread
         atomic
         hwloc
         numa
 )
 
-if(NOT DEFINED ENV{ARCH_NAME})
-    message(FATAL_ERROR "Please set ARCH_NAME to grayskull, wormhole_b0, or blackhole")
-endif(NOT DEFINED ENV{ARCH_NAME})
-string(TOUPPER "$ENV{ARCH_NAME}" ARCH_NAME_DEF)
-add_compile_definitions(ARCH_${ARCH_NAME_DEF})
 add_compile_options(
     -Werror
     -Wno-deprecated-declarations
@@ -261,6 +241,7 @@ include(tracy)
 # Build subdirectories
 ############################################################################################################################
 
+add_subdirectory(tt_fabric)
 add_subdirectory(tt_metal)
 add_subdirectory(ttnn)
 
@@ -276,6 +257,15 @@ endif()
 # Install for build artifacts that will upload build/lib
 include(GNUInstallDirs)
 
+install(
+    TARGETS
+        tt_fabric
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT dev
+)
 install(
     TARGETS
         tt_metal
@@ -314,8 +304,8 @@ add_custom_target(
     COMMENT "Cleaning `built` directory"
 )
 
-include(packaging)
-
 if(BUILD_TT_TRAIN)
     add_subdirectory(tt-train)
 endif()
+
+include(packaging)

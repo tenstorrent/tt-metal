@@ -359,7 +359,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     )
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
@@ -376,7 +376,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
-        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
@@ -1230,14 +1230,14 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand((k_size), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand((1, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = input_tensor_a @ input_tensor_b
-    output = ttnn.to_torch(output, torch_rank=1)
+    output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
@@ -1719,7 +1719,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
 
 
 # @skip_for_grayskull()
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
     [
@@ -1889,7 +1888,6 @@ def test_matmul_in0_in1_bias_sharded(
                 N_padded // num_compute_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -1904,7 +1902,6 @@ def test_matmul_in0_in1_bias_sharded(
                     N_padded // num_compute_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -1919,7 +1916,6 @@ def test_matmul_in0_in1_bias_sharded(
                 K // num_activation_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -2111,3 +2107,17 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert_with_pcc(torch_output_tensor, output, 0.999)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
     assert_with_pcc(output, optional_output_tensor, 0.999)
+
+
+def test_small_matmul_pcc(device):
+    torch.manual_seed(0)
+    pcc = 0.99
+    torch_input_tensor_a = torch.rand([1, 2048], dtype=torch.float32)
+    torch_input_tensor_b = torch.rand([2048, 1000], dtype=torch.float32)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output1)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)

@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_log.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_log.h>
 
 namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(
-    const Tensor& input_tensor, const uint16_t k, const int8_t dim, Tensor& value_tensor, Tensor& index_tensor) {
+    const Tensor& input_tensor,
+    const uint16_t k,
+    const int8_t dim,
+    const bool largest,
+    Tensor& value_tensor,
+    Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
     CoreRange core({0, 0}, {0, 0});
@@ -34,7 +39,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     uint32_t num_input_tiles = input_tensor.volume() / TILE_HW;
     uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
     // for streaming in input
@@ -131,7 +136,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         k,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt),
-    };
+        largest};
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk.cpp",
@@ -203,7 +208,12 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  *
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
-    const Tensor& input_tensor, const uint16_t k, const int8_t dim, Tensor& value_tensor, Tensor& index_tensor) {
+    const Tensor& input_tensor,
+    const uint16_t k,
+    const int8_t dim,
+    const bool largest,
+    Tensor& value_tensor,
+    Tensor& index_tensor) {
     using namespace tt::constants;
     tt::tt_metal::Program program{};
 
@@ -227,7 +237,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     uint32_t num_value_tiles = value_tensor.volume() / TILE_HW;
     auto device = input_tensor.device();
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     const auto& [num_cores, local_topk_input_size, rem, final_topk_input_size] = cores_utilized(
         input_shape[dim],
@@ -401,7 +411,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_local),
-    };
+        largest};
     tt::tt_metal::KernelHandle topk_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_local.cpp",
@@ -421,7 +431,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         Kt,
         (std::uint32_t)std::log2(k),
         (std::uint32_t)std::log2(Wt_final),
-    };
+        largest};
 
     tt::tt_metal::KernelHandle topk_final_compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -430,7 +440,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 
     for (uint32_t core_h = 0; core_h < 1; core_h++) {
-        bool ascending = false;
+        bool ascending = !largest;
         for (uint32_t core_w = 0; core_w < num_cores - 1; core_w++) {
             CoreCoord core = {core_h, core_w};
             SetRuntimeArgs(
