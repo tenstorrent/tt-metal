@@ -3,11 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operations/core/core.hpp"
+// #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
-#include "device/split_op.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -16,154 +13,79 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
-std::vector<Tensor> split_dim_n_chunks_rm(
-    const Tensor& input_tensor, int dim, int num_splits, const MemoryConfig& mem_config) {
-    TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.split only supports row major tensors.");
-    TT_FATAL(
-        input_tensor.get_logical_shape()[dim] % num_splits == 0,
-        "Split dimension {} must be divisible by num_splits {}.",
-        input_tensor.get_logical_shape()[dim],
-        num_splits);
+std::vector<ttnn::Tensor> split_with_slice_impl(
+    const uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int64_t>& split_sizes,
+    const int32_t dim,
+    const MemoryConfig& memory_config) {
     const auto& input_shape = input_tensor.get_logical_shape();
-    auto input_rank = input_shape.size();
 
-    const bool on_host =
-        input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED;
-    std::optional<IDevice*> device = on_host ? std::nullopt : std::make_optional(input_tensor.device());
-
-    Tensor preprocessed = ttnn::unsqueeze_to_4D(input_tensor);  // ensure we're 4D before slicing
-    dim += 4 - input_rank;                                      // convert to 4D index
-
-    if (!on_host && input_tensor.get_dtype() == DataType::BFLOAT16) {
-        preprocessed = preprocessed.cpu();  // bf16 tensors must be handled on host due to limitations in slice
-    }
-
-    const auto& preproc_shape = preprocessed.get_logical_shape();
-
-    auto chunk_len = preproc_shape[dim] / num_splits;
-
-    std::vector<Tensor> output_tensors;
-    output_tensors.reserve(num_splits);
-
-    for (int i = 0; i < num_splits; i++) {
-        auto start = i * chunk_len;
-        auto end = start + chunk_len;
-
-        ttnn::SmallVector<uint32_t> start_shape(preproc_shape.size(), 0);
-        start_shape[dim] = start;
-
-        ttnn::SmallVector<uint32_t> end_shape(preproc_shape.size());
-        for (int j = 0; j < end_shape.size(); j++) {
-            if (j == dim) {
-                end_shape[j] = end;
-            } else {
-                end_shape[j] = preproc_shape[j];
-            }
-        }
-
-        Tensor output_chunk = ttnn::slice(
-            preprocessed, start_shape, end_shape, ttnn::SmallVector<uint32_t>(end_shape.size(), 1), mem_config);
-        if (input_rank < 4) {
-            output_chunk = ttnn::squeeze_from_4D(output_chunk, input_rank);
-        }
-
-        tt::tt_metal::Layout layout = input_tensor.get_layout();
-        if (device && (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::UINT16) &&
-            chunk_len % 2 != 0) {
-            layout = Layout::TILE;  // bf16 and uint16 tensors must be tiled if the chunk length is odd due to packing
-                                    // constraints
-            output_chunk = output_chunk.pad_to_tile(0.0);
-        }
-
-        output_chunk = output_chunk.to(layout);
-
-        if (device) {
-            output_chunk = output_chunk.to(*device);
-        }
-
-        output_tensors.push_back(output_chunk);
-    }
-
-    return output_tensors;
-}
-
-std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.get_padded_shape();
-    auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
-    ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
-        .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return operation::run_with_autoformat(
-        SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
-}
-
-std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.get_padded_shape();
-    const bool pre_post_reshape = shape[0] > 1;
-
-    if (!pre_post_reshape) {
-        return impl_split_last_dim_two_chunks_tiled(input_tensor, mem_config);
-    }
-
-    const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
-    const Tensor& reshaped_tensor =
-        ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
-
-    auto part_reshaped = impl_split_last_dim_two_chunks_tiled(reshaped_tensor, mem_config);
-
-    std::vector<Tensor> results;
-    results.reserve(part_reshaped.size());
-    for (auto& part : part_reshaped) {
-        results.emplace_back(
-            ttnn::reshape_on_device(part, ttnn::SmallVector<int32_t>{-1, (int32_t)shape[1], Y, X / 2}, mem_config));
-    }
-
-    return results;
-}
-
-std::vector<Tensor> split_dim_n_chunks_tiled(
-    const Tensor& input_tensor, int dim /* = 3 */, int num_splits, const MemoryConfig& mem_config /* = default */) {
+    // torch requires split size to sum to dim size but since we are using slice we can be more permissive.
     TT_FATAL(
-        num_splits == 2, "ttnn.split currently only supports split in 2 in tiled layout, but {} is passed", num_splits);
-    if (dim == 3) {
-        return split_last_dim_two_chunks_tiled(input_tensor, mem_config);
+        std::accumulate(split_sizes.begin(), split_sizes.end(), 0) >= input_shape[dim],
+        "Split sizes should sum to at least dimension size");
+    std::vector<ttnn::Tensor> results;
+    results.reserve(split_sizes.size());
+
+    const ttnn::SmallVector<const int32_t> steps(input_shape.rank(), 1);
+    ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
+    const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+
+    ends[dim] = 0;
+    for (const auto& s : split_sizes) {
+        ends[dim] = std::min(static_cast<uint32_t>(ends[dim] + s), input_shape[dim]);
+        results.emplace_back(ttnn::slice(queue_id, input_tensor, sbegins, sends, ssteps, memory_config));
+        begins[dim] += s;
     }
-    Tensor ref_input_tensor = ttnn::transpose(input_tensor, dim, 3, mem_config);
-    auto transposed_result = split_last_dim_two_chunks_tiled(ref_input_tensor, mem_config);
-    std::vector<Tensor> results;
-    results.reserve(transposed_result.size());
-    for (Tensor& t : transposed_result) {
-        results.emplace_back(ttnn::transpose(t, dim, 3, mem_config));
-    }
+
     return results;
 }
-
 }  // namespace detail
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    uint8_t queue_id,
+    const uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    int64_t& num_splits,
-    int64_t& dim,
-    const std::optional<MemoryConfig>& memory_config_arg) {
+    const SmallVector<int64_t>& split_sizes,
+    const int64_t& dim = 0,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-        return detail::split_dim_n_chunks_rm(input_tensor, dim, num_splits, memory_config);
-    } else {
-        return detail::split_dim_n_chunks_tiled(input_tensor, dim, num_splits, memory_config);
-    }
+    TT_FATAL(
+        std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
+        "split_size should be greater than 0 ");
+
+    return detail::split_with_slice_impl(queue_id, input_tensor, split_sizes, dim, memory_config);
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    int64_t& num_splits,
-    int64_t& dim,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, num_splits, dim, memory_config);
+    const SmallVector<int64_t>& split_sizes,
+    const int64_t& dim = 0,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_sizes, dim, memory_config_arg);
 }
 
-std::vector<ttnn::Tensor> SplitOperation::invoke(const ttnn::Tensor& input_tensor, int64_t& num_splits, int64_t& dim) {
-    return invoke(DefaultQueueId, input_tensor, num_splits, dim, std::nullopt);
+std::vector<ttnn::Tensor> SplitOperation::invoke(
+    const uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const int64_t& split_size,
+    const int64_t& dim = 0,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+
+    const auto num_chunks =
+        std::ceil(static_cast<float>(input_tensor.get_logical_shape()[dim]) / static_cast<float>(split_size));
+    const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
+    return SplitOperation::invoke(queue_id, input_tensor, split_sizes, dim, memory_config);
+}
+
+std::vector<ttnn::Tensor> SplitOperation::invoke(
+    const ttnn::Tensor& input_tensor,
+    const int64_t& split_size,
+    const int64_t& dim = 0,
+    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
+    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_size, dim, memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -29,7 +29,7 @@ void bind_split(py::module& module) {
 
             Args:
                 * :attr:`input_tensor`: Input Tensor.
-                * :attr:`num_splits`: Number of ways to split.
+                * :attr:`split_size` (Union[int, list[int]]): Single chunk size or list of chunk sizes. Output may be smaller if dim not evenly divisible.
                 * :attr:`dim2`: Dim to split. Defaults to 0.
 
             Keyword Args:
@@ -45,12 +45,26 @@ void bind_split(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               int64_t& num_splits,
-               int64_t& dim,
+               const int64_t& split_size,
+               const int64_t& dim,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, num_splits, dim, memory_config); },
+               const uint8_t queue_id) { return self(queue_id, input_tensor, split_size, dim, memory_config); },
             py::arg("input_tensor"),
-            py::arg("num_splits"),
+            py::arg("split_size"),
+            py::arg("dim") = 0,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = 0,
+        },
+        ttnn::pybind_overload_t{
+            [](const OperationType& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::SmallVector<int64_t>& split_sizes,
+               const int64_t& dim,
+               const std::optional<ttnn::MemoryConfig>& memory_config,
+               const uint8_t queue_id) { return self(queue_id, input_tensor, split_sizes, dim, memory_config); },
+            py::arg("input_tensor"),
+            py::arg("split_size"),
             py::arg("dim") = 0,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
