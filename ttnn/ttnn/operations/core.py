@@ -321,7 +321,7 @@ def to_torch(
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
         shape_without_tile_padding = tuple(tensor.shape)
-        logical_shape_rank = len(tensor.logical_shape)
+        logical_shape_rank = len(tensor.shape)
 
         while len(shape_without_tile_padding) < len(tensor.padded_shape):
             shape_without_tile_padding = (1,) + shape_without_tile_padding
