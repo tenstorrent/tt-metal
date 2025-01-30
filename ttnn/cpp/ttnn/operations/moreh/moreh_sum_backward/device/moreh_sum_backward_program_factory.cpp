@@ -34,22 +34,21 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> get_output_grad_shape(
         return {output_grad.get_logical_shape(), output_grad.get_padded_shape()};
     }
 
-    auto shape = input_grad.get_shape().value;
-    auto rank = shape.rank();
-    auto padding = shape.padding();
+    auto logical_shape = input_grad.get_logical_shape();
+    auto padded_shape = input_grad.get_padded_shape();
+    auto rank = logical_shape.rank();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        logical_shape[dim] = 1;
         if (is_tile_dim) {
-            shape[dim] = tt::constants::TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
+            padded_shape[dim] = tt::constants::TILE_HEIGHT;
         } else {
-            shape[dim] = 1;
+            padded_shape[dim] = 1;
         }
     }
 
-    auto res = Shape(tt::tt_metal::LegacyShape(shape, padding));
-    return {res.logical_shape(), res.padded_shape()};
+    return {logical_shape, padded_shape};
 }
 MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
