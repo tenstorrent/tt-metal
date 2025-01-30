@@ -92,13 +92,7 @@ def run_conv(
     torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
-    # torch_weight_tensor = torch.randn(input_channels, dtype=torch.bfloat16).float().reshape(1, input_channels, 1, 1)
-    torch_weight_tensor = (
-        torch.tensor(range(filter_height * filter_width), dtype=torch.bfloat16)
-        .float()
-        .reshape(1, 1, filter_height, filter_width)
-    )
-    # torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
 
     torch_weight_tensor = torch.broadcast_to(torch_weight_tensor, conv_weight_shape)
     torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float() if has_bias else None
@@ -194,9 +188,6 @@ def run_conv(
         return_weights_and_bias=True,
         return_output_dim=True,
     )
-    import numpy as np
-
-    np.save("out.npy", weights_device.cpu().to_torch().float().numpy())
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -396,7 +387,7 @@ def run_conv_with_split(
     "filter, pad",
     [
         [3, 1],
-        # [1, 0],
+        [1, 0],
         [5, 2],
     ],
 )
@@ -1236,52 +1227,10 @@ def test_resnet50_conv_wh_fp32(
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, ttnn.BLOCK_SHARDED_LAYOUT, {"act_block_h": 32}),  # fits with bfloat8_b
         (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
         (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),  # bfloat16 doesnt fit
-        (
-            2,
-            1280,
-            1280,
-            16,
-            16,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            ttnn.WIDTH_SHARDED_LAYOUT,
-            {"act_block_h": 32},
-        ),  # bfloat16 doesnt fit
-        (
-            2,
-            1280,
-            1280,
-            16,
-            16,
-            3,
-            3,
-            2,
-            2,
-            1,
-            1,
-            ttnn.WIDTH_SHARDED_LAYOUT,
-            {"act_block_h": 32},
-        ),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
+        (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
         (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
-        (
-            2,
-            1280,
-            1280,
-            32,
-            32,
-            3,
-            3,
-            1,
-            1,
-            1,
-            1,
-            ttnn.WIDTH_SHARDED_LAYOUT,
-            {"act_block_h": 32},
-        ),  # bfloat16 doesnt fit
+        (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
         # (2, 640, 640, 64, 64, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}), L1 Allocation Error
         (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
         (2, 1280, 2560, 16, 16, 3, 3, 1, 1, 1, 1, ttnn.WIDTH_SHARDED_LAYOUT, {"act_block_h": 32}),
