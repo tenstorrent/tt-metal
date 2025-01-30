@@ -242,7 +242,7 @@ def run_multi_core_matmul_1d(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             core_range_set,
-            [K_padded, N_per_shard],
+            [K, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
