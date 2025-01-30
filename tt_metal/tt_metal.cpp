@@ -15,7 +15,7 @@
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
 
@@ -291,9 +291,9 @@ namespace detail {
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
     bool pass = true;
     TT_FATAL(
-        address >= device->get_base_allocator_addr(HalMemType::DRAM),
+        address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
-        device->get_base_allocator_addr(HalMemType::DRAM));
+        device->allocator()->get_base_allocator_addr(HalMemType::DRAM));
     tt::Cluster::instance().write_dram_vec(host_buffer, tt_target_dram{device->id(), dram_channel, 0}, address);
     return pass;
 }
@@ -432,7 +432,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
         auto dev_page_id = buffer_page_mapping.host_page_to_dev_page_mapping_[host_page_id];
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-        auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+        auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto absolute_address = buffer.sharded_page_address(bank_id, dev_page_id);
         auto bank_local_address = buffer.bank_local_page_address(bank_id, dev_page_id);
         auto data_index = host_page_id * page_size;
@@ -458,7 +458,7 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
     uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
+    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     uint32_t bank_index = 0;
     int data_index = 0;
     std::vector<uint32_t> page;
@@ -517,7 +517,7 @@ void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buf
     uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->num_banks(buffer.buffer_type());
+    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
     size_t host_idx = 0;
 
     uint32_t bank_index = 0;
@@ -587,7 +587,7 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
     for (int dev_page_id = 0; dev_page_id < total_pages; dev_page_id++) {
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-        auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+        auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto host_page_id = buffer_page_mapping.dev_page_to_host_page_mapping_[dev_page_id];
         if (host_page_id.has_value()) {
             if (!shard_order) {
@@ -652,7 +652,7 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     uint32_t host_page_id = 0;
     for (auto dev_page_id : page_ids) {
         auto core = buffer_page_mapping.all_cores_[buffer_page_mapping.dev_page_to_core_mapping_[dev_page_id]];
-        auto bank_id = device->bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
+        auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         read_pages_to_host_helper(device, buffer, host_buffer, buffer.page_size(), host_page_id, dev_page_id, bank_id);
         host_page_id++;
     }
@@ -877,7 +877,7 @@ DeviceAddr AllocateBuffer(Buffer* buffer) {
             buffer->device()->get_active_sub_device_manager_id());
     }
 
-    DeviceAddr allocated_addr = allocator::allocate_buffer(*buffer->allocator(), buffer);
+    DeviceAddr allocated_addr = buffer->allocator()->allocate_buffer(buffer);
 
     // Assertion here because buffer class returns a u32 when address is queried
     // Requires updating all use cases of buffer address to accept a u64 to remove
@@ -916,8 +916,7 @@ void DeallocateBuffer(Buffer* buffer) {
             *buffer->sub_device_manager_id(),
             buffer->device()->get_active_sub_device_manager_id());
     }
-    auto allocator = buffer->allocator();
-    allocator::deallocate_buffer(*allocator, buffer);
+    buffer->allocator()->deallocate_buffer(buffer);
 }
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers) {
@@ -1351,6 +1350,10 @@ void LightMetalBeginCapture() {
 LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "End LightMetalBinary Capture - not yet implemented.");
     return {};
+}
+
+void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
+    device->load_trace(cq_id, trace_id, trace_desc);
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {

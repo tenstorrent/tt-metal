@@ -84,7 +84,7 @@ public:
     volatile bool is_dprint_server_hung();
     volatile bool is_noc_hung();
 
-    void record_begin(const uint32_t tid, std::shared_ptr<detail::TraceDescriptor> ctx);
+    void record_begin(const uint32_t tid, std::shared_ptr<TraceDescriptor> ctx);
     void record_end();
     void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
     void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
@@ -149,7 +149,7 @@ private:
     uint32_t size_B;
     uint32_t completion_queue_reader_core = 0;
     std::optional<uint32_t> tid_;
-    std::shared_ptr<detail::TraceDescriptor> trace_ctx;
+    std::shared_ptr<TraceDescriptor> trace_ctx;
     std::thread completion_queue_thread;
     SystemMemoryManager& manager;
     std::array<tt::tt_metal::WorkerConfigBufferMgr, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr;

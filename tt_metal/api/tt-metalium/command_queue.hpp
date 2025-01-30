@@ -160,7 +160,7 @@ class EnqueueTraceCommand : public Command {
     Buffer& buffer;
     IDevice* device;
     SystemMemoryManager& manager;
-    std::shared_ptr<detail::TraceDescriptor>& descriptor;
+    std::shared_ptr<TraceDescriptor>& descriptor;
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed;
     bool clear_count;
     NOC noc_index;
@@ -170,7 +170,7 @@ class EnqueueTraceCommand : public Command {
         uint32_t command_queue_id,
         IDevice* device,
         SystemMemoryManager& manager,
-        std::shared_ptr<detail::TraceDescriptor>& descriptor,
+        std::shared_ptr<TraceDescriptor>& descriptor,
         Buffer& buffer,
         std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
         NOC noc_index,
@@ -205,7 +205,7 @@ void EnqueueGetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blo
 void EnqueueSetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
     bool blocking);
 void EnqueueAddBufferToProgram(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,

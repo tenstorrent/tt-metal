@@ -75,7 +75,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->num_banks(BufferType::DRAM);
+    const auto num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(

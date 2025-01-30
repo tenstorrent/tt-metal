@@ -29,7 +29,7 @@
 #include <host_api.hpp>
 #include <circular_buffer_constants.h>
 #include <circular_buffer.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -312,7 +312,7 @@ EnqueueTraceCommand::EnqueueTraceCommand(
     uint32_t command_queue_id,
     IDevice* device,
     SystemMemoryManager& manager,
-    std::shared_ptr<detail::TraceDescriptor>& descriptor,
+    std::shared_ptr<TraceDescriptor>& descriptor,
     Buffer& buffer,
     std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> & expected_num_workers_completed,
     NOC noc_index,
@@ -466,7 +466,7 @@ void EnqueueAddBufferToProgram(
 void EnqueueSetRuntimeArgs(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
     bool blocking) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());

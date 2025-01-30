@@ -17,7 +17,7 @@ void RunTest(IDevice* device) {
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
 
-    auto l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    auto l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Kernels on brisc + ncrisc that just add two numbers
     KernelHandle brisc_kid = CreateKernel(

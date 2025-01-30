@@ -117,40 +117,13 @@ public:
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
-    const std::unique_ptr<Allocator>& get_initialized_allocator() const override;
-    const std::unique_ptr<Allocator>& get_initialized_allocator(SubDeviceId sub_device_id) const override;
-    DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const override;
-    DeviceAddr get_base_allocator_addr(const HalMemType& mem_type, SubDeviceId sub_device_id) const override;
-    uint32_t num_banks(const BufferType& buffer_type) const override;
-    uint32_t num_banks(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t bank_size(const BufferType& buffer_type) const override;
-    uint32_t bank_size(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const override;
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<Allocator>& allocator() const override;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const override;
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const override;
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const override;
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
-    const std::vector<uint32_t>& bank_ids_from_dram_channel(uint32_t dram_channel) const override;
-    const std::vector<uint32_t>& bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const override;
-    const std::vector<uint32_t>& bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core) const override;
-    const std::vector<uint32_t>& bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord& logical_core, SubDeviceId sub_device_id) const override;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type) const override;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType& buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t get_allocator_alignment() const override;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
-    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
-    size_t get_l1_small_size() const override;
-    size_t get_l1_small_size(SubDeviceId sub_device_id) const override;
-    const std::unordered_set<Buffer*>& get_allocated_buffers() const override;
-    const std::unordered_set<Buffer*>& get_allocated_buffers(SubDeviceId sub_device_id) const override;
-    void deallocate_buffers() override;
-    void deallocate_buffers(SubDeviceId sub_device_id) override;
-    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const override;
-    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out, SubDeviceId sub_device_id) const override;
+    std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
@@ -172,6 +145,9 @@ public:
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
+
+    // Light Metal
+    void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
     bool using_slow_dispatch() const override;
     bool using_fast_dispatch() const override;
@@ -223,7 +199,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override;
-    MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

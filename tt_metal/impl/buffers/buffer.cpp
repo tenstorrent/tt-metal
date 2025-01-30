@@ -242,9 +242,9 @@ Buffer::Buffer(
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_parameters);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
-        this->allocator_ = device->get_initialized_allocator(*this->sub_device_id_).get();
+        this->allocator_ = device->allocator(*this->sub_device_id_).get();
     } else {
-        this->allocator_ = device->get_initialized_allocator().get();
+        this->allocator_ = device->allocator().get();
     }
     if (size != 0) {
         validate_buffer_size_and_page_size(size, page_size, buffer_type, buffer_layout, shard_parameters);
@@ -422,16 +422,16 @@ bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
 
 uint32_t Buffer::dram_channel_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_dram(), "Expected DRAM buffer!");
-    return allocator::dram_channel_from_bank_id(*this->allocator_, bank_id);
+    return allocator_->get_dram_channel_from_bank_id(bank_id);
 }
 
 CoreCoord Buffer::logical_core_from_bank_id(uint32_t bank_id) const {
     TT_FATAL(this->is_l1(), "Expected L1 buffer!");
-    return allocator::logical_core_from_bank_id(*this->allocator_, bank_id);
+    return allocator_->get_logical_core_from_bank_id(bank_id);
 }
 
 DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     int pages_offset_within_bank = (int)page_index / num_banks;
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
@@ -439,7 +439,7 @@ DeviceAddr Buffer::page_address(uint32_t bank_id, uint32_t page_index) const {
 }
 
 DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index) const {
-    uint32_t num_banks = allocator::num_banks(*this->allocator_, this->buffer_type_);
+    uint32_t num_banks = allocator_->get_num_banks(buffer_type_);
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     uint32_t offset;
     if (is_sharded(this->buffer_layout())) {
@@ -453,9 +453,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     return this->address() + offset;
 }
 
-uint32_t Buffer::alignment() const {
-    return this->allocator_->config.alignment;
-}
+uint32_t Buffer::alignment() const { return this->allocator_->get_config().alignment; }
 
 DeviceAddr Buffer::aligned_page_size() const {
     return align(page_size(), this->alignment());
@@ -465,7 +463,8 @@ DeviceAddr Buffer::aligned_size() const {
 }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
-    uint32_t num_banks = is_sharded(this->buffer_layout_) ? this->num_cores().value() : this->device_->num_banks(this->buffer_type());
+    uint32_t num_banks =
+        is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::SizeBytesPerBank(this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
@@ -496,8 +495,8 @@ std::optional<uint32_t> Buffer::num_cores() const {
 }
 
 DeviceAddr Buffer::translate_page_address(uint64_t offset, uint32_t bank_id) const {
-    allocator::bank_offset(*this->allocator_, this->buffer_type_, bank_id);
-    DeviceAddr base_page_address = this->address() + allocator::bank_offset(*this->allocator_, this->buffer_type_, bank_id);
+    allocator_->get_bank_offset(buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
     return base_page_address + offset;
 }
 

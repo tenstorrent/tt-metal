@@ -34,6 +34,7 @@ namespace tt {
 namespace tt_metal {
 
 class CommandQueue;
+struct TraceDescriptor;
 inline namespace v0 {
 
 class Program;
@@ -905,6 +906,22 @@ void LightMetalBeginCapture();
  */
 // clang-format on
 LightMetalBinary LightMetalEndCapture();
+
+// clang-format off
+/**
+ * Load an existing trace descriptor onto a particular device and command queue and assign it as user-provided trace id. Useful for Light Metal Binary replay.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device to load the trace onto.                                     | IDevice *                     |                                    | Yes      |
+ * | cq_id        | The command queue id to load the trace onto.                           | uint8_t                       |                                    | Yes      |
+ * | trace_id     | A unique id to represent the trace on device.                          | uint32_t                      |                                    | Yes      |
+ * | trace_desc   | The trace descriptor to load onto the device.                          | TraceDescriptor&              |                                    | Yes      |
+ */
+// clang-format on
+void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc);
 
 // clang-format off
 /**
