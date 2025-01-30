@@ -50,6 +50,7 @@ public:
 
     std::optional<ShardSpecBuffer> compute_shard_spec_buffer(const ttnn::SimpleShape& shape) const;
 
+    size_t compute_device_buffer_size_bytes(const ttnn::SimpleShape& shape) const;
     size_t compute_packed_buffer_size_bytes(const ttnn::SimpleShape& shape) const;
     size_t compute_page_size_bytes(const ttnn::SimpleShape& shape) const;
 
