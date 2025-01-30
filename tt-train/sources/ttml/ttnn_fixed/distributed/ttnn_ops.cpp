@@ -30,11 +30,15 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto tensor_shape = tensor.get_shape();
     auto tensor_rank = tensor_shape.rank();
     if (tensor_rank != 4U) {
-        throw std::logic_error("Scatter supports only 4D tensors");
+        throw std::logic_error(
+            fmt::format("Scatter supports only 4D tensors. Shape {} Rank {}", tensor_shape, tensor_rank));
     }
     auto split_axis_size = tensor_shape[dim];
     if (split_axis_size % num_devices != 0) {
-        throw std::logic_error("Slice dimension should be divisible by number of devices");
+        throw std::logic_error(fmt::format(
+            "Split axis size should be divisible by number of devices. Split axis size: {}, number of devices: {}",
+            split_axis_size,
+            num_devices));
     }
     auto split_size_per_device = split_axis_size / num_devices;
     if (split_size_per_device % 32 != 0) {
