@@ -117,13 +117,13 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
     }
 
     const auto& input_tensor = tensor_args.input_tensor_q;
-    const auto input_shape = input_tensor.get_padded_shape();
+    const auto input_shape = input_tensor.get_logical_shape();
 
     auto sequence_length = input_shape[2];
     auto head_dim = operation_attributes.head_dim;
-    if (sequence_length % TILE_HEIGHT != 0) {
-        sequence_length = (sequence_length / TILE_HEIGHT + 1) * TILE_HEIGHT;
-    }
+    // if (sequence_length % TILE_HEIGHT != 0) {
+    //     sequence_length = (sequence_length / TILE_HEIGHT + 1) * TILE_HEIGHT;
+    // }
     if (head_dim % TILE_WIDTH != 0) {
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
