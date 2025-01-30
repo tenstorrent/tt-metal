@@ -89,7 +89,7 @@ def mha(qkv_weight, qkv_bias, hidden_dim, num_heads, device, model_config):
 
         # Input and output tensors of this fused op is: [9, 1, 6144, 384] instead of [9, 16, 384, 384]
         # No-op reshapes are handled within pre-softmax (op 7) and post-softmax bmms (op 9)
-        shape = qkt.shape.with_tile_padding()
+        shape = qkt.padded_shape
         qkt = qkt.reshape(shape[0], 1, shape[1] * shape[2], shape[3])
         attention_scores = ttnn.scale_mask_softmax_in_place(
             qkt, freciprocal_of_sqrt_hidden_dim, attention_mask, program_config=softmax_program_config
@@ -239,7 +239,7 @@ class TtMultiHeadAttentionModel:
             )
 
         # Hidden dim
-        hidden_dim = qkv_weight.shape.with_tile_padding()[-1] // 3
+        hidden_dim = qkv_weight.padded_shape[-1] // 3
 
         self.mha = mha(
             qkv_weight,

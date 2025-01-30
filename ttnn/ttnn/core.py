@@ -80,11 +80,11 @@ def has_tile_padding(tensor, *, dim=None):
     if dim is not None:
         rank = tensor.shape.rank
         dim = dim if dim >= 0 else rank + dim
-        return tensor.shape[dim] != tensor.shape.with_tile_padding()[dim]
+        return tensor.shape[dim] != tensor.padded_shape[dim]
 
     if len(tensor.shape) > 1:
         *_, h, w = tensor.shape
-        *_, h_padded, w_padded = tensor.shape.with_tile_padding()
+        *_, h_padded, w_padded = tensor.padded_shape
         return h != h_padded or w != w_padded
     return False
 

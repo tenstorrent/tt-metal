@@ -369,7 +369,7 @@ def test_post_allgather_layernorm(
 
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(1, 1, 32, tt_device_stats.shape.with_tile_padding()[-1]),
+        shape=(1, 1, 32, tt_device_stats.padded_shape[-1]),
         core_grid=ttnn.CoreGrid(y=1, x=1),
         strategy=ttnn.ShardStrategy.WIDTH,
     )
@@ -449,7 +449,7 @@ def test_simulated_distributed_layernorm(
     tt_global_stats = ttnn.concat(tt_stats_list, -1)
     # shard to 1 core
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
-        shape=(32, tt_global_stats.shape.with_tile_padding()[-1]),
+        shape=(32, tt_global_stats.padded_shape[-1]),
         core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(grid_offset, grid_offset)]),
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,

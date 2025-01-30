@@ -262,7 +262,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             input_index += 1
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
-            return tuple(object_value.with_tile_padding())
+            return tuple(object_value)
         elif isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)

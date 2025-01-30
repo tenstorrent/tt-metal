@@ -44,8 +44,8 @@ class TestUpdateCache:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                        xt.shape.with_tile_padding()[-1],
+                        xt.volume() // xt.padded_shape[-1] // num_cores,
+                        xt.padded_shape[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 )
@@ -111,8 +111,8 @@ class TestUpdateCache:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
             )
@@ -177,8 +177,8 @@ class TestUpdateCacheFP32:
                 input_shard_spec = ttnn.ShardSpec(
                     shard_grid,
                     [
-                        xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                        xt.shape.with_tile_padding()[-1],
+                        xt.volume() // xt.padded_shape[-1] // num_cores,
+                        xt.padded_shape[-1],
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
                 )
@@ -242,8 +242,8 @@ class TestUpdateCacheFP32:
             input_shard_spec = ttnn.ShardSpec(
                 shard_grid,
                 [
-                    xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                    xt.shape.with_tile_padding()[-1],
+                    xt.volume() // xt.padded_shape[-1] // num_cores,
+                    xt.padded_shape[-1],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
             )

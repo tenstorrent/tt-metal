@@ -81,12 +81,8 @@ def test_bcast(
     input_tensor = ttnn.from_torch(
         input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT, dtype=in0_dtype
     )
-    input_2d_height = (
-        input_tensor.shape.with_tile_padding()[0]
-        * input_tensor.shape.with_tile_padding()[1]
-        * input_tensor.shape.with_tile_padding()[2]
-    )
-    input_2d_width = input_tensor.shape.with_tile_padding()[3]
+    input_2d_height = input_tensor.padded_shape[0] * input_tensor.padded_shape[1] * input_tensor.padded_shape[2]
+    input_2d_width = input_tensor.padded_shape[3]
     if shard_strategy == ttnn.ShardStrategy.BLOCK:
         input_2d_height_padded = _nearest_y(input_2d_height, shard_grid[0] * 32)
         shard_height = math.ceil(input_2d_height_padded / shard_grid[0])

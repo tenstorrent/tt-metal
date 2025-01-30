@@ -27,9 +27,20 @@ void Validate_transform (const ttnn::Shape& input_shape, const ttnn::Shape& outp
 struct ReshapeViewOperation {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape,const std::optional<MemoryConfig> &memory_config,const uint8_t queue_id,const std::optional<PadValue> &pad_value);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& logical_shape,const std::optional<MemoryConfig> &memory_config,const uint8_t queue_id,const std::optional<PadValue> &pad_value);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        const std::optional<MemoryConfig>& memory_config,
+        const uint8_t queue_id,
+        const std::optional<PadValue>& pad_value);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector,const std::optional<MemoryConfig> &memory_config,const uint8_t queue_id,const std::optional<PadValue> &pad_value);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& logical_shape);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape);
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
 };
 

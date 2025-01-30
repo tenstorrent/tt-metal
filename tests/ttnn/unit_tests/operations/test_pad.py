@@ -303,7 +303,7 @@ def test_pad_any_input_shape(device, h, w, padding, value):
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    tilezed_input_shape = input_tensor.shape.with_tile_padding()
+    tilezed_input_shape = input_tensor.padded_shape
     th = tilezed_input_shape[-2]
     tw = tilezed_input_shape[-1]
     assert output_tensor.shape == ttnn.Shape((th + padding[0][0] + padding[0][1], tw + padding[1][0] + padding[1][1]))

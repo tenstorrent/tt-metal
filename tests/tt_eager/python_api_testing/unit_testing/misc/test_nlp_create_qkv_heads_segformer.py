@@ -34,7 +34,7 @@ def run_nlp_create_qkv_heads_segformer_test(batch, seq_len, hidden_dim, dtype, i
 
     head_dim = 32
     heads_num = hidden_dim // head_dim
-    assert list(q.shape.with_tile_padding()) == [batch, heads_num, seq_len, head_dim]
+    assert list(q.padded_shape) == [batch, heads_num, seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
 

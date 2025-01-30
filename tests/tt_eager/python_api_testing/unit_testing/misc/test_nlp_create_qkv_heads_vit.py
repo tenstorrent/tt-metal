@@ -36,9 +36,9 @@ def run_nlp_create_qkv_heads_vit_test(batch, seq_len, dtype, in0_mem_config, out
     logger.debug(f"k: {k.memory_config().buffer_type} and {k.get_dtype()}")
     logger.debug(f"v: {v.memory_config().buffer_type} and {v.get_dtype()}")
 
-    assert list(q.shape.with_tile_padding()) == [batch, 12, seq_len, 64]
-    assert list(k.shape.with_tile_padding()) == [batch, 12, seq_len, 64]
-    assert list(v.shape.with_tile_padding()) == [batch, 12, seq_len, 64]
+    assert list(q.padded_shape) == [batch, 12, seq_len, 64]
+    assert list(k.padded_shape) == [batch, 12, seq_len, 64]
+    assert list(v.padded_shape) == [batch, 12, seq_len, 64]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

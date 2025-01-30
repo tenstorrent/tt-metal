@@ -53,7 +53,7 @@ def _golden_function(input_tensor: ttnn.Tensor, padding, value):
 def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
     output_tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output_tensor, args, kwargs)
     # Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
+    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.padded_shape)
     return output_tensor
 
 

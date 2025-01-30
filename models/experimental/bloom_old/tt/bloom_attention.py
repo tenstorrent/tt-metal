@@ -276,7 +276,7 @@ class TtBloomAttention(torch.nn.Module):
             value_layer, 1, batch_size * self.num_heads, q_length, self.head_dim
         )
 
-        _, _, _, kv_length = reshaped_key_layer.shape.with_tile_padding()
+        _, _, _, kv_length = reshaped_key_layer.padded_shape
 
         matmul_result = baddbmm.tt_baddbmm(
             device=device,

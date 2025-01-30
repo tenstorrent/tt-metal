@@ -278,9 +278,8 @@ class TtLlamaAttention_galaxy:
         fqkv_shape = fused_query_key_value.shape
         fused_query_key_value = ttnn.reshape(
             fused_query_key_value,
-            ttnn.Shape(
-                (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, self.max_batch_size, fqkv_shape[3])
-            ),
+            (1, 1, self.batch_size_per_device_group, fqkv_shape[3]),
+            (1, 1, self.max_batch_size, fqkv_shape[3]),
         )
 
         fused_query_key_value = ttnn.to_memory_config(

@@ -54,7 +54,7 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     h_prev = ttnn.Tensor(h_prev, ttnn.bfloat16).to(ttnn.ROW_MAJOR_LAYOUT).to(device, h_memory_config)
 
     actual = ttnn.experimental.prefix_scan(a, bx, h_prev, memory_config=memory_config, dtype=dtype)
-    assert list(actual.shape.with_tile_padding()) == list(expected.shape)
+    assert list(actual.padded_shape) == list(expected.shape)
     assert actual.dtype == dtype
 
     actual = tt2torch_tensor(actual)
