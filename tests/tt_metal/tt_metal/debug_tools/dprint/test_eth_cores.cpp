@@ -32,11 +32,15 @@ SETW:
 HEX/OCT/DEC:
 1e240361100123456)";
 
-static void RunTest(DPrintFixture* fixture, IDevice* device, bool active) {
+static void RunTest(
+    DPrintFixture* fixture,
+    IDevice* device,
+    bool active,
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     // Try printing on all ethernet cores on this device
     int count = 0;
     std::unordered_set<CoreCoord> test_cores;
-    tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
+    tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = processor};
     if (active) {
         test_cores = device->get_active_ethernet_cores(true);
         config.eth_mode = Eth::SENDER;
@@ -49,7 +53,6 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, bool active) {
         Program program = Program();
 
         // Create the kernel
-        // TODO: When #6424 is fixed combine these kernels again.
         KernelHandle erisc_kernel_id = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
@@ -59,10 +62,11 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, bool active) {
         // Run the program
         log_info(
             tt::LogTest,
-            "Running print test on eth core {}:({},{})",
+            "Running print test on eth core {}:({},{}), {}",
             device->id(),
             core.x,
-            core.y
+            core.y,
+            processor
         );
         fixture->RunProgram(device, program);
 
@@ -108,10 +112,14 @@ TEST_F(DPrintFixture, IdleEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, IDevice* device){
-                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false);
-            },
-            device
-        );
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false); },
+            device);
+        if (device->arch() == ARCH::BLACKHOLE) {
+            this->RunTestOnDevice(
+                [](DPrintFixture* fixture, IDevice* device) {
+                    CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, false, DataMovementProcessor::RISCV_1);
+                },
+                device);
+        }
     }
 }
