@@ -298,7 +298,6 @@ class MeshDevice {
 
    // - Common Interface between {Device, MeshDevice}
    uint32_t get_num_worker_cores() const;
-   uint32_t get_l1_small_size();
    int num_dram_channels() const;
    uint32_t l1_size_per_core() const;
    uint32_t dram_size_per_channel() const;

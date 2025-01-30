@@ -455,7 +455,7 @@ void verify_cb_config(
             for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
                  logical_y++) {
                 auto device = mesh_device->get_device(logical_y, logical_x);
-                uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 for (const auto& core_range : crs.ranges()) {
                     for (const auto& core_coord : core_range) {
                         ::tt::tt_metal::detail::ReadFromDeviceL1(
