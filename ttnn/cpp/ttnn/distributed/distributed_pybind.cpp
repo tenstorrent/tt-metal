@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
+#include <pybind11/pytypes.h>
 #include <utility>
 
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/storage.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include "pybind11/stl.h"
@@ -17,6 +21,147 @@ using namespace tt::tt_metal;
 namespace ttnn::distributed {
 
 namespace py = pybind11;
+
+py::object get_torch_type(DataType& dtype, const py::object& torch) {
+    if (dtype == DataType::UINT8) {
+        return torch.attr("uint8");
+    } else if (dtype == DataType::UINT16) {
+        return torch.attr("int16");
+    } else if (dtype == DataType::INT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::UINT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::FLOAT32) {
+        return torch.attr("float32");
+    } else if (dtype == DataType::BFLOAT16) {
+        return torch.attr("bfloat16");
+    } else {
+        static_assert("Unsupported buffer!");
+    }
+}
+
+// duplicated from pytensor.cpp
+template <typename T>
+owned_buffer::Buffer<T> create_row_major_owned_buffer(
+    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool legacy_output) {
+    TT_FATAL(
+        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
+        "Sharded tensors must have a shard spec when converting to tt tensors!");
+
+    if (legacy_output) {
+        if (tensor_spec.layout() == Layout::TILE) {
+            auto data = tensor_impl::convert_layout_tile_to_row_major(
+                tensor_spec.physical_shape(), tensor_spec.tile(), owned_buffer);
+            return owned_buffer::create(std::move(data));
+        }
+        return owned_buffer;
+    }
+
+    auto physical_data = owned_buffer.get();
+
+    // See implementation for documentation
+    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
+
+    return owned_buffer::create(std::move(logical_data));
+}
+
+// duplicated from pytensor.cpp
+OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool legacy_output) {
+    TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED);
+
+    OwnedStorage storage = std::visit(
+        [&tt_tensor](auto&&) -> OwnedBuffer {
+            TT_THROW(
+                "Tensor with {} cannot be converted to torch",
+                tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+        },
+        tt_tensor.get_storage());
+
+    const auto& tensor_spec = tt_tensor.get_tensor_spec();
+    const auto tt_dtype = tensor_spec.data_type();
+    switch (tt_dtype) {
+        case DataType::UINT8: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::UINT16: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::INT32: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::UINT32: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::FLOAT32: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::BFLOAT16: {
+            return create_row_major_owned_buffer(
+                std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, legacy_output);
+        }
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B: {
+            const auto& tile = tensor_spec.tile();
+            auto uint32_data = owned_buffer::get_as<std::uint32_t>(storage.buffer).get();
+            auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
+                                           ? unpack_bfp8_tiles_into_float_vec(
+                                                 uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                                           : unpack_bfp4_tiles_into_float_vec(
+                                                 uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+            return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
+        }
+        default: {
+            TT_THROW("Unsupported DataType: {}", tt_dtype);
+            break;
+        }
+    }
+}
+
+// duplicated from pytensor.cpp
+py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool legacy_output = false) {
+    // TODO: Remove legacy_output flag which supports old behaviour of returning tensors with padded shape.
+    // These cases need to be fixed:
+    //     ROW_MAJOR tensors with padding (since ROW_MAJOR has no alignment, cannot automatically strip data unless
+    //     padded shape is queried) Physical sharding on padded shape (unlike interleaved tensors, cannot derive an
+    //     equivalent logical shard spec to strip out data)
+    // One way to clean this up is:
+    //     1. Update tests to use ttnn.from_torch and ttnn.to_torch
+    //     2. Fix usage of tensor.to_torch inside ttnn functional APIs
+    //     3. Deprecate old tensor.to_torch and rename tensor.to_torch_with_logical_shape back to tensor.to_torch
+    auto buffer = get_host_buffer_from_tensor(tt_tensor, legacy_output);
+
+    py::object torch = py::module_::import("torch");
+    auto frombuffer = torch.attr("frombuffer");
+
+    DataType dtype = tt_tensor.get_tensor_spec().data_type();
+
+    py::object torch_dtype = get_torch_type(dtype, torch);
+
+    auto logical_shape = tt_tensor.get_logical_shape();
+    auto view = logical_shape.view();
+    std::vector<uint32_t> torch_shape(view.begin(), view.end());
+    auto tensor = [&]() {
+        if (tt_tensor.volume() == 0) {
+            auto pytorch_empty = torch.attr("empty");
+            return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
+        }
+        return frombuffer(buffer, py::arg("dtype") = torch_dtype);
+    }();
+
+    if (legacy_output) {
+        auto shape = tt_tensor.get_padded_shape();
+        torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
+    }
+    tensor = tensor.attr("reshape")(torch_shape);
+    tensor = tensor.attr("contiguous")();
+    return tensor;
+}
 
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
@@ -339,6 +484,22 @@ void py_module(py::module& module) {
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
         py::kw_only());
+    module.def(
+        "shardedtensor_to_tensorlist",
+        [](const Tensor& tensor) -> std::vector<py::object> {
+            std::vector<py::object> tensorlist_local;
+
+            std::vector<ttnn::Tensor> tensors = get_device_tensors(tensor);
+
+            tensorlist_local.reserve(tensors.size());
+
+            for (const Tensor& shard : tensors) {
+                tensorlist_local.push_back(convert_tt_tensor_to_torch_tensor(shard));
+            }
+
+            return tensorlist_local;
+        },
+        py::arg("tensor"));
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
