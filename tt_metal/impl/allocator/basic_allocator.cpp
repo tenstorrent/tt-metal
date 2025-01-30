@@ -12,6 +12,7 @@ namespace tt_metal {
 BasicAllocator::BasicAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
     this->init_one_bank_per_channel();
     this->init_one_bank_per_l1();
+    this->validate_bank_assignments();
 }
 
 }  // namespace tt_metal

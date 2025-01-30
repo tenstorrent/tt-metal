@@ -223,6 +223,7 @@ void Allocator::init_compute_and_storage_l1_bank_manager() {
 L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
     this->init_one_bank_per_channel();
     this->init_compute_and_storage_l1_bank_manager();
+    this->validate_bank_assignments();
 }
 
 }  // namespace tt_metal
