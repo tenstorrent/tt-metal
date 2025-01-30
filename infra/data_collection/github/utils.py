@@ -92,8 +92,8 @@ def return_first_string_starts_with(starting_string, strings):
 
 def get_job_failure_signature_(github_job, failure_description) -> Optional[Union[InfraErrorV1]]:
     error_snippet_to_signature_mapping = {
-        "timed out": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
-        "exceeded the maximum execution time": str(InfraErrorV1.JOB_TIMEOUT_FAILURE),
+        "timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
+        "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
     }

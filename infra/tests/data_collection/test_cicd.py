@@ -73,7 +73,7 @@ def test_create_pipeline_json_to_detect_job_timeout_error_v1(workflow_run_gh_env
 
     for job in pipeline.jobs:
         if job.github_job_id == 30531878948:
-            assert job.failure_signature == str(InfraErrorV1.JOB_TIMEOUT_FAILURE)
+            assert job.failure_signature == str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE)
             assert job.failure_description is not None
         else:
             assert job.failure_signature is None
