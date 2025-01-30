@@ -41,10 +41,10 @@ static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {

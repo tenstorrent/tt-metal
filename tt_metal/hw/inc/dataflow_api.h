@@ -133,10 +133,7 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 255    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
-    return (uint32_t)&rta_l1_base[arg_idx];
-    ;
-}
+static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for common (all cores) runtime arguments set via
@@ -188,7 +185,7 @@ template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((volatile tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
 // clang-format off

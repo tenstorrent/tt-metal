@@ -22,6 +22,7 @@
 #include "hardware_command_queue.hpp"
 #include "sub_device_manager_tracker.hpp"
 #include "sub_device_types.hpp"
+#include "trace_buffer.hpp"
 #include "span.hpp"
 #include "program_cache.hpp"
 
@@ -41,7 +42,7 @@ public:
         std::size_t trace_region_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false,
-        uint32_t worker_core = 0,
+        uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0);
 
     ~Device() override;
@@ -98,57 +99,14 @@ public:
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
 
-    const std::unique_ptr<Allocator> &get_initialized_allocator() const override;
-    const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const override;
-
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const override;
-    DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const override;
-
-    uint32_t num_banks(const BufferType &buffer_type) const override;
-    uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
-    uint32_t bank_size(const BufferType &buffer_type) const override;
-    uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
-
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const override;
-    uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
+    const std::unique_ptr<Allocator>& allocator() const override;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
 
     CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
 
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const override;
-    int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const override;
-
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const override;
-    CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const override;
-
-    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const override;
-    const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const override;
-
-    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const override;
-    const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const override;
-
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const override;
-    allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const override;
-
-    uint32_t get_allocator_alignment() const override;
-    uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const override;
-
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
-
-    size_t get_l1_small_size() const override;
-    size_t get_l1_small_size(SubDeviceId sub_device_id) const override;
-
-    const std::unordered_set<Buffer *> &get_allocated_buffers() const override;
-    const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const override;
-
-    void deallocate_buffers() override;
-    void deallocate_buffers(SubDeviceId sub_device_id) override;
-
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const override;
-    void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const override;
-
-    MemoryBlockTable get_memory_block_table(const BufferType &buffer_type) const override;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
@@ -168,7 +126,6 @@ public:
     const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
 
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    HWCommandQueue& hw_command_queue(size_t cq_id = 0) override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
@@ -179,6 +136,9 @@ public:
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
+
+    // Light Metal
+    void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
     bool using_slow_dispatch() const override;
     bool using_fast_dispatch() const override;
@@ -191,7 +151,6 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void initialize_synchronous_sw_cmd_queue() override;
     void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
 
     // Puts device into reset
@@ -243,8 +202,6 @@ public:
     // TODO #15944: Temporary api until migration to actual fabric is complete
     std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
-
-    uint32_t get_completion_queue_reader_core() const override { return completion_queue_reader_core_; }
 
     bool is_mmio_capable() const override;
     std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
@@ -302,8 +259,7 @@ private:
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<HWCommandQueue>> hw_command_queues_;
-    std::vector<std::unique_ptr<CommandQueue>> sw_command_queues_;
+    std::vector<std::unique_ptr<CommandQueue>> command_queues_;
 
     JitBuildEnv build_env_;
     JitBuildStateSet firmware_build_states_;

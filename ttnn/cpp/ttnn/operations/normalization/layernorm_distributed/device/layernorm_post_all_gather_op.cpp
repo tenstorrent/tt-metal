@@ -7,7 +7,6 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
