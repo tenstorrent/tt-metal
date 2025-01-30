@@ -42,7 +42,7 @@ constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRI
 
 #define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
 
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
 #else
 constexpr uint32_t num_cbs_to_early_init = 0;
@@ -183,7 +183,7 @@ void set_deassert_addresses() {
 }
 
 void l1_to_ncrisc_iram_copy(uint32_t src_addr, uint16_t size, uint32_t address_offset = 0) {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     // Always copy ncrisc even if its size is 0 (save branch)...
     // Copy NCRISC firmware from L1 to local IRAM using tensix DMA
     tdma_xmov(
@@ -196,7 +196,7 @@ void l1_to_ncrisc_iram_copy(uint32_t src_addr, uint16_t size, uint32_t address_o
 }
 
 void l1_to_ncrisc_iram_copy_wait() {
-#ifdef NCRISC_HAS_IRAM
+#if NCRISC_FIRMWARE_IN_IRAM
     // Wait for DMA to finish
     wait_tdma_movers_done(RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK);
 #endif
@@ -327,11 +327,15 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-        mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
+        mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_GO;
+        mailboxes->slave_sync.trisc1 = RUN_SYNC_MSG_GO;
+        mailboxes->slave_sync.trisc2 = RUN_SYNC_MSG_GO;
     }
 }
 
 inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
+    // On Wormhole, start_ncrisc_kernel_run will reset NCRISC to start the kernel running.
+#if !defined(NCRISC_FIRMWARE_KERNEL_SPLIT)
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         l1_to_ncrisc_iram_copy_wait();
         mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
@@ -341,6 +345,7 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
         deassert_all_reset();
 #endif
     }
+#endif
 }
 
 inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
@@ -348,7 +353,7 @@ inline void start_ncrisc_kernel_run(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
         // The NCRISC behaves badly if it jumps from L1 to IRAM, so instead halt it and then reset it to the IRAM
         // address it provides.
-        while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_DONE);
+        while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_WAITING_FOR_RESET);
         mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
         volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
         cfg_regs[NCRISC_RESET_PC_PC_ADDR32] = mailboxes->ncrisc_halt.resume_addr;
@@ -462,6 +467,14 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+#if !NCRISC_FIRMWARE_IN_IRAM
+            // On Wormhole and Blackhole, trigger the NCRISC to start loading CBs and IRAM as soon as possible.
+            if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+                mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_LOAD;
+            }
+#endif
             // Copies from L1 to IRAM on chips where NCRISC has IRAM
             uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             int ncrisc_index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
@@ -473,9 +486,6 @@ int main() {
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
-
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
             run_triscs(enables);
 
