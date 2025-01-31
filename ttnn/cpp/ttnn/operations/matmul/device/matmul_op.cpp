@@ -2151,11 +2151,9 @@ operation::ProgramWithCallbacks Matmul::create_program(
     tt::tt_metal::DataType output_dtype = this->output_dtype.value();
 
     bool fuse_batch = true;
-    // TODO: If input_tensor_a.get_legacy_shape()[0] *
-    // input_tensor_a.get_legacy_shape()[1] * ... except last two dimensions == 1,
-    // does matmuls work if we treat it as bmm
-    // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single
-    // core matmul/bmm
+    // TODO: If input_tensor_a.get_padded_shape()[0] * input_tensor_a.get_padded_shape()[1] * ... except last two
+    // dimensions == 1, does matmuls work if we treat it as bmm
+    // TODO: Only for MatmulMultiCoreReuseProgramConfig we allow this as single core matmul/bmm
     TT_FATAL(this->compute_kernel_config.has_value(), "Error");
     TT_FATAL(this->bcast_batch.has_value(), "Error");
     bool broadcast_batch = this->bcast_batch.value();
