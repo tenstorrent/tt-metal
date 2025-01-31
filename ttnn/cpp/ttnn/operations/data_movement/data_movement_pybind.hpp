@@ -72,7 +72,7 @@ void py_module(py::module& module) {
     detail::py_bind_bcast(module);
     detail::py_bind_copy(module);
     detail::py_bind_move(module);
-    detail::py_bind_expand(module);
+    py_bind_expand(module);
     py_bind_interleaved_to_sharded(module);
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);

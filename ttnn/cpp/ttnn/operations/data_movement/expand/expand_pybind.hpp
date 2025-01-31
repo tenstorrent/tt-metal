@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@
 
 #include "pybind11/pybind_fwd.hpp"
 
-namespace py = pybind11;
+namespace ttnn::operations::data_movement {
 
-namespace ttnn::operations::data_movement::detail {
-void py_bind_expand(py::module& module);
-}  // namespace ttnn::operations::data_movement::detail
+void py_bind_expand(pybind11::module& module);
+
+}  // namespace ttnn::operations::data_movement
