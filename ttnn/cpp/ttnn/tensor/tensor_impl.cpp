@@ -891,14 +891,15 @@ std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& t
     }
 
     const auto& logical_shape = tensor_spec.logical_shape();
+    const auto& padded_shape = tensor_spec.padded_shape();
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
-    auto physical_shard_shape = logical_shard_shape;
-    if (tensor_spec.layout() == Layout::TILE) {
-        const auto& tile = tensor_spec.tile();
-        auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
-        auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
-        physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
-    }
+    Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
+    // if (tensor_spec.layout() == Layout::TILE) {
+    //     const auto& tile = tensor_spec.tile();
+    //     auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
+    //     auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
+    //     physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
+    // }
     return {logical_shard_shape, physical_shard_shape};
 }
 

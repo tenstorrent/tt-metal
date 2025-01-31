@@ -319,20 +319,20 @@ def to_torch(
         ):
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
-        shape_without_tile_padding = tuple(tensor.shape)
-        logical_shape_rank = len(tensor.shape)
+        # shape_without_tile_padding = tuple(tensor.shape)
+        # logical_shape_rank = len(tensor.shape)
 
-        while len(shape_without_tile_padding) < len(tensor.padded_shape):
-            shape_without_tile_padding = (1,) + shape_without_tile_padding
+        # while len(shape_without_tile_padding) < len(tensor.padded_shape):
+        #     shape_without_tile_padding = (1,) + shape_without_tile_padding
 
-        tensor = tensor.to_torch()
-        slices = [slice(None, x) for x in shape_without_tile_padding]
-        tensor = tensor[slices]
+        tensor = tensor.to_torch_with_logical_shape()
+        # slices = [slice(None, x) for x in shape_without_tile_padding]
+        # tensor = tensor[slices]
 
-        while len(tensor.shape) > logical_shape_rank:
-            if tensor.shape[0] != 1:
-                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-            tensor = tensor.squeeze(0)
+        # while len(tensor.shape) > logical_shape_rank:
+        #     if tensor.shape[0] != 1:
+        #         raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
+        #     tensor = tensor.squeeze(0)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:
