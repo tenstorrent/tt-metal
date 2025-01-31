@@ -56,9 +56,12 @@ namespace distributed {
     class MeshWorkload;
 } // namespace distributed
 
+class JitBuildOptions;
 class EnqueueProgramCommand;
 class CommandQueue;
-class JitBuildOptions;
+// Must be removed. Only here because its a friend of a Program
+class HWCommandQueue;
+
 namespace detail{
     class Program_;
 
@@ -232,7 +235,7 @@ class Program {
     template<typename T> friend void program_dispatch::finalize_program_offsets(T&, IDevice*);
     template <typename WorkloadType, typename DeviceType>
     friend uint32_t program_dispatch::program_base_addr_on_core(WorkloadType&, DeviceType, HalProgrammableCoreType);
-    friend CommandQueue;
+    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend distributed::MeshWorkload;
     friend detail::Internal_;

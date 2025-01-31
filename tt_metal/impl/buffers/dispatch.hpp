@@ -6,10 +6,56 @@
 
 #include <command_queue_interface.hpp>
 #include <sub_device_types.hpp>
-#include <hardware_command_queue.hpp>  // Need this for ReadBufferDesriptor -> this should be moved to a separate header
+#include <command_queue.hpp>
 #include "buffer.hpp"
 
 namespace tt::tt_metal {
+
+// Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
+struct ReadBufferDescriptor {
+    TensorMemoryLayout buffer_layout;
+    uint32_t page_size;
+    uint32_t padded_page_size;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
+    void* dst;
+    uint32_t dst_offset;
+    uint32_t num_pages_read;
+    uint32_t cur_dev_page_id;
+    uint32_t starting_host_page_id;
+
+    ReadBufferDescriptor(
+        TensorMemoryLayout buffer_layout,
+        uint32_t page_size,
+        uint32_t padded_page_size,
+        void* dst,
+        uint32_t dst_offset,
+        uint32_t num_pages_read,
+        uint32_t cur_dev_page_id,
+        uint32_t starting_host_page_id = 0,
+        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
+        buffer_layout(buffer_layout),
+        page_size(page_size),
+        padded_page_size(padded_page_size),
+        buffer_page_mapping(buffer_page_mapping),
+        dst(dst),
+        dst_offset(dst_offset),
+        num_pages_read(num_pages_read),
+        cur_dev_page_id(cur_dev_page_id),
+        starting_host_page_id(starting_host_page_id) {}
+};
+
+// Used so host knows data in completion queue is just an event ID
+struct ReadEventDescriptor {
+    uint32_t event_id;
+    uint32_t global_offset;
+
+    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
+
+    void set_global_offset(uint32_t offset) { global_offset = offset; }
+    uint32_t get_global_event_id() { return global_offset + event_id; }
+};
+
+using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
 
 // Contains helper functions to interface with buffers on device
 namespace buffer_dispatch {
@@ -72,7 +118,7 @@ void copy_interleaved_buffer_to_completion_queue(
     CoreType dispatch_core_type);
 
 void copy_completion_queue_data_into_user_space(
-    const detail::ReadBufferDescriptor& read_buffer_descriptor,
+    const ReadBufferDescriptor& read_buffer_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint32_t cq_id,
@@ -82,9 +128,9 @@ void copy_completion_queue_data_into_user_space(
 std::vector<CoreCoord> get_cores_for_sharded_buffer(
     bool width_split, const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping, Buffer& buffer);
 
-std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
+std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer);
-std::shared_ptr<::tt::tt_metal::detail::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
+std::shared_ptr<::tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, BufferReadDispatchParams& dispatch_params, Buffer& buffer);
 
 }  // namespace buffer_dispatch

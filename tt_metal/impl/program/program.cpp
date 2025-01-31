@@ -21,7 +21,6 @@
 #include "dprint_server.hpp"
 #include <device.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 #include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"

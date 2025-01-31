@@ -31,7 +31,9 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
+
 #include "impl/dispatch/topology.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 
 namespace tt {
 
@@ -970,7 +972,8 @@ void Device::init_command_queue_host() {
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(
+            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
@@ -1068,7 +1071,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<CommandQueue>& hw_command_queue : command_queues_) {
+    for (const auto& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
@@ -1599,7 +1602,7 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
+    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
 // Main source to get NOC idx for dispatch core
