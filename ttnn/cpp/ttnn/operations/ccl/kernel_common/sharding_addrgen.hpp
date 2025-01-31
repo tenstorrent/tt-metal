@@ -9,6 +9,20 @@
 
 #include "dataflow_api.h"
 
+typedef uint32_t mapping_table_t;
+
+enum class Contiguity_types {
+    PADDING_BETWEEN_PAGES = 0,
+    PADDING_IN_RIGHTMOST_SHARD,
+    NO_SHARD_PADDING,
+};
+
+enum class ShardingLayout {
+    HEIGHT_SHARDED = 0,
+    WIDTH_SHARDED,
+    BLOCK_SHARDED,
+};
+
 template <
     uint32_t SHARD_TYPE,
     uint32_t NUMBER_OF_CORES,
@@ -17,15 +31,15 @@ template <
     uint32_t CONTIGUITY,
     uint32_t PAGES_PER_SHARD_WIDTH,
     uint32_t ROWS_PER_SHARD_HEIGHT>
-class Sharded_Info {
+struct Sharded_Info {
 public:
     // The isX types are correctly templated shard_grid_info class objects containing the information of the respective
     // grid
-    constexpr static uint32_t shard_type = SHARD_TYPE;
+    constexpr static ShardingLayout shard_type = static_cast<ShardingLayout>(SHARD_TYPE);
     constexpr static uint32_t number_of_cores = NUMBER_OF_CORES;
     constexpr static uint32_t page_size_jump = PAGE_SIZE_JUMP;
     constexpr static uint32_t pages_per_tensor_row = PAGES_PER_TENSOR_ROW;
-    constexpr static uint32_t contiguity = CONTIGUITY;
+    constexpr static Contiguity_types contiguity = static_cast<Contiguity_types>(CONTIGUITY);
     constexpr static uint32_t pages_per_shard_width = PAGES_PER_SHARD_WIDTH;
     constexpr static uint32_t rows_per_shard_height = ROWS_PER_SHARD_HEIGHT;
 };
@@ -38,7 +52,7 @@ struct shard_coord_info {
     uint32_t num_contiguous_pages;
 };
 
-template <uint32_t columns_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
+template <uint32_t columns_per_shard, uint32_t total_pages_last_dim, Contiguity_types contiguity>
 struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
@@ -48,7 +62,7 @@ struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     coord_info.core_num = w_core_id;
     coord_info.page_num = page_row * columns_per_shard + w_offset;
-    if constexpr (contiguity != 0) {
+    if constexpr (contiguity != Contiguity_types::PADDING_BETWEEN_PAGES) {
         uint32_t space_left_in_shard = columns_per_shard - w_offset;
         uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
         coord_info.num_contiguous_pages =
@@ -59,16 +73,16 @@ struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     return coord_info;
 }
 
-template <uint32_t rows_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
+template <uint32_t rows_per_shard, uint32_t total_pages_last_dim, Contiguity_types contiguity>
 struct shard_coord_info get_height_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
     constexpr uint32_t num_pages_per_core = total_pages_last_dim * rows_per_shard;
     coord_info.core_num = page_num / num_pages_per_core;
     coord_info.page_num = page_num - coord_info.core_num * num_pages_per_core;
-    if constexpr (contiguity == 0) {
+    if constexpr (contiguity == Contiguity_types::PADDING_BETWEEN_PAGES) {
         coord_info.num_contiguous_pages = 1;
-    } else if constexpr (contiguity == 1) {
+    } else if constexpr (contiguity == Contiguity_types::PADDING_IN_RIGHTMOST_SHARD) {
         coord_info.num_contiguous_pages = total_pages_last_dim - page_num % total_pages_last_dim;
     } else {
         coord_info.num_contiguous_pages = num_pages_per_core - coord_info.page_num;
@@ -76,7 +90,11 @@ struct shard_coord_info get_height_sharded_coordinates(uint32_t page_num) {
     return coord_info;
 }
 
-template <uint32_t columns_per_shard, uint32_t rows_per_shard, uint32_t total_pages_last_dim, uint32_t contiguity>
+template <
+    uint32_t columns_per_shard,
+    uint32_t rows_per_shard,
+    uint32_t total_pages_last_dim,
+    Contiguity_types contiguity>
 experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     // Calculate how many cores are in the sharding grid
@@ -94,7 +112,7 @@ experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinat
     // Find the coord_info
     coord_info.core_num = w_core_id + h_core_id * cores_per_block_row;
     coord_info.page_num = w_offset + h_offset * columns_per_shard;
-    if constexpr (contiguity != 0) {
+    if constexpr (contiguity != Contiguity_types::PADDING_BETWEEN_PAGES) {
         uint32_t space_left_in_shard = columns_per_shard - w_offset;
         uint32_t space_left_in_tensor = total_pages_last_dim - page_col;
         coord_info.num_contiguous_pages =
@@ -105,14 +123,14 @@ experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinat
     return coord_info;
 }
 template <typename SHARDING_INFO_OBJECT>
-std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
+std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_address) {
     // Gets the shard_array from the runtime arguments
     // returns a pair where .first holds the shard array map
-    // and .second holds the new rt_index
+    // and .second holds the size of the map
     constexpr SHARDING_INFO_OBJECT CONSTANT_ARGS{};
-    const uint32_t* const map = reinterpret_cast<const uint32_t* const>(get_arg_addr(rt_index));
+    const mapping_table_t* const map = reinterpret_cast<const mapping_table_t* const>(L1_address);
     constexpr uint32_t incrementation = (CONSTANT_ARGS.number_of_cores - 1) / 2 + 1;
-    return std::pair<const uint32_t* const, uint32_t>(map, rt_index + incrementation);
+    return std::pair<const mapping_table_t* const, uint32_t>(map, incrementation);
 }
 
 }  // namespace shard_addr_gen_utils
@@ -134,10 +152,11 @@ std::pair<const uint32_t* const, uint32_t> parse_map(uint32_t rt_index) {
     shard_pf_builder:sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
     defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
 
-    It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::parse_map
-function which requires the Sharded_Info class object ex. auto mapping = parse_map<tensor_1_shard_info>(rt_index); const
-uint32_t* const shard_array_map = mapping.first;
-//Contains the shard array map rt_index = mapping.second;//contains the new runtime index
+    It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::get_shard_map
+function which requires the Sharded_Info class object ex. auto mapping = get_shard_map<tensor_1_shard_info>(rt_index);
+const mapping_table_t* const shard_array_map = mapping.first;
+//Contains the shard array map
+rt_index += mapping.second;//contains the size of the map hence how much to increment the rt values
 
 In the program factory you can create an vector containing the runtime arguments extracted by this function using the
 function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
@@ -159,7 +178,7 @@ struct ShardedAddrGen {
     // Sharded Info Class is a Sharded_Info class object that is appropriately templated
     // including all the compile time parameters
     uint32_t bank_base_address;
-    const uint32_t* const shard_array;
+    const mapping_table_t* const shard_array;
 
     FORCE_INLINE
     std::uint64_t get_sharded_addr(
@@ -188,12 +207,12 @@ struct ShardedAddrGen {
         // Resolve linear core id/bank address, the page offset in the core,
         // and the number of contiguous pages within that core
         experimental::shard_addr_gen_utils::shard_coord_info sharding_coordinates{};
-        if constexpr (CONSTANT_ARGS.shard_type == 0) {
+        if constexpr (CONSTANT_ARGS.shard_type == ShardingLayout::WIDTH_SHARDED) {
             sharding_coordinates = experimental::shard_addr_gen_utils::get_width_sharded_coordinates<
                 CONSTANT_ARGS.pages_per_shard_width,
                 CONSTANT_ARGS.pages_per_tensor_row,
                 CONSTANT_ARGS.contiguity>(id);
-        } else if constexpr (CONSTANT_ARGS.shard_type == 1) {
+        } else if constexpr (CONSTANT_ARGS.shard_type == ShardingLayout::HEIGHT_SHARDED) {
             sharding_coordinates = experimental::shard_addr_gen_utils::get_height_sharded_coordinates<
                 CONSTANT_ARGS.rows_per_shard_height,
                 CONSTANT_ARGS.pages_per_tensor_row,
