@@ -40,11 +40,8 @@ void kernel_main() {
             uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                // DPRINT << "broadcast_to writer scalar start, number of tile written " << num_tiles_written << ENDL();
                 noc_async_write_tile(start_tile_id + num_tiles_written, dst, l1_read_addr);
                 noc_async_write_barrier();
-                // DPRINT << "broadcast_to writer scalar end, number of tile written " << num_tiles_written + 1 <<
-                // ENDL();
             }
             cb_pop_front(cb_id_dst, onetile);
         }
