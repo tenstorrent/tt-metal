@@ -74,7 +74,7 @@ public:
     // devices are returned in row-major order with start/end coordinates inclusive
     [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end) const;
     [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
-    [[nodiscard]] DeviceView get_devices(MeshType type = MeshType::RowMajor) const;
+    [[nodiscard]] DeviceView get_devices() const;
 
     [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
     [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;

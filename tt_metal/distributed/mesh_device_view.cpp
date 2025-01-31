@@ -39,7 +39,7 @@ MeshDeviceView::MeshDeviceView(const std::vector<IDevice*>& devices, Coordinate 
 }
 
 MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
-    MeshDeviceView(mesh_device.get_devices(MeshType::RowMajor), mesh_device.shape()) {}
+    MeshDeviceView(mesh_device.get_devices(), mesh_device.shape()) {}
 
 MeshDeviceView::MeshDeviceView(const std::vector<IDevice*>& devices, const MeshShape& shape) :
     MeshDeviceView(devices, Coordinate{0, 0}, Coordinate{shape.num_rows - 1, shape.num_cols - 1}) {}
@@ -261,13 +261,6 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
     return get_devices_from_coordinates(*this, boundary_coords);
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(MeshType type) const {
-    switch (type) {
-        case MeshType::RowMajor: return this->devices_;
-        case MeshType::Ring: return this->get_ring_devices();
-        case MeshType::Line: return this->get_line_devices();
-        default: TT_THROW("Unsupported Mesh type: {}", type);
-    }
-}
+MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return this->devices_; }
 
 }  // namespace tt::tt_metal::distributed

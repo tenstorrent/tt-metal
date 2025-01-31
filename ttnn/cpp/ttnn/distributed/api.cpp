@@ -24,11 +24,10 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    MeshType mesh_type,
     const MeshOffset& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config = MeshDeviceConfig{
-        .mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids, .mesh_type = mesh_type};
+    auto config =
+        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
@@ -152,6 +151,7 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
                 [&](const ShardTensor2D& s) {
                     return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
                 },
+                [&](const ShardTensor& s) { return mesh_device.get_view().get_line_devices(); },
                 [&](const auto&) { return get_workers_for_tensor(); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
