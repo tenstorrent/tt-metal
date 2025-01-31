@@ -13,7 +13,6 @@ from models.demos.llama3.tt.llama_common import (
 from models.demos.llama3.tt.model_config import TtModelArgs
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -78,7 +77,7 @@ def test_llama_decoder_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
@@ -92,8 +91,8 @@ def test_llama_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
@@ -143,8 +142,8 @@ def test_llama_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
         model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     freqs_cis = torch.complex(cos, sin)
 

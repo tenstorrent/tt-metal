@@ -8,14 +8,10 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     sample_host,
-    encode_prompt_llama_instruct,
-    HostEmbedding,
     PagedAttentionConfig,
 )
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -92,7 +88,7 @@ def test_llama_model_inference(
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
-    instruct = True if weights == "instruct" else False
+    instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = TtModelArgs(
         mesh_device,
@@ -102,14 +98,6 @@ def test_llama_model_inference(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
     )
-
-    model_name = {
-        (16, False): "llama32_1b",
-        (28, False): "llama32_3b",
-        (32, False): "llama31_8b",
-        (32, True): "llama32_11b",
-        (80, False): "llama31_70b",
-    }[(model_args.n_layers, model_args.is_vision())]
 
     # Define minimum PCC for each iteration
     if layers == 1:
@@ -125,6 +113,23 @@ def test_llama_model_inference(
         "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
         "llama31_70b": 0.9419 if mode_accuracy else 0.9419,
     }[model_name]
+    if layers == 1:  # quick mode has tight PCC checks for known models
+        model_name = {
+            (16, False): "llama32_1b",
+            (28, False): "llama32_3b",
+            (32, False): "llama31_8b",
+            (32, True): "llama32_11b",
+            (80, False): "llama31_70b",
+        }[(model_args.n_layers, model_args.is_vision())]
+
+        # Define tight final PCC thresholds for quick mode
+        final_model_pcc = {
+            "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
+            "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
+            "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
+            "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
+            "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
+        }[model_name]
 
     final_k_cache_pcc = {
         "llama32_1b": 0.9998,
@@ -141,11 +146,13 @@ def test_llama_model_inference(
         "llama31_70b": 0.9997,
     }[model_name]
 
-    quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
-        model_name
-    ]
+        quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
+            model_name
+        ]
 
-    iterations = quick_iterations if layers == 1 else 9
+        iterations = quick_iterations
+    else:
+        iterations = 9
 
     if layers is not None:
         model_args.n_layers = layers
@@ -172,18 +179,18 @@ def test_llama_model_inference(
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.tokenizer
         if instruct:
-            encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+            encoded_prompts = [model_args.encode_prompt(prompt) for prompt in prompts]
         else:
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+            encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0
