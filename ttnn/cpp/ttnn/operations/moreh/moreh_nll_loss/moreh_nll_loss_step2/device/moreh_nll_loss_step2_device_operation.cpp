@@ -72,8 +72,8 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto input_shape = input_tensor.get_shape().value;
-    auto input_shape_without_padding = input_shape.without_padding();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto input_shape_without_padding = input_tensor.get_logical_shape();
     auto input_rank = input_shape.rank();
     auto dtype = tensor_args.input_tensor.get_dtype();
     Layout layout{Layout::TILE};
