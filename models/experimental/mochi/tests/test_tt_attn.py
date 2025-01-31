@@ -210,49 +210,40 @@ def test_tt_attn_prepare_qkv(
     valid_token_indices = torch.arange(total_seq_len)
     max_seqlen_in_batch = total_seq_len
 
-    # Convert inputs to TT tensors
-    # enable padding
-    x_padded_len = nearest_32(vision_seq_len) - vision_seq_len
-    x_input_padded = torch.nn.functional.pad(x_input, (0, 0, 0, x_padded_len))
-    y_padded_len = 256 - text_seq_len
-    y_input_padded = torch.nn.functional.pad(y_input, (0, 0, 0, y_padded_len))
-    cos_padded = torch.nn.functional.pad(rope_cos_stack, (0, 0, 0, x_padded_len))
-    sin_padded = torch.nn.functional.pad(rope_sin_stack, (0, 0, 0, x_padded_len))
-    tt_x = to_tt_tensor(x_input_padded.view(1, batch_size, vision_seq_len + x_padded_len, dim_x), mesh_device)
-    tt_y = to_tt_tensor(y_input_padded.view(1, batch_size, text_seq_len + y_padded_len, dim_y), mesh_device)
+    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device)
+    tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(cos_padded, mesh_device, shard_dim=-3)
-    tt_rope_sin = to_tt_tensor(sin_padded, mesh_device, shard_dim=-3)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
 
     trans_mat = get_rot_transformation_mat(None)
     trans_mat_tt = to_tt_tensor(trans_mat, mesh_device)
 
     logger.info("Run TtAsymmetricAttention prepare_qkv")
-    tt_q, tt_k, tt_v = tt_model.prepare_qkv(
+    tt_q_x, tt_k_x, tt_v_x, tt_q_y, tt_k_y, tt_v_y = tt_model.prepare_qkv(
         tt_x,
         tt_y,
         scale_x=tt_scale_x,
         scale_y=tt_scale_y,
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
-        max_seqlen_in_batch=max_seqlen_in_batch,
         trans_mat=trans_mat_tt,
     )
 
     # Convert TT outputs to torch tensors
-    tt_q_torch = to_torch_tensor(tt_q, mesh_device, dim=-3)
-    tt_k_torch = to_torch_tensor(tt_k, mesh_device, dim=-3)
-    tt_v_torch = to_torch_tensor(tt_v, mesh_device, dim=-3)
+    tt_q_x_torch = to_torch_tensor(tt_q_x, mesh_device, dim=-3)
+    tt_k_x_torch = to_torch_tensor(tt_k_x, mesh_device, dim=-3)
+    tt_v_x_torch = to_torch_tensor(tt_v_x, mesh_device, dim=-3)
+    tt_q_y_torch = to_torch_tensor(tt_q_y, mesh_device, dim=-3)
+    tt_k_y_torch = to_torch_tensor(tt_k_y, mesh_device, dim=-3)
+    tt_v_y_torch = to_torch_tensor(tt_v_y, mesh_device, dim=-3)
 
-    # unpad
-    text_start = vision_seq_len + x_padded_len
-    text_end = text_start + text_seq_len
-    tt_q_torch = torch.cat([tt_q_torch[:, :, :vision_seq_len, :], tt_q_torch[:, :, text_start:text_end, :]], dim=2)
-    tt_k_torch = torch.cat([tt_k_torch[:, :, :vision_seq_len, :], tt_k_torch[:, :, text_start:text_end, :]], dim=2)
-    tt_v_torch = torch.cat([tt_v_torch[:, :, :vision_seq_len, :], tt_v_torch[:, :, text_start:text_end, :]], dim=2)
+    # Concat for comparison
+    tt_q_torch = torch.cat([tt_q_x_torch, tt_q_y_torch], dim=2)
+    tt_k_torch = torch.cat([tt_k_x_torch, tt_k_y_torch], dim=2)
+    tt_v_torch = torch.cat([tt_v_x_torch, tt_v_y_torch], dim=2)
 
-    print(f"tt_q_torch shape: {tt_q_torch.shape}")
     # Get reference outputs
     with torch.no_grad():
         ref_q, ref_k, ref_v = reference_model.prepare_qkv(
@@ -266,7 +257,6 @@ def test_tt_attn_prepare_qkv(
             max_seqlen_in_batch=max_seqlen_in_batch,
         )
 
-        print(f"ref_q shape: {ref_q.shape}")
         # Reshape reference to be B, NH, S, D
         ref_q = ref_q.reshape(batch_size, total_seq_len, NUM_HEADS, HEAD_DIM).transpose(1, 2)
         ref_k = ref_k.reshape(batch_size, total_seq_len, NUM_HEADS, HEAD_DIM).transpose(1, 2)
@@ -314,60 +304,44 @@ def test_tt_attn_run_attention(
 
     # Create input tensors
     seq_len = vision_seq_len + text_seq_len
-    torch_q = torch.randn(batch_size, NUM_HEADS, seq_len, head_dim)
-    torch_k = torch.randn(batch_size, NUM_HEADS, seq_len, head_dim)
-    torch_v = torch.randn(batch_size, NUM_HEADS, seq_len, head_dim)
+    torch_q_x = torch.randn(batch_size, NUM_HEADS, vision_seq_len, head_dim)
+    torch_k_x = torch.randn(batch_size, NUM_HEADS, vision_seq_len, head_dim)
+    torch_v_x = torch.randn(batch_size, NUM_HEADS, vision_seq_len, head_dim)
+    torch_q_y = torch.randn(batch_size, NUM_HEADS, text_seq_len, head_dim)
+    torch_k_y = torch.randn(batch_size, NUM_HEADS, text_seq_len, head_dim)
+    torch_v_y = torch.randn(batch_size, NUM_HEADS, text_seq_len, head_dim)
 
     # Convert to TT tensors
-    # Implement padding and masking
-    attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
-    x_padded_len = nearest_32(vision_seq_len) - vision_seq_len
-    y_padding_len = 256 - text_seq_len
-    xy_padding = attn_padded_len - (vision_seq_len + x_padded_len + text_seq_len + y_padding_len)
-    x_pad = torch.zeros(batch_size, NUM_HEADS, x_padded_len, head_dim)
-    y_pad = torch.zeros(batch_size, NUM_HEADS, y_padding_len, head_dim)
-    xy_pad = torch.zeros(batch_size, NUM_HEADS, xy_padding, head_dim)
-    torch_q_padded = torch.cat(
-        [torch_q[:, :, :vision_seq_len, :], x_pad, torch_q[:, :, vision_seq_len:, :], y_pad, xy_pad], dim=2
-    )
-    torch_k_padded = torch.cat(
-        [torch_k[:, :, :vision_seq_len, :], x_pad, torch_k[:, :, vision_seq_len:, :], y_pad, xy_pad], dim=2
-    )
-    torch_v_padded = torch.cat(
-        [torch_v[:, :, :vision_seq_len, :], x_pad, torch_v[:, :, vision_seq_len:, :], y_pad, xy_pad], dim=2
-    )
-    tt_q = to_tt_tensor(torch_q_padded, mesh_device, shard_dim=-3)
-    tt_k = to_tt_tensor(torch_k_padded, mesh_device, shard_dim=-3)
-    tt_v = to_tt_tensor(torch_v_padded, mesh_device, shard_dim=-3)
-
-    attn_mask = torch.zeros(batch_size, 1, attn_padded_len, attn_padded_len)
-    attn_mask[:, :, :, vision_seq_len : vision_seq_len + x_padded_len] = -float("inf")
-    text_end = vision_seq_len + x_padded_len + text_seq_len
-    attn_mask[:, :, :, text_end:] = -float("inf")
-    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
+    tt_q_x = to_tt_tensor(torch_q_x, mesh_device, shard_dim=-3)
+    tt_k_x = to_tt_tensor(torch_k_x, mesh_device, shard_dim=-3)
+    tt_v_x = to_tt_tensor(torch_v_x, mesh_device, shard_dim=-3)
+    tt_q_y = to_tt_tensor(torch_q_y, mesh_device, shard_dim=-3)
+    tt_k_y = to_tt_tensor(torch_k_y, mesh_device, shard_dim=-3)
+    tt_v_y = to_tt_tensor(torch_v_y, mesh_device, shard_dim=-3)
 
     logger.info("Run TtAsymmetricAttention run_attention")
-    tt_out = tt_model.run_attention(
-        tt_q,
-        tt_k,
-        tt_v,
+    tt_out, tt_out_joint = tt_model.run_attention(
+        tt_q_x,
+        tt_k_x,
+        tt_v_x,
+        tt_q_y,
+        tt_k_y,
+        tt_v_y,
         B=batch_size,
-        attn_mask=tt_attn_mask,
     )
-
     # Convert TT output to torch tensor
     tt_out_torch = to_torch_tensor(tt_out, mesh_device, dim=-1)
+    tt_out_joint_torch = to_torch_tensor(tt_out_joint, mesh_device, dim=-1)
+    tt_out_joint_torch = to_torch_tensor(tt_out_joint, mesh_device, dim=-1)
 
-    # unpad
-    text_start = vision_seq_len + x_padded_len
-    text_end = text_start + text_seq_len
-    tt_out_torch = torch.cat(
-        [tt_out_torch[:, :, :vision_seq_len, :], tt_out_torch[:, :, text_start:text_end, :]], dim=2
-    )
+    tt_out_torch = torch.cat([tt_out_torch, tt_out_joint_torch], dim=2)
 
     # Get reference output
     with torch.no_grad():
         # Reshape inputs for reference model
+        torch_q = torch.cat([torch_q_x, torch_q_y], dim=2)
+        torch_k = torch.cat([torch_k_x, torch_k_y], dim=2)
+        torch_v = torch.cat([torch_v_x, torch_v_y], dim=2)
         ref_q = torch_q.transpose(1, 2).view(-1, NUM_HEADS, head_dim)  # (B*L, H, D)
         ref_k = torch_k.transpose(1, 2).view(-1, NUM_HEADS, head_dim)  # (B*L, H, D)
         ref_v = torch_v.transpose(1, 2).view(-1, NUM_HEADS, head_dim)  # (B*L, H, D)
@@ -378,8 +352,6 @@ def test_tt_attn_run_attention(
         ref_out = ref_out.reshape(1, batch_size, seq_len, -1)
 
     # Validate outputs
-    logger.info(f"ref_out shape: {ref_out.shape}")
-    logger.info(f"tt_out_torch shape: {tt_out_torch.shape}")
     pcc, mse, mae = compute_metrics(ref_out, tt_out_torch)
     logger.info(f"Attention - PCC: {pcc}, MSE: {mse}, MAE: {mae}")
 
@@ -430,42 +402,28 @@ def test_tt_attn_post_attention(
 
     batch_size = 1
     total_seq_len = vision_seq_len + text_seq_len
-    local_dim = dim_x  # No head parallel support yet
 
     # Create input tensor - simulating attention output
-    torch_out = torch.randn(batch_size * total_seq_len, local_dim)
+    torch_out = torch.randn(batch_size * total_seq_len, dim_x)
 
     # Convert to TT tensor
-    # Create padded tt_out tensor
-    attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
-    x_padded_len = nearest_32(vision_seq_len) - vision_seq_len
-    y_padding_len = 256 - text_seq_len
-    xy_padding = attn_padded_len - (vision_seq_len + x_padded_len + text_seq_len + y_padding_len)
-    x_pad = torch.zeros(1, batch_size, x_padded_len, local_dim)
-    y_pad = torch.zeros(1, batch_size, y_padding_len, local_dim)
-    xy_pad = torch.zeros(1, batch_size, xy_padding, local_dim)
-    torch_out_padded = torch_out.reshape(1, batch_size, total_seq_len, local_dim)
-    torch_out_padded = torch.cat(
-        [torch_out_padded[:, :, :vision_seq_len, :], x_pad, torch_out_padded[:, :, vision_seq_len:, :], y_pad, xy_pad],
-        dim=2,
-    )
-    tt_out = to_tt_tensor(torch_out_padded, mesh_device, shard_dim=-1)
+    torch_x = torch_out[:vision_seq_len].view(1, batch_size, vision_seq_len, dim_x)
+    torch_y = torch_out[vision_seq_len:].view(1, batch_size, text_seq_len, dim_x)
+    tt_x = to_tt_tensor(torch_x, mesh_device, shard_dim=-1)
+    tt_y = to_tt_tensor(torch_y, mesh_device, shard_dim=-1)
 
     logger.info("Run TtAsymmetricAttention post_attention")
     tt_x, tt_y = tt_model.post_attention(
-        tt_out,
+        tt_x,
+        tt_y,
         B=batch_size,
-        M=(vision_seq_len + x_padded_len),
-        L=(text_seq_len + y_padding_len),
+        L=text_seq_len,
         dtype=ttnn.bfloat16,
     )
 
     # Convert TT outputs to torch tensors
     tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-1)
     tt_y_torch = to_torch_tensor(tt_y, mesh_device, dim=-1)
-    # unpad
-    tt_x_torch = tt_x_torch[:, :, :vision_seq_len, :]
-    tt_y_torch = tt_y_torch[:, :, :text_seq_len, :]
 
     # Get reference outputs
     with torch.no_grad():
@@ -480,11 +438,6 @@ def test_tt_attn_post_attention(
         # Reshape to match TT output
         ref_x = ref_x.reshape(1, batch_size, vision_seq_len, -1)
         ref_y = ref_y.reshape(1, batch_size, text_seq_len, -1)
-
-    print(f"tt_x_torch shape: {tt_x_torch.shape}")
-    print(f"ref_x shape: {ref_x.shape}")
-    print(f"tt_y_torch shape: {tt_y_torch.shape}")
-    print(f"ref_y shape: {ref_y.shape}")
 
     # Validate outputs
     metrics = []
@@ -512,6 +465,7 @@ def test_tt_attn_post_attention(
     "vision_seq_len, text_seq_len",
     [
         (43 * 1024, 256),
+        (44520, 118),
     ],
 )
 @pytest.mark.parametrize(
@@ -560,26 +514,12 @@ def test_tt_attn_forward(
     valid_token_indices = torch.arange(total_seq_len)
     max_seqlen_in_batch = total_seq_len
 
-    # Convert inputs to TT tensors
-    attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
-    x_padded_len = nearest_32(vision_seq_len) - vision_seq_len
-    y_padding_len = 256 - text_seq_len
-    x_pad = torch.zeros(1, batch_size, x_padded_len, dim_x)
-    y_pad = torch.zeros(1, batch_size, y_padding_len, dim_y)
-    rope_pad = torch.zeros(batch_size, NUM_HEADS, x_padded_len, head_dim)
-
-    attn_mask = torch.zeros(batch_size, 1, attn_padded_len, attn_padded_len)
-    attn_mask[:, :, :, vision_seq_len : vision_seq_len + x_padded_len] = -float("inf")
-    text_end = vision_seq_len + x_padded_len + text_seq_len
-    attn_mask[:, :, :, text_end:] = -float("inf")
-
-    tt_x = to_tt_tensor(torch.cat([x_input.unsqueeze(0), x_pad], dim=2), mesh_device)
-    tt_y = to_tt_tensor(torch.cat([y_input.unsqueeze(0), y_pad], dim=2), mesh_device)
+    tt_x = to_tt_tensor(x_input.unsqueeze(0), mesh_device)
+    tt_y = to_tt_tensor(y_input.unsqueeze(0), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(torch.cat([rope_cos_stack, rope_pad], dim=2), mesh_device, shard_dim=-3)
-    tt_rope_sin = to_tt_tensor(torch.cat([rope_sin_stack, rope_pad], dim=2), mesh_device, shard_dim=-3)
-    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, dtype=ttnn.bfloat4_b)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
 
     # Create transformation matrix for RoPE
     trans_mat = get_rot_transformation_mat(None)
@@ -597,13 +537,12 @@ def test_tt_attn_forward(
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         trans_mat=trans_mat_tt,
-        packed_indices=packed_indices,
-        attn_mask=tt_attn_mask,
     )
 
     # Convert TT outputs to torch tensors
     tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=-1)
     tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=-1)
+
     # unpad TT
     tt_x_torch = tt_x_torch[:, :, :vision_seq_len, :]
     tt_y_torch = tt_y_torch[:, :, :text_seq_len, :]
@@ -619,6 +558,7 @@ def test_tt_attn_forward(
         "rope_sin": rope_sin,
     }
     # Get reference outputs
+    logger.info("Run reference model forward")
     with torch.no_grad():
         ref_x, ref_y = reference_model(
             x_input,
