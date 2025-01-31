@@ -149,14 +149,14 @@ def run_all_gather_impl(
     logger.info(f"dim: {dim}")
 
     input_tensor = torch.rand(input_shape).bfloat16()
-
-    input_tensors = torch.chunk(input_tensor, num_devices, dim)
-    tt_input_tensors = []
-    for i, t in enumerate(input_tensors):
-        t = ttnn.from_torch(t, input_dtype, layout=layout, tile=ttnn.Tile(tile))
-        tt_input_tensors.append(t.to(mesh_device.get_devices()[i], mem_config))
-
-    input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors)
+    input_tensor_mesh = ttnn.from_torch(
+        input_tensor,
+        dtype=input_dtype,
+        layout=layout,
+        tile=ttnn.Tile(tile),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim),
+        device=mesh_device,
+    )
     if trace_mode:
         tt_out_tensor = run_with_trace(
             mesh_device,

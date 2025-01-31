@@ -1195,7 +1195,7 @@ Below is a summary and example code of the most important concepts for mapping a
 import ttnn
 
 # 2x4 mesh_device, Topology Ring: devices are connected in a ring
-mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4), mesh_type=ttnn.MeshType.Ring)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 
 # Construct initial torch tensor
 torch_tensor = torch.rand((1,1,32,256), dtype=torch.bfloat16)

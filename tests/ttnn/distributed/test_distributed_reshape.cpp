@@ -27,7 +27,7 @@ void check_test_environment() {
 
 std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
     std::vector<chip_id_t> device_ids;
-    for (auto* device : mesh.get_devices(ttnn::distributed::MeshType::RowMajor)) {
+    for (auto* device : mesh.get_devices()) {
         device_ids.push_back(device->id());
     }
     return device_ids;
@@ -138,12 +138,7 @@ TEST_F(T3000ReshapeTest, From1x8To2x4) {
 
 TEST_F(T3000ReshapeTest, OnRingTopology) {
     auto mesh = ttnn::distributed::open_mesh_device(
-        {1, 8},
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::DispatchCoreType::WORKER,
-        ttnn::distributed::MeshType::Ring);
+        {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
     EXPECT_EQ(mesh->num_rows(), 1);
     EXPECT_EQ(mesh->num_cols(), 8);
@@ -228,7 +223,6 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
     // Fetch the device ids for a physically connected 2x2 mesh.
     auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{
         .mesh_shape = MeshShape{2, 2},
-        .mesh_type = ttnn::distributed::MeshType::Line,
     });
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
@@ -239,7 +233,6 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER,
-        ttnn::distributed::MeshType::Line,
         MeshOffset{0, 0},
         physical_device_ids);
 

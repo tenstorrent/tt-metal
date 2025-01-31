@@ -57,7 +57,7 @@ void py_bind_barrier(pybind11::module& module) {
         Example:
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> input_tensors = torch.chunk(full_tensor, num_devices, dim)
-            >>> physical_device_ids = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), mesh_type=ttnn.MeshType.Ring)
+            >>> physical_device_ids = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
             >>> tt_input_tensors = []
             >>> for i, t in enumerate(input_tensors):
