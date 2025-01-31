@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "tt-metalium/assert.hpp"
+#include "tt-metalium/core_coord.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -347,6 +348,13 @@ void py_module(py::module& module) {
                     2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
             )doc")
         .def("__repr__", &MeshDevice::to_string)
+        .def(
+            "get_mesh_device_core_grid",
+            [](MeshDevice& mesh_device) {
+                CoreCoord coords = mesh_device.compute_with_storage_grid_size();
+                new CoreGrid(coords.x, coords.y);
+            },
+            py::arg("mesh_device"))
         .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
