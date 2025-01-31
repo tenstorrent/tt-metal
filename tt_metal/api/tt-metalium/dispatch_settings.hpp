@@ -201,7 +201,7 @@ struct DispatchSettings {
     DispatchSettings& tunneling_buffer_size(uint32_t val) {
         this->tunneling_buffer_size_ = val;
         this->tunneling_buffer_pages_ =
-            this->tunneling_buffer_size_ / (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE); // match legacy dispatch_constants
+            this->tunneling_buffer_size_ / (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE);  // match legacy DispatchMemMap
         return *this;
     }
 
