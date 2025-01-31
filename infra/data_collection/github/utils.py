@@ -95,6 +95,7 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
         "timed out": str(InfraErrorV1.JOB_UNIT_TIMEOUT_FAILURE),
         "exceeded the maximum execution time": str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE),
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
+        "runner has received a shutdown signal": str(InfraErrorV1.RUNNER_SHUTDOWN_FAILURE),
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
     }
 
