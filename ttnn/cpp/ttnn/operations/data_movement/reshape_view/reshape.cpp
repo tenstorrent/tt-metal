@@ -257,7 +257,43 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> tiling_reshape_corrector(
                 ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3]}),
                 ttnn::SimpleShape({padded[0], padded[1], padded[2] + correction_2, padded[3] + correction_1})};
             break;
-
+        case 5:
+            return {
+                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4]}),
+                ttnn::SimpleShape(
+                    {padded[0], padded[1], padded[2], padded[3] + correction_2, padded[4] + correction_1})};
+            break;
+        case 6:
+            return {
+                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5]}),
+                ttnn::SimpleShape(
+                    {padded[0], padded[1], padded[2], padded[3], padded[4] + correction_2, padded[5] + correction_1})};
+            break;
+        case 7:
+            return {
+                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6]}),
+                ttnn::SimpleShape(
+                    {padded[0],
+                     padded[1],
+                     padded[2],
+                     padded[3],
+                     padded[4],
+                     padded[5] + correction_2,
+                     padded[6] + correction_1})};
+            break;
+        case 8:
+            return {
+                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6], shape[7]}),
+                ttnn::SimpleShape(
+                    {padded[0],
+                     padded[1],
+                     padded[2],
+                     padded[3],
+                     padded[4],
+                     padded[5],
+                     padded[6] + correction_2,
+                     padded[7] + correction_1})};
+            break;
     }
     return {shape, padded};
 }

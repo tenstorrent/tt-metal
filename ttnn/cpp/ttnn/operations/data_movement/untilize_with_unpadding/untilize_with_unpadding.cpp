@@ -17,7 +17,7 @@ ttnn::SimpleShape squeeze_vector_shape(ttnn::SimpleShape output_shape) {
     if (output_shape.rank() > 4) {
         ttnn::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
-        int extra_rank = output_shape.rank() - 4;
+        int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
             output_shape_4d[0] *= (output_shape[i] + 1);
         }
@@ -76,17 +76,20 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
         }
         output_end = squeeze_vector_shape(ttnn::SimpleShape(std::move(output_end_vector)));
     } else {
-        output_end = output_tensor_end;
+        for (auto index = 0; index < input_tensor.get_logical_shape().rank(); ++index) {
+            output_end_vector.push_back(output_tensor_end[index]);
+        }
+        output_end = ttnn::SimpleShape(std::move(output_end_vector));
     }
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
-            UntilizeWithUnpadding{
-                output_end,
-                memory_config.value_or(input_tensor.memory_config()),
-                use_multicore,
-                use_pack_untilize,
-                fp32_dest_acc_en},
+            UntilizeWithUnpadding{// output_end,
+                                  ttnn::SimpleShape(output_end),
+                                  memory_config.value_or(input_tensor.memory_config()),
+                                  use_multicore,
+                                  use_pack_untilize,
+                                  fp32_dest_acc_en},
             {input_tensor},
             {},
             {},
