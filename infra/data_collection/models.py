@@ -8,3 +8,4 @@ class InfraErrorV1(enum.Enum):
     GENERIC_FAILURE = enum.auto()
     DISK_SPACE_FAILURE = enum.auto()
     RUNNER_COMM_FAILURE = enum.auto()
+    RUNNER_SHUTDOWN_FAILURE = enum.auto()
