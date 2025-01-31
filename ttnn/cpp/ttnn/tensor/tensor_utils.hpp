@@ -14,15 +14,6 @@ namespace tt {
 namespace tt_metal {
 const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-// TODO: Remove this once we switch to SimpleShape .volume()
-static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
-    size_t volume = 1;
-    for (auto index = 0; index < shape.rank(); index++) {
-        volume *= shape[index];
-    }
-    return volume;
-}
-
 static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
     if (shape.rank() == 0) {
         return {};

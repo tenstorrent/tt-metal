@@ -13,9 +13,9 @@
 
 using namespace tt::tt_metal;
 
-std::vector<uint32_t> squeeze_vector_shape(std::vector<uint32_t> output_shape) {
-    if (output_shape.size() > 4) {
-        std::vector<uint32_t> output_shape_4d(output_shape.size());
+ttnn::SimpleShape squeeze_vector_shape(ttnn::SimpleShape output_shape) {
+    if (output_shape.rank() > 4) {
+        ttnn::SmallVector<uint32_t> output_shape_4d(output_shape.rank());
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.size() - 4;
         for (int i = extra_rank; i >= 0; i--) {
@@ -25,7 +25,7 @@ std::vector<uint32_t> squeeze_vector_shape(std::vector<uint32_t> output_shape) {
         output_shape_4d[1] = output_shape[1 + extra_rank];
         output_shape_4d[2] = output_shape[2 + extra_rank];
         output_shape_4d[3] = output_shape[3 + extra_rank];
-        return output_shape_4d;
+        return ttnn::SimpleShape(std::move(output_shape_4d));
     }
     return output_shape;
 }
@@ -67,18 +67,19 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
     bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
 
-    std::vector<uint32_t> output_end_vector;
-    std::vector<uint32_t> output_end;
-    if (input_tensor.get_logical_shape().rank() > 4) {
-        for (auto index = 0; index < input_tensor.get_logical_shape().rank(); ++index) {
-            output_end_vector.push_back(input_tensor.get_logical_shape()[index] - 1);
+    ttnn::SmallVector<uint32_t> output_end_vector;
+    ttnn::SimpleShape output_end;
+    const auto input_shape = input_tensor.get_logical_shape();
+    if (input_shape.rank() > 4) {
+        for (auto index = 0; index < input_shape.rank(); ++index) {
+            output_end_vector.push_back(input_shape[index] - 1);
         }
-        output_end = squeeze_vector_shape(output_end_vector);
+        output_end = squeeze_vector_shape(ttnn::SimpleShape(std::move(output_end_vector)));
     } else {
         for (auto index = 0; index < input_tensor.get_logical_shape().rank(); ++index) {
             output_end_vector.push_back(output_tensor_end[index]);
         }
-        output_end = output_end_vector;
+        output_end = ttnn::SimpleShape(std::move(output_end_vector));
     }
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
@@ -101,56 +102,6 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::SimpleShape& output_tensor_end,
-    const std::optional<MemoryConfig>& memory_config,
-    bool use_multicore,
-    bool use_pack_untilize) {
-    return invoke(DefaultQueueId, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
-}
-
-ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    uint8_t queue_id,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_tensor_end,
-    const std::optional<MemoryConfig>& memory_config,
-    bool use_multicore,
-    bool use_pack_untilize) {
-    // MT: Currently only uint32 is moved to DST directly, fp32 is converted to fp16b
-    bool fp32_dest_acc_en = input_tensor.get_dtype() == DataType::UINT32;
-
-    std::vector<uint32_t> output_end_vector;
-    std::vector<uint32_t> output_end;
-    if (input_tensor.get_logical_shape().rank() > 4) {
-        for (auto index = 0; index < input_tensor.get_logical_shape().rank(); ++index) {
-            output_end_vector.push_back(input_tensor.get_logical_shape()[index] - 1);
-        }
-        output_end = squeeze_vector_shape(output_end_vector);
-    } else {
-        for (auto index = 0; index < input_tensor.get_logical_shape().rank(); ++index) {
-            output_end_vector.push_back(output_tensor_end[index]);
-        }
-        output_end = output_end_vector;
-    }
-
-    auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
-        return operation::run(
-            UntilizeWithUnpadding{
-                ttnn::SimpleShape(output_end),
-                memory_config.value_or(input_tensor.memory_config()),
-                use_multicore,
-                use_pack_untilize,
-                fp32_dest_acc_en},
-            {input_tensor},
-            {},
-            {},
-            queue_id)[0];
-    };
-
-    return build_ndiml_untilize_val(base_untilize)(input_tensor);
-}
-
-ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     bool use_pack_untilize) {

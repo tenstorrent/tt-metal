@@ -76,7 +76,8 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
                     shape_vec.push_back(shape[i]);
                     full_shape_vec.push_back(full_shape[i]);
                 }
-                res = ttnn::reshape(res, ttnn::Shape(shape_vec, full_shape_vec));
+                res = ttnn::reshape(
+                    res, ttnn::SimpleShape(std::move(shape_vec)), ttnn::SimpleShape(std::move(full_shape_vec)));
             }
             return res;
         },
@@ -152,8 +153,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     ttnn::tilize_with_val_padding(padded, padded.get_padded_shape(), 0.0f, output.memory_config());
                 concat_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical concat output shape
-                auto reshaped = ttnn::reshape(
-                    tilized, ttnn::Shape{logical_output_shape.view(), tilized.get_padded_shape().view()});
+                auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.get_padded_shape());
                 return reshaped;
             }
             concat_db_print(true, "[DEBUG] already tilized");

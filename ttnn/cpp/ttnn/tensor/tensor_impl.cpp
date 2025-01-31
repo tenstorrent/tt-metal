@@ -1179,7 +1179,7 @@ Tensor unpad(
         ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
-        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        auto output_buffer = owned_buffer::create<T>(ttnn::SimpleShape(output_shape).volume());
 
         std::function<void(std::size_t)> unpad_from_tile = [&](std::size_t dim) -> void {
             for (auto i = output_tensor_start[dim]; i < output_tensor_end[dim]; i++) {

@@ -566,10 +566,6 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-ttnn::Shape Tensor::get_shape() const {
-    wait_for_tensor_metadata_populated();
-    return shape();
-}
 DataType Tensor::get_dtype() const {
     wait_for_tensor_metadata_populated();
     return dtype();
@@ -592,11 +588,6 @@ const ttnn::SimpleShape& Tensor::get_logical_shape() const {
 const ttnn::SimpleShape& Tensor::get_padded_shape() const {
     wait_for_tensor_metadata_populated();
     return padded_shape();
-}
-
-tt::tt_metal::Padding Tensor::get_padding() const {
-    wait_for_tensor_metadata_populated();
-    return tensor_attributes->tensor_spec.shape().value.padding();
 }
 
 const Storage& Tensor::get_storage() const {
@@ -818,7 +809,9 @@ Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
     return tensor_ops::tensor_reshape(*this, new_shape);
 }
 
-Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
+Tensor Tensor::reshape(const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+}
 
 bool Tensor::is_allocated() const {
     ZoneScoped;
@@ -895,20 +888,6 @@ Tensor create_device_tensor(
     const std::optional<Tile>& tile) {
     return create_device_tensor(
         TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
-}
-
-Tensor create_device_tensor(
-    const ttnn::Shape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    return create_device_tensor(
-        TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape)),
-        device);
 }
 
 namespace detail {

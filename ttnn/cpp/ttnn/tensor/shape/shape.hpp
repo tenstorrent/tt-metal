@@ -37,6 +37,7 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(this->value_); }
 
     std::array<uint32_t, 4> to_array_4D() const;
+    SimpleShape to_rank(size_t new_rank) const;
 
     friend std::ostream& operator<<(std::ostream& os, const SimpleShape& shape);
 };

@@ -56,7 +56,6 @@ struct NDArray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::LegacyShape;
     using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;

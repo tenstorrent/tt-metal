@@ -14,7 +14,8 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
     return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor& tensor, const Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const Tensor& tensor, const ttnn::SimpleShape& slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
     const auto& shape = tensor.get_padded_shape();
@@ -37,7 +38,7 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
     return start_offset;
 }
 
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_start) {
+uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::SimpleShape& slice_start) {
     using namespace tt::constants;
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
     const auto& shape = input_tensor.get_padded_shape();
@@ -51,7 +52,7 @@ uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_s
     return start_offset;
 }
 
-uint32_t get_rm_start_offset(const Tensor& tensor, const Shape& slice_start) {
+uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::SimpleShape& slice_start) {
     uint32_t start_offset = 0;
 
     if (tensor.get_padded_shape().rank() >= 2) {

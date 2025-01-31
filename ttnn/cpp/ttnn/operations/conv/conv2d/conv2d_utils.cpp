@@ -938,9 +938,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape,
-    const Shape& weights_shape,
-    const Shape& output_shape,
+    const ttnn::SimpleShape& input_shape,
+    const ttnn::SimpleShape& padded_weights_shape,
+    const ttnn::SimpleShape& output_shape,
     uint32_t output_channels,
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
@@ -971,8 +971,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * act_block_w_ntiles;
 
-    uint32_t weight_matrix_height = weights_shape.padded_shape()[2];
-    uint32_t weight_matrix_width = weights_shape.padded_shape()[3];
+    uint32_t weight_matrix_height = padded_weights_shape[2];
+    uint32_t weight_matrix_width = padded_weights_shape[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 

@@ -729,11 +729,11 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     }
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    TT_FATAL(weight_tensor_.shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
+    TT_FATAL(weight_tensor_.get_logical_shape()[2] >= weight_matrix_height, " Matrix Height Padding can't be negative");
     ttnn::SimpleShape target_shape({1, 1, weight_matrix_height, out_channels});
     ttnn::SimpleShape padded_target_shape(
         {1, 1, weight_tensor_.get_logical_shape()[2], out_channels + out_channel_padding});
-    weight_tensor_ = ttnn::reshape(weight_tensor_, ttnn::Shape(target_shape.view(), padded_target_shape.view()));
+    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
 
     if (parameters_on_device) {
         weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
@@ -743,7 +743,9 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
-            TT_FATAL(bias_tensor_.shape()[3] == out_channels, "Bias must have the same length as output channels");
+            TT_FATAL(
+                bias_tensor_.get_logical_shape()[3] == out_channels,
+                "Bias must have the same length as output channels");
             bias_tensor_ = conv_bias_layout_convert(
                 bias_tensor_,
                 weights_bias_dtype,
@@ -950,7 +952,7 @@ ttnn::Tensor prepare_conv_bias(
         parallel_config, device->compute_with_storage_grid_size(), out_channels, mm_conv);
 
     ttnn::Tensor bias_tensor_ = bias_tensor;
-    TT_FATAL(bias_tensor_.shape()[3] == out_channels, "Bias must have the same length as output channels");
+    TT_FATAL(bias_tensor_.get_logical_shape()[3] == out_channels, "Bias must have the same length as output channels");
 
     bias_tensor_ = conv_bias_layout_convert(
         bias_tensor_,

@@ -28,7 +28,6 @@ public:
     const ttnn::SimpleShape& padded_shape() const { return cached_padded_shape_; }
     const Shape2D& logical_2d_shape() const { return cached_logical_2d_shape_; }
     const Shape2D& physical_shape() const { return cached_physical_shape_; }
-    ttnn::Shape shape() const { return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view()); }
 
     Tile tile() const { return tensor_layout_.get_tile(); }
 

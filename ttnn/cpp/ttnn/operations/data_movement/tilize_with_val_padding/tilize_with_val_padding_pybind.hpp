@@ -46,14 +46,14 @@ void bind_tilize_with_val_padding(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<uint32_t>& output_tensor_shape,
+               const ttnn::SimpleShape& output_padded_shape,
                const PadValue value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,
                bool use_multicore,
                uint8_t queue_id) {
                 return self(
-                    queue_id, input_tensor, output_tensor_shape, value, memory_config, output_dtype, use_multicore);
+                    queue_id, input_tensor, output_padded_shape, value, memory_config, output_dtype, use_multicore);
             },
             py::arg("input_tensor"),
             py::arg("output_tensor_shape"),

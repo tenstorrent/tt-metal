@@ -19,15 +19,15 @@ bool eq_spans(const ArrayType& a, const ArrayType& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end());
 }
 
-ttnn::Shape update_original_shape(ttnn::Shape padded_shape, ttnn::Shape input_shape) {
-    std::vector<uint32_t> updated_shape;
+ttnn::SimpleShape update_original_shape(const ttnn::SimpleShape& padded_shape, const ttnn::SimpleShape& input_shape) {
+    ttnn::SmallVector<uint32_t> updated_shape;
     size_t input_rank = input_shape.rank();
     for (size_t i = 0; i < input_rank - 2; i++) {
         updated_shape.push_back(input_shape[i]);
     }
     updated_shape.push_back(padded_shape[-2]);
     updated_shape.push_back(padded_shape[-1]);
-    return ttnn::Shape(updated_shape);
+    return ttnn::SimpleShape(std::move(updated_shape));
 }
 
 static ttnn::Tensor pad_impl(
@@ -249,17 +249,13 @@ ttnn::Tensor ExecutePad::invoke(
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
             remove_prefix(output_shape, rank_diff);
             remove_prefix(padded_shape, rank_diff);
-            auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-            output_tensor = ttnn::reshape(output_tensor, squeezedShape);
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+            output_tensor =
+                ttnn::reshape(output_tensor, ttnn::SimpleShape(output_shape), ttnn::SimpleShape(padded_shape));
+            output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape(padded_shape));
         }
     } else {
-        auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
-        auto output_shape = to_vec(output_tensor.get_padded_shape().view());
-        auto padded_shape = to_vec(output_tensor.get_padded_shape().view());
-        auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
-        output_tensor =
-            ttnn::reshape(output_tensor, update_original_shape(squeezedShape, input_tensor.get_logical_shape()));
+        output_tensor = ttnn::reshape(
+            output_tensor, update_original_shape(output_tensor.get_padded_shape(), input_tensor.get_logical_shape()));
     }
 
     // Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation

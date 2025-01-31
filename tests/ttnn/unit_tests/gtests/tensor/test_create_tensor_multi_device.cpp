@@ -89,7 +89,7 @@ TEST_P(MultiDeviceTensorCreationTest, Full) {
 
     EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
-    EXPECT_EQ(mesh_replicated_tensor.shape(), ttnn::SimpleShape({32, 32}));
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), ttnn::SimpleShape({32, 32}));
     EXPECT_EQ(mesh_replicated_tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(mesh_replicated_tensor.layout(), Layout::ROW_MAJOR);
 
@@ -122,7 +122,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLike) {
 
     EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
-    EXPECT_EQ(mesh_replicated_tensor.shape(), tensor.shape());
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
+    EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
     EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
 
@@ -164,7 +165,8 @@ TEST_P(MultiDeviceTensorCreationTest, FullLikeWithOptTensor) {
 
     EXPECT_EQ(mesh_replicated_tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_THAT(mesh_replicated_tensor.get_workers(), SizeIs(mesh_device->num_devices()));
-    EXPECT_EQ(mesh_replicated_tensor.shape(), tensor.shape());
+    EXPECT_EQ(mesh_replicated_tensor.logical_shape(), tensor.logical_shape());
+    EXPECT_EQ(mesh_replicated_tensor.padded_shape(), tensor.padded_shape());
     EXPECT_EQ(mesh_replicated_tensor.dtype(), tensor.dtype());
     EXPECT_EQ(mesh_replicated_tensor.layout(), tensor.layout());
 
@@ -185,7 +187,7 @@ TEST_P(MultiDeviceTensorCreationTest, Arange) {
 
     EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE);
     EXPECT_EQ(tensor.get_workers().size(), mesh_device->num_devices());
-    EXPECT_EQ(tensor.shape(), ttnn::SimpleShape({1, 1, 1, 1024}));
+    EXPECT_EQ(tensor.logical_shape(), ttnn::SimpleShape({1, 1, 1, 1024}));
 
     const auto distributed_tensor_config = get_distributed_tensor_config_from_tensor(tensor);
     EXPECT_TRUE(std::holds_alternative<ReplicateTensor>(distributed_tensor_config));

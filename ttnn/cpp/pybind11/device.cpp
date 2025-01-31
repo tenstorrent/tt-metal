@@ -505,7 +505,7 @@ void device_module(py::module& m_device) {
             pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
 
         Returns:
-            ttnn.tt_metal.LegacyShape: The padded shape.
+            List of [int]: The padded shape.
 
         Note:
             This functionality is planned for deprecation in the future.

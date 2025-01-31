@@ -11,8 +11,8 @@
 
 namespace ttnn::operations::data_movement {
 
-uint32_t get_rm_start_offset(const Tensor& tensor, const Shape& slice_start);
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_start);
+uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::SimpleShape& slice_start);
+uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::SimpleShape& slice_start);
 
 struct SliceDeviceOperation {
     const ttnn::SimpleShape slice_start;

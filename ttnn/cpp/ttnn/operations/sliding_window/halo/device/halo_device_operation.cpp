@@ -78,10 +78,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         shard_shape,
         shard_shape,
         output_memory_config_.shard_spec->orientation};
-    return {TensorSpec(
-        output_shape,
-        TensorLayout::fromLegacyPaddedShape(
-            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, ttnn::Shape(output_shape)))};
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(

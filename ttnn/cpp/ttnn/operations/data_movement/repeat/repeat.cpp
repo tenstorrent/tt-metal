@@ -103,9 +103,7 @@ ttnn::Tensor RepeatOperation::invoke(
             auto padded_output = ttnn::pad(queue_id, sliced_output, padding_vec, 0.0f, pad_use_multicore, std::nullopt);
             auto tiled_output = ttnn::tilize(padded_output, input_tensor.memory_config());
 
-            auto padded_to_tiled_shape =
-                ttnn::Shape(sliced_logical_shape.view(), tiled_output.get_padded_shape().view());
-            return ttnn::reshape(tiled_output, padded_to_tiled_shape);
+            return ttnn::reshape(tiled_output, sliced_logical_shape, tiled_output.get_padded_shape());
         } else {
             return ttnn::slice(
                 output_tensors[0], zero_indices, end_indices, step, input_tensor.memory_config(), std::nullopt);

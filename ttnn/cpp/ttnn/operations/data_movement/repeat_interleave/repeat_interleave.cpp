@@ -53,7 +53,7 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     }
 
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
-    auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
+    auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::SimpleShape(final_shape));
     auto original_layout =
         ttnn::to_layout(reshaped_tensor, input_a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
     return typecast ? ttnn::typecast(original_layout, input_a.get_dtype(), mem_config) : original_layout;

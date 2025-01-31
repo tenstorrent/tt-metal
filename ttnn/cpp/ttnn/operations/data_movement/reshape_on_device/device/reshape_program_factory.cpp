@@ -330,7 +330,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
 
         uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-        auto output_shape = dst_tensor.shape();
+        auto output_shape = dst_tensor.get_logical_shape();
 
         uint32_t num_old_sticks =
             src_tensor.get_padded_shape()[0] * src_tensor.get_padded_shape()[1] * src_tensor.get_padded_shape()[2];

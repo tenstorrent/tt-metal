@@ -125,16 +125,6 @@ TensorLayout::TensorLayout(
     CMAKE_UNIQUE_NAMESPACE::validate_shard_spec(*this);
 }
 
-TensorLayout TensorLayout::fromLegacyPaddedShape(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const ttnn::Shape& legacy_shape) {
-    return TensorLayout(
-        dtype,
-        page_config,
-        memory_config,
-        CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(
-            legacy_shape.logical_shape(), legacy_shape.padded_shape(), page_config, memory_config));
-}
-
 TensorLayout TensorLayout::fromPaddedShape(
     DataType dtype,
     const PageConfig& page_config,
