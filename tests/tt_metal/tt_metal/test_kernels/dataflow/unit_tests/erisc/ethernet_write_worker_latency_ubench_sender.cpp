@@ -10,6 +10,8 @@
 #include "debug/dprint.h"
 #include "debug/debug.h"
 
+// #define ENABLE_DEBUG 1
+
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -22,6 +24,22 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 
 static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 
+FORCE_INLINE void wait_ack(volatile eth_channel_sync_t* channel_sync_addr) {
+    while (channel_sync_addr->bytes_sent != 0) {
+#if ENABLE_DEBUG
+        internal_::risc_context_switch();
+#endif
+    }
+}
+
+FORCE_INLINE void wait_eth_txq() {
+    while (eth_txq_is_busy()) {
+#if ENABLE_DEBUG
+        internal_::risc_context_switch();
+#endif
+    }
+}
+
 template <bool waiting_tails>
 FORCE_INLINE void run_loop_iteration(
     const std::array<uint32_t, NUM_CHANNELS>& channel_addrs,
@@ -32,22 +50,24 @@ FORCE_INLINE void run_loop_iteration(
         // send packet
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             // wait for receiver ack compelete
-            while (channel_sync_addrs[i]->bytes_sent != 0) {
-            }
+            wait_ack(channel_sync_addrs[i]);
 
             channel_sync_addrs[i]->bytes_sent = 1;
-            channel_sync_addrs[i]->receiver_ack = 0;
-            while (eth_txq_is_busy()) {
-            }
+
+            wait_eth_txq();
+
+#if ENABLE_DEBUG
+            eth_send_bytes_over_channel_payload_only(
+#else
             eth_send_bytes_over_channel_payload_only_unsafe(
+#endif
                 channel_addrs[i], channel_addrs[i], full_payload_size, full_payload_size, full_payload_size_eth_words);
         }
     } else {
         // waiting tails
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
             // wait for receiver ack compelete
-            while (channel_sync_addrs[i]->bytes_sent != 0) {
-            }
+            wait_ack(channel_sync_addrs[i]);
         }
     }
 }
