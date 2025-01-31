@@ -92,11 +92,11 @@ struct ExecuteJointAttention {
 
 namespace transformer {
 
-constexpr auto scaled_dot_product_attention = ttnn::register_operation_with_auto_launch_op<
+constexpr auto scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteScaledDotProductAttention>();
 
-constexpr auto chunked_scaled_dot_product_attention = ttnn::register_operation_with_auto_launch_op<
+constexpr auto chunked_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::chunked_scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteChunkedScaledDotProductAttention>();
 

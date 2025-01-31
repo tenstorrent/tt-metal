@@ -19,6 +19,5 @@ struct Bernoulli {
 }  // namespace ttnn::operations::bernoulli
 
 namespace ttnn {
-constexpr auto bernoulli =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::bernoulli", ttnn::operations::bernoulli::Bernoulli>();
+constexpr auto bernoulli = ttnn::register_operation<"ttnn::bernoulli", ttnn::operations::bernoulli::Bernoulli>();
 }  // namespace ttnn

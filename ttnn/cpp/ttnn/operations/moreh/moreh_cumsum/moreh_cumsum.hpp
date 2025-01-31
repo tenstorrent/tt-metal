@@ -28,10 +28,9 @@ struct MorehCumsumBackward {
 }  // namespace ttnn::operations::moreh::moreh_cumsum
 
 namespace ttnn {
-constexpr auto moreh_cumsum = ttnn::
-    register_operation_with_auto_launch_op<"ttnn::moreh_cumsum", ttnn::operations::moreh::moreh_cumsum::MorehCumsum>();
+constexpr auto moreh_cumsum =
+    ttnn::register_operation<"ttnn::moreh_cumsum", ttnn::operations::moreh::moreh_cumsum::MorehCumsum>();
 
-constexpr auto moreh_cumsum_backward = ttnn::register_operation_with_auto_launch_op<
-    "ttnn::moreh_cumsum_backward",
-    ttnn::operations::moreh::moreh_cumsum::MorehCumsumBackward>();
+constexpr auto moreh_cumsum_backward = ttnn::
+    register_operation<"ttnn::moreh_cumsum_backward", ttnn::operations::moreh::moreh_cumsum::MorehCumsumBackward>();
 }  // namespace ttnn

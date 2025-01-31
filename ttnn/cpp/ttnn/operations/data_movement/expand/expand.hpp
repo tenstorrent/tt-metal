@@ -19,6 +19,5 @@ struct Expand {
 }  // namespace ttnn::operations::expand
 
 namespace ttnn {
-constexpr auto expand =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::expand", ttnn::operations::expand::Expand>();
+constexpr auto expand = ttnn::register_operation<"ttnn::expand", ttnn::operations::expand::Expand>();
 }
