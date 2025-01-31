@@ -191,12 +191,6 @@ FORCE_INLINE void write_chunk(
         std::pair<uint64_t, uint32_t> dst_noc_addr_retval = get_contiguous_noc_addr(output_page_idx, d);
         uint64_t dst_noc_addr = dst_noc_addr_retval.first;
         contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(dst_noc_addr_retval.second, num_cols - col_idx));
-        /*
-        auto [noc_yx, page_offset, contig_pages_] = d.get_page_location_with_contiguous_pages_in_row_in_bank(output_page_idx);
-        contig_pages = std::min<int32_t>(pages_remaining, std::min<int32_t>(contig_pages_, num_cols - col_idx));
-        uint32_t local_address = d.bank_base_address + (page_offset * d.page_size) + 0;
-        uint64_t dst_noc_addr = get_noc_addr(static_cast<uint32_t>(noc_yx.noc_x), static_cast<uint32_t>(noc_yx.noc_y), local_address);
-        */
         ASSERT(((dst_noc_addr >> 32) & 0xF) == 0);
 
         noc_async_write(l1_read_addr, dst_noc_addr, page_size * contig_pages);
