@@ -28,16 +28,9 @@ Note the current compatability matrix:
 
 ### Step 2. System-level dependencies
 
-```sh
-sudo ./install_dependencies.sh
-```
----
-
-### Step 3. Install and start using TT-NN and TT-Metalium!
-
 > [!NOTE]
 >
-> You may choose to install from either source, a Python wheel, or Docker release image.
+> Later in Step 3 you may choose to install from either source, a Python wheel, or Docker release image.
 >
 > However, no matter your method, in order to use our pre-built models or to
 > follow along with the documentation and tutorials to get started, you will
@@ -46,13 +39,22 @@ sudo ./install_dependencies.sh
 > If you do not want to use the models or follow the tutorials and want to
 > immediately start using the API, you may install just the wheel or get the release Docker container.
 
-1. Clone the repo.
+
+1. Clone the repo 
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 ```
+2. Install system-level dependencies
+```sh
+sudo ./install_dependencies.sh
+```
+---
 
-2. Install either from source, or from our release wheel. Note that if you are
+
+### Step 3. Install and start using TT-NN and TT-Metalium!
+
+Install either from source, or from our release wheel. Note that if you are
 going to try using the model demos, we highly recommend you install from
 source.
 
@@ -64,12 +66,12 @@ Set up the environment variables and invoke our build scripts. Note that for
 source builds, you must set these environment variables every time.
 
 ```sh
-export ARCH_NAME=<ARCH_NAME>
+export ARCH_NAME=<ARCH_NAME> # See below for ARCH_NAME examples
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ./build_metal.sh
 
-# If you would like an out-of-the-box virtual environment to use,
+# See NOTE below on Python Environments for alternative to OOTB venv 
 ./create_venv.sh
 source python_env/bin/activate
 ```
