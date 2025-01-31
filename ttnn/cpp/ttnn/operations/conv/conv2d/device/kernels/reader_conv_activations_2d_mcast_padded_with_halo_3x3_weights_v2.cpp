@@ -269,7 +269,6 @@ void kernel_main() {
                 // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                 noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
             }
-            noc_async_write_barrier();
             cb_push_back(cb_id_act, act_block_num_tiles);
         }  // act_w_num_outer
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
