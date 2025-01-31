@@ -25,7 +25,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_hw_configure_disaggregated<true>(icb, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
+    PACK((llk_pack_untilize_init<DST_ACCUM_MODE, block_ct_dim, full_ct_dim>(ocb)));
     PACK((llk_pack_dest_init<true, DST_ACCUM_MODE>()));
 
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
@@ -76,7 +76,7 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
 ALWI void pack_untilize_dst_init_short(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
-    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
+    PACK((llk_pack_untilize_init<DST_ACCUM_MODE, block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, diagonal>()));
 

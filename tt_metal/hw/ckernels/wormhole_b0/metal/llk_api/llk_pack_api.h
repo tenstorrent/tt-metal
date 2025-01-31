@@ -180,6 +180,7 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
  *************************************************************************/
 
 template <
+    bool is_fp32_dest_acc_en,
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
@@ -198,8 +199,18 @@ inline void llk_pack_untilize_init(
     } else if constexpr (narrow_row) {
         TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
     } else {
-        TT_SETADCXX(p_setadc::PAC, FACE_R_DIM - 1, 0x0);
+        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     }
+    //
+    _llk_pack_hw_configure_<true, is_fp32_dest_acc_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        num_faces,
+        false /* partial_face */,
+        false /* narrow_tile */,
+        0 /* relu_config */);
 }
 
 template <
