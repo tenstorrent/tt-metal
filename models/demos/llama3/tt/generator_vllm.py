@@ -32,7 +32,7 @@ def initialize_vllm_text_transformer(
     # Load model args, weights
     model_args = TtModelArgs(
         mesh_device,
-        instruct=("Instruct" in hf_config._name_or_path),
+        instruct=("Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path),
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
