@@ -6,7 +6,7 @@
 import sys
 import argparse
 import re
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from collections import defaultdict
 import pandas as pd
 
@@ -294,12 +294,16 @@ def analyze_op(row, prev_row):
     else:
         op_to_op_gap = Cell(None, unit="us", decimals=0)
 
-    output_datatype = row["OUTPUT_0_DATATYPE"]
-    input_0_datatype = row["INPUT_0_DATATYPE"]
-    input_1_datatype = row["INPUT_1_DATATYPE"]
+    def get_entry(k: str) -> Union[str, None]:
+        return row[k] if k in row else None
+
+    output_datatype = get_entry("OUTPUT_0_DATATYPE")
+    input_0_datatype = get_entry("INPUT_0_DATATYPE")
+    input_1_datatype = get_entry("INPUT_1_DATATYPE")
     output_datatype_cell = Cell(output_datatype)
     input_0_datatype_cell = Cell(input_0_datatype)
     input_1_datatype_cell = Cell(input_1_datatype)
+
     short_name = lambda n: {"BFLOAT16": "BF16", "BFLOAT8_B": "BFP8", "BFLOAT4_B": "BFP4"}.get(n, n)
 
     if "Matmul" in op_code.raw_value:
