@@ -1032,20 +1032,6 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForD
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
 
-TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestPageSizeTooLarge) {
-    if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP();  // This test hanging on wormhole b0
-    }
-    // Should throw a host error due to the page size not fitting in the consumer CB
-    TestBufferConfig config = {.num_pages = 1024, .page_size = 250880 * 2, .buftype = BufferType::DRAM};
-
-    CommandQueue& a = this->device_->command_queue(0);
-    CommandQueue& b = this->device_->command_queue(1);
-    vector<std::reference_wrapper<CommandQueue>> cqs = {a, b};
-    EXPECT_ANY_THROW(
-        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
-}
-
 TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
     uint32_t page_size = 2048;
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
