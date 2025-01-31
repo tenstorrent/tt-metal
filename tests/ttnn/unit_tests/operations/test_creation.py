@@ -258,7 +258,7 @@ def test_full_multi_device(mesh_device, input_shape, fill_value, layout):
 
     tensor = ttnn.full(input_shape, device=mesh_device, fill_value=fill_value, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tensor)
-    output_tensors = ttnn.shardedtensor_to_tensorlist(tensor)
+    output_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(tensor)
     for output_tensor in output_tensors:
         assert_with_pcc(torch_tensor, output_tensor, 0.9999)
         assert torch.allclose(torch_tensor, output_tensor)
