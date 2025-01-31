@@ -44,7 +44,7 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
         // last tensor can support without any kernel changes
-        if (in_ref.get_layout() == Layout::TILE and in_ref.get_shape().has_tile_padding(this->dim)) {
+        if (in_ref.get_layout() == Layout::TILE and in_ref.get_logical_shape()[dim] != in_ref.get_padded_shape()[dim]) {
             warn_about_alignment = true;
         }
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");

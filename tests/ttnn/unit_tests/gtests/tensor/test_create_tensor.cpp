@@ -103,8 +103,8 @@ TEST_P(EmptyTensorTest, Combinations) {
         GTEST_SKIP() << "Skipping test with ROW_MAJOR layout and BFLOAT8_B dtype!";
     }
 
-    auto tensor_layout =
-        tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
+    auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {

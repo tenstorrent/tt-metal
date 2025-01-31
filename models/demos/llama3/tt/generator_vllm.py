@@ -130,6 +130,10 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
     def cache_path(self):
         return self.model_args.model_cache_path
 
+    @property
+    def max_cross_attn_tokens(self):
+        return self.model_args.vision_max_num_chunks * nearest_32(self.model_args.vision_chunk_ntok)
+
     def prefill_forward(
         self,
         tokens: torch.Tensor,

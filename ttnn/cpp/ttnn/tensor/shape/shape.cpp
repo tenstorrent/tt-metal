@@ -30,6 +30,21 @@ std::array<uint32_t, 4> SimpleShape::to_array_4D() const {
     return ret_array;
 }
 
+SimpleShape SimpleShape::to_rank(size_t new_rank) const {
+    SmallVector<uint32_t> new_shape(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        new_shape[new_idx] = (*this)[cur_idx];
+    }
+    for (; cur_idx >= 0; cur_idx--) {
+        TT_FATAL((*this)[cur_idx] == 1, "Can't convert shape rank");
+    }
+
+    return SimpleShape(std::move(new_shape));
+}
+
 const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
     std::int64_t rank = static_cast<std::int64_t>(this->rank());
     std::uint64_t normalized_index = index >= 0 ? index : rank + index;

@@ -187,8 +187,7 @@ Tensor to_layout_impl(
                 return ttnn::reshape(tensor, original_shape);
             }
 
-            return ttnn::reshape(
-                tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape.view(), padded_output_shape.view()}));
+            return ttnn::reshape(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

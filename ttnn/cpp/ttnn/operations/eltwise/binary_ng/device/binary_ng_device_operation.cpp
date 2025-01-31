@@ -212,7 +212,8 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b =
+        input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::SimpleShape({1, 1});
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();

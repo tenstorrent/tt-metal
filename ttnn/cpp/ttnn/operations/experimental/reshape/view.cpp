@@ -150,8 +150,4 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Simpl
     return tensor_reshape(tensor, shape, shape);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return tensor_reshape(tensor, shape.logical_shape(), shape.padded_shape());
-}
-
 }  // namespace ttnn::operations::experimental::reshape

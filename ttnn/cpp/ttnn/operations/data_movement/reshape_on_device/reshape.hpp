@@ -13,13 +13,30 @@ struct ReshapeOperation {
     static ttnn::Tensor invoke(
         uint8_t queue_id,
         const ttnn::Tensor& input_tensor,
-        ttnn::Shape shape,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        const std::optional<MemoryConfig>& memory_config_arg);
+    static ttnn::Tensor invoke(
+        uint8_t queue_id,
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, ttnn::Shape shape, const std::optional<MemoryConfig>& memory_config);
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape,
+        const std::optional<MemoryConfig>& memory_config);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const std::optional<MemoryConfig>& memory_config);
 
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape);
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        const ttnn::SimpleShape& logical_shape,
+        const ttnn::SimpleShape& padded_shape);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& logical_shape);
 
     static ttnn::Tensor invoke(
         uint8_t queue_id,

@@ -80,8 +80,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_offset =
-        ttnn::operations::data_movement::get_rm_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
+    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_sticks_per_core;
@@ -448,8 +447,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
 
-    uint32_t start_offset =
-        ttnn::operations::data_movement::get_rm_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
+    uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
         CoreCoord core;
         if (row_major) {
@@ -576,8 +574,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     uint32_t num_unpadded_sticks = output.volume() / output.get_padded_shape()[-1];
 
     // stick sizes
-    uint32_t W_padded = a.shape()[-1];
-    uint32_t W_unpadded = output.shape()[-1];
+    uint32_t W_padded = a.get_logical_shape()[-1];
+    uint32_t W_unpadded = output.get_logical_shape()[-1];
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_unpadded = W_unpadded * output.element_size();
 
@@ -776,8 +774,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
         set_common_reader_args(reader_common_args.data(), num_unpadded_tiles_per_dim, num_padded_tiles_per_dim);
     }
 
-    uint32_t start_offset =
-        ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, ttnn::Shape(output_tensor_start));
+    uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
 
     auto& reader_kernel_args_by_core = GetRuntimeArgs(program, unary_reader_kernel_id);
     auto& writer_kernel_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);

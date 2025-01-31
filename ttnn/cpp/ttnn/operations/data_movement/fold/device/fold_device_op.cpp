@@ -17,7 +17,7 @@ Fold::program_factory_t Fold::select_program_factory(
 void validate_fold(const std::vector<Tensor>& input_tensors, bool is_sharded, uint32_t stride_h, uint32_t stride_w) {
     const Tensor& input_tensor = input_tensors.at(0);
 
-    const Shape& input_shape = Shape(input_tensor.get_padded_shape());
+    const auto input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Fold: Expect input tensor to be stored on device.");
     TT_FATAL(input_tensor.buffer() != nullptr, "Fold: Expect input tensor to be allocated on a device buffer.");
