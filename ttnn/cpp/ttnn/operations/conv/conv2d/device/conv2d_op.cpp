@@ -101,7 +101,7 @@ Tensor optimized_conv_new(
             TT_FATAL(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
-            const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
+            const auto& ashape = input_tensor_shape;
             auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
                 .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
@@ -141,7 +141,7 @@ Tensor optimized_conv_new(
             IDevice* device = a.device();
 
             optimized_conv_op.pre_op_l1_allocation_size_bytes =
-                device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+                device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
             return operation::run_without_autoformat(optimized_conv_op, input_tensors, optional_input_tensors);
         },
         {a, b},
@@ -321,7 +321,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         use_non_tile_height);
 
     const uint32_t post_op_l1_stats =
-        device->get_memory_allocation_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
     auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        input_tensor_shape,
+        ttnn::SimpleShape(input_tensor_shape),
         weights_shape,
         sliding_window_config.get_output_shape(),
         output_channels,

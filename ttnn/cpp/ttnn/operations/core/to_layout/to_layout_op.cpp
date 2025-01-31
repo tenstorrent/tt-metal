@@ -37,7 +37,7 @@ inline bool use_multicore_device_tilize(
 
     uint32_t num_tiles_in_row = input.get_logical_shape()[-1] / tt::constants::TILE_WIDTH;
     uint32_t max_l1_size =
-        input.device()->l1_size_per_core() / 2 - input.device()->get_base_allocator_addr(HalMemType::L1);
+        input.device()->l1_size_per_core() / 2 - input.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
 
     return num_tiles_in_row <= max_tiles;
@@ -122,8 +122,11 @@ Tensor to_layout_impl(
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
             } else if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
+                    const auto tensor_tile = tensor.get_tensor_spec().tile();
+                    uint32_t tile_height = tensor_tile.get_height();
+                    uint32_t tile_width = tensor_tile.get_width();
                     const auto shard_shape = get_memory_config(tensor).value().shard_spec.value().shape;
-                    if (shard_shape[0] % ttnn::TILE_SIZE != 0 or shard_shape[1] % ttnn::TILE_SIZE != 0) {
+                    if (shard_shape[0] % tile_height != 0 or shard_shape[1] % tile_width != 0) {
                         TT_THROW(
                             "ttnn::to_layout: Sharded tensor must have shard shape that is a multiple of "
                             "TILE_SIZE!");
@@ -149,11 +152,8 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
             }
 
-            tensor = ttnn::untilize_with_unpadding(
-                tensor,
-                tt::tt_metal::LegacyShape(output_tensor_end.view()),
-                output_memory_config,
-                use_multicore_untilize);
+            tensor =
+                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
@@ -187,8 +187,7 @@ Tensor to_layout_impl(
                 return ttnn::reshape(tensor, original_shape);
             }
 
-            return ttnn::reshape(
-                tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape.view(), padded_output_shape.view()}));
+            return ttnn::reshape(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

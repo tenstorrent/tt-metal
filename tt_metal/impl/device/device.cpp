@@ -14,7 +14,7 @@
 #include <core_descriptor.hpp>
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include "impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include <utils.hpp>
@@ -31,7 +31,9 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
+
 #include "impl/dispatch/topology.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 
 namespace tt {
 
@@ -328,8 +330,8 @@ void Device::initialize_device_kernel_defines()
     // Clear previously stored defines, in case we are running with different configuration this time.
     // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
     this->device_kernel_defines_.clear();
-    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
-    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+    const size_t num_dram_banks = this->allocator()->get_num_banks(BufferType::DRAM);
+    const size_t num_l1_banks = this->allocator()->get_num_banks(BufferType::L1);
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
@@ -367,8 +369,8 @@ void Device::initialize_build() {
     this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, this->num_hw_cqs_)
+                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     uint32_t num_build_states = hal.get_num_risc_processors();
 
@@ -867,18 +869,6 @@ void Device::clear_l1_state() {
     // TODO: clear idle eriscs as well
 }
 
-bool Device::dispatch_s_enabled() const {
-    // Dispatch_s is always enabled for Tensix Dispatch
-    // Conditionally enabled for Ethernet Dispatch - If a single CQ is being used
-    // This condition may be modified for BH
-    return (this->num_hw_cqs() == 1 or dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER);
-}
-
-bool Device::distributed_dispatcher() const {
-    // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores.
-    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
-}
-
 void Device::compile_command_queue_programs() {
     ZoneScoped;
     auto command_queue_program_ptr = std::make_unique<Program>();
@@ -924,11 +914,18 @@ void Device::configure_command_queue_programs() {
         for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-            uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
+                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start/sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue
@@ -970,7 +967,8 @@ void Device::init_command_queue_host() {
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(
+            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
@@ -1068,7 +1066,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<CommandQueue>& hw_command_queue : command_queues_) {
+    for (const auto& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
@@ -1297,46 +1295,16 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
     }
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator() const {
-    return sub_device_manager_tracker_->get_default_sub_device_manager()->get_initialized_allocator(SubDeviceId{0});
+const std::unique_ptr<Allocator>& Device::allocator() const {
+    return sub_device_manager_tracker_->get_default_sub_device_manager()->allocator(SubDeviceId{0});
 }
 
-const std::unique_ptr<Allocator> &Device::get_initialized_allocator(SubDeviceId sub_device_id) const {
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->get_initialized_allocator(sub_device_id);
+const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
+    return sub_device_manager_tracker_->get_active_sub_device_manager()->allocator(sub_device_id);
 }
 
 uint32_t Device::num_sub_devices() const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices();
-}
-
-uint32_t Device::num_banks(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::num_banks(*allocator, buffer_type);
-}
-
-uint32_t Device::num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::num_banks(*allocator, buffer_type);
-}
-
-uint32_t Device::bank_size(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_size(*allocator, buffer_type);
-}
-
-uint32_t Device::bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_size(*allocator, buffer_type);
-}
-
-uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
-}
-
-uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::dram_channel_from_bank_id(*allocator, bank_id);
 }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
@@ -1351,113 +1319,6 @@ CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
     return tt::Cluster::instance().get_soc_desc(id_).get_dram_channel_from_logical_core(logical_core);
-}
-
-int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
-}
-
-int32_t Device::bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_offset(*allocator, buffer_type, bank_id);
-}
-
-CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
-}
-
-CoreCoord Device::logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::logical_core_from_bank_id(*allocator, bank_id);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_dram_channel(*allocator, dram_channel);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
-    BufferType buffer_type, const CoreCoord &logical_core) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
-}
-
-const std::vector<uint32_t> &Device::bank_ids_from_logical_core(
-    BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::bank_ids_from_logical_core(*allocator, buffer_type, logical_core);
-}
-
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_statistics(*allocator, buffer_type);
-}
-
-allocator::Statistics Device::get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_statistics(*allocator, buffer_type);
-}
-
-uint32_t Device::get_allocator_alignment() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.alignment;
-}
-
-uint32_t Device::get_allocator_alignment(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.alignment;
-}
-
-size_t Device::get_l1_small_size() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator->config.l1_small_size;
-}
-
-size_t Device::get_l1_small_size(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator->config.l1_small_size;
-}
-
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::dump_memory_blocks(*allocator, buffer_type, out);
-}
-
-void Device::dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::dump_memory_blocks(*allocator, buffer_type, out);
-}
-
-MemoryBlockTable Device::get_memory_block_table(const BufferType& buffer_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_memory_block_table(*allocator, buffer_type);
-}
-
-const std::unordered_set<Buffer *> &Device::get_allocated_buffers() const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_allocated_buffers(*allocator);
-}
-
-const std::unordered_set<Buffer *> &Device::get_allocated_buffers(SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_allocated_buffers(*allocator);
-}
-
-void Device::deallocate_buffers() {
-    const auto& allocator = this->get_initialized_allocator();
-    allocator::deallocate_buffers(*allocator);
-}
-
-void Device::deallocate_buffers(SubDeviceId sub_device_id) {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    allocator::deallocate_buffers(*allocator);
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
@@ -1658,31 +1519,30 @@ std::size_t Device::num_program_cache_entries() {
     return program_cache_.num_entries();
 }
 
-void Device::mark_allocations_unsafe() {
-    tt::tt_metal::allocator::mark_allocations_unsafe(*this->get_initialized_allocator());
-}
+void Device::mark_allocations_unsafe() { this->allocator()->mark_allocations_unsafe(); }
 
-void Device::mark_allocations_safe() {
-    tt::tt_metal::allocator::mark_allocations_safe(*this->get_initialized_allocator());
-}
+void Device::mark_allocations_safe() { this->allocator()->mark_allocations_safe(); }
 
 void Device::generate_device_bank_to_noc_tables()
 {
-    const size_t num_dram_banks = this->num_banks(BufferType::DRAM);
+    const auto& allocator = this->allocator();
+    const size_t num_dram_banks = allocator->get_num_banks(BufferType::DRAM);
     std::vector<CoreCoord> dram_noc_coord_per_bank(num_dram_banks);
     dram_bank_offset_map_.clear();
     dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] = this->dram_core_from_dram_channel(this->dram_channel_from_bank_id(bank_id));
-        dram_bank_offset_map_[bank_id] = this->bank_offset(BufferType::DRAM, bank_id);
+        dram_noc_coord_per_bank[bank_id] =
+            this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
     }
-    const size_t num_l1_banks = this->num_banks(BufferType::L1);
+    const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
     std::vector<CoreCoord> l1_noc_coord_per_bank(num_l1_banks);
     l1_bank_offset_map_.clear();
     l1_bank_offset_map_.resize(num_l1_banks);
     for (unsigned bank_id = 0; bank_id < num_l1_banks; bank_id++) {
-        l1_noc_coord_per_bank[bank_id] = this->worker_core_from_logical_core(this->logical_core_from_bank_id(bank_id));
-        l1_bank_offset_map_[bank_id] = this->bank_offset(BufferType::L1, bank_id);
+        l1_noc_coord_per_bank[bank_id] =
+            this->worker_core_from_logical_core(allocator->get_logical_core_from_bank_id(bank_id));
+        l1_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::L1, bank_id);
     }
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
@@ -1737,12 +1597,7 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
-}
-
-// Main source to get NOC idx for dispatch core
-NOC Device::dispatch_go_signal_noc() const {
-    return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
+    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {
@@ -1785,16 +1640,6 @@ void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_dev
 
 void Device::reset_sub_device_stall_group() {
     sub_device_manager_tracker_->get_active_sub_device_manager()->reset_sub_device_stall_group();
-}
-
-DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type) const {
-    const auto& allocator = this->get_initialized_allocator();
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
-}
-
-DeviceAddr Device::get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const {
-    const auto& allocator = this->get_initialized_allocator(sub_device_id);
-    return allocator::get_unreserved_base_address(*allocator, mem_type);
 }
 
 std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignment() {
@@ -1904,7 +1749,7 @@ IDevice* v1::CreateDevice(chip_id_t device_id, CreateDeviceOptions options) {
 
 bool v1::CloseDevice(IDevice* device) { return v0::CloseDevice(device); }
 
-void v1::DeallocateBuffers(IDevice* device) { device->deallocate_buffers(); }
+void v1::DeallocateBuffers(IDevice* device) { device->allocator()->deallocate_buffers(); }
 
 void v1::DumpDeviceProfileResults(IDevice* device) {
     detail::DumpDeviceProfileResults(device);
@@ -1936,15 +1781,17 @@ std::vector<CoreCoord> v1::GetEthernetSockets(IDevice* device, chip_id_t connect
     return device->get_ethernet_sockets(connected_chip_id);
 }
 
-std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) { return device->num_banks(buffer_type); }
+std::uint32_t v1::GetNumBanks(IDevice* device, BufferType buffer_type) {
+    return device->allocator()->get_num_banks(buffer_type);
+}
 
 std::int32_t v1::GetBankOffset(IDevice* device, BufferType buffer_type, std::uint32_t bank_id) {
-    return device->bank_offset(buffer_type, bank_id);
+    return device->allocator()->get_bank_offset(buffer_type, bank_id);
 }
 
 tt::stl::Span<const std::uint32_t> v1::BankIdsFromLogicalCore(
     IDevice* device, BufferType buffer_type, CoreCoord logical_core) {
-    return device->bank_ids_from_logical_core(buffer_type, logical_core);
+    return device->allocator()->get_bank_ids_from_logical_core(buffer_type, logical_core);
 }
 
 float v1::GetSfpuEps(IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); }

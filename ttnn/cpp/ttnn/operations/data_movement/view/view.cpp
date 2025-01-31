@@ -42,7 +42,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Simpl
         tensor_shape_second_last_dim,
         shape_second_last_dim);
     // Perform the View
-    return PerformView(tensor, shape, tile_first_dim, tile_second_dim);
+    return PerformView(tensor, shape, shape, tile_first_dim, tile_second_dim);
 }
 
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {

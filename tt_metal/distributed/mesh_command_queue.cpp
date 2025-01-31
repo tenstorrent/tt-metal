@@ -4,6 +4,7 @@
 
 #include <mesh_command_queue.hpp>
 #include <mesh_device.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
@@ -126,8 +127,9 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
             mesh_workload.get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id)));
 
-        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x; logical_x++) {
-            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
+        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x + 1;
+             logical_x++) {
+            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y + 1;
                  logical_y++) {
                 experimental::write_program_commands(
                     this->mesh_device_->get_device(logical_y, logical_x)->command_queue(this->id_),
@@ -180,7 +182,7 @@ void MeshCommandQueue::finish() {
 void MeshCommandQueue::write_shard_to_device(
     std::shared_ptr<Buffer>& shard_view,
     const void* src,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto device = shard_view->device();
     BufferRegion region(0, shard_view->size());
@@ -191,7 +193,7 @@ void MeshCommandQueue::write_shard_to_device(
 void MeshCommandQueue::read_shard_from_device(
     std::shared_ptr<Buffer>& shard_view,
     void* dst,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto device = shard_view->device();
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device->id());
@@ -210,7 +212,7 @@ void MeshCommandQueue::read_shard_from_device(
             buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
                 core_id, *shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
-                auto read_descriptor = std::get<tt::tt_metal::detail::ReadBufferDescriptor>(
+                auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                     *buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
                 buffer_dispatch::copy_completion_queue_data_into_user_space(
                     read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
@@ -222,7 +224,7 @@ void MeshCommandQueue::read_shard_from_device(
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
             dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
         if (dispatch_params.pages_per_txn > 0) {
-            auto read_descriptor = std::get<tt::tt_metal::detail::ReadBufferDescriptor>(
+            auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                 *buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
@@ -234,8 +236,8 @@ void MeshCommandQueue::enqueue_write_shard(
     std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     auto shard = mesh_buffer->get_device_buffer(coord);
     this->write_shard_to_device(shard, host_data, expected_num_workers_completed, sub_device_ids);
@@ -250,8 +252,8 @@ void MeshCommandQueue::enqueue_read_shard(
     TT_FATAL(blocking, "Only blocking reads are currently supported from MeshBuffer shards.");
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     auto shard = mesh_buffer->get_device_buffer(coord);
     this->read_shard_from_device(shard, host_data, expected_num_workers_completed, sub_device_ids);
@@ -260,7 +262,7 @@ void MeshCommandQueue::enqueue_read_shard(
 void MeshCommandQueue::write_sharded_buffer(
     const MeshBuffer& buffer,
     const void* src,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
     auto global_buffer_size = buffer.global_shard_spec().global_size;
@@ -345,7 +347,7 @@ void MeshCommandQueue::write_sharded_buffer(
 void MeshCommandQueue::read_sharded_buffer(
     MeshBuffer& buffer,
     void* dst,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     TT_FATAL(
@@ -401,13 +403,14 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
     const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking) {
     // TODO: Add proper support for SubDevices once SubDeviceManager and allocator are moved up to MeshDevice
     // We should not be querying SubDevices from device 0.
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
 
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
-        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x; logical_x++) {
-            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
+        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x + 1;
+             logical_x++) {
+            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y + 1;
                  logical_y++) {
                 auto device_shard_view = buffer.get_device_buffer(Coordinate(logical_y, logical_x));
                 this->write_shard_to_device(
@@ -424,7 +427,7 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
 
 void MeshCommandQueue::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
-    LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols(), buffer->device()->num_rows()});
+    LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols() - 1, buffer->device()->num_rows() - 1});
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 
@@ -432,8 +435,8 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
-    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device(0)->get_sub_device_ids());
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
+    auto sub_device_ids = tt::stl::Span<const SubDeviceId>(mesh_device_->get_device_index(0)->get_sub_device_ids());
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed;
     expected_num_workers_completed[0] = expected_num_workers_completed_;
     this->read_sharded_buffer(*buffer, host_data, expected_num_workers_completed, sub_device_ids);
 }

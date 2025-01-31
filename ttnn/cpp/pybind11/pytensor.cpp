@@ -673,7 +673,6 @@ auto parse_external_operation(
 }  // namespace detail
 
 void pytensor_module_types(py::module& m_tensor) {
-    using tt::tt_metal::LegacyShape;
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that
     // Device needs to outlive Tensor. This is because when tensors on device are destroyed they need to deallocate
     // their buffers via device. keep_alive increases the ref count of the Device object being passed into the
@@ -988,8 +987,8 @@ void pytensor_module(py::module& m_tensor) {
                     ttnn.Tensor(py_tensor, ttnn.bfloat16, device, ttnn.TILE_LAYOUT)
             )doc")
         .def_property_readonly("spec", [](const Tensor& self) { return self.get_tensor_spec(); })
-        .def_property_readonly("shape", [](const Tensor& self) { return self.get_shape(); })
-        .def_property_readonly("logical_shape", [](const Tensor& self) { return self.get_logical_shape(); })
+        .def_property_readonly("shape", [](const Tensor& self) { return self.get_logical_shape(); })
+        .def_property_readonly("padded_shape", [](const Tensor& self) { return self.get_padded_shape(); })
         .def_property_readonly("dtype", [](const Tensor& self) { return self.get_dtype(); })
         .def_property_readonly("layout", [](const Tensor& self) { return self.get_layout(); })
         .def_property_readonly("tile", [](const Tensor& self) { return self.get_tensor_spec().tile(); })
@@ -1665,7 +1664,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            [](Tensor& self, const ttnn::SimpleShape& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 

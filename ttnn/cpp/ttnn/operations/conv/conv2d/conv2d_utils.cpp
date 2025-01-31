@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
+#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -936,9 +938,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape,
-    const Shape& weights_shape,
-    const Shape& output_shape,
+    const ttnn::SimpleShape& input_shape,
+    const ttnn::SimpleShape& padded_weights_shape,
+    const ttnn::SimpleShape& output_shape,
     uint32_t output_channels,
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
@@ -969,8 +971,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * act_block_w_ntiles;
 
-    uint32_t weight_matrix_height = weights_shape.padded_shape()[2];
-    uint32_t weight_matrix_width = weights_shape.padded_shape()[3];
+    uint32_t weight_matrix_height = padded_weights_shape[2];
+    uint32_t weight_matrix_width = padded_weights_shape[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 
@@ -982,6 +984,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t num_blocks_act_h_per_core =
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
+
+    // TODO: this needs to be changed - needs to be independent from dram alignment
+    const uint32_t alignment_bytes = std::max(hal.get_alignment(HalMemType::L1), hal.get_alignment(HalMemType::DRAM));
 
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
@@ -1061,7 +1066,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1164,7 +1169,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
