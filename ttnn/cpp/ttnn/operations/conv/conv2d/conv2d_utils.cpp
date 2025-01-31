@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
+#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -983,6 +985,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
 
+    // TODO: this needs to be changed - needs to be independent from dram alignment
+    const uint32_t alignment_bytes = std::max(hal.get_alignment(HalMemType::L1), hal.get_alignment(HalMemType::DRAM));
+
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
 
@@ -1061,7 +1066,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1164,7 +1169,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

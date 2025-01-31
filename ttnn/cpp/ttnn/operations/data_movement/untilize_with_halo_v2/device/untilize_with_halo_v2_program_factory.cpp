@@ -170,8 +170,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
-    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
+    log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
+    log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
+
+    uint32_t input_buffer_alignment = input_tensor.buffer()->alignment();
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        // FIXME: Remove this workaround once the alignment is fixed in the allocator:
+        // https://github.com/tenstorrent/tt-metal/pull/13762, ticket:
+        // https://github.com/tenstorrent/tt-metal/issues/13609
+        input_buffer_alignment = 32;  // this is a workaround for the issue mentioned above
+    }
+    if (out_stick_nbytes % input_buffer_alignment != 0) {
+        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_buffer_alignment);
     }
     // reader kernel
     std::vector<uint32_t> reader_ct_args = {
