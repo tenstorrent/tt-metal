@@ -136,11 +136,10 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsSeparateTensorsDeviceOperation::comp
     const auto input_shape = input_tensor.get_padded_shape();
     const auto input_shape_kv = input_tensor_kv.get_padded_shape();
 
-    SimpleShape q_shape({input_shape[0], this->num_q_heads, input_shape[2], this->head_dim});
-    SimpleShape v_shape({input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim});
-    const auto k_shape = this->transpose_k_heads
-                             ? SimpleShape({input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]})
-                             : v_shape;
+    Shape q_shape({input_shape[0], this->num_q_heads, input_shape[2], this->head_dim});
+    Shape v_shape({input_shape_kv[0], this->num_kv_heads, input_shape_kv[2], this->head_dim});
+    const auto k_shape =
+        this->transpose_k_heads ? Shape({input_shape_kv[0], this->num_kv_heads, head_dim, input_shape_kv[2]}) : v_shape;
 
     CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
     ShardOrientation shard_orientation = input_tensor.shard_spec().value().orientation;

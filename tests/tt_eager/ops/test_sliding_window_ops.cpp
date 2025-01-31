@@ -373,12 +373,12 @@ int main() {
             .pad_hw = {tc.pad_h, tc.pad_w},
             .dilation_hw = {1, 1},
             .num_cores_nhw = tc.num_cores_nhw};
-        ttnn::SimpleShape input_tensor_shape(
+        ttnn::Shape input_tensor_shape(
             {config.batch_size,
              config.input_hw.first + 2 * config.pad_hw.first,
              config.input_hw.second + 2 * config.pad_hw.second});
         auto output_tensor_shape = config.get_output_shape();
-        ttnn::SimpleShape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
+        ttnn::Shape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 
         Tensor input_padded_tensor =
             ttnn::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();

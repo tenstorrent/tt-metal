@@ -31,25 +31,25 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 
     query = ttnn::reshape(
         query,
-        ttnn::SimpleShape({batch_size, num_heads, sequence_size, head_size}),
-        ttnn::SimpleShape({batch_size, num_heads, sequence_size_padded, head_size_padded}));
+        ttnn::Shape({batch_size, num_heads, sequence_size, head_size}),
+        ttnn::Shape({batch_size, num_heads, sequence_size_padded, head_size_padded}));
 
     if (transpose_key) {
         key = ttnn::reshape(
             key,
-            ttnn::SimpleShape({batch_size, num_kv_heads, head_size, sequence_size}),
-            ttnn::SimpleShape({batch_size, num_kv_heads, head_size_padded, sequence_size_padded}));
+            ttnn::Shape({batch_size, num_kv_heads, head_size, sequence_size}),
+            ttnn::Shape({batch_size, num_kv_heads, head_size_padded, sequence_size_padded}));
     } else {
         key = ttnn::reshape(
             key,
-            ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size, head_size}),
-            ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
+            ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
+            ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     }
 
     value = ttnn::reshape(
         value,
-        ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size, head_size}),
-        ttnn::SimpleShape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
+        ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
+        ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     return {query, key, value};
 }
 }  // namespace detail
@@ -104,7 +104,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             padded_head_size);
 
         const auto input_4d = ttnn::experimental::view(
-            input_tensor, ttnn::SimpleShape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
 
         auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
@@ -166,7 +166,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             "the KV tensor is only used in non-sharded configurations.");
 
         const auto input_tensor_4d = ttnn::experimental::view(
-            input_tensor, ttnn::SimpleShape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
                 input_tensor_4d,
@@ -179,13 +179,13 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             transpose_key);
     } else {
         const auto input_tensor_4d = ttnn::experimental::view(
-            input_tensor, ttnn::SimpleShape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
         if (input_tensor_kv.has_value()) {
             auto padded_input_shape_kv = input_tensor_kv.value().get_padded_shape();
             input_tensor_kv_4d = ttnn::experimental::view(
                 input_tensor_kv.value(),
-                ttnn::SimpleShape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
+                ttnn::Shape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
         }
         const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
             input_tensor_4d,

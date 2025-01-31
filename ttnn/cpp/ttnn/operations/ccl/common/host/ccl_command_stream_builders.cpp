@@ -88,7 +88,7 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_
     return worker_slices_streams;
 };
 
-static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const SimpleShape& shape) {
+static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const Shape& shape) {
     TT_FATAL(shape.rank() == 4, "Expected 4D shape but got {}", shape.rank());
     ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
         shape[0], shape[1], shape[-2] / tt::constants::TILE_HEIGHT, shape[-1] / tt::constants::TILE_WIDTH};

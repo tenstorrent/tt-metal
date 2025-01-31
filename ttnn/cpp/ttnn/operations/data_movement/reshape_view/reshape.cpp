@@ -32,8 +32,8 @@ namespace detail {
 
 ttnn::Tensor convert_tile_to_rm(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
@@ -61,8 +61,8 @@ ttnn::Tensor convert_tile_to_rm(
 
 ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
@@ -84,8 +84,8 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         return fix_shape_and_perform_reshape_on_2D_RM(
             PerformView(
                 tensor,
-                SimpleShape({second_dim, tensor_shape[-1]}),
-                SimpleShape({second_dim, tensor_shape[-1]}),
+                Shape({second_dim, tensor_shape[-1]}),
+                Shape({second_dim, tensor_shape[-1]}),
                 tile_first_dim,
                 tile_second_dim),
             logical_shape,
@@ -109,8 +109,8 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
         return fix_shape_and_perform_reshape_on_3D_TILE(
             PerformView(
                 tensor,
-                SimpleShape({third_dim, second_dim, tensor_shape[-1]}),
-                SimpleShape({third_dim, second_dim, tensor_shape[-1]}),
+                Shape({third_dim, second_dim, tensor_shape[-1]}),
+                Shape({third_dim, second_dim, tensor_shape[-1]}),
                 tile_first_dim,
                 tile_second_dim),
             logical_shape,
@@ -126,8 +126,8 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
 
 ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
@@ -145,8 +145,8 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     return PerformView(
         convert_tile_to_rm(
             tensor,
-            ttnn::SimpleShape{third_dim, second_dim, logical_shape[-1]},
-            ttnn::SimpleShape{third_dim, second_dim, logical_shape[-1]},
+            ttnn::Shape{third_dim, second_dim, logical_shape[-1]},
+            ttnn::Shape{third_dim, second_dim, logical_shape[-1]},
             tile_first_dim,
             tile_second_dim,
             memory_config,
@@ -160,8 +160,8 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
 
 ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
@@ -176,8 +176,8 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     return PerformView(
         perform_reshape_on_2D_RM(
             tensor,
-            ttnn::SimpleShape({second_dim, logical_shape[-1]}),
-            ttnn::SimpleShape({second_dim, logical_shape[-1]}),
+            ttnn::Shape({second_dim, logical_shape[-1]}),
+            ttnn::Shape({second_dim, logical_shape[-1]}),
             memory_config,
             queue_id),
         logical_shape,
@@ -190,8 +190,8 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
 
 ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
     const uint8_t queue_id) {
     auto temp_tensor = tensor;
@@ -227,9 +227,9 @@ ttnn::Tensor perform_reshape_on_2D_RM(
 }
 }
 
-std::pair<ttnn::SimpleShape, ttnn::SimpleShape> tiling_reshape_corrector(
-    const ttnn::SimpleShape& shape,
-    const ttnn::SimpleShape& padded,
+std::pair<ttnn::Shape, ttnn::Shape> tiling_reshape_corrector(
+    const ttnn::Shape& shape,
+    const ttnn::Shape& padded,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim) {
     // Apply the correct padding metadata to the target shape
@@ -237,42 +237,40 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> tiling_reshape_corrector(
     const int8_t correction_1 =(tile_first_dim - (int)padded[-1] % tile_first_dim) % tile_first_dim;
     if(rank == 1)
     {
-        return {ttnn::SimpleShape({1, shape[0]}), ttnn::SimpleShape({32, padded[0] + correction_1})};
+        return {ttnn::Shape({1, shape[0]}), ttnn::Shape({32, padded[0] + correction_1})};
     }
     const int8_t correction_2 =(tile_second_dim - (int)padded[-2] % tile_second_dim) % tile_second_dim;
     switch(rank)
     {
         case 2:
             return {
-                ttnn::SimpleShape({shape[0], shape[1]}),
-                ttnn::SimpleShape({padded[0] + correction_2, padded[1] + correction_1})};
+                ttnn::Shape({shape[0], shape[1]}), ttnn::Shape({padded[0] + correction_2, padded[1] + correction_1})};
             break;
         case 3:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2]}),
-                ttnn::SimpleShape({padded[0], padded[1] + correction_2, padded[2] + correction_1})};
+                ttnn::Shape({shape[0], shape[1], shape[2]}),
+                ttnn::Shape({padded[0], padded[1] + correction_2, padded[2] + correction_1})};
             break;
         case 4:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3]}),
-                ttnn::SimpleShape({padded[0], padded[1], padded[2] + correction_2, padded[3] + correction_1})};
+                ttnn::Shape({shape[0], shape[1], shape[2], shape[3]}),
+                ttnn::Shape({padded[0], padded[1], padded[2] + correction_2, padded[3] + correction_1})};
             break;
         case 5:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4]}),
-                ttnn::SimpleShape(
-                    {padded[0], padded[1], padded[2], padded[3] + correction_2, padded[4] + correction_1})};
+                ttnn::Shape({shape[0], shape[1], shape[2], shape[3], shape[4]}),
+                ttnn::Shape({padded[0], padded[1], padded[2], padded[3] + correction_2, padded[4] + correction_1})};
             break;
         case 6:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5]}),
-                ttnn::SimpleShape(
+                ttnn::Shape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5]}),
+                ttnn::Shape(
                     {padded[0], padded[1], padded[2], padded[3], padded[4] + correction_2, padded[5] + correction_1})};
             break;
         case 7:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6]}),
-                ttnn::SimpleShape(
+                ttnn::Shape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6]}),
+                ttnn::Shape(
                     {padded[0],
                      padded[1],
                      padded[2],
@@ -283,8 +281,8 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> tiling_reshape_corrector(
             break;
         case 8:
             return {
-                ttnn::SimpleShape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6], shape[7]}),
-                ttnn::SimpleShape(
+                ttnn::Shape({shape[0], shape[1], shape[2], shape[3], shape[4], shape[5], shape[6], shape[7]}),
+                ttnn::Shape(
                     {padded[0],
                      padded[1],
                      padded[2],
@@ -300,8 +298,8 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> tiling_reshape_corrector(
 
 ttnn::Tensor PerformView(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim) {
     if (tensor.get_logical_shape() == logical_shape && tensor.get_padded_shape() == padded_shape) {
@@ -320,8 +318,8 @@ ttnn::Tensor PerformView(
     return ttnn::experimental::view(tensor, logical_shape, padded_shape);
 }
 
-std::pair<ttnn::SimpleShape, ttnn::SimpleShape> shape_corrector(
-    const ttnn::Tensor& tensor, const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+std::pair<ttnn::Shape, ttnn::Shape> shape_corrector(
+    const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     //Correct the shape to account for inferred dimensions
     uint32_t input_volume = tensor.get_logical_volume();
     uint32_t output_volume = 1;
@@ -342,15 +340,15 @@ std::pair<ttnn::SimpleShape, ttnn::SimpleShape> shape_corrector(
     }
 
     uint32_t implied_dim_value = (output_volume == 0) ? 0: input_volume/output_volume;
-    ttnn::SimpleShape new_shape = logical_shape;
+    ttnn::Shape new_shape = logical_shape;
     new_shape[inferred_dim] = implied_dim_value;
     return {new_shape, new_shape};
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& logical_input_shape,
-    const ttnn::SimpleShape& padded_input_shape,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
     const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
     const std::optional<PadValue>& pad_value) {
@@ -436,19 +434,19 @@ ttnn::Tensor ReshapeViewOperation::invoke(
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
     const uint8_t queue_id,
     const std::optional<PadValue>& pad_value) {
     return invoke(tensor, shape, shape, memory_config, queue_id, pad_value);
 }
 
-ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return invoke(tensor, shape, shape, std::nullopt, 0, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
-    const ttnn::Tensor& tensor, const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+    const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     return invoke(tensor, logical_shape, padded_shape, std::nullopt, 0, std::nullopt);
 }
 

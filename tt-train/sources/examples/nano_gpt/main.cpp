@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
                 auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
                     data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
                 auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
-                    targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
+                    targets, ttnn::Shape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
