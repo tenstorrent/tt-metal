@@ -174,12 +174,14 @@ class LlamaGenerator:
         kv_cache=None,
         enable_trace=True,
         read_from_device=True,
+        argmax_on_device=False,
     ):
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
+            "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
             tt_logits = self._easy_trace_text(**decode_kwargs)
@@ -187,7 +189,7 @@ class LlamaGenerator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0])
+            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
         else:
             return tt_logits
 
@@ -197,6 +199,7 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Performs text decode step.
@@ -205,13 +208,13 @@ class LlamaGenerator:
         tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table
         )
-
         tt_logits = self.model.ttnn_decode_forward(
             tt_tokens,
             tt_current_pos,
             rot_mats=tt_rot_mats,
             page_table=tt_page_table,
             kv_cache=kv_cache,
+            argmax_on_device=argmax_on_device,
         )
 
         return tt_logits
@@ -222,13 +225,16 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
+        self._decode_forward_no_trace_text(
+            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
@@ -238,11 +244,12 @@ class LlamaGenerator:
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_decode_forward(*transformed_inputs, kv_cache=kv_cache)
+        tt_out_trace = self.model.ttnn_decode_forward(
+            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-
         return trace_id, tt_out_trace, *device_inputs
 
     def _decode_forward_trace_text(
@@ -274,13 +281,14 @@ class LlamaGenerator:
         current_pos,
         page_table=None,
         kv_cache=None,
+        argmax_on_device=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
@@ -460,8 +468,8 @@ class LlamaGenerator:
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1)
+    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
+        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
         return logits
 
     def _decode_forward_no_trace(

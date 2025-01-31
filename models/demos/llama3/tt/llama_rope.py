@@ -55,14 +55,14 @@ class TtLlamaRotarySetup(LightweightModule):
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,
             device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )

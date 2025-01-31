@@ -15,7 +15,7 @@ from models.demos.llama3.tt.llama_common import (
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3.demo.demo import preprocess_inputs_prefill
+from models.demos.llama3.demo.simple_text_demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
@@ -228,7 +228,6 @@ def test_tt_model_acc(
         # Pre-compute the rotational embedding matrix and send to device
         rot_mats_prefill = get_prefill_rot_mat(
             model_args.head_dim,
-            model_args.max_seq_len,
             mesh_device,
             seq_len=prefill_lens[0],
             scale_factor=model_args.rope_scaling_factor,
