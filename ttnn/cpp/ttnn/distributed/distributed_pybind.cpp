@@ -12,11 +12,14 @@
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/overloaded.hpp"
+<<<<<<< HEAD
 =======
 >>>>>>> change assert to tt_throw to satisfy compiler
 =======
 #include "tt-metalium/core_coord.hpp"
 >>>>>>> add get_mesh_device_core_grid
+=======
+>>>>>>> fix module names and variant unpacking
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -34,6 +37,7 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
 py::object get_torch_type(DataType& dtype, const py::object& torch) {
@@ -54,6 +58,8 @@ py::object get_torch_type(DataType& dtype, const py::object& torch) {
 }
 
 >>>>>>> change assert to tt_throw to satisfy compiler
+=======
+>>>>>>> fix module names and variant unpacking
 // duplicated from pytensor.cpp
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
@@ -123,6 +129,7 @@ OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool lega
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                 : unpack_bfp4_tiles_into_float_vec(
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+<<<<<<< HEAD
                         std::vector<bfloat16> bfloat16_unpacked_data;
                         bfloat16_unpacked_data.reserve(float_unpacked_data.size());
                         std::transform(
@@ -133,6 +140,10 @@ OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool lega
                         auto input_bfloat16_buffer = owned_buffer::create<bfloat16>(std::move(bfloat16_unpacked_data));
                         return create_row_major_owned_buffer(
                             std::move(input_bfloat16_buffer), tensor_spec, legacy_output);
+=======
+                        auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
+>>>>>>> fix module names and variant unpacking
                     }
                     default: {
                         TT_THROW("Unsupported DataType: {}", tt_dtype);
@@ -162,10 +173,13 @@ py::object get_torch_type(DataType& dtype, const py::object& torch) {
         return torch.attr("float32");
     } else if (dtype == DataType::BFLOAT16) {
         return torch.attr("bfloat16");
+<<<<<<< HEAD
     } else if (dtype == DataType::BFLOAT4_B) {
         return torch.attr("bfloat16");
     } else if (dtype == DataType::BFLOAT8_B) {
         return torch.attr("bfloat16");
+=======
+>>>>>>> fix module names and variant unpacking
     }
     TT_THROW("Unsupported DataType: {}", dtype);
 }
@@ -397,13 +411,6 @@ void py_module(py::module& module) {
             )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
-            "get_mesh_device_core_grid",
-            [](MeshDevice& mesh_device) {
-                CoreCoord coords = mesh_device.compute_with_storage_grid_size();
-                new CoreGrid(coords.x, coords.y);
-            },
-            py::arg("mesh_device"))
-        .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
                 return self.mesh_create_sub_device_manager(sub_devices, local_l1_size);
@@ -563,6 +570,7 @@ void py_module(py::module& module) {
             return tensorlist_local;
         },
         py::arg("tensor"),
+<<<<<<< HEAD
         py::kw_only(),
         R"doc(
             Convert a sharded multidevice tensor into a locally stored (StorageType::OWNED) list of tensors,
@@ -572,6 +580,9 @@ void py_module(py::module& module) {
             Returns:
                 List[torch.tensor]: A list of locally stored tensors representing the multidevice shards.
         )doc");
+=======
+        py::kw_only());
+>>>>>>> fix module names and variant unpacking
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
