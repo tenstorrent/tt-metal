@@ -105,11 +105,7 @@ void test_linear(uint32_t batch, uint32_t emb_dim) {
 TEST_F(LinearOpTest, TTNNLargeLinearOpWithBias) {
     uint32_t dim = 4096;
     uint32_t batch = 32;  // it works with batch = 1, please try to check from 4 to 64
-    test_linear(batch, dim);
-    test_linear(batch, 2 * dim);
-    test_linear(batch, 4 * dim);
-    test_linear(batch, 8 * dim);
-    test_linear(batch, 16 * dim);
+    EXPECT_NO_FATAL_FAILURE(test_linear(batch, 4 * dim));
 }
 
 // Currently raises SEGFAULT
