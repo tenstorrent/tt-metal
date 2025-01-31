@@ -13,18 +13,18 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 | Llama3.2-1B    | N150   | 89        | 98        | 86.9          |
 | Llama3.2-1B    | N300   | 91        | 98        | 104.3         |
 | Llama3.2-1B    | T3K    | 91        | 98        | 118.5         |
-| Llama3.2-1B    | TG     |         | 99        | 53.3          |
+| Llama3.2-1B    | TG     |         |         | 72.3          |
 | Llama3.2-3B    | N150   | 92        | 96        | 53.3          |
 | Llama3.2-3B    | N300   | 91        | 96        | 66.1          |
 | Llama3.2-3B    | T3K    | 91        | 96        | 66.9          |
-| Llama3.2-3B    | TG     |         |         |           |
+| Llama3.2-3B    | TG     |         |         | 48.5          |
 | Llama3.1-8B    | N150   | 87        | 99        | 27.9          |
 | Llama3.1-8B    | N300   | 88        | 99        | 43.7          |
 | Llama3.1-8B    | T3K    | 91        | 100        | 64.2          |
-| Llama3.1-8B    | TG     |         |         |           |
+| Llama3.1-8B    | TG     |         |         | 41.0          |
 | Llama3.2-11B   | N300   | 89        | 99        | 43.5          |
 | Llama3.2-11B   | T3K    | 88        | 99        | 63.4          |
-| Llama3.2-11B   | TG     |         |         |           |
+| Llama3.2-11B   | TG     |         |         | 40.9          |
 | Llama3.1-70B   | T3K    | 96        | 100        | 16.1          |
 | Llama3.1-70B   | TG     |         |        |           |
 
