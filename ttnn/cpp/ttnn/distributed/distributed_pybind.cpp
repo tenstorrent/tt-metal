@@ -26,12 +26,6 @@ void py_module_types(py::module& module) {
 }
 
 void py_module(py::module& module) {
-    py::enum_<MeshType>(module, "MeshType")
-        .value("RowMajor", MeshType::RowMajor)
-        .value("Ring", MeshType::Ring)
-        .value("Line", MeshType::Line)
-        .export_values();
-
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
             py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
@@ -71,14 +65,12 @@ void py_module(py::module& module) {
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
                         const MeshOffset& offset,
-                        const std::vector<chip_id_t>& physical_device_ids,
-                        MeshType mesh_type) {
+                        const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
                     MeshDeviceConfig{
                         .mesh_shape = mesh_device_shape,
                         .offset = offset,
                         .physical_device_ids = physical_device_ids,
-                        .mesh_type = mesh_type,
                     },
                     l1_small_size,
                     trace_region_size,
@@ -92,8 +84,7 @@ void py_module(py::module& module) {
             py::arg("num_command_queues"),
             py::arg("dispatch_core_config"),
             py::arg("offset"),
-            py::arg("physical_device_ids"),
-            py::arg("mesh_type"))
+            py::arg("physical_device_ids"))
         .def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
@@ -109,7 +100,6 @@ void py_module(py::module& module) {
             "get_devices",
             &MeshDevice::get_devices,
             py::return_value_policy::reference,
-            py::arg("type") = py::none(),
             R"doc(
             Get the devices in the device mesh.
 
@@ -121,13 +111,11 @@ void py_module(py::module& module) {
             &MeshDevice::create_submesh,
             py::arg("submesh_shape"),
             py::arg("offset"),
-            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevice is alive
         .def(
             "create_submeshes",
             &MeshDevice::create_submeshes,
             py::arg("submesh_shape"),
-            py::arg("mesh_type"),
             py::keep_alive<1, 0>())  // Keep MeshDevice alive as long as SubmeshDevices are alive
         .def(
             "compute_with_storage_grid_size",
@@ -310,7 +298,6 @@ void py_module(py::module& module) {
         py::arg("num_command_queues"),
         py::arg("offset"),
         py::arg("physical_device_ids"),
-        py::arg("mesh_type"),
         py::arg("dispatch_core_config"));
 
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());

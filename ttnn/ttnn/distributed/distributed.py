@@ -18,7 +18,6 @@ def get_mesh_device_core_grid(mesh_device):
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
-MeshType = ttnn._ttnn.multi_device.MeshType
 
 
 def _get_rich_table(
@@ -141,7 +140,6 @@ def open_mesh_device(
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: ttnn.MeshOffset = ttnn.MeshOffset(row=0, col=0),
     physical_device_ids: List[int] = [],
-    mesh_type: "MeshType" = MeshType.RowMajor,
 ):
     """
     Open a mesh device with the specified configuration.
@@ -154,7 +152,6 @@ def open_mesh_device(
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
         offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
-        mesh_type (MeshType, optional): Defines type of mesh requested. Type imposes connectivity constraints and defines device iteration order.
 
     Returns:
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
@@ -168,7 +165,6 @@ def open_mesh_device(
         dispatch_core_config=dispatch_core_config,
         offset=offset,
         physical_device_ids=physical_device_ids,
-        mesh_type=mesh_type,
     )
 
 

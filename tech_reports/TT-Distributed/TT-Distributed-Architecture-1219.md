@@ -223,10 +223,6 @@ struct MeshConfig {
 
     // Offset into Logical Device Coordinate Space
     MeshOffset offset;
-
-    // TODO: consider whether this should be automatically inferred.
-    // Interpret as e.g. {Ring, Line}
-    MeshType type;
 };
 
 // Class exposing host and device dispatch state
@@ -986,8 +982,8 @@ Below, we include snippets from both the TT-Mesh and TT-Metal examples to illust
 *Specify MeshConfig when creating two Virtual Meshes on a Physical Mesh.*
 
 ```cpp
-MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}, .type=mesh_type};
-MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}, .type=mesh_type};
+MeshConfig mesh_config_0 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 0}};
+MeshConfig mesh_config_1 = MeshConfig{.shape = virtual_mesh_shape, .offset = {0, 4}};
 
 DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_0, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
 DeviceHandle virtual_mesh_0 = CreateMeshDevice(mesh_config_1, 2 /* num_command_queues */, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE);
