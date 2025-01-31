@@ -297,8 +297,6 @@ def run_all_gather_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-                print("Golden output: ", output_tensor)
-                print("My output: ", tt_output_tensor)
                 if enable_persistent_fabric and teardown_persistent_fabric:
                     mesh_device.reset_sub_device_stall_group()
                     teardown_fabric_interface(mesh_device)

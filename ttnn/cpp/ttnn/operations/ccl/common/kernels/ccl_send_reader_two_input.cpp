@@ -154,10 +154,10 @@ FORCE_INLINE auto build_source_address_generator(
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        std::pair<const uint32_t* const, uint32_t> map = experimental::shard_addr_gen_utils::parse_map<SHARDING_INFO_OBJECT>(arg_idx);
+        std::pair<const mapping_table_t* const, uint32_t> map = experimental::shard_addr_gen_utils::get_shard_map<SHARDING_INFO_OBJECT>(get_arg_addr(arg_idx));
         if (addrgen_enabled)
         {
-            arg_idx = map.second;
+            arg_idx += map.second;
         }
         experimental::ShardedAddrGen<SHARDING_INFO_OBJECT> ret_val = {
             .bank_base_address = tensor_address, .shard_array=map.first};
