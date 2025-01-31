@@ -359,7 +359,9 @@ operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_decode_sharded_i
             process_qv,                        // read and write q and v heads
             process_k,                         // read and write k heads
             batch_offset.has_value() ? 1 : 0,  // use_batch_offset
-            batch_offset->buffer()->buffer_type() == tt_metal::BufferType::DRAM ? (uint32_t)1 : (uint32_t)0,
+            batch_offset.has_value() && batch_offset->buffer()->buffer_type() == tt_metal::BufferType::DRAM
+                ? (uint32_t)1
+                : (uint32_t)0,
             batch_offset_index_stick_size,
             batch_offset_cb_index_reader};
         auto q_reader_kernel_id = tt_metal::CreateKernel(
