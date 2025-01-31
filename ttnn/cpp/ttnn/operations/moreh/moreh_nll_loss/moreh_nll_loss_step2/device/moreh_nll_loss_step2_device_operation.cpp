@@ -96,7 +96,7 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
         output_shape_vec.push_back(input_shape_without_padding[dim]);
     }
 
-    auto output_shape = SimpleShape{output_shape_vec};
+    auto output_shape = Shape{output_shape_vec};
     return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
 }
 

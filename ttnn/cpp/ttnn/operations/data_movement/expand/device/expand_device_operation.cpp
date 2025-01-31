@@ -57,7 +57,7 @@ ExpandOperation::spec_return_value_t ExpandOperation::compute_output_specs(
         return tensor_args.output->get_tensor_spec();
     }
     return TensorSpec(
-        SimpleShape{operation_attributes.output_shape},
+        Shape{operation_attributes.output_shape},
         TensorLayout(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

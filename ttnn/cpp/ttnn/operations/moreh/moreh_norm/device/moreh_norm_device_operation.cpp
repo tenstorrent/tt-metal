@@ -159,7 +159,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         shape.push_back(input_shape[i]);
     }
     return TensorSpec(
-        ttnn::SimpleShape(shape),
+        ttnn::Shape(shape),
         TensorLayout(tensor_args.input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
