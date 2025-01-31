@@ -8,10 +8,13 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+
 using namespace tt::tt_metal;
 
 void DemuxKernel::GenerateStaticConfigs() {
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     uint16_t channel =
         tt::Cluster::instance().get_assigned_channel_for_device(servicing_device_id_);  // TODO: this can be mmio
     logical_core_ = dispatch_core_manager::instance().demux_core(servicing_device_id_, channel, placement_cq_id_);
@@ -30,7 +33,7 @@ void DemuxKernel::GenerateStaticConfigs() {
         FDKernel* k = downstream_kernels_[idx];
         static_config_.remote_tx_queue_id[idx] = 0;
         static_config_.remote_tx_network_type[idx] = (uint32_t)DispatchRemoteNetworkType::NOC0;
-        static_config_.output_depacketize_cb_log_page_size[idx] = dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;
+        static_config_.output_depacketize_cb_log_page_size[idx] = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.output_depacketize_local_sem_id[idx] =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.output_depacketize_remove_header[idx] = 1;

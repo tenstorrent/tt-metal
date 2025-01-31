@@ -244,9 +244,9 @@ TEST_F(DeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
 
     uint32_t base_l1_src_address =
         device->allocator()->get_base_allocator_addr(HalMemType::L1) + hal.get_alignment(HalMemType::L1);
-    // This is a slow dispatch test dispatch core type is needed to query dispatch_constants
+    // This is a slow dispatch test dispatch core type is needed to query DispatchMemMap
     uint32_t base_pcie_dst_address =
-        dispatch_constants::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
+        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED) +
         hal.get_alignment(HalMemType::L1);
 
     uint32_t size_bytes = 2048 * 128;

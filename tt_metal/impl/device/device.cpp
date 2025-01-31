@@ -369,8 +369,8 @@ void Device::initialize_build() {
     this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, this->num_hw_cqs_)
+                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     uint32_t num_build_states = hal.get_num_risc_processors();
 
@@ -914,11 +914,18 @@ void Device::configure_command_queue_programs() {
         for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-            uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
+                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start/sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue

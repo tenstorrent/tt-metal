@@ -39,6 +39,8 @@
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "umd/device/tt_xy_pair.h"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 #include <hal.hpp>
 
@@ -115,9 +117,9 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     this->dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     this->packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
     this->dispatch_message_addr =
-        dispatch_constants::get(this->dispatch_core_type)
+        DispatchMemMap::get(this->dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        dispatch_constants::get(this->dispatch_core_type).get_dispatch_message_offset(this->sub_device_id.to_index());
+        DispatchMemMap::get(this->dispatch_core_type).get_dispatch_message_offset(this->sub_device_id.to_index());
 }
 
 void EnqueueProgramCommand::process() {
@@ -191,7 +193,7 @@ EnqueueRecordEventCommand::EnqueueRecordEventCommand(
     write_barrier(write_barrier) {}
 
 void EnqueueRecordEventCommand::process() {
-    std::vector<uint32_t> event_payload(dispatch_constants::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
+    std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
     event_payload[0] = this->event_id;
 
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
@@ -200,7 +202,7 @@ void EnqueueRecordEventCommand::process() {
         this->device->num_hw_cqs();  // Device initialize asserts that there can only be a maximum of 2 HW CQs
     uint32_t packed_event_payload_sizeB =
         align(sizeof(CQDispatchCmd) + num_hw_cqs * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment) +
-        (align(dispatch_constants::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
+        (align(DispatchSettings::EVENT_PADDED_SIZE, l1_alignment) * num_hw_cqs);
     uint32_t packed_write_sizeB = align(sizeof(CQPrefetchCmd) + packed_event_payload_sizeB, pcie_alignment);
     uint32_t num_worker_counters = this->sub_device_ids.size();
 
@@ -210,7 +212,7 @@ void EnqueueRecordEventCommand::process() {
         packed_write_sizeB +  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_PACKED + unicast subcmds + event
                               // payload
         align(
-            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + dispatch_constants::EVENT_PADDED_SIZE,
+            sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
             pcie_alignment);  // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WRITE_LINEAR_HOST + event ID
 
     void* cmd_region = this->manager.issue_queue_reserve(cmd_sequence_sizeB, this->command_queue_id);
@@ -219,7 +221,7 @@ void EnqueueRecordEventCommand::process() {
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->device->id());
     uint32_t dispatch_message_base_addr =
-        dispatch_constants::get(dispatch_core_type)
+        DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     uint32_t last_index = num_worker_counters - 1;
@@ -228,14 +230,14 @@ void EnqueueRecordEventCommand::process() {
         auto offset_index = this->sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr +
-            dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
             false, dispatch_message_addr, this->expected_num_workers_completed[offset_index], this->clear_count);
     }
     auto offset_index = this->sub_device_ids[last_index].to_index();
     uint32_t dispatch_message_addr =
         dispatch_message_base_addr +
-        dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait(
         this->write_barrier,
         dispatch_message_addr,
@@ -261,16 +263,16 @@ void EnqueueRecordEventCommand::process() {
         event_payloads[cq_id] = {event_payload.data(), event_payload.size() * sizeof(uint32_t)};
     }
 
-    uint32_t completion_q0_last_event_addr = dispatch_constants::get(core_type).get_device_command_queue_addr(
+    uint32_t completion_q0_last_event_addr = DispatchMemMap::get(core_type).get_device_command_queue_addr(
         CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
-    uint32_t completion_q1_last_event_addr = dispatch_constants::get(core_type).get_device_command_queue_addr(
+    uint32_t completion_q1_last_event_addr = DispatchMemMap::get(core_type).get_device_command_queue_addr(
         CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
     uint32_t address = this->command_queue_id == 0 ? completion_q0_last_event_addr : completion_q1_last_event_addr;
     const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(this->device);
     command_sequence.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_hw_cqs,
         address,
-        dispatch_constants::EVENT_PADDED_SIZE,
+        DispatchSettings::EVENT_PADDED_SIZE,
         packed_event_payload_sizeB,
         unicast_sub_cmds,
         event_payloads,
@@ -278,7 +280,7 @@ void EnqueueRecordEventCommand::process() {
 
     bool flush_prefetch = true;
     command_sequence.add_dispatch_write_host<true>(
-        flush_prefetch, dispatch_constants::EVENT_PADDED_SIZE, true, event_payload.data());
+        flush_prefetch, DispatchSettings::EVENT_PADDED_SIZE, true, event_payload.data());
 
     this->manager.issue_queue_push_back(cmd_sequence_sizeB, this->command_queue_id);
 
@@ -312,10 +314,10 @@ void EnqueueWaitForEventCommand::process() {
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
     uint32_t completion_q0_last_event_addr =
-        dispatch_constants::get(this->dispatch_core_type)
+        DispatchMemMap::get(this->dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q0_LAST_EVENT);
     uint32_t completion_q1_last_event_addr =
-        dispatch_constants::get(this->dispatch_core_type)
+        DispatchMemMap::get(this->dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
 
     uint32_t last_completed_event_address =
@@ -336,7 +338,7 @@ EnqueueTraceCommand::EnqueueTraceCommand(
     SystemMemoryManager& manager,
     std::shared_ptr<TraceDescriptor>& descriptor,
     Buffer& buffer,
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
     NOC noc_index,
     CoreCoord dispatch_core) :
     command_queue_id(command_queue_id),
@@ -385,7 +387,7 @@ void EnqueueTraceCommand::process() {
     }
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     uint32_t dispatch_message_base_addr =
-        dispatch_constants::get(dispatch_core_type)
+        DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     go_msg_t reset_launch_message_read_ptr_go_signal;
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
@@ -401,10 +403,10 @@ void EnqueueTraceCommand::process() {
         const auto& num_noc_unicast_txns =
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_noc_unicast_txns(id) : 0;
         reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
-            (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
+            (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr +
-            dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(id.to_index());
         auto index = id.to_index();
         // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
         command_sequence.add_dispatch_go_signal_mcast(
@@ -430,7 +432,7 @@ void EnqueueTraceCommand::process() {
     for (const auto& id : descriptor->sub_device_ids) {
         auto index = id.to_index();
         uint32_t dispatch_message_addr =
-            dispatch_message_base_addr + dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(index);
+            dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(index);
         if (DispatchQueryManager::instance().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
                 false,

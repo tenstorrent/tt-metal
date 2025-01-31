@@ -560,9 +560,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

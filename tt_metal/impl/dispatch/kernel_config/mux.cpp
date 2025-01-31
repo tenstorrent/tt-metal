@@ -9,15 +9,18 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
+
 using namespace tt::tt_metal;
 
 void MuxKernel::GenerateStaticConfigs() {
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_->id());
     logical_core_ = dispatch_core_manager::instance().mux_d_core(device_->id(), channel, this->cq_id_);
-    auto& my_dispatch_constants = dispatch_constants::get(GetCoreType());
+    auto& my_dispatch_constants = DispatchMemMap::get(GetCoreType());
     static_config_.reserved = 0;
     static_config_.rx_queue_start_addr_words = my_dispatch_constants.dispatch_buffer_base() >> 4;
-    static_config_.rx_queue_size_words = ((1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
+    static_config_.rx_queue_size_words = ((1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                           my_dispatch_constants.mux_buffer_pages(device_->num_hw_cqs())) >>
                                          4;
     static_config_.mux_fan_in = upstream_kernels_.size();
@@ -47,7 +50,7 @@ void MuxKernel::GenerateDependentConfigs() {
         dependent_config_.remote_rx_x[idx] = k->GetVirtualCore().x;
         dependent_config_.remote_rx_y[idx] = k->GetVirtualCore().y;
         dependent_config_.input_packetize_log_page_size[idx] =
-            dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE;  // Does this ever change?
+            DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;  // Does this ever change?
         if (auto dispatch_kernel = dynamic_cast<DispatchKernel*>(k)) {
             dependent_config_.input_packetize[idx] = 0x1;
             dependent_config_.input_packetize_upstream_sem[idx] =
