@@ -12,7 +12,6 @@ from ttnn.operations.complex_binary_backward import (
     _golden_function_complex_div,
 )
 
-import torch
 
 THIS_MODULE = sys.modules[__name__]
 
@@ -95,6 +94,8 @@ def _golden_function_backward_with_dim(
 def _golden_function_backward_with_float(
     torch_op, grad_tensor, input_tensor_a, input_tensor_b, alpha=None, *args, **kwargs
 ):
+    import torch
+
     if alpha == None:
         pyt_y = torch_op(input_tensor_a, input_tensor_b)
     else:
@@ -140,152 +141,191 @@ def _golden_function_backward_with_string(
     return golden_tensor
 
 
-ttnn.attach_golden_function(
-    ttnn.sub_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.sub, grad, a, b, *args, **kwargs
-    ),
-)
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
 
-ttnn.attach_golden_function(
-    ttnn.add_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.add, grad, a, b, *args, **kwargs
-    ),
-)
+    return _golden_function_backward(torch.sub, grad, a, b, *args, **kwargs)
 
-ttnn.attach_golden_function(
-    ttnn.remainder_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_overload(
-        torch.remainder, grad, a, b, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.fmod_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward_overload(
-        torch.fmod, grad, a, b, *args, **kwargs
-    ),
-)
+ttnn.attach_golden_function(ttnn.sub_bw, golden_function=_golden_function_bw)
 
-ttnn.attach_golden_function(
-    ttnn.atan2_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.atan2, grad, a, b, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.xlogy_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.xlogy, grad, a, b, *args, **kwargs
-    ),
-)
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
 
-ttnn.attach_golden_function(
-    ttnn.hypot_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.hypot, grad, a, b, *args, **kwargs
-    ),
-)
+    return _golden_function_backward(torch.add, grad, a, b, *args, **kwargs)
 
-ttnn.attach_golden_function(
-    ttnn.ldexp_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.ldexp, grad, a, b, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.logaddexp_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.logaddexp, grad, a, b, *args, **kwargs
-    ),
-)
+ttnn.attach_golden_function(ttnn.add_bw, golden_function=_golden_function_bw)
 
-ttnn.attach_golden_function(
-    ttnn.logaddexp2_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.logaddexp2, grad, a, b, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.squared_difference_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        "torch.squared_difference", grad, a, b, *args, **kwargs
-    ),
-)
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
 
-ttnn.attach_golden_function(
-    ttnn.subalpha_bw,
-    golden_function=lambda grad, a, b, alpha=None, *args, **kwargs: _golden_function_backward_with_float(
-        torch.sub, grad, a, b, alpha, *args, **kwargs
-    ),
-)
+    return _golden_function_backward_overload(torch.remainder, grad, a, b, *args, **kwargs)
 
-ttnn.attach_golden_function(
-    ttnn.addalpha_bw,
-    golden_function=lambda grad, a, b, alpha=None, *args, **kwargs: _golden_function_backward_with_float(
-        torch.add, grad, a, b, alpha, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.assign_bw,
-    golden_function=lambda grad, a, b=None, *args, **kwargs: _golden_function_backward_overload(
-        torch.clone, grad, a, b, *args, **kwargs
-    ),
-)
+ttnn.attach_golden_function(ttnn.remainder_bw, golden_function=_golden_function_bw)
 
-ttnn.attach_golden_function(
-    ttnn.concat_bw,
-    golden_function=lambda grad, a, b, dim=None, *args, **kwargs: _golden_function_backward_with_dim(
-        torch.concat, grad, a, b, dim, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.rsub_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.rsub, grad, a, b, *args, **kwargs
-    ),
-)
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
 
-ttnn.attach_golden_function(
-    ttnn.bias_gelu_bw,
-    golden_function=lambda grad, a, b, value="none", *args, **kwargs: _golden_function_backward_with_string(
-        "bias_gelu_bw", grad, a, b, value, *args, **kwargs
-    ),
-)
+    return _golden_function_backward_overload(torch.fmod, grad, a, b, *args, **kwargs)
 
-ttnn.attach_golden_function(
-    ttnn.min_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.min, grad, a, b, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.max_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.max, grad, a, b, *args, **kwargs
-    ),
-)
+ttnn.attach_golden_function(ttnn.fmod_bw, golden_function=_golden_function_bw)
 
-ttnn.attach_golden_function(
-    ttnn.div_bw,
-    golden_function=lambda grad, a, b, value=None, *args, **kwargs: _golden_function_backward_with_string(
-        torch.div, grad, a, b, value, *args, **kwargs
-    ),
-)
 
-ttnn.attach_golden_function(
-    ttnn.mul_bw,
-    golden_function=lambda grad, a, b, *args, **kwargs: _golden_function_backward(
-        torch.mul, grad, a, b, *args, **kwargs
-    ),
-)
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.atan2, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.atan2_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.xlogy, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.xlogy_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.hypot, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.hypot_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.ldexp, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.ldexp_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.logaddexp, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.logaddexp_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.logaddexp2, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.logaddexp2_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    return _golden_function_backward("torch.squared_difference", grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.squared_difference_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, alpha=None, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_with_float(torch.sub, grad, a, b, alpha, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.subalpha_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, alpha=None, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_with_float(torch.add, grad, a, b, alpha, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.addalpha_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b=None, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_overload(torch.clone, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.assign_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, dim=None, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_with_dim(torch.concat, grad, a, b, dim, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.concat_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.rsub, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.rsub_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, value="none", *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_with_string("bias_gelu_bw", grad, a, b, value, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.bias_gelu_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function_bw(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.min, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.min_bw, golden_function=_golden_function_bw)
+
+
+def _golden_function(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.max, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.max_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad, a, b, value=None, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward_with_string(torch.div, grad, a, b, value, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.div_bw, golden_function=_golden_function)
+
+
+def _golden_function(grad, a, b, *args, **kwargs):
+    import torch
+
+    return _golden_function_backward(torch.mul, grad, a, b, *args, **kwargs)
+
+
+ttnn.attach_golden_function(ttnn.mul_bw, golden_function=_golden_function)
 
 
 __all__ = []
