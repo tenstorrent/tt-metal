@@ -121,7 +121,7 @@ update_package_list()
                 ;;
             build)
                 ub_buildtime_packages
-                PKG_LIST=("${UB_BUILD_LIST[@]}")
+                PKG_LIST=("${UB_BUILDTIME_LIST[@]}")
                 ;;
             baremetal)
                 ub_baremetal_packages
@@ -142,15 +142,22 @@ validate_packages()
     fi
 }
 
-prep_ubuntu()
+prep_ubuntu_runtime()
 {
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
-    apt install -y --no-install-recommends ca-certificates gpg wget
+}
+
+prep_ubuntu_build()
+{
+    echo "Preparing ubuntu ..."
+    # Update the list of available packages
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ focal main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
-    apt update
+    apt-get update
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
@@ -179,23 +186,28 @@ configure_hugepages() {
     echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
     TEMP_DIR=$(mktemp -d)
     wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
-    apt-get install $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    apt-get install -y --no-install-recommends $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
     systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
 }
 
 install() {
     if [ $FLAVOR == "ubuntu" ]; then
-        prep_ubuntu
-
         echo "Installing packages..."
-        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
 
 	case "$mode" in
+            runtime)
+                prep_ubuntu_runtime
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+                ;;
             build)
+                prep_ubuntu_build
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 install_llvm
                 ;;
             baremetal)
+                prep_ubuntu_build
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 install_llvm
                 configure_hugepages
                 ;;
