@@ -110,7 +110,7 @@ struct ShardSpecBuffer {
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
-    /* Shape in pages of the full tensor, not per core */
+    /* Shape in pages of the full shard */
     std::array<uint32_t, 2> shape_in_pages() const;
     DeviceAddr size() const;
 };
@@ -282,6 +282,7 @@ class Buffer final {
 
     IDevice* const device_;
     const DeviceAddr size_; // Size in bytes
+    const uint32_t num_pages_;
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;

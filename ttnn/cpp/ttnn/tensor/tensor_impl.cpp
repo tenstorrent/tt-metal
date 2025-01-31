@@ -518,11 +518,10 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
     TT_ASSERT(device != nullptr && "Need device to be set copy data from device to host!");
-    uint32_t size_in_bytes = device_buffer->size();
-    std::vector<T> data_vec;
+    uint32_t size_in_bytes = tensor.get_tensor_spec().compute_host_buffer_size_bytes();
+    std::vector<T> data_vec(size_in_bytes / sizeof(T));
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        data_vec.resize(size_in_bytes / sizeof(T));
         read_data_from_device_buffer<T>(device->command_queue(cq_id), device_buffer, data_vec.data(), blocking);
     } else {
         read_data_from_device_buffer<T>(device_buffer, data_vec);
@@ -618,13 +617,13 @@ std::shared_ptr<Buffer> to_device_buffer(
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
-                auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+                auto expected_host_buffer_size_bytes = tensor_spec.compute_host_buffer_size_bytes();
                 auto input_size_bytes = data_to_write.size() * sizeof(T);
                 TT_FATAL(
-                    input_size_bytes == expected_packed_buffer_size_bytes,
-                    "Host data with total size {}B does not match expected size {}B of device buffer!",
+                    input_size_bytes == expected_host_buffer_size_bytes,
+                    "Host data with total size {}B does not match expected size {}B of physical host buffer!",
                     input_size_bytes,
-                    expected_packed_buffer_size_bytes);
+                    expected_host_buffer_size_bytes);
                 return initialize_data_on_device<T>(data_to_write, device, tensor_spec, cq_id);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");
