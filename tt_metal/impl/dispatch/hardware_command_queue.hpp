@@ -9,140 +9,89 @@
 #include <memory>
 #include <thread>
 
+#include "command_queue.hpp"
+#include "host_runtime_commands.hpp"
 #include "command_queue_interface.hpp"
 #include "lock_free_queue.hpp"
 #include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
 #include "trace_buffer.hpp"
 
+#include "tt_metal/impl/buffers/dispatch.hpp"
+
 namespace tt::tt_metal {
-inline namespace v0 {
 
-class Event;
-
-}  // namespace v0
-
-namespace detail {
-
-// Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
-struct ReadBufferDescriptor {
-    TensorMemoryLayout buffer_layout;
-    uint32_t page_size;
-    uint32_t padded_page_size;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    void* dst;
-    uint32_t dst_offset;
-    uint32_t num_pages_read;
-    uint32_t cur_dev_page_id;
-    uint32_t starting_host_page_id;
-
-    ReadBufferDescriptor(
-        TensorMemoryLayout buffer_layout,
-        uint32_t page_size,
-        uint32_t padded_page_size,
-        void* dst,
-        uint32_t dst_offset,
-        uint32_t num_pages_read,
-        uint32_t cur_dev_page_id,
-        uint32_t starting_host_page_id = 0,
-        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
-        buffer_layout(buffer_layout),
-        page_size(page_size),
-        padded_page_size(padded_page_size),
-        buffer_page_mapping(buffer_page_mapping),
-        dst(dst),
-        dst_offset(dst_offset),
-        num_pages_read(num_pages_read),
-        cur_dev_page_id(cur_dev_page_id),
-        starting_host_page_id(starting_host_page_id) {}
-};
-
-// Used so host knows data in completion queue is just an event ID
-struct ReadEventDescriptor {
-    uint32_t event_id;
-    uint32_t global_offset;
-
-    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
-
-    void set_global_offset(uint32_t offset) { global_offset = offset; }
-    uint32_t get_global_event_id() { return global_offset + event_id; }
-};
-
-using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
-
-}  // namespace detail
-
-class CommandQueue {
+class HWCommandQueue : public CommandQueue {
 public:
-    CommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core = 0);
+    HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core = 0);
 
-    ~CommandQueue();
+    ~HWCommandQueue() override;
 
-    CoreCoord virtual_enqueue_program_dispatch_core;
-    CoreCoord completion_queue_writer_core;
-    NOC noc_index;
-    volatile bool is_dprint_server_hung();
-    volatile bool is_noc_hung();
+    const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
+    const CoreCoord& completion_queue_writer_core() const override;
 
-    void record_begin(const uint32_t tid, std::shared_ptr<TraceDescriptor> ctx);
-    void record_end();
-    void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems);
-    void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
+    volatile bool is_dprint_server_hung() override;
+    volatile bool is_noc_hung() override;
+
+    void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) override;
+    void record_end() override;
+    void set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) override;
+    void set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) override;
 
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data);
+        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) override;
 
-    uint32_t id() const;
-    std::optional<uint32_t> tid() const;
+    uint32_t id() const override;
+    std::optional<uint32_t> tid() const override;
 
-    SystemMemoryManager& sysmem_manager();
+    SystemMemoryManager& sysmem_manager() override;
 
-    void terminate();
+    void terminate() override;
 
     // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const;
-    void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers);
-    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index);
+    uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const override;
+    void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) override;
+    WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
-    void enqueue_trace(const uint32_t trace_id, bool blocking);
-    void enqueue_program(Program& program, bool blocking);
+    void enqueue_trace(const uint32_t trace_id, bool blocking) override;
+    void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
         std::shared_ptr<Buffer>& buffer,
         void* dst,
         const BufferRegion& region,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void enqueue_read_buffer(
         Buffer& buffer,
         void* dst,
         const BufferRegion& region,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     void enqueue_record_event(
         const std::shared_ptr<Event>& event,
         bool clear_count = false,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
-    void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false);
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false) override;
 
     void enqueue_write_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
         const BufferRegion& region,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void enqueue_write_buffer(
         Buffer& buffer,
         const void* src,
         const BufferRegion& region,
         bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
-    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids);
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
 
-    IDevice* device();
+    IDevice* device() override;
 
 private:
     uint32_t id_;
@@ -166,7 +115,7 @@ private:
     volatile uint32_t num_completed_completion_q_reads;  // completion queue reader thread increments this after reading
                                                          // an entry out of the completion queue
 
-    LockFreeQueue<detail::CompletionReaderVariant> issued_completion_q_reads;
+    LockFreeQueue<CompletionReaderVariant> issued_completion_q_reads;
     // These values are used to reset the host side launch message wptr after a trace is captured
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
@@ -184,6 +133,10 @@ private:
     std::condition_variable reads_processed_cv;
     std::mutex reads_processed_cv_mutex;
     CoreType get_dispatch_core_type();
+
+    CoreCoord virtual_enqueue_program_dispatch_core_;
+    CoreCoord completion_queue_writer_core_;
+    NOC noc_index_;
 
     void reset_worker_dispatch_state_on_device(bool reset_launch_msg_state);
     void reset_config_buffer_mgr(const uint32_t num_entries);

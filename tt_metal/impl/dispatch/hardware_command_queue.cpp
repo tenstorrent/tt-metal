@@ -2,15 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <command_queue.hpp>
+#include "hardware_command_queue.hpp"
+
 #include <device.hpp>
 #include "dprint_server.hpp"
 #include <event.hpp>
-#include <hardware_command_queue.hpp>
 #include <overloaded.hpp>
 #include <trace_buffer.hpp>
 
-#include "tt_metal/impl/buffers/dispatch.hpp"
+// Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
+// MUST REMOVE
+#include <program_impl.hpp>
+
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 
@@ -43,14 +46,14 @@ Buffer& get_buffer_object(const std::variant<std::reference_wrapper<Buffer>, std
 
 }  // namespace
 
-CommandQueue::CommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core) :
+HWCommandQueue::HWCommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t completion_queue_reader_core) :
     manager(device->sysmem_manager()),
     completion_queue_thread{},
     completion_queue_reader_core(completion_queue_reader_core) {
     ZoneScopedN("CommandQueue_constructor");
     this->device_ = device;
     this->id_ = id;
-    this->noc_index = noc_index;
+    this->noc_index_ = noc_index;
     this->num_entries_in_completion_q = 0;
     this->num_completed_completion_q_reads = 0;
 
@@ -76,16 +79,16 @@ CommandQueue::CommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t
                 dispatch_core_manager::instance().dispatcher_d_core(device_->id(), channel, id);
         }
     }
-    this->virtual_enqueue_program_dispatch_core =
+    this->virtual_enqueue_program_dispatch_core_ =
         device_->virtual_core_from_logical_core(enqueue_program_dispatch_core, core_type);
 
     tt_cxy_pair completion_q_writer_location =
         dispatch_core_manager::instance().completion_queue_writer_core(device_->id(), channel, this->id_);
 
-    this->completion_queue_writer_core = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
+    this->completion_queue_writer_core_ = CoreCoord(completion_q_writer_location.x, completion_q_writer_location.y);
 
     this->exit_condition = false;
-    std::thread completion_queue_thread = std::thread(&CommandQueue::read_completion_queue, this);
+    std::thread completion_queue_thread = std::thread(&HWCommandQueue::read_completion_queue, this);
     this->completion_queue_thread = std::move(completion_queue_thread);
     // Set the affinity of the completion queue reader.
     set_device_thread_affinity(this->completion_queue_thread, this->completion_queue_reader_core);
@@ -96,13 +99,13 @@ CommandQueue::CommandQueue(IDevice* device, uint32_t id, NOC noc_index, uint32_t
     reset_config_buffer_mgr(dispatch_constants::DISPATCH_MESSAGE_ENTRIES);
 }
 
-uint32_t CommandQueue::id() const { return this->id_; }
+uint32_t HWCommandQueue::id() const { return this->id_; }
 
-std::optional<uint32_t> CommandQueue::tid() const { return this->tid_; }
+std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 
-SystemMemoryManager& CommandQueue::sysmem_manager() { return this->manager; }
+SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager; }
 
-void CommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
+void HWCommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
     // Not needed for regular dispatch kernel
     if (!this->device_->dispatch_s_enabled()) {
         return;
@@ -116,7 +119,7 @@ void CommandQueue::set_num_worker_sems_on_dispatch(uint32_t num_worker_sems) {
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id_);
 }
 
-void CommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
+void HWCommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
     uint32_t pci_alignment = hal.get_alignment(HalMemType::HOST);
     uint32_t cmd_sequence_sizeB = align(
         sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + go_signal_noc_data.size() * sizeof(uint32_t), pci_alignment);
@@ -130,21 +133,22 @@ void CommandQueue::set_go_signal_noc_data_on_dispatch(const vector_memcpy_aligne
     this->manager.fetch_queue_write(cmd_sequence_sizeB, this->id_);
 }
 
-uint32_t CommandQueue::get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const {
+uint32_t HWCommandQueue::get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const {
     TT_FATAL(
         sub_device_index < dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
         "Expected sub_device_index to be less than dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
     return this->expected_num_workers_completed[sub_device_index];
 }
 
-void CommandQueue::set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) {
+void HWCommandQueue::set_expected_num_workers_completed_for_sub_device(
+    uint32_t sub_device_index, uint32_t num_workers) {
     TT_FATAL(
         sub_device_index < dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
         "Expected sub_device_index to be less than dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
     this->expected_num_workers_completed[sub_device_index] = num_workers;
 }
 
-void CommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_state) {
+void HWCommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_state) {
     auto num_sub_devices = device_->num_sub_devices();
     uint32_t go_signals_cmd_size = 0;
     if (reset_launch_msg_state) {
@@ -183,8 +187,8 @@ void CommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_s
         }
         go_msg_t reset_launch_message_read_ptr_go_signal;
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
-        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core.x;
-        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core.y;
+        reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)this->virtual_enqueue_program_dispatch_core_.x;
+        reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)this->virtual_enqueue_program_dispatch_core_.y;
         for (uint32_t i = 0; i < num_sub_devices; ++i) {
             reset_launch_message_read_ptr_go_signal.dispatch_message_offset =
                 (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(i);
@@ -225,7 +229,7 @@ void CommandQueue::reset_worker_dispatch_state_on_device(bool reset_launch_msg_s
     }
 }
 
-void CommandQueue::reset_worker_state(
+void HWCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
     TT_FATAL(!this->manager.get_bypass_mode(), "Cannot reset worker state during trace capture");
     // TODO: This could be further optimized by combining all of these into a single prefetch entry
@@ -239,7 +243,7 @@ void CommandQueue::reset_worker_state(
     }
 }
 
-CommandQueue::~CommandQueue() {
+HWCommandQueue::~HWCommandQueue() {
     ZoneScopedN("HWCommandQueue_destructor");
     if (this->exit_condition) {
         this->completion_queue_thread.join();  // We errored out already prior
@@ -257,7 +261,7 @@ CommandQueue::~CommandQueue() {
     }
 }
 
-void CommandQueue::increment_num_entries_in_completion_q() {
+void HWCommandQueue::increment_num_entries_in_completion_q() {
     // Increment num_entries_in_completion_q and inform reader thread
     // that there is work in the completion queue to process
     this->num_entries_in_completion_q++;
@@ -267,7 +271,7 @@ void CommandQueue::increment_num_entries_in_completion_q() {
     }
 }
 
-void CommandQueue::set_exit_condition() {
+void HWCommandQueue::set_exit_condition() {
     this->exit_condition = true;
     {
         std::lock_guard lock(this->reader_thread_cv_mutex);
@@ -275,17 +279,17 @@ void CommandQueue::set_exit_condition() {
     }
 }
 
-IDevice* CommandQueue::device() { return this->device_; }
+IDevice* HWCommandQueue::device() { return this->device_; }
 
 template <typename T>
-void CommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void HWCommandQueue::enqueue_command(T& command, bool blocking, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     command.process();
     if (blocking) {
         this->finish(sub_device_ids);
     }
 }
 
-void CommandQueue::enqueue_read_buffer(
+void HWCommandQueue::enqueue_read_buffer(
     std::shared_ptr<Buffer>& buffer,
     void* dst,
     const BufferRegion& region,
@@ -296,7 +300,7 @@ void CommandQueue::enqueue_read_buffer(
 
 // Read buffer command is enqueued in the issue region and device writes requested buffer data into the completion
 // region
-void CommandQueue::enqueue_read_buffer(
+void HWCommandQueue::enqueue_read_buffer(
     Buffer& buffer,
     void* dst,
     const BufferRegion& region,
@@ -348,7 +352,7 @@ void CommandQueue::enqueue_read_buffer(
     }
 }
 
-void CommandQueue::enqueue_write_buffer(
+void HWCommandQueue::enqueue_write_buffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
@@ -365,11 +369,11 @@ void CommandQueue::enqueue_write_buffer(
     this->enqueue_write_buffer(buffer_obj, data, region, blocking, sub_device_ids);
 }
 
-CoreType CommandQueue::get_dispatch_core_type() {
+CoreType HWCommandQueue::get_dispatch_core_type() {
     return dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
 }
 
-void CommandQueue::enqueue_write_buffer(
+void HWCommandQueue::enqueue_write_buffer(
     Buffer& buffer,
     const void* src,
     const BufferRegion& region,
@@ -389,7 +393,7 @@ void CommandQueue::enqueue_write_buffer(
     }
 }
 
-void CommandQueue::enqueue_program(Program& program, bool blocking) {
+void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
     std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
@@ -462,9 +466,9 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
     auto command = EnqueueProgramCommand(
         this->id_,
         this->device_,
-        this->noc_index,
+        this->noc_index_,
         program,
-        this->virtual_enqueue_program_dispatch_core,
+        this->virtual_enqueue_program_dispatch_core_,
         this->manager,
         this->get_config_buffer_mgr(sub_device_index),
         expected_workers_completed,
@@ -503,7 +507,7 @@ void CommandQueue::enqueue_program(Program& program, bool blocking) {
         expected_workers_completed);
 }
 
-void CommandQueue::enqueue_record_event(
+void HWCommandQueue::enqueue_record_event(
     const std::shared_ptr<Event>& event, bool clear_count, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
 
@@ -522,7 +526,7 @@ void CommandQueue::enqueue_record_event(
     auto command = EnqueueRecordEventCommand(
         this->id_,
         this->device_,
-        this->noc_index,
+        this->noc_index_,
         this->manager,
         event->event_id,
         this->expected_num_workers_completed,
@@ -536,12 +540,12 @@ void CommandQueue::enqueue_record_event(
             this->expected_num_workers_completed[id.to_index()] = 0;
         }
     }
-    this->issued_completion_q_reads.push(std::make_shared<detail::CompletionReaderVariant>(
-        std::in_place_type<detail::ReadEventDescriptor>, event->event_id));
+    this->issued_completion_q_reads.push(
+        std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
 }
 
-void CommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count) {
+void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
 
     auto command = EnqueueWaitForEventCommand(this->id_, this->device_, this->manager, *sync_event, clear_count);
@@ -552,7 +556,7 @@ void CommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_eve
     }
 }
 
-void CommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
+void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_trace");
 
     auto trace_inst = this->device_->get_trace(trace_id);
@@ -563,8 +567,8 @@ void CommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
         trace_inst->desc,
         *trace_inst->buffer,
         this->expected_num_workers_completed,
-        this->noc_index,
-        this->virtual_enqueue_program_dispatch_core);
+        this->noc_index_,
+        this->virtual_enqueue_program_dispatch_core_);
 
     this->enqueue_command(command, false, {});
 
@@ -593,7 +597,7 @@ void CommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
     }
 }
 
-void CommandQueue::read_completion_queue() {
+void HWCommandQueue::read_completion_queue() {
     chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_->id());
     uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_->id());
     while (true) {
@@ -622,7 +626,7 @@ void CommandQueue::read_completion_queue() {
                 std::visit(
                     [&](auto&& read_descriptor) {
                         using T = std::decay_t<decltype(read_descriptor)>;
-                        if constexpr (std::is_same_v<T, detail::ReadBufferDescriptor>) {
+                        if constexpr (std::is_same_v<T, ReadBufferDescriptor>) {
                             ZoneScopedN("CompletionQueueReadData");
                             buffer_dispatch::copy_completion_queue_data_into_user_space(
                                 read_descriptor,
@@ -631,7 +635,7 @@ void CommandQueue::read_completion_queue() {
                                 this->id_,
                                 this->manager,
                                 this->exit_condition);
-                        } else if constexpr (std::is_same_v<T, detail::ReadEventDescriptor>) {
+                        } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id_);
                             thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
@@ -671,7 +675,7 @@ void CommandQueue::read_completion_queue() {
     }
 }
 
-void CommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
@@ -697,11 +701,17 @@ void CommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     }
 }
 
-volatile bool CommandQueue::is_dprint_server_hung() { return dprint_server_hang; }
+volatile bool HWCommandQueue::is_dprint_server_hung() { return dprint_server_hang; }
 
-volatile bool CommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
+volatile bool HWCommandQueue::is_noc_hung() { return illegal_noc_txn_hang; }
 
-void CommandQueue::record_begin(const uint32_t tid, std::shared_ptr<TraceDescriptor> ctx) {
+const CoreCoord& HWCommandQueue::virtual_enqueue_program_dispatch_core() const {
+    return this->virtual_enqueue_program_dispatch_core_;
+}
+
+const CoreCoord& HWCommandQueue::completion_queue_writer_core() const { return this->completion_queue_writer_core_; }
+
+void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) {
     auto num_sub_devices = this->device_->num_sub_devices();
     // Record the original value of expected_num_workers_completed, and reset it to 0.
     std::copy(
@@ -738,7 +748,7 @@ void CommandQueue::record_begin(const uint32_t tid, std::shared_ptr<TraceDescrip
     }
 }
 
-void CommandQueue::record_end() {
+void HWCommandQueue::record_end() {
     auto& trace_data = this->trace_ctx->data;
     trace_data = std::move(this->manager.get_bypass_data());
     // Add command to terminate the trace buffer
@@ -776,7 +786,7 @@ void CommandQueue::record_end() {
     this->manager.set_bypass_mode(false, true);  // stop
 }
 
-void CommandQueue::terminate() {
+void HWCommandQueue::terminate() {
     ZoneScopedN("HWCommandQueue_terminate");
     TT_FATAL(!this->manager.get_bypass_mode(), "Terminate cannot be used with tracing");
     tt::log_debug(tt::LogDispatch, "Terminating dispatch kernels for command queue {}", this->id_);
@@ -784,9 +794,9 @@ void CommandQueue::terminate() {
     this->enqueue_command(command, false, {});
 }
 
-WorkerConfigBufferMgr& CommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr[index]; }
+WorkerConfigBufferMgr& HWCommandQueue::get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr[index]; }
 
-void CommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
+void HWCommandQueue::reset_config_buffer_mgr(const uint32_t num_entries) {
     for (uint32_t i = 0; i < num_entries; ++i) {
         this->config_buffer_mgr[i] = WorkerConfigBufferMgr();
         program_dispatch::initialize_worker_config_buf_mgr(this->config_buffer_mgr[i]);
