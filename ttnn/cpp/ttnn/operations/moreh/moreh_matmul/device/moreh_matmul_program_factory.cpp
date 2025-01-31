@@ -9,7 +9,7 @@
 
 namespace ttnn::operations::moreh::moreh_matmul {
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -28,7 +28,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& s
     }
 }
 
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::SimpleShape& a_shape, const ttnn::SimpleShape& b_shape) {
+ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
     ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);

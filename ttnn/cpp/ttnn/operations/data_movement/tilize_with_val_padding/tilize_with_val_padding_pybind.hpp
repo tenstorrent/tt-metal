@@ -46,7 +46,7 @@ void bind_tilize_with_val_padding(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SimpleShape& output_padded_shape,
+               const ttnn::Shape& output_padded_shape,
                const PadValue value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<DataType> output_dtype,

@@ -18,7 +18,7 @@
 
 namespace {
 
-void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::SimpleShape& input_shape) {
+void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -57,7 +57,7 @@ void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::SimpleSha
 }
 
 struct CreateTensorParams {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
 };
 
 }  // namespace
@@ -74,11 +74,11 @@ INSTANTIATE_TEST_SUITE_P(
     CreateTensorTestWithShape,
     CreateTensorTest,
     ::testing::Values(
-        CreateTensorParams{.shape = ttnn::SimpleShape({1, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({2, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0, 0, 0, 0})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0, 1, 32, 32})},
-        CreateTensorParams{.shape = ttnn::SimpleShape({0})}));
+        CreateTensorParams{.shape = ttnn::Shape({1, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({2, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({0, 0, 0, 0})},
+        CreateTensorParams{.shape = ttnn::Shape({0, 1, 32, 32})},
+        CreateTensorParams{.shape = ttnn::Shape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
     os << magic_enum::enum_name(value);
@@ -86,7 +86,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) 
 }
 
 using CombinationInputParams =
-    std::tuple<ttnn::SimpleShape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
+    std::tuple<ttnn::Shape, tt::tt_metal::DataType, tt::tt_metal::Layout, tt::tt_metal::MemoryConfig>;
 class EmptyTensorTest : public ttnn::TTNNFixtureWithDevice,
                         public ::testing::WithParamInterface<CombinationInputParams> {};
 
@@ -124,20 +124,20 @@ INSTANTIATE_TEST_SUITE_P(
     EmptyTensorTest,
     ::testing::Combine(
         ::testing::Values(
-            ttnn::SimpleShape({}),
-            ttnn::SimpleShape({0}),
-            ttnn::SimpleShape({1}),
-            ttnn::SimpleShape({1, 2}),
-            ttnn::SimpleShape({1, 2, 3}),
-            ttnn::SimpleShape({1, 2, 3, 4}),
-            // ttnn::SimpleShape({0, 0, 0, 0}), fails with width sharded case
-            ttnn::SimpleShape({1, 1, 1, 1}),
-            // ttnn::SimpleShape({0, 1, 32, 32}), fails with width sharded case
-            ttnn::SimpleShape({1, 1, 32, 32}),
-            ttnn::SimpleShape({2, 1, 32, 32}),
-            ttnn::SimpleShape({64, 1, 256, 1}),
-            ttnn::SimpleShape({1, 1, 21120, 16}),
-            ttnn::SimpleShape({1, 2, 3, 4, 5})),
+            ttnn::Shape({}),
+            ttnn::Shape({0}),
+            ttnn::Shape({1}),
+            ttnn::Shape({1, 2}),
+            ttnn::Shape({1, 2, 3}),
+            ttnn::Shape({1, 2, 3, 4}),
+            // ttnn::Shape({0, 0, 0, 0}), fails with width sharded case
+            ttnn::Shape({1, 1, 1, 1}),
+            // ttnn::Shape({0, 1, 32, 32}), fails with width sharded case
+            ttnn::Shape({1, 1, 32, 32}),
+            ttnn::Shape({2, 1, 32, 32}),
+            ttnn::Shape({64, 1, 256, 1}),
+            ttnn::Shape({1, 1, 21120, 16}),
+            ttnn::Shape({1, 2, 3, 4, 5})),
 
         ::testing::Values(
             tt::tt_metal::DataType::BFLOAT16,

@@ -73,7 +73,7 @@ int main() {
         // Let the tensor take ownership of the buffer
         OwnedStorage{std::move(buffer)},
         // IMPORTANT: SHAPE MUST BE 4D ELSE EVERYTHING WILL BREAK during the PAD operation
-        ttnn::SimpleShape({1, 1, tensor_width, tensor_height}),
+        ttnn::Shape({1, 1, tensor_width, tensor_height}),
         // The data type of the tensor
         tt::tt_metal::DataType::BFLOAT16,
         // The layout of the tensor. We don't care about the layout in this demo. But the valid options are TILE and

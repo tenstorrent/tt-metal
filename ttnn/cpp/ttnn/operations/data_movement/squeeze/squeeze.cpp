@@ -30,8 +30,8 @@ ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const in
 
     return ttnn::reshape(
         input_tensor,
-        ttnn::SimpleShape(std::move(original_logical_shape_vector)),
-        ttnn::SimpleShape(std::move(padded_shape_vector)));
+        ttnn::Shape(std::move(original_logical_shape_vector)),
+        ttnn::Shape(std::move(padded_shape_vector)));
 }
 
 }  // namespace ttnn::operations::data_movement

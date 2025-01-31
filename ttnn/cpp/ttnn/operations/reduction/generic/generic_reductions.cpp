@@ -195,7 +195,7 @@ static Tensor reduce_impl(
             TT_THROW("Unsupported reduction operation");
         }
     }
-    output_tensor = ttnn::reshape(output_tensor, ttnn::SimpleShape{output_shape});
+    output_tensor = ttnn::reshape(output_tensor, ttnn::Shape{output_shape});
     return output_tensor;
 }
 

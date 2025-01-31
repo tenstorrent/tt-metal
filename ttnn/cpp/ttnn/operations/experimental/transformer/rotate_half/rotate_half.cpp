@@ -22,7 +22,7 @@ Tensor RotateHalfOperation::invoke(const Tensor& input_tensor, const std::option
         input_tensor.get_padded_shape()[-1],
         tt::constants::TILE_WIDTH * 2);
 
-    ttnn::SimpleShape pad_shape =
+    ttnn::Shape pad_shape =
         ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_tensor.get_padded_shape());
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = Layout::TILE};

@@ -10,8 +10,7 @@
 
 namespace test_utils {
 
-void test_tensor_on_device(
-    const ttnn::SimpleShape& input_shape, const TensorLayout& layout, tt::tt_metal::IDevice* device) {
+void test_tensor_on_device(const ttnn::Shape& input_shape, const TensorLayout& layout, tt::tt_metal::IDevice* device) {
     using namespace tt::tt_metal;
 
     const uint32_t io_cq = 0;
@@ -48,7 +47,7 @@ void test_tensor_on_device(
     tensor.deallocate();
 }
 
-void test_tensor_on_device(const ttnn::SimpleShape& input_shape, const tt::tt_metal::TensorLayout& layout) {
+void test_tensor_on_device(const ttnn::Shape& input_shape, const tt::tt_metal::TensorLayout& layout) {
     tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(0);
 
     test_tensor_on_device(input_shape, layout, device);

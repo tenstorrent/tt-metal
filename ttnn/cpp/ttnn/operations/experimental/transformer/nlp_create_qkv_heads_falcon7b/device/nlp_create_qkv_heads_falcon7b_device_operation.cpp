@@ -25,7 +25,7 @@ void NlpCreateHeadsFalcon7BDeviceOperation::validate(const std::vector<Tensor>& 
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
-    TT_FATAL((input_shape == ttnn::SimpleShape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
+    TT_FATAL((input_shape == ttnn::Shape({input_shape[0], 1, input_shape[2], 4672})), "Unsupported input shape");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
@@ -40,9 +40,9 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsFalcon7BDeviceOperation::compute_out
     const auto input_shape = input_tensor.get_padded_shape();
     TensorLayout layout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config);
     return {
-        TensorSpec(SimpleShape({input_shape[0], 71, input_shape[2], 64}), layout),
-        TensorSpec(SimpleShape({input_shape[0], 1, input_shape[2], 64}), layout),
-        TensorSpec(SimpleShape({input_shape[0], 1, input_shape[2], 64}), layout)};
+        TensorSpec(Shape({input_shape[0], 71, input_shape[2], 64}), layout),
+        TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout),
+        TensorSpec(Shape({input_shape[0], 1, input_shape[2], 64}), layout)};
 }
 
 operation::ProgramWithCallbacks NlpCreateHeadsFalcon7BDeviceOperation::create_program(

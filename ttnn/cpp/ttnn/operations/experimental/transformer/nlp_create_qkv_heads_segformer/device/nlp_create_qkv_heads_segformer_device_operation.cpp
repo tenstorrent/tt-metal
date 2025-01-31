@@ -43,7 +43,7 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsSegformerDeviceOperation::compute_ou
     const auto head_dim = 32;                                      // head_dim is hard-coded = 32
     auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT;  // head_dim is hard-coded = 32
     TensorSpec spec(
-        SimpleShape({input_shape[0], num_heads, input_shape[2], head_dim}),
+        Shape({input_shape[0], num_heads, input_shape[2], head_dim}),
         TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
     return {spec, spec, spec};
 }

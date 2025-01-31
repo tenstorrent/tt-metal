@@ -1872,13 +1872,13 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
 
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const ttnn::SimpleShape input_shape_a = input_tensor_a.get_logical_shape();
-    const ttnn::SimpleShape input_shape_b = input_tensor_b.get_logical_shape();
+    const ttnn::Shape input_shape_a = input_tensor_a.get_logical_shape();
+    const ttnn::Shape input_shape_b = input_tensor_b.get_logical_shape();
     const uint32_t a_rank = input_shape_a.rank();
     const uint32_t b_rank = input_shape_b.rank();
     const uint32_t out_rank = std::max(a_rank, b_rank);
     const uint32_t rank_difference = out_rank - a_rank;
-    ttnn::SimpleShape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
+    ttnn::Shape output_shape = (b_rank > a_rank) ? input_shape_b : input_shape_a;
 
     for (auto index = 0; index < rank_difference; index++) {
         TT_FATAL(input_shape_b[index] == 1, "When in1 rank greater than in0 rank front dimensions need to be 1");

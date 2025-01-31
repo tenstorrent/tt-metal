@@ -23,7 +23,7 @@ namespace ttnn::operations::data_movement {
 std::vector<Tensor> fold_with_transpose_(
     uint8_t queue_id,
     const Tensor& input,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t pad_c,
@@ -73,8 +73,8 @@ std::vector<Tensor> fold_with_transpose_(
     // reshape
     n = transpose_hc_output.logical_shape()[0], w = transpose_hc_output.logical_shape()[1],
     c = transpose_hc_output.logical_shape()[2], h = transpose_hc_output.logical_shape()[3];
-    auto reshape_hc_output = ttnn::reshape_on_device(
-        transpose_hc_output, ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h}, L1_mem_config);
+    auto reshape_hc_output =
+        ttnn::reshape_on_device(transpose_hc_output, ttnn::Shape{n, (w / stride_w), (c * stride_w), h}, L1_mem_config);
 
     tt::log_debug("reshape_hc_output: {}", reshape_hc_output.logical_shape());
 
@@ -86,8 +86,8 @@ std::vector<Tensor> fold_with_transpose_(
     // reshape
     n = transpose_hw_output2.get_logical_shape()[0], w = transpose_hw_output2.get_logical_shape()[1],
     h = transpose_hw_output2.get_logical_shape()[2], c = transpose_hw_output2.get_logical_shape()[3];
-    auto reshape_hw_output = ttnn::reshape_on_device(
-        transpose_hw_output2, ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)}, L1_mem_config);
+    auto reshape_hw_output =
+        ttnn::reshape_on_device(transpose_hw_output2, ttnn::Shape{n, w, (h / stride_h), (c * stride_h)}, L1_mem_config);
 
     tt::log_debug("reshape_hw_output: {}", reshape_hw_output.get_logical_shape());
 
@@ -118,7 +118,7 @@ std::vector<Tensor> fold_with_transpose_(
 }
 
 ttnn::MemoryConfig create_sharded_memory_config(
-    ttnn::SimpleShape tensor_shape,
+    ttnn::Shape tensor_shape,
     CoreCoord grid_size,
     ShardOrientation orientation,
     const std::optional<MemoryConfig>& override_memory_config = std::nullopt) {
@@ -147,7 +147,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 std::vector<Tensor> fold_with_transpose_sharded_(
     uint8_t queue_id,
     const Tensor& input,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t pad_c,
@@ -192,8 +192,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // pad input tensor
     tt::tt_metal::Array4D padded_shape = {n, padded_c, padded_h32, w};
-    auto pad_mem_config =
-        create_sharded_memory_config(ttnn::SimpleShape(padded_shape), grid_size, shard_spec.orientation);
+    auto pad_mem_config = create_sharded_memory_config(ttnn::Shape(padded_shape), grid_size, shard_spec.orientation);
     auto tt_output_tensor = ttnn::pad(input, padded_shape, tt::tt_metal::Array4D({0, 0, pad_h, 0}), 0, pad_mem_config);
 
     tt::log_debug("pad_output: {}", tt_output_tensor.get_logical_shape());
@@ -207,8 +206,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     // pad tensor W dim
     tt::tt_metal::Array4D padded_shape2 = {n, padded_c, padded_h32, padded_w32};
-    auto pad_mem_config2 =
-        create_sharded_memory_config(ttnn::SimpleShape(padded_shape2), grid_size, shard_spec.orientation);
+    auto pad_mem_config2 = create_sharded_memory_config(ttnn::Shape(padded_shape2), grid_size, shard_spec.orientation);
     tt_output_tensor =
         ttnn::pad(tt_output_tensor, padded_shape2, tt::tt_metal::Array4D({0, 0, pad_w, 0}), 0, pad_mem_config2);
 
@@ -224,8 +222,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[1],
     c = tt_output_tensor.get_logical_shape()[2], h = tt_output_tensor.get_logical_shape()[3];
-    tt_output_tensor =
-        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, (w / stride_w), (c * stride_w), h});
+    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, (w / stride_w), (c * stride_w), h});
 
     tt::log_debug("reshape_hc_output: {}", tt_output_tensor.get_logical_shape());
 
@@ -239,8 +236,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // reshape
     n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[1],
     h = tt_output_tensor.get_logical_shape()[2], c = tt_output_tensor.get_logical_shape()[3];
-    tt_output_tensor =
-        ttnn::experimental::view(tt_output_tensor, ttnn::SimpleShape{n, w, (h / stride_h), (c * stride_h)});
+    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, w, (h / stride_h), (c * stride_h)});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.get_logical_shape());
 
@@ -261,7 +257,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
         tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
-            ttnn::SimpleShape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
+            ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
         tt_output_tensor =
             ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
@@ -274,7 +270,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
         tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
         tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
-            ttnn::SimpleShape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
+            ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
         tt_output_tensor =
             ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
 
@@ -292,7 +288,7 @@ Tensor FoldOperation::invoke(
     uint32_t stride_h,
     uint32_t stride_w,
     bool use_transpose_as_fold,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w,
@@ -329,7 +325,7 @@ Tensor FoldOperation::invoke(
     uint32_t stride_h,
     uint32_t stride_w,
     bool use_transpose_as_fold,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w,

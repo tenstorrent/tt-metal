@@ -25,7 +25,7 @@ void NlpKVCacheLoadSliceDeviceOperation::validate(const std::vector<Tensor>& inp
         TT_FATAL(this->output_tensor_start[i] <= this->output_tensor_end[i], "Error");
     }
 
-    SimpleShape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
+    Shape output_tensor_shape = this->compute_output_specs(input_tensors)[0].padded_shape();
     auto num_dims = input_tensor_a.get_padded_shape().rank();
     TT_FATAL(num_dims == 4, "Input tensor must be 4D");
     const auto input_shape = input_tensor_a.get_padded_shape();
@@ -68,7 +68,7 @@ std::vector<ttnn::TensorSpec> NlpKVCacheLoadSliceDeviceOperation::compute_output
     mem_config.shard_spec = shard_spec;
 
     return {TensorSpec(
-        SimpleShape(out_shape),
+        Shape(out_shape),
         TensorLayout(input_tensor_a.get_dtype(), PageConfig(input_tensor_a.get_layout()), mem_config))};
 }
 operation::ProgramWithCallbacks NlpKVCacheLoadSliceDeviceOperation::create_program(

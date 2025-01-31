@@ -96,12 +96,10 @@ static Tensor arange_impl(
             owned_buffer[index++] = static_cast<T>(value);
         }
     }
-    auto output = Tensor(
-                      OwnedStorage{owned_buffer},
-                      ttnn::SimpleShape{1, 1, 1, static_cast<uint32_t>(size)},
-                      data_type,
-                      Layout::ROW_MAJOR)
-                      .to(layout);
+    auto output =
+        Tensor(
+            OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
+            .to(layout);
     if (device.has_value()) {
         output = output.to(device->get_devices(), output_mem_config);
     }
@@ -111,7 +109,7 @@ static Tensor arange_impl(
 template <typename T>
 static Tensor full_impl(
     uint8_t queue_id,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     T value,
     const Layout layout,
     const std::vector<IDevice*>& devices,
@@ -152,7 +150,7 @@ static Tensor full_impl(
 template <typename T>
 inline ttnn::Tensor full_impl(
     uint8_t queue_id,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
@@ -166,7 +164,7 @@ inline ttnn::Tensor full_impl(
                                                              : layout.value_or(ttnn::ROW_MAJOR_LAYOUT);
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().get_dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
-    ttnn::SimpleShape shape_value =
+    ttnn::Shape shape_value =
         optional_output_tensor.has_value() ? optional_output_tensor.value().get_logical_shape() : shape;
     MemoryConfig mem_cfg = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                               : memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
@@ -188,7 +186,7 @@ inline ttnn::Tensor full_impl(
 
 template <typename T>
 inline ttnn::Tensor full(
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<Layout>& layout = std::nullopt,
@@ -212,7 +210,7 @@ struct FullWith {
     static constexpr auto fill_value = FillValue.invoke();
 
     static ttnn::Tensor invoke(
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
         detail::OptionalAnyDevice device = std::nullopt,
@@ -321,7 +319,7 @@ inline constexpr OnesLike ones_like{};
 
 struct Empty {
     static ttnn::Tensor invoke(
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         const DataType& dtype,
         const Layout& layout,
         ttnn::AnyDevice device,
@@ -354,7 +352,7 @@ struct Full {
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
     static ttnn::Tensor invoke(
         uint8_t queue_id,
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
@@ -375,7 +373,7 @@ struct Full {
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
     static ttnn::Tensor invoke(
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,

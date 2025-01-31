@@ -7,7 +7,7 @@
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
+ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     auto layout = tensor.get_layout();
     auto tensor_shape = tensor.get_logical_shape();
     // First Case, No reshape Required

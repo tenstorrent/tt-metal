@@ -91,7 +91,7 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
     }
 
     return TensorSpec(
-        ttnn::SimpleShape(std::move(shape)),
+        ttnn::Shape(std::move(shape)),
         TensorLayout(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

@@ -155,8 +155,8 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    ttnn::SimpleShape output_shape({output_dim});
-    ttnn::SimpleShape output_shape_wo_padding = output_shape;
+    ttnn::Shape output_shape({output_dim});
+    ttnn::Shape output_shape_wo_padding = output_shape;
     output_shape_wo_padding[output_rank - 2] = h_wo_padding;
     output_shape_wo_padding[output_rank - 1] = w_wo_padding;
     return TensorSpec(

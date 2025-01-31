@@ -83,8 +83,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
-    const ttnn::SimpleShape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
-    const ttnn::SimpleShape output_shape({1, 1, out_nhw, out_c});
+    const ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+    const ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {

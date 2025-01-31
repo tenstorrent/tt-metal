@@ -128,11 +128,11 @@ NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation
         head_dim = (head_dim / TILE_WIDTH + 1) * TILE_WIDTH;
     }
 
-    const SimpleShape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
-    const SimpleShape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
-    const SimpleShape k_output_shape =
+    const Shape q_output_shape({input_shape[0], operation_attributes.num_q_heads, sequence_length, head_dim});
+    const Shape v_output_shape({input_shape[0], operation_attributes.num_kv_heads, sequence_length, head_dim});
+    const Shape k_output_shape =
         operation_attributes.transpose_k_heads
-            ? SimpleShape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
+            ? Shape({input_shape[0], operation_attributes.num_kv_heads, head_dim, sequence_length})
             : v_output_shape;
 
     if (operation_attributes.output_mem_config.is_sharded()) {

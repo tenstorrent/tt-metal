@@ -9,18 +9,18 @@
 
 namespace ttml::init {
 
-void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, UniformRange range);
+void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, UniformRange range);
 
-void normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, NormalParams params);
+void normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, NormalParams params);
 
-void constant_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, float value);
+void constant_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, float value);
 
-void xavier_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, FanParams params);
+void xavier_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, FanParams params);
 
-void xavier_normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, FanParams params);
+void xavier_normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, FanParams params);
 
-void kaiming_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, int fan_in);
+void kaiming_uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, int fan_in);
 
-void kaiming_normal_init(ttml::autograd::TensorPtr& t, const ttnn::SimpleShape& shape, int fan_out);
+void kaiming_normal_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, int fan_out);
 
 }  // namespace ttml::init

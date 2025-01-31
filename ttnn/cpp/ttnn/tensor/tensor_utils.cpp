@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
+const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape) {
     int64_t old_volume = tensor.get_logical_volume();
     int64_t new_volume = 1;
     int64_t index_of_negative_1 = -1;
@@ -53,7 +53,7 @@ const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Sp
         new_shape[index_of_negative_1] = old_volume / new_volume;
     }
 
-    return ttnn::SimpleShape(std::move(new_shape));
+    return ttnn::Shape(std::move(new_shape));
 }
 
 bool is_arch_gs(const tt::ARCH& arch) { return arch == tt::ARCH::GRAYSKULL; }

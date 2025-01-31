@@ -20,7 +20,7 @@ using MassagedTilize = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
-    auto original_shape = std::make_shared<SimpleShape>();
+    auto original_shape = std::make_shared<Shape>();
     return MassagedTilize(MassagedTilizeParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
             return input_tensor.get_logical_shape().rank() > 4;

@@ -14,8 +14,8 @@ std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string
 /**
  * Return the input shape (excluding depth)
  */
-ttnn::SimpleShape SlidingWindowConfig::get_input_shape() const {
-    return ttnn::SimpleShape({batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
+ttnn::Shape SlidingWindowConfig::get_input_shape() const {
+    return ttnn::Shape({batch_size, std::get<0>(input_hw), std::get<1>(input_hw)});
 }
 
 bool SlidingWindowConfig::has_parallel_config() const {
@@ -24,7 +24,7 @@ bool SlidingWindowConfig::has_parallel_config() const {
 /**
  * Calculate the window op output shape, excludes the channel dimension since this config is independent of the depth.
  */
-ttnn::SimpleShape SlidingWindowConfig::get_output_shape() const {
+ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     if (is_transpose) {
         TT_FATAL(!ceil_mode, "ceil_mode is not supported for transposed operation");
 
@@ -42,7 +42,7 @@ ttnn::SimpleShape SlidingWindowConfig::get_output_shape() const {
             output_h,
             output_w,
             "is_transpose==True");
-        return ttnn::SimpleShape({batch_size, output_h, output_w, 0});
+        return ttnn::Shape({batch_size, output_h, output_w, 0});
     }
 
     uint32_t output_h;
@@ -66,13 +66,13 @@ ttnn::SimpleShape SlidingWindowConfig::get_output_shape() const {
         output_w = input_hw.second;
     }
     log_debug(tt::LogOp, "SlidingWindowConfig::get_output_shape():: {} {} {}", batch_size, output_h, output_w);
-    return ttnn::SimpleShape({batch_size, output_h, output_w, 0});
+    return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
 uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
     uint32_t ceil_padding_h = 0;
     if (ceil_mode) {
-        ttnn::SimpleShape output_shape = get_output_shape();
+        ttnn::Shape output_shape = get_output_shape();
         // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
         ceil_padding_h = stride_hw.first * (output_shape[1] - 1) + window_hw.first - input_hw.first - 2 * pad_hw.first;
     }
@@ -83,7 +83,7 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
 uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
     uint32_t ceil_padding_w = 0;
     if (ceil_mode) {
-        ttnn::SimpleShape output_shape = get_output_shape();
+        ttnn::Shape output_shape = get_output_shape();
         // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
         ceil_padding_w =
             stride_hw.second * (output_shape[2] - 1) + window_hw.second - input_hw.second - 2 * pad_hw.second;
@@ -92,14 +92,14 @@ uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
     return ceil_padding_w;
 }
 
-ttnn::SimpleShape SlidingWindowConfig::get_transposed_full_input_shape() const {
+ttnn::Shape SlidingWindowConfig::get_transposed_full_input_shape() const {
     TT_FATAL(
         is_transpose == true,
         "SlidingWindowConfig::get_transposed_full_input_shape() is only valid for transposed operation");
     auto output_shape = get_output_shape();
     uint32_t full_input_height = output_shape[1] + dilation_hw.first * (window_hw.first - 1);
     uint32_t full_input_width = output_shape[2] + dilation_hw.second * (window_hw.second - 1);
-    return ttnn::SimpleShape({batch_size, full_input_height, full_input_width, 0});
+    return ttnn::Shape({batch_size, full_input_height, full_input_width, 0});
 }
 
 std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() const {
@@ -126,7 +126,7 @@ std::array<uint32_pair_t, 2> SlidingWindowConfig::get_transposed_real_padding() 
  */
 uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     TT_ASSERT(has_parallel_config(), "Parallel config is not set in SlidingWindowConfig");
-    ttnn::SimpleShape output_shape = get_output_shape();
+    ttnn::Shape output_shape = get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (snap_to_tile ? tt::constants::TILE_HEIGHT : 1));
@@ -194,7 +194,7 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
 }
 
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
-    ttnn::SimpleShape output_shape = config.get_output_shape();
+    ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
 
@@ -292,7 +292,7 @@ std::vector<std::pair<bool, uint32_pair_t>> generate_tensor_metadata(
     const SlidingWindowConfig& config,
     uint32_t reshard_num_cores_nhw,
     bool is_in_tiled) {
-    ttnn::SimpleShape input_shape = config.get_input_shape();
+    ttnn::Shape input_shape = config.get_input_shape();
     uint32_t input_nhw = input_shape[0] * input_shape[1] * input_shape[2];
     uint32_t input_nhw_padded;
     if (is_in_tiled) {
@@ -628,7 +628,7 @@ Tensor construct_on_host_config_tensor(
     // we need the last dim of tensors to be multiple of 2, pad if needed
     uint32_t extend_with_zeroes = config[0].size() % 2;
     extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
-    ttnn::SimpleShape config_shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
+    ttnn::Shape config_shape({(uint32_t)config.size(), (uint32_t)config[0].size() + extend_with_zeroes});
     std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
     if (p_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
@@ -641,7 +641,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = ttnn::SimpleShape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else if (p_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         TT_ASSERT(p_config.grid.ranges().size() == 1, "BLOCK_SHARDED should have just a single core range");
@@ -671,7 +671,7 @@ Tensor construct_on_host_config_tensor(
             repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
         }
         auto config_buffer = owned_buffer::create<uint16_t>(std::move(repeat_config));
-        config_shape = ttnn::SimpleShape({config_shape[0] * repeat_factor, config_shape[1]});
+        config_shape = ttnn::Shape({config_shape[0] * repeat_factor, config_shape[1]});
         return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
     } else {
         TT_ASSERT(false, "Unsupported shard scheme");

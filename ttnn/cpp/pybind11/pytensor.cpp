@@ -207,7 +207,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     py::object np = py::module_::import("numpy");
 
     auto py_dtype = py_tensor.attr("dtype");
-    auto shape = ttnn::SimpleShape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
+    auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     DataType data_type;
 
@@ -342,7 +342,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         TT_THROW("The argument must be of type torch.Tensor or numpy.ndarray!");
     }
 
-    // TODO: Remove check of num_elements from python against volume of ttnn::SimpleShape
+    // TODO: Remove check of num_elements from python against volume of ttnn::Shape
     TT_FATAL(
         num_elements == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
@@ -759,8 +759,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(
-                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})));
+                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})));
             }),
             py::arg("data"),
             py::arg("shape"),
@@ -802,8 +801,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(
-                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
+                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
             }),
             py::keep_alive<1, 6>(),
@@ -858,8 +856,7 @@ void pytensor_module(py::module& m_tensor) {
                           const std::optional<Tile>& tile) {
                 return Tensor::from_vector(
                     std::move(data),
-                    TensorSpec(
-                        ttnn::SimpleShape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
+                    TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
             }),
             py::keep_alive<1, 7>(),
@@ -1174,8 +1171,7 @@ void pytensor_module(py::module& m_tensor) {
                const std::array<uint32_t, 4>& output_tensor_shape,
                const std::array<uint32_t, 4>& input_tensor_start,
                float pad_value) {
-                return self.pad(
-                    ttnn::SimpleShape(output_tensor_shape), ttnn::SimpleShape(input_tensor_start), pad_value);
+                return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
             R"doc(
             Pad TT Tensor with given pad value ``arg2``.
@@ -1248,7 +1244,7 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self,
                const std::array<uint32_t, 4>& output_tensor_start,
                const std::array<uint32_t, 4>& output_tensor_end) {
-                return self.unpad(ttnn::SimpleShape(output_tensor_start), ttnn::SimpleShape(output_tensor_end));
+                return self.unpad(ttnn::Shape(output_tensor_start), ttnn::Shape(output_tensor_end));
             },
             R"doc(
             Unpad this TT Tensor.
@@ -1370,7 +1366,7 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "unpad_from_tile",
             [](const Tensor& self, const ttnn::SmallVector<uint32_t>& output_tensor_shape) {
-                return self.unpad_from_tile(ttnn::SimpleShape(output_tensor_shape));
+                return self.unpad_from_tile(ttnn::Shape(output_tensor_shape));
             },
             R"doc(
             Unpads TT Tensor from given input tensor ``arg0``.
@@ -1664,7 +1660,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "reshape",
-            [](Tensor& self, const ttnn::SimpleShape& shape) -> Tensor { return ttnn::reshape(self, shape); },
+            [](Tensor& self, const ttnn::Shape& shape) -> Tensor { return ttnn::reshape(self, shape); },
             R"doc(
                 Reshapes TT tensor
 

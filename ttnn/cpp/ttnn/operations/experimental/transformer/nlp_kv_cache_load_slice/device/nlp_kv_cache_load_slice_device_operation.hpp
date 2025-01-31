@@ -13,16 +13,13 @@
 namespace ttnn::operations::experimental::transformer {
 
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 struct NlpKVCacheLoadSliceDeviceOperation {
-    const ttnn::SimpleShape output_tensor_start;
-    const ttnn::SimpleShape output_tensor_end;
-    const ttnn::SimpleShape output_shape;
-    const ttnn::SimpleShape input_shape;
+    const ttnn::Shape output_tensor_start;
+    const ttnn::Shape output_tensor_end;
+    const ttnn::Shape output_shape;
+    const ttnn::Shape input_shape;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

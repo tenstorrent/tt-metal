@@ -589,7 +589,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::create_worker_slice_shapes_
 }
 
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -795,7 +795,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -1206,7 +1206,7 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,

@@ -23,24 +23,24 @@ using ::testing::FloatNear;
 using ::testing::Pointwise;
 
 template <typename... Args>
-testing::Matcher<ttnn::SimpleShape> ShapeIs(Args... args) {
-    return testing::Eq(ttnn::SimpleShape({args...}));
+testing::Matcher<ttnn::Shape> ShapeIs(Args... args) {
+    return testing::Eq(ttnn::Shape({args...}));
 }
 
-const std::vector<ttnn::SimpleShape>& get_shapes_for_test() {
-    static auto* shapes = new std::vector<ttnn::SimpleShape>{
-        ttnn::SimpleShape{1},
-        ttnn::SimpleShape{1, 1, 1, 1},
-        ttnn::SimpleShape{1, 1, 1, 10},
-        ttnn::SimpleShape{1, 32, 32, 16},
-        ttnn::SimpleShape{1, 40, 3, 128},
-        ttnn::SimpleShape{2, 2},
-        ttnn::SimpleShape{1, 1, 1, 1, 10},
+const std::vector<ttnn::Shape>& get_shapes_for_test() {
+    static auto* shapes = new std::vector<ttnn::Shape>{
+        ttnn::Shape{1},
+        ttnn::Shape{1, 1, 1, 1},
+        ttnn::Shape{1, 1, 1, 10},
+        ttnn::Shape{1, 32, 32, 16},
+        ttnn::Shape{1, 40, 3, 128},
+        ttnn::Shape{2, 2},
+        ttnn::Shape{1, 1, 1, 1, 10},
     };
     return *shapes;
 }
 
-TensorSpec get_tensor_spec(const ttnn::SimpleShape& shape, DataType dtype, Layout layout = Layout::ROW_MAJOR) {
+TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtype, Layout layout = Layout::ROW_MAJOR) {
     return TensorSpec(shape, TensorLayout(dtype, layout, MemoryConfig{}));
 }
 
@@ -74,7 +74,7 @@ TYPED_TEST(VectorConversionTest, Roundtrip) {
 }
 
 TYPED_TEST(VectorConversionTest, InvalidSize) {
-    ttnn::SimpleShape shape{32, 32};
+    ttnn::Shape shape{32, 32};
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
@@ -82,7 +82,7 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
 }
 
 TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
-    ttnn::SimpleShape shape{128, 128};
+    ttnn::Shape shape{128, 128};
 
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
@@ -93,7 +93,7 @@ TYPED_TEST(VectorConversionTest, RoundtripTilezedLayout) {
 }
 
 TYPED_TEST(VectorConversionTest, InvalidDtype) {
-    ttnn::SimpleShape shape{32, 32};
+    ttnn::Shape shape{32, 32};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
     EXPECT_ANY_THROW(Tensor::from_vector(
@@ -125,14 +125,14 @@ TEST(FloatVectorConversionTest, RoundtripBfloat16) {
 class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType> {};
 
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
-    ttnn::SimpleShape shape{32, 32};
+    ttnn::Shape shape{32, 32};
     // Block float types are only supported in TILE layout.
     EXPECT_ANY_THROW(
         Tensor::from_vector(std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
 }
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
-    ttnn::SimpleShape shape{32, 32};
+    ttnn::Shape shape{32, 32};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE)).to_vector<float>();
@@ -140,7 +140,7 @@ TEST_P(BlockFloatVectorConversionTest, Roundtrip) {
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
-    ttnn::SimpleShape shape{14, 47};
+    ttnn::Shape shape{14, 47};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     auto output = Tensor::from_vector(input, get_tensor_spec(shape, GetParam(), Layout::TILE));
@@ -152,7 +152,7 @@ TEST_P(BlockFloatVectorConversionTest, RoundtripWithPadding) {
 }
 
 TEST_P(BlockFloatVectorConversionTest, RoundtripWithPaddingAndCustomTile) {
-    ttnn::SimpleShape shape{14, 47};
+    ttnn::Shape shape{14, 47};
     std::vector<float> input = arange<float>(0, shape.volume(), 1, /*cap=*/32);
 
     TensorSpec spec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE, Tile({16, 16})), MemoryConfig{}));
@@ -172,7 +172,7 @@ INSTANTIATE_TEST_SUITE_P(
 using DeviceVectorConversionTest = TTNNFixtureWithDevice;
 
 TEST_F(DeviceVectorConversionTest, RoundtripWithMemoryConfig) {
-    ttnn::SimpleShape shape{128, 128};
+    ttnn::Shape shape{128, 128};
 
     auto input = arange<float>(0, shape.volume(), 1);
 

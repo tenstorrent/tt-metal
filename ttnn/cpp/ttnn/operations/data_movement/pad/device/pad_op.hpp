@@ -12,9 +12,9 @@
 namespace ttnn::operations::data_movement {
 
 struct Pad {
-    const ttnn::SimpleShape output_logical_shape;
-    const ttnn::SimpleShape output_padded_shape;
-    const ttnn::SimpleShape input_tensor_start;
+    const ttnn::Shape output_logical_shape;
+    const ttnn::Shape output_padded_shape;
+    const ttnn::Shape input_tensor_start;
     const float pad_value;
     const tt::tt_metal::MemoryConfig output_mem_config;
     const bool use_multicore;

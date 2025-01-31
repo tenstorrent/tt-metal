@@ -66,13 +66,13 @@ MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_s
 
     if (operation_attributes.untilize_out) {
         return TensorSpec(
-            SimpleShape({num_elems}),
+            Shape({num_elems}),
             TensorLayout(
                 operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
     }
 
     return TensorSpec(
-        SimpleShape({1, num_elems}),
+        Shape({1, num_elems}),
         TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 

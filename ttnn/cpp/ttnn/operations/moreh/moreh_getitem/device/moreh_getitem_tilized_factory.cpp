@@ -69,8 +69,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         new_output_padded_shape[index + output_dim_offset] = output_shape[index];
     }
 
-    ttnn::SimpleShape input_5d_shape(new_input_padded_shape);
-    ttnn::SimpleShape output_5d_shape(new_output_padded_shape);
+    ttnn::Shape input_5d_shape(new_input_padded_shape);
+    ttnn::Shape output_5d_shape(new_output_padded_shape);
 
     bool is_w_index_exist = false;
     for (auto dim : index_dims) {
@@ -79,8 +79,8 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
         }
     }
 
-    ttnn::SimpleShape input_5d_shape_without_padding(new_input_shape);
-    ttnn::SimpleShape output_5d_shape_without_padding(new_output_shape);
+    ttnn::Shape input_5d_shape_without_padding(new_input_shape);
+    ttnn::Shape output_5d_shape_without_padding(new_output_shape);
 
     auto index_layout = index_tensors.front().get_layout();
     bool is_row_major_index = (index_layout == Layout::ROW_MAJOR);

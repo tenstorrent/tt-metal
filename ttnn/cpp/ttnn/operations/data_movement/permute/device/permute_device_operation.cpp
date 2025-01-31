@@ -64,7 +64,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
     }
 
     return TensorSpec(
-        SimpleShape(std::move(shape)),
+        Shape(std::move(shape)),
         TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), attributes.output_mem_config));
 }
 

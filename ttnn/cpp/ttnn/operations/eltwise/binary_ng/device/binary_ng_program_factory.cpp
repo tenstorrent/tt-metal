@@ -83,7 +83,7 @@ void set_or_update_runtime_arguments(
     const auto& b = tensor_args.input_tensor_b;
 
     const auto ashape = a.padded_shape();
-    const auto bshape = b.has_value() ? b->padded_shape() : SimpleShape{1, 1};
+    const auto bshape = b.has_value() ? b->padded_shape() : Shape{1, 1};
     const auto cshape = c.padded_shape();
 
     const auto [aN, aC, aHt, aWt] = get_shape_dims(a);

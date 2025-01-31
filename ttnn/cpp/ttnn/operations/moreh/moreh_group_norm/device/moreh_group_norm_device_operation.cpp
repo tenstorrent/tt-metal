@@ -83,7 +83,7 @@ MorehGroupNormOperation::spec_return_value_t MorehGroupNormOperation::compute_ou
     const auto output_shape = tensor_args.input.get_logical_shape();
     const auto N = output_shape[0];
     const auto num_groups = operation_attributes.num_groups;
-    SimpleShape mean_rstd_shape({1, 1, N, num_groups});
+    Shape mean_rstd_shape({1, 1, N, num_groups});
 
     std::vector<std::optional<TensorSpec>> result;
     result.reserve(3);

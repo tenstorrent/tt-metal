@@ -25,7 +25,7 @@ void NlpCreateHeadsVitDeviceOperation::validate(const std::vector<Tensor>& input
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
 
     TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
-    TT_FATAL((input_shape == ttnn::SimpleShape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported input shape");
+    TT_FATAL((input_shape == ttnn::Shape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported input shape");
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
@@ -38,7 +38,7 @@ std::vector<ttnn::TensorSpec> NlpCreateHeadsVitDeviceOperation::compute_output_s
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_padded_shape();
     TensorSpec spec(
-        SimpleShape({input_shape[0], 12, input_shape[2], 64}),
+        Shape({input_shape[0], 12, input_shape[2], 64}),
         TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
     return {spec, spec, spec};
 }

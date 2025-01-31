@@ -35,7 +35,7 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
 std::vector<ttnn::TensorSpec> RepeatDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    ttnn::SimpleShape shape_out = input_tensor.get_logical_shape();
+    ttnn::Shape shape_out = input_tensor.get_logical_shape();
     shape_out[this->repeat_dim] *= this->num_repeats;
     return {TensorSpec(
         shape_out, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};

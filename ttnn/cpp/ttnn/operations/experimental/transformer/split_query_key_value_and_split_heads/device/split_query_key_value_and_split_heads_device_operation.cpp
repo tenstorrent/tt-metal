@@ -15,8 +15,7 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_with_output_tensors(
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_padded_shape()[0];
     // TODO: See issue #1744
-    TT_FATAL(
-        (input_tensor.get_padded_shape() == ttnn::SimpleShape({batch_size, 1, 384, 3072})), "Unsupported input shape");
+    TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 3072})), "Unsupported input shape");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
@@ -78,22 +77,22 @@ std::vector<ttnn::TensorSpec> SplitFusedQKVAndSplitHeadsDeviceOperation::compute
         auto mem_config_k = this->output_mem_config;
         mem_config_k.shard_spec = shard_spec_k;
         auto out_tensor_q = TensorSpec(
-            SimpleShape({batch_size, num_heads, M, K}),
+            Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_qv));
         auto out_tensor_k = TensorSpec(
-            SimpleShape({batch_size, num_heads, K, M}),
+            Shape({batch_size, num_heads, K, M}),
             TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_k));
         auto out_tensor_v = TensorSpec(
-            SimpleShape({batch_size, num_heads, M, K}),
+            Shape({batch_size, num_heads, M, K}),
             TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), mem_config_qv));
         return {out_tensor_q, out_tensor_k, out_tensor_v};
     }
 
     TensorLayout layout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config);
     return {
-        TensorSpec(SimpleShape({batch_size, this->num_heads, M, K}), layout),
-        TensorSpec(SimpleShape({batch_size, this->num_heads, K, M}), layout),
-        TensorSpec(SimpleShape({batch_size, this->num_heads, M, K}), layout),
+        TensorSpec(Shape({batch_size, this->num_heads, M, K}), layout),
+        TensorSpec(Shape({batch_size, this->num_heads, K, M}), layout),
+        TensorSpec(Shape({batch_size, this->num_heads, M, K}), layout),
     };
 }
 

@@ -108,7 +108,7 @@ Tensor to_layout_impl(
             SmallVector<uint32_t> new_padded_shape(2, 1);
             new_padded_shape[1] = tensor.get_padded_shape()[-1];
             new_padded_shape[0] = tensor.get_padded_shape()[-2];
-            tensor = ttnn::experimental::view(tensor, tensor.get_logical_shape(), SimpleShape(new_padded_shape));
+            tensor = ttnn::experimental::view(tensor, tensor.get_logical_shape(), Shape(new_padded_shape));
         }
     }
 
@@ -146,7 +146,7 @@ Tensor to_layout_impl(
                 output_memory_config =
                     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
-            SimpleShape output_tensor_end(SmallVector<uint32_t>(tensor.get_padded_shape().rank(), 0));
+            Shape output_tensor_end(SmallVector<uint32_t>(tensor.get_padded_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
@@ -154,7 +154,7 @@ Tensor to_layout_impl(
 
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
-            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
+            return ttnn::reshape(tensor, ttnn::Shape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
             if (tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -177,7 +177,7 @@ Tensor to_layout_impl(
 
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
-                    SimpleShape(padded_output_shape),
+                    Shape(padded_output_shape),
                     pad_value_variant,
                     output_memory_config,
                     dtype,
@@ -198,14 +198,13 @@ Tensor to_layout_impl(
         } else if (layout == ttnn::ROW_MAJOR_LAYOUT) {
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             tensor = tensor.unpad_from_tile(tensor.get_logical_shape());
-            return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
+            return ttnn::reshape(tensor, ttnn::Shape{output_shape});
         } else if (layout == ttnn::TILE_LAYOUT) {
             SmallVector<uint32_t> padded_input_start;
             for (int index = 0; index < padded_output_shape.rank(); ++index) {
                 padded_input_start.push_back(0);
             }
-            tensor =
-                tensor.pad(ttnn::SimpleShape(padded_output_shape), ttnn::SimpleShape(std::move(padded_input_start)), 0);
+            tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
             tensor = device ? tensor.to(layout, device) : tensor.to(layout);
             return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
         } else {

@@ -73,7 +73,7 @@ std::vector<TensorSpec> EmbeddingBackward::compute_output_specs(
     const auto &grad_tensor = input_tensors.at(1);
     auto embedding_dim = grad_tensor.get_logical_shape()[-1];
 
-    ttnn::SimpleShape output_shape({1, 1, this->num_embeddings, embedding_dim});
+    ttnn::Shape output_shape({1, 1, this->num_embeddings, embedding_dim});
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
 }
 

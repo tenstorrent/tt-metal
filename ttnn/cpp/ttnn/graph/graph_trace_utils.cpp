@@ -15,7 +15,7 @@
 namespace ttnn::graph {
 
 namespace {
-ttnn::SimpleShape parse_shape(std::string_view shape_string) {
+ttnn::Shape parse_shape(std::string_view shape_string) {
     // Extract shape values from string like "ttnn.Shape([1, 3, 32, 32])"
     auto start = shape_string.find('[') + 1;
     auto end = shape_string.find(']');
@@ -42,7 +42,7 @@ ttnn::SimpleShape parse_shape(std::string_view shape_string) {
         }
     }
 
-    return ttnn::SimpleShape(std::move(shape));
+    return ttnn::Shape(std::move(shape));
 }
 }  // namespace
 

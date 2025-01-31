@@ -116,9 +116,9 @@ std::vector<ttnn::TensorSpec> NLPCreateHeadsDecodeDeviceOperation::compute_outpu
 
     auto head_dim = this->head_dim;
 
-    const SimpleShape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});
-    const SimpleShape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
-    const SimpleShape k_output_shape = v_output_shape;
+    const Shape q_output_shape({input_shape[0], batch, this->num_q_heads, head_dim});
+    const Shape v_output_shape({input_shape[0], batch, this->num_kv_heads, head_dim});
+    const Shape k_output_shape = v_output_shape;
 
     auto num_q_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;
     auto num_kv_heads_padded = ((this->num_q_heads - 1) / TILE_HEIGHT + 1) * TILE_HEIGHT;

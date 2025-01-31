@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement::detail {
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& output_tensor_start,
+    const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -137,11 +137,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end) {
-    const ttnn::SimpleShape output_shape = output.get_padded_shape();
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    const ttnn::Shape output_shape = output.get_padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -282,9 +279,9 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end,
-    const ttnn::SimpleShape& step) {
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const ttnn::Shape& step) {
     // TODO: multi core implementation - work division is not trivial as we need to determine the N/C/H/W start and end
     // points for each split, and base that off stride
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -403,7 +400,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& output_tensor_start,
+    const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_unpadded,
     bool row_major,
     uint32_t num_cores_x_unpadded,
@@ -559,11 +556,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end) {
-    const ttnn::SimpleShape output_shape = output.get_padded_shape();
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
+    const ttnn::Shape output_shape = output.get_padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -695,7 +689,7 @@ template <bool initialize_args>
 inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
-    const ttnn::SimpleShape& output_tensor_start,
+    const ttnn::Shape& output_tensor_start,
     const uint32_t& num_cores_total,
     const uint32_t& num_cores,
     const std::vector<CoreCoord>& cores,
@@ -837,10 +831,7 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 }
 
 operation::ProgramWithCallbacks slice_tile_multi_core(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -968,9 +959,9 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 operation::ProgramWithCallbacks slice_multi_core(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end,
-    const ttnn::SimpleShape& step) {
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const ttnn::Shape& step) {
     bool has_step = false;
     for (int i = 0; i < step.size(); i++) {
         if (step[i] != 1) {

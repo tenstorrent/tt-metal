@@ -18,7 +18,7 @@ std::tuple<bool, bool, bool> MorehLinearBackward::get_required_outputs(const std
     return {are_required_outputs[0], are_required_outputs[1], are_required_outputs[2]};
 }
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -61,7 +61,7 @@ inline void moreh_linear_backward_validate(
     }
 }
 
-ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::SimpleShape& a_shape, const ttnn::SimpleShape& b_shape) {
+ttnn::SmallVector<int64_t> find_reduce_dim(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
     ttnn::SmallVector<uint32_t> a_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     ttnn::SmallVector<uint32_t> b_dim(tt::tt_metal::MAX_NUM_DIMENSIONS, 1);
     get_tensor_dim(a_dim, a_shape);

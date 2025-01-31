@@ -12,9 +12,9 @@
 namespace tt {
 
 namespace tt_metal {
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
+const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
+static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::Shape& shape) {
     if (shape.rank() == 0) {
         return {};
     }
@@ -42,7 +42,7 @@ static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const Tile& tile) {
+static std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {

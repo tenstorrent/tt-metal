@@ -63,7 +63,7 @@ MorehMeanBackwardOperation::invoke(
     const Tensor& output_grad,
     const ttnn::SmallVector<int64_t>& dims,
     const bool keepdim,
-    const std::optional<ttnn::SimpleShape>& input_grad_shape,
+    const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

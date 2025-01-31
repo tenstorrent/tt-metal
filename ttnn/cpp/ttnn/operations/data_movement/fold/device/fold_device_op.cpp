@@ -49,9 +49,9 @@ void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, 
 Fold::spec_return_value_t Fold::compute_output_specs(
     const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
     auto input_tensor = tensors.input_tensor;
-    const ttnn::SimpleShape input_shape = input_tensor.get_logical_shape();
+    const ttnn::Shape input_shape = input_tensor.get_logical_shape();
     // we concatenate (stride_h sticks in H-dim) * (stride_w in W-dim) into 1 stick along C-dim
-    ttnn::SimpleShape output_shape(
+    ttnn::Shape output_shape(
         {1,
          1,
          input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w),
@@ -80,7 +80,7 @@ std::tuple<Fold::operation_attributes_t, Fold::tensor_args_t> Fold::invoke(
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
-    const std::optional<const ttnn::SimpleShape>& output_shape,
+    const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w) {

@@ -26,7 +26,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SimpleShape& shape,
+               const ttnn::Shape& shape,
                const std::optional<MemoryConfig>& memory_config,
                const uint8_t queue_id,
                const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
@@ -39,8 +39,8 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const ttnn::SimpleShape& logical_shape,
-               const ttnn::SimpleShape& padded_shape,
+               const ttnn::Shape& logical_shape,
+               const ttnn::Shape& padded_shape,
                const std::optional<MemoryConfig>& memory_config,
                const uint8_t queue_id,
                const std::optional<PadValue>& pad_value) -> ttnn::Tensor {
