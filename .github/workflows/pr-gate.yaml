@@ -38,3 +38,36 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       os: "ubuntu-22.04-amd64"
+
+  metal-tests:
+    runs-on:
+      - in-service
+      - cloud-virtual-machine
+      - BH
+    container:
+      image: ubuntu:22.04
+      env:
+        ENV_VAR: foo
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: >
+        --user $(id -u):$(id -g)
+        --device /dev/tenstorrent
+        -w /work
+    steps:
+      - name: Inspect
+        shell: bash
+        run: |
+          set -x
+          pwd
+          ls -al
+          whoami
+          touch foo
+          ls -al
+
+      #- uses: actions/download-artifact@v4
+      #  if: ${{ inputs.is_profiler == 'false' }}
+      #    with:
+      #  name: TTMetal_build_any
+      #- name: Check for dockerenv file
+      #  run: (ls /.dockerenv && echo Found dockerenv) || (echo No dockerenv)
