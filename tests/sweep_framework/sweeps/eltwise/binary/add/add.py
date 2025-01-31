@@ -14,11 +14,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
 random.seed(0)
-
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -26,24 +22,39 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "activations": [None, ["relu"]],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32],
+        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+activation_types = {"relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)}
 
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if (
+        test_vector["input_a_dtype"] == ttnn.int32
+        and test_vector["input_b_dtype"] != ttnn.int32
+        or test_vector["input_b_dtype"] == ttnn.int32
+        and test_vector["input_a_dtype"] != ttnn.int32
+    ):
+        return True, "Both input tensors must have int32 datatype if one of them has int32 datatype"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Inputs to eltwise binary must be tilized"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
+        return True, "Row Major layout is not supported"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
+        test_vector["input_a_dtype"] == ttnn.bfloat8_b or test_vector["input_b_dtype"] == ttnn.bfloat8_b
+    ):
         return True, "bfloat8_b is only supported on tiled layout"
     return False, None
 
@@ -54,58 +65,58 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
+    activations,
     input_a_dtype,
+    input_b_dtype,
     input_layout,
     input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
-    torch_real = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
-        input_shape
-    ).to(torch.float32)
-    torch_imag = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
-        input_shape
-    ).to(torch.float32)
+    torch_input_tensor_a = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+    )(input_shape)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape)
 
-    torch_input_tensor = torch.complex(torch_real, torch_imag)
+    golden_function = ttnn.get_golden_function(ttnn.add)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, activations=activations)
 
-    golden_function = ttnn.get_golden_function(ttnn.polar)
-    torch_output_tensor = golden_function(torch_input_tensor)
-
-    input_tensor_a_real = ttnn.from_torch(
-        torch_real,
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
         dtype=input_a_dtype,
         layout=input_layout,
         device=device,
         memory_config=input_a_memory_config,
     )
-    input_tensor_a_imag = ttnn.from_torch(
-        torch_imag,
-        dtype=input_a_dtype,
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=input_b_dtype,
         layout=input_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
-    input_tensor_a = ttnn.complex_tensor(input_tensor_a_real, input_tensor_a_imag)
+
+    if activations is not None:
+        activations = [activation_types[activation] for activation in activations]
+    else:
+        activations = None
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.polar(input_tensor_a, memory_config=output_memory_config)
+    output_tensor = ttnn.add(
+        input_tensor_a, input_tensor_b, activations=activations, memory_config=output_memory_config
+    )
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = torch.complex(
-        ttnn.to_torch(output_tensor.real).to(torch.float32), ttnn.to_torch(output_tensor.imag).to(torch.float32)
-    )
+    output_tensor = ttnn.to_torch(output_tensor)
 
-    return [
-        check_with_pcc(
-            torch.view_as_real(torch_output_tensor.clone()), torch.view_as_real(output_tensor.clone()), 0.999
-        ),
-        e2e_perf,
-    ]
+    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
