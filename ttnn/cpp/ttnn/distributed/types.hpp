@@ -18,7 +18,6 @@ using DeviceIds = tt::tt_metal::distributed::DeviceIds;
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceView = tt::tt_metal::distributed::MeshDeviceView;
-using MeshType = tt::tt_metal::distributed::MeshType;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
 using MeshSubDeviceManagerId = tt::tt_metal::distributed::MeshSubDeviceManagerId;
 
@@ -34,7 +33,6 @@ using ttnn::distributed::MeshDeviceView;
 using ttnn::distributed::MeshOffset;
 using ttnn::distributed::MeshShape;
 using ttnn::distributed::MeshSubDeviceManagerId;
-using ttnn::distributed::MeshType;
 using ttnn::distributed::SystemMesh;
 
 }  // namespace ttnn
