@@ -1,73 +1,32 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
 import bz2
 import os
 import argparse
-from models.demos.llama3.tt.model_config import TtModelArgs, CheckpointType
+from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
 from loguru import logger
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
-def generate_reference_outputs(total_length, output_file, hf_model_name=None):
+def generate_reference_outputs(total_length, output_file, model_name):
+    # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    if hf_model_name:
-        # HuggingFace path
-        tokenizer = AutoTokenizer.from_pretrained(hf_model_name)
-        config = AutoConfig.from_pretrained(hf_model_name)
-        # Qwen only: add rope scaling to the config
-        # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
-        if "Qwen" in hf_model_name:
-            config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
-        model = AutoModelForCausalLM.from_pretrained(hf_model_name, config=config, torch_dtype=torch.float32 if device=="cpu" else None, device_map="auto")
-        model.eval()
+    # Load model and tokenizer from HuggingFace
+    config = AutoConfig.from_pretrained(model_name)
 
-    else:
-        # Original path - load reference model
-        model_args = TtModelArgs(mesh_device=None)
-        model_args.max_seq_len = total_length
-        tokenizer = Tokenizer(model_args.tokenizer_path)
-        
+    # Qwen only: add rope scaling to the config
+    # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
+    if "Qwen" in model_name:
+        config.rope_scaling = {"factor": 4.0, "original_max_position_embeddings": 32768, "type": "yarn"}
 
-    # Special-case Hf models as they can load directly from the safetensors much more efficiently
-    if model_args.checkpoint_type == CheckpointType.Meta:
-        # Load the model state dict
-        state_dict = model_args.load_state_dict()
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, config=config, device_map="auto")
+    model.eval()
 
-        # Initialize the reference model
-        state_dict_prefix = model_args.get_state_dict_prefix("", None)
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                    ]
-                )
-            )
-        }
-        reference_model = model_args.reference_transformer()
-        reference_model.to(device)  # Move model to device
-        reference_model.eval()  # Set to evaluation mode
-        reference_model.load_state_dict(reference_state_dict)
-
-        embd = model_args.reference_embedding(reference_model)
-        embd.to(device)  # Move embedding to device
-        embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
-    else:
-        reference_model = model_args.reference_transformer(load_checkpoint=True)
-        reference_model.to(device)  # Move model to device
-        reference_model.eval()  # Set to evaluation mode
-        embd = reference_model.model.model.embed_tokens
-        embd.to(device)  # Move embedding to device
-
-    # Load the book text and encode tokens
+    # Load the book text
     current_file_path = os.path.abspath(__file__)
     current_file_dir = os.path.dirname(current_file_path)
     prompt_file = os.path.join(current_file_dir, "tale-of-two-cities.txt.bz2")
@@ -76,8 +35,8 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         text = f.read()
 
     # Encode text to tokens
-    encoded_tokens = model_args.encode_prompt(text, instruct=False)
-    encoded_tokens_tensor = torch.tensor(encoded_tokens, device=device).unsqueeze(0)  # Move to device
+    encoded_tokens = tokenizer.encode(text, add_special_tokens=True)[:total_length]
+    encoded_tokens_tensor = torch.tensor(encoded_tokens, device=device).unsqueeze(0)  # Shape [1, seq_len] on device
 
     print(f"{'Progress':<15}{'Correct':<8}{'Actual':<15}{'Top 5 Predictions':<75}")
     print("-" * 113)
@@ -92,7 +51,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
     with torch.no_grad():
         for chunk_start in range(0, total_length - 1, chunk_size):
             chunk_end = min(chunk_start + chunk_size, total_length)
-            # Get input and target chunks, ensuring they have matching lengths
+            # Get input and target chunks
             chunk_tokens = encoded_tokens_tensor[:, chunk_start:chunk_end]
             chunk_next_tokens = encoded_tokens[chunk_start + 1 : chunk_end + 1]
             actual_chunk_size = min(len(chunk_tokens[0]), len(chunk_next_tokens))
@@ -100,22 +59,19 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
             # Trim input chunk if needed
             chunk_tokens = chunk_tokens[:, :actual_chunk_size]
 
-            # Process chunk based on model type
-            chunk_tokens = chunk_tokens.to(device)
-            if hf_model_name:
-                outputs = model(chunk_tokens)
-                ref_output = outputs.logits
-            else:
-                pt_decode_input = embd(chunk_tokens).view(1, actual_chunk_size, -1)
-                ref_output = model(pt_decode_input, start_pos=chunk_start)
+            # Process chunk using HuggingFace model
+            outputs = model(chunk_tokens.to(device))
+            logits = outputs.logits
 
             # Compute top-5 predictions
-            probs = torch.softmax(ref_output, dim=-1)
+            probs = torch.softmax(logits, dim=-1)
             _, chunk_top5_tokens = torch.topk(probs, k=5, dim=-1)  # Shape: [1, chunk_size, 5]
             chunk_top5_tokens = chunk_top5_tokens.squeeze(0)  # Shape: [chunk_size, 5]
 
-            # Get next tokens tensor, ensuring same length as predictions
-            chunk_next_tokens_tensor = torch.tensor(chunk_next_tokens[:actual_chunk_size], device=device)
+            # Get next tokens tensor
+            chunk_next_tokens_tensor = torch.tensor(
+                chunk_next_tokens[:actual_chunk_size], device=device
+            )  # Move to same device
 
             # Calculate correctness
             chunk_top1_correct = chunk_top5_tokens[:, 0] == chunk_next_tokens_tensor
@@ -149,10 +105,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
                     if len(segment_accuracies) <= global_pos // 100:
                         segment_accuracies.append((segment_top1_acc, segment_top5_acc))
 
-        # Concatenate all top5 tokens into a single tensor
-        all_top5_tokens = torch.cat(all_top5_tokens, dim=0)  # Shape: [total_tokens, 5]
-
-    # Move tensors back to CPU before saving
+    # Save the data - ensure tensors are concatenated and on CPU
     data = {
         "top5_tokens": torch.cat(all_top5_tokens, dim=0).cpu(),
         "reference_tokens": encoded_tokens_tensor[:, :total_length].clone().cpu(),
@@ -177,17 +130,18 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
     print(f"{'Overall':<15}{f'{overall_top1_acc:.2f}%':<20}{f'{overall_top5_acc:.2f}%':<20}")
 
 
-# New main function with argparse
 def main():
-    parser = argparse.ArgumentParser(description="Generate reference outputs for LLaMA accuracy testing.")
+    parser = argparse.ArgumentParser(description="Generate reference outputs using HuggingFace models.")
     parser.add_argument("--total_length", type=int, default=1024, help="Total length of tokens to process")
     parser.add_argument(
         "--output_file", type=str, default="reference_outputs.pt", help="Output file path for reference data"
     )
-    parser.add_argument("--model", type=str, help="Optional: HuggingFace model name (e.g., 'meta-llama/Llama-2-7b-hf')")
+    parser.add_argument(
+        "--model", type=str, required=True, help="HuggingFace model name (e.g., 'meta-llama/Llama-2-7b-hf')"
+    )
     args = parser.parse_args()
 
-    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, hf_model_name=args.model)
+    generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, model_name=args.model)
 
 
 if __name__ == "__main__":

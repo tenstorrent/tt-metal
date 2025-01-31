@@ -15,22 +15,17 @@ import requests
 from pathlib import Path
 import hashlib
 
-from models.utility_functions import nearest_32
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
     sample_host,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.tt.model_config import TtModelArgs
 
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.llama3.tt.model_config import LlamaOptimizations
 
 
@@ -108,10 +103,7 @@ def preprocess_inputs_prefill(
     if max_prefill_len == 128 * 1024:
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
-    if instruct:
-        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-    else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in input_prompts]
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -122,14 +114,26 @@ def preprocess_inputs_prefill(
 
     # The large input demo we provide contains more tokens than the maximum (32k tokens)
     # To avoid running out of memory, clip to max_prefill_len
+
     if min_prompt_len > max_prefill_len:
-        logger.info(f"Clipping prompts to {max_prefill_len}")
-        if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
-            encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
-            dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in dec_prompts]
+        logger.info(f"Left-clipping prompts to {max_prefill_len}")
+        if instruct:
+            # We need to allow a few tokens for the system prompt and the special turn tokens for assistant and user;
+            # to find out how big those will be, we will:
+            # 1. Tokenize the entire prompt with non-instruct tokenization
+            # 2. Calculate overhead = length of instruct tokenization - length of non-instruct tokenization
+            # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
+            # 4. Tokenize the result with instruct tokenization
+            # 5. Assert that the length of this is equal to the max_prefill_len
+            raw_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
+            overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
+            shortened = [tokenizer.decode(e[-(max_prefill_len - o) :]) for e, o in zip(raw_prompts, overhead)]
+            encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in shortened]
+            assert all(
+                len(e) == max_prefill_len for e in encoded_prompts
+            ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
         else:
-            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
+            encoded_prompts = [encod[-max_prefill_len:] for encod in encoded_prompts]
 
         # Update prompt lengths
         prompt_lens = [len(x) for x in encoded_prompts]
@@ -227,20 +231,20 @@ def run_llama3_demo(
         max_seq_len=max_seq_len,
     )
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
-    llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
+    llama_model_name = model_args.base_model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
 
-    if llama_model_name in ["3.1-8B", "3.2-11B"] and tt_device_name == "N150":
+    if llama_model_name in ["Llama3.1-8B", "Llama3.2-11B"] and tt_device_name == "N150":
         assert (
             max_seq_len <= 64 * 1024
         ), "N150 only supports a max context length of 64k tokens for Llama3.1-8B and Llama3.2-11B"
     else:
-        assert max_seq_len <= 128 * 1024, f"Llama{llama_model_name} supports a max context length of 128k tokens"
+        assert max_seq_len <= 128 * 1024, f"{llama_model_name} supports a max context length of 128k tokens"
 
-    if llama_model_name == "3.1-70B":
+    if llama_model_name == "Llama3.1-70B":
         assert tt_device_name in ["T3K", "TG"], "Llama3.1-70B is only supported on T3K or TG"
 
     logger.info("Loading weights...")
@@ -284,7 +288,7 @@ def run_llama3_demo(
         state_dict=state_dict,
         dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
     )
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
     profiler.end("loading_weights_to_device")
@@ -340,8 +344,10 @@ def run_llama3_demo(
                 model_args.head_dim,
                 model_args.max_seq_len,
                 mesh_device,
-                seq_len=prefill_seq_len,
-                scale_factor=model_args.rope_scaling_factor,
+                prefill_seq_len,
+                model_args.rope_theta,
+                model_args.rope_scaling_factor,
+                model_args.orig_context_len,
             )
             if decoding_pos[batch_id] < prefill_seq_len:
                 pt_prefill_input[batch_id][
@@ -483,10 +489,15 @@ def run_llama3_demo(
         if tt_model.args.num_devices > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
-                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                    tt_out,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=model_args.ccl_topology(),
                 )
             else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=model_args.ccl_topology())
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -527,10 +538,15 @@ def run_llama3_demo(
         if tt_model.args.num_devices > 1:
             if tt_model.args.is_galaxy:
                 tt_out_gathered = ttnn.all_gather(
-                    tt_out, dim=3, num_links=2, cluster_axis=0, mesh_device=mesh_device, topology=ttnn.Topology.Linear
+                    tt_out,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=mesh_device,
+                    topology=model_args.ccl_topology(),
                 )
             else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=model_args.ccl_topology())
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out
@@ -629,8 +645,8 @@ def run_llama3_demo(
             for user in range(batch_size):
                 user_tok = tt_output_torch[user].tolist()
                 if (
-                    user_tok != 128009 and user_done[user] == False
-                ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
+                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                     all_outputs[user].append(user_tok)
                 else:
                     user_done[user] = True
@@ -680,14 +696,10 @@ def run_llama3_demo(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                     text = tokenizer.decode(output)
-                    if instruct_mode:
-                        split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
-                    else:
-                        split_text = text.split(prompt, 1)
-                    if len(split_text) > 1:
-                        text_after_prompt = split_text[1]
-                    else:
-                        text_after_prompt = text  # If prompt is not found, use the whole text
+                    prompt_including_assistant_tags = tokenizer.decode(
+                        model_args.encode_prompt(prompt, instruct=instruct_mode)
+                    )
+                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
                     if print_to_file:
                         with open(output_filename, "a") as f:
                             f.write(
@@ -770,76 +782,78 @@ def run_llama3_demo(
     )
     logger.info("")
 
-    supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
+    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B"]
     supported_devices = ["N150", "N300", "T3K", "TG"]
 
     # TODO update targets based on the llama3 model and the target device
-    llama_model_name = model_args.model_name
     tt_device_name = model_args.device_name
 
-    assert llama_model_name in supported_models, f"Model {llama_model_name} not supported"
-    assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+    if model_args.base_model_name in supported_models:
+        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "N150_3.2-1B": 1050,  # TODO Update target
-        "N300_3.2-1B": 1050,  # TODO Update target
-        "T3K_3.2-1B": 1050,  # TODO Update target
-        "TG_3.2-1B": 1050,  # TODO Update target
-        #
-        "N150_3.2-3B": 1050,  # TODO Update target
-        "N300_3.2-3B": 1050,  # TODO Update target
-        "T3K_3.2-3B": 1050,  # TODO Update target
-        "TG_3.2-3B": 1050,  # TODO Update target
-        #
-        "N150_3.1-8B": 1050,
-        "N300_3.1-8B": 1050,
-        "T3K_3.1-8B": 1050,
-        "TG_3.1-8B": 1050,
-        #
-        "N150_3.2-11B": 1050,  # TODO Update target
-        "N300_3.2-11B": 1050,  # TODO Update target
-        "T3K_3.2-11B": 1050,  # TODO Update target
-        "TG_3.2-11B": 1050,  # TODO Update target
-        #
-        "N150_3.1-70B": 1050,  # TODO Update target
-        "N300_3.1-70B": 1050,  # TODO Update target
-        "T3K_3.1-70B": 1050,  # TODO Update target
-        "TG_3.1-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{llama_model_name}"]
+        # Set the target times to first token for every combination of device and model
+        target_prefill_tok_s = {
+            "N150_Llama3.2-1B": 1050,  # TODO Update target
+            "N300_Llama3.2-1B": 1050,  # TODO Update target
+            "T3K_Llama3.2-1B": 1050,  # TODO Update target
+            "TG_Llama3.2-1B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.2-3B": 1050,  # TODO Update target
+            "N300_Llama3.2-3B": 1050,  # TODO Update target
+            "T3K_Llama3.2-3B": 1050,  # TODO Update target
+            "TG_Llama3.2-3B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.1-8B": 1050,
+            "N300_Llama3.1-8B": 1050,
+            "T3K_Llama3.1-8B": 1050,
+            "TG_Llama3.1-8B": 1050,
+            #
+            "N150_Llama3.2-11B": 1050,  # TODO Update target
+            "N300_Llama3.2-11B": 1050,  # TODO Update target
+            "T3K_Llama3.2-11B": 1050,  # TODO Update target
+            "TG_Llama3.2-11B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.1-70B": 1050,  # TODO Update target
+            "N300_Llama3.1-70B": 1050,  # TODO Update target
+            "T3K_Llama3.1-70B": 1050,  # TODO Update target
+            "TG_Llama3.1-70B": 1050,  # TODO Update target
+        }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "N150_3.2-1B": 160,  # TODO Update target
-        "N300_3.2-1B": 250,  # TODO Update target
-        "T3K_3.2-1B": 300,  # TODO Update target
-        "TG_3.2-1B": 300,  # TODO Update target
-        #
-        "N150_3.2-3B": 60,  # TODO Update target
-        "N300_3.2-3B": 100,  # TODO Update target
-        "T3K_3.2-3B": 150,  # TODO Update target
-        "TG_3.2-3B": 150,  # TODO Update target
-        #
-        "N150_3.1-8B": 23,  # TODO Update target
-        "N300_3.1-8B": 38,
-        "T3K_3.1-8B": 45,
-        "TG_3.1-8B": 45,  # TODO Update target
-        #
-        "N150_3.2-11B": 23,
-        "N300_3.2-11B": 38,  # TODO Update target
-        "T3K_3.2-11B": 45,  # TODO Update target
-        "TG_3.2-11B": 45,  # TODO Update target
-        #
-        "T3K_3.1-70B": 20,  # TODO Update target
-        "TG_3.1-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{llama_model_name}"]
+        # Set the target decode timesfor every combination of device and model
+        target_decode_tok_s_u = {
+            "N150_Llama3.2-1B": 160,  # TODO Update target
+            "N300_Llama3.2-1B": 250,  # TODO Update target
+            "T3K_Llama3.2-1B": 300,  # TODO Update target
+            "TG_Llama3.2-1B": 300,  # TODO Update target
+            #
+            "N150_Llama3.2-3B": 60,  # TODO Update target
+            "N300_Llama3.2-3B": 100,  # TODO Update target
+            "T3K_Llama3.2-3B": 150,  # TODO Update target
+            "TG_Llama3.2-3B": 150,  # TODO Update target
+            #
+            "N150_Llama3.1-8B": 23,  # TODO Update target
+            "N300_Llama3.1-8B": 38,
+            "T3K_Llama3.1-8B": 45,
+            "TG_Llama3.1-8B": 45,  # TODO Update target
+            #
+            "N150_Llama3.2-11B": 23,
+            "N300_Llama3.2-11B": 38,  # TODO Update target
+            "T3K_Llama3.2-11B": 45,  # TODO Update target
+            "TG_Llama3.2-11B": 45,  # TODO Update target
+            #
+            "T3K_Llama3.1-70B": 20,  # TODO Update target
+            "TG_Llama3.1-70B": 20,  # TODO Update target
+        }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
+        target_decode_tok_s = target_decode_tok_s_u * batch_size
+        targets = {
+            "prefill_t/s": target_prefill_tok_s,
+            "decode_t/s": target_decode_tok_s,
+            "decode_t/s/u": target_decode_tok_s_u,
+        }
+    else:
+        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
+        targets = {}
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -847,7 +861,7 @@ def run_llama3_demo(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
-            ml_model_name=llama_model_name,
+            ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
@@ -873,6 +887,17 @@ def run_llama3_demo(
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params",
     [
+        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
+            "models/demos/llama3/demo/input_data_questions_reasoning.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            16384,  # max_seq_len
+            1,  # batch_size
+            15000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+        ),
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -908,6 +933,7 @@ def run_llama3_demo(
         ),
     ],
     ids=[
+        "reasoning-1",
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context",  # max-length

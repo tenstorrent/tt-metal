@@ -16,12 +16,22 @@ from models.demos.llama3.tt.llama_common import (
     num_to_core_range_set,
     calculate_hidden_dim,
     get_out_subblock_w,
+    encode_prompt_llama_instruct,
+    encode_prompt_hf,
+    nearest_multiple,
 )
 from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
-from tqdm import tqdm
 from dataclasses import dataclass
+from enum import Enum, auto
+from models.demos.llama3.tt.load_checkpoints import (
+    load_meta_state_dict,
+    load_hf_state_dict,
+    convert_hf_to_meta,
+    convert_meta_to_hf,
+    reverse_permute,
+)
 
 
 @dataclass
@@ -37,7 +47,8 @@ class LlamaOptimizations:
         """Configuration optimized for accuracy
         Only 3.1-70B uses bfp4 MLPs in this configuration
         """
-        return cls(bfp4_mlp=model_name == "3.1-70B")
+        bfp4 = model_name in ["Llama3.1-70B", "Qwen2.5-72B"]
+        return cls(bfp4_mlp=bfp4)
 
     @classmethod
     def performance(cls, model_name):
@@ -45,6 +56,11 @@ class LlamaOptimizations:
         All models use bfp4 MLPs in this configuration
         """
         return cls(bfp4_mlp=True)
+
+
+class CheckpointType(Enum):
+    Meta = auto()
+    HuggingFace = auto()
 
 
 class TtModelArgs:
@@ -92,7 +108,7 @@ class TtModelArgs:
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 8: "T3K", 32: "TG"}[self.num_devices]
+        self.device_name = {0: "CPU", 1: "N150", 2: "N300", 4: "N150x4", 8: "T3K", 32: "TG"}[self.num_devices]
         self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
@@ -116,14 +132,7 @@ class TtModelArgs:
             assert os.path.exists(
                 self.DEFAULT_CKPT_DIR
             ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            assert os.path.isfile(
-                self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please set LLAMA_TOKENIZER_PATH=..."
-            if not os.path.exists(self.DEFAULT_CACHE_PATH):
-                os.makedirs(self.DEFAULT_CACHE_PATH)
-            assert os.path.exists(
-                self.DEFAULT_CACHE_PATH
-            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please set LLAMA_CACHE_PATH=..."
+            os.makedirs(self.DEFAULT_CACHE_PATH, exist_ok=True)
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         #            assert os.path.isfile(
         #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
@@ -132,57 +141,6 @@ class TtModelArgs:
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
-
-        # Set the model name based on the checkpoint directory being loaded
-        if "3.2-1B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_1B_PARAMS"
-            self.model_name = "3.2-1B"
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_3B_PARAMS"
-            self.model_name = "3.2-3B"
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_8B_PARAMS"
-            self.model_name = "3.1-8B"
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_11B_PARAMS"
-            self.model_name = "3.2-11B"
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_70B_PARAMS"
-            self.model_name = "3.1-70B"
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        else:
-            # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
-            raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
-
-        # Set the max number of tokens for each prefill chunk based on the model and device
-        MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-            "3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
-            "3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
-            "3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-            "3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
-            "3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-        }
-        max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.model_name][self.device_name]
-        assert (
-            max_prefill_chunk_size_div1024 is not None
-        ), f"Unsupported model {self.model_name} on device {self.device_name}"
-        self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
-
-        if callable(optimizations):
-            self.optimizations = optimizations(self.model_name)
-        else:
-            self.optimizations = optimizations
-
-        # Load model params
-        if not dummy_weights:
-            self._set_llama_params(self.DEFAULT_CKPT_DIR)
-        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
-            self._set_llama_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
         # Some consumers like SentencePiece only accept str not Path for files
         self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
@@ -196,6 +154,43 @@ class TtModelArgs:
         # If the weights file contain the keyword `instruct` also set self.instruct to true
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
+
+        # Load model params
+        if not dummy_weights:
+            self.checkpoint_type = self.detect_checkpoint_type()
+            self._set_model_params(self.DEFAULT_CKPT_DIR)
+        else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
+            self.checkpoint_type = CheckpointType.Meta
+            self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
+
+        # Set the max number of tokens for each prefill chunk based on the model and device
+        max_prefill_chunk_size_div1024 = os.getenv("MAX_PREFILL_CHUNK_SIZE")
+        if max_prefill_chunk_size_div1024 is None:
+            MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+                "Llama3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
+                "Llama3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
+                "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+                "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+                "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+                "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+            }
+            try:
+                max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
+            except KeyError:
+                raise ValueError(
+                    f"Unknown model {self.model_name} on device {self.device_name}, try setting MAX_PREFILL_CHUNK_SIZE between 4 (compatible) and 128 (faster)"
+                )
+            assert (
+                max_prefill_chunk_size_div1024 is not None
+            ), f"Unsupported model {self.model_name} on device {self.device_name}"
+        self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
+
+        if callable(optimizations):
+            self.optimizations = optimizations(self.model_name)
+        else:
+            self.optimizations = optimizations
+
         self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
@@ -215,9 +210,11 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.use_scaled_rope, self.rope_scaling_factor
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
+
+        self.tokenizer = self.create_tokenizer()
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
@@ -350,45 +347,59 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
+            mlp1_3_grid = (
+                lambda seq_len: (8, min(min(seq_len, 1024) // 32, 4))
+                if self.is_galaxy
+                else self.find_grid(self.dim // self.tile_size)
+            )
+            mlp2_grid = (
+                lambda seq_len: (8, min(min(seq_len, 1024) // 32, 4))
+                if self.is_galaxy
+                else self.find_grid(self.hidden_dim // self.tile_size)
+            )
+
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+                grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024),
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
-                grid_size=(8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else ((8, 8) if seq_len >= 1024 else (8, 4)),
+                grid_size=mlp2_grid(seq_len),
             )
 
+            k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
+            n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=min(seq_len, 1024 if self.is_galaxy else 2048),
-                k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
-                n=self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim,
-                grid_size=(8, 8),
+                k=k_dim,
+                n=n_dim,
+                grid_size=self.find_grid(k_dim // self.tile_size),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
             )
 
-            # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * 8) == 0
+            # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:
                 lm_head_num_rows = 4
                 while self.dim % (32 * 32 * lm_head_num_rows) != 0:
                     lm_head_num_rows -= 1
             else:
                 lm_head_num_rows = 8
-                while self.dim % (32 * lm_head_num_rows * 8) != 0:
-                    lm_head_num_rows -= 1
-            assert (
-                lm_head_num_rows > 0
-            ), f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 4) == 0"
-            self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=8)
+            lm_head_cores_per_row = 8
+            while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
+                lm_head_num_rows -= 1
+                if lm_head_num_rows == 0:
+                    lm_head_cores_per_row -= 1
+                    if lm_head_cores_per_row == 0:
+                        raise ValueError(
+                            f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
+                        )
+                    lm_head_num_rows = 8
+            self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
 
             self.model_config["LM_HEAD_INPUT_MEMCFG"] = ttnn.create_sharded_memory_config(
                 (
@@ -610,41 +621,42 @@ class TtModelArgs:
                 else self.model_config["FULL_GRID_MEMCFG"]
             )
 
-            self.model_config["FF1_3_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
-                (
-                    1,
-                    1,
-                    32,
-                    self.dim // 4,
-                ),
-                (
-                    1,
-                    1,
-                    self.dim // 4,
-                    self.hidden_dim // 8,
-                ),
-                grid=ttnn.CoreGrid(x=8, y=2),
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-            )
+            if self.is_galaxy:
+                self.model_config["FF1_3_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
+                    (
+                        1,
+                        1,
+                        32,
+                        self.dim // 4,
+                    ),
+                    (
+                        1,
+                        1,
+                        self.dim // 4,
+                        self.hidden_dim // 8,
+                    ),
+                    grid=ttnn.CoreGrid(x=8, y=2),
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
 
-            self.model_config["FF2_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
-                (
-                    1,
-                    1,
-                    32,
-                    self.hidden_dim // 8,
-                ),
-                (
-                    1,
-                    1,
-                    self.hidden_dim // 8,
-                    self.dim // 4,
-                ),
-                grid=ttnn.CoreGrid(x=8, y=2),
-                overwrite_subblock_h=1,
-                overwrite_subblock_w=1,
-            )
+                self.model_config["FF2_TG_PROGCFG"] = self.matmul_1d_config_from_tensor_shapes(
+                    (
+                        1,
+                        1,
+                        32,
+                        self.hidden_dim // 8,
+                    ),
+                    (
+                        1,
+                        1,
+                        self.hidden_dim // 8,
+                        self.dim // 4,
+                    ),
+                    grid=ttnn.CoreGrid(x=8, y=2),
+                    overwrite_subblock_h=1,
+                    overwrite_subblock_w=1,
+                )
 
             self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.hidden_dim // 28 // 8),  # shard_grid_cores = 28, num_devices=8
@@ -815,6 +827,7 @@ class TtModelArgs:
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
             self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
+
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
@@ -835,7 +848,7 @@ class TtModelArgs:
                 ),
             )
 
-            self.model_config = set_tg_attention_config(self.model_config, self.dim)
+            self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
             self.num_reduce_scatter_links = 1
@@ -844,12 +857,20 @@ class TtModelArgs:
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
+            logger.info(f"Attention grid: {attn_input_grid}")
+            logger.info(f"MLP grid: {mlp_core_grid}")
+            logger.info(f"LM head grid: {self.lm_head_core_grid}")
+
+            logger.info(f"Attention grid: {attn_input_grid}")
+            logger.info(f"MLP grid: {mlp_core_grid}")
+            logger.info(f"LM head grid: {self.lm_head_core_grid}")
+
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
         if all([dim > 1 for dim in list(self.mesh_device.shape)]):  # 2D grid
             return True
-        elif self.dim >= 8192 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
+        elif self.dim > 4096 and mode == "prefill":  # Somewhere between 4k and 8k WH runs out of L1 if not distributed
             return True
         return False
 
@@ -932,23 +953,75 @@ class TtModelArgs:
         )
         return xs_1BSH
 
-    def _set_llama_params_from_dict(self, params):
-        # Text params
-        self.dim = params["dim"]
-        self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
-        self.multiple_of = params["multiple_of"]
-        self.n_heads = params["n_heads"]
-        self.n_kv_heads = params["n_kv_heads"]
-        self.n_layers = params["n_layers"]
-        self.norm_eps = params["norm_eps"]
-        self.rope_theta = params["rope_theta"]
-        self.use_scaled_rope = params["use_scaled_rope"]
+    def _set_params_from_dict(self, params):
+        # Common params with different names between Meta and HF
+        self.dim = params.get("dim", params.get("hidden_size"))
+        self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
+        self.n_kv_heads = params.get("n_kv_heads", params.get("num_key_value_heads"))
+        self.n_layers = params.get("n_layers", params.get("num_hidden_layers"))
+        self.full_model_n_layers = self.n_layers
+        self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
         self.head_dim = self.dim // self.n_heads
-        self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
-        # Vision params
+        # Handle different MLP dimension specifications
+        if "intermediate_size" in params:
+            self.hidden_dim = params["intermediate_size"]
+            self.ffn_dim_multiplier = None
+            self.multiple_of = None
+        else:
+            self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+            self.multiple_of = params["multiple_of"]
+            self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
+
+        if "_name_or_path" in params:
+            self.model_name = params["_name_or_path"].split("/")[-1]
+
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+            raise AssertionError(
+                "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use FAKE_DEVICE=N150x4"
+            )
+
+        # Don't need to pad for CPU runs
+        if self.num_devices:
+            # Default padding cores for each model, 0 if not set here
+            default_padded_cores = {
+                "Qwen2.5-72B": 32,
+                "Qwen2.5-7B": 16,
+            }.get(self.base_model_name, 0)
+
+            # Override MLP padding cores from env var
+            mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
+
+            # Only pad if MLP_PADDED_CORES is non-zero
+            if mlp_padded_cores > 0:
+                padded_hidden_dim = nearest_multiple(
+                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                )
+                if padded_hidden_dim != self.hidden_dim:
+                    logger.info(
+                        f"PAD_MLP_CORES={mlp_padded_cores}, padding hidden dim from {self.hidden_dim} to {padded_hidden_dim}"
+                    )
+                    self.hidden_dim = padded_hidden_dim
+
+        # RoPE params
+        self.rope_theta = params.get("rope_theta")
+        self.use_scaled_rope = params.get("use_scaled_rope", False)
+        if "rope_scaling" in params:
+            self.rope_scaling_factor = params.get("factor", None)
+            self.orig_context_len = params.get("original_max_position_embeddings", None)
+            if not "use_scaled_rope" in params:
+                self.use_scaled_rope = True
+        else:
+            if "Qwen" in self.model_name:
+                self.rope_scaling_factor = 4.0
+                self.orig_context_len = 32768
+            else:
+                self.rope_scaling_factor = None
+                self.orig_context_len = None
+
+        # Vision params (Meta-specific)
         self.vision_chunk_size = params.get("vision_chunk_size", -1)
         self.vision_max_num_chunks = params.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = params.get("vision_num_cross_attention_layers", -1)
@@ -968,18 +1041,68 @@ class TtModelArgs:
         self.vision_in_channels = 3
 
     @property
+    def base_model_name(self):
+        return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
+
+    @property
     def vision_chunk_ntok(self):
         """
         Returns the number of tokens per chunk, accounting for the extra class token
         """
         return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
 
+    def _set_model_params(self, checkpoint_dir):
+        if self.checkpoint_type == CheckpointType.Meta:
+            self._set_llama_params(checkpoint_dir)
+        elif self.checkpoint_type == CheckpointType.HuggingFace:
+            self._set_hf_params(checkpoint_dir)
+        else:
+            raise ValueError(f"Unsupported checkpoint type: {self.checkpoint_type}")
+
     def _set_llama_params(self, checkpoint_dir):
         params_file = os.path.join(checkpoint_dir, "params.json")
         assert os.path.exists(params_file), f"params.json file not found at {params_file}"
         with open(params_file, "r") as f:
             params = json.load(f)
-        self._set_llama_params_from_dict(params)
+        self._set_params_from_dict(params)
+
+        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Set the model name based on the checkpoint directory being loaded
+        # FIXME: add a llama prefix to all llama-specific models and names
+        if "3.2-1B" in checkpoint_dir:
+            local_params = "LLAMA3_2_1B_PARAMS"
+            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 32
+        elif "3.2-3B" in checkpoint_dir:
+            local_params = "LLAMA3_2_3B_PARAMS"
+            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 32
+        elif "3.1-8B" in checkpoint_dir:
+            local_params = "LLAMA3_1_8B_PARAMS"
+            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8
+        elif "3.2-11B" in checkpoint_dir:
+            local_params = "LLAMA3_2_11B_PARAMS"
+            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8  # shared with 3.1-8B
+        elif "3.1-70B" in checkpoint_dir:
+            local_params = "LLAMA3_1_70B_PARAMS"
+            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        else:
+            local_params = "UNKNOWN"
+            self.model_name = "Unknown"
+            self.rope_scaling_factor = 4
+            logger.warning(f"Unknown model: {LLAMA_DIR}")
+        self.orig_context_len = 8192
+
+    def _set_hf_params(self, checkpoint_dir):
+        config_file = os.path.join(checkpoint_dir, "config.json")
+        assert os.path.exists(config_file), f"config.json file not found at {config_file}"
+        with open(config_file, "r") as f:
+            config = json.load(f)
+        self._set_params_from_dict(config)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1031,19 +1154,19 @@ class TtModelArgs:
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
-        """Generate or load state_dict for n_layers of the model"""
         if self.dummy_weights:
             reference_model = Transformer(self)
             state_dict = reference_model.state_dict()
             state_dict_prefix = self.get_state_dict_prefix("", None)
             state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
+        elif self.checkpoint_type == CheckpointType.Meta:
+            state_dict = load_meta_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
         else:
-            state_dict = load_llama_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
-
+            assert self.checkpoint_type == CheckpointType.HuggingFace
+            state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
-        remv = [
-            f"layers.{i}." for i in list(range(self.n_layers, 32))
-        ]  # TODO, this is not generalized to all models. it assumes max layers = 32
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
@@ -1068,7 +1191,7 @@ class TtModelArgs:
         in0_block_w: int = None,
         fuse_batch: bool = False,
         fused_activation=None,
-    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    ):
         per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
         per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
 
@@ -1143,7 +1266,6 @@ class TtModelArgs:
         Find the number of rows and columns for a grid of cores such that
         the total number of tiles N can be evenly divided among the cores.
         Each core will have the same integer number of tiles.
-        The grid size is limited to a maximum of 2 rows and 8 columns.
 
         Parameters:
             N (int): Total number of tiles to be distributed.
@@ -1154,9 +1276,9 @@ class TtModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 4
+        max_rows = 8
         max_cols = 8  # Maximum number of rows or columns
-        max_cores = max_rows * max_cols  # Maximum number of cores (8x2 grid)
+        max_cores = max_rows * max_cols  # Maximum number of cores
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
         possible_cores = [c for c in range(1, max_cores + 1) if K % c == 0 and N % c == 0]
@@ -1175,12 +1297,10 @@ class TtModelArgs:
             f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
         )
 
-    def dram_matmul_config(
-        self, m: int, k: int, n: int, num_cores=None
-    ) -> ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig:
+    def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
-            # num_cores = self.dram_shard_core_grid_for_k_and_n(k).num_cores
+            # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
             num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
             assert (
                 k % (self.tile_size * num_cores) == 0
@@ -1302,72 +1422,352 @@ class TtModelArgs:
             inplace=False,
         )
 
+    def detect_checkpoint_type(self) -> CheckpointType:
+        """Detect if checkpoint directory contains Meta or HuggingFace format weights.
 
-def load_llama_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
-    if is_chunked:
-        checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
-    else:
-        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
+        Returns:
+            CheckpointType: Meta or HuggingFace enum value
 
-    return checkpoint
+        Raises:
+            ValueError: If neither Meta nor HuggingFace checkpoint format is detected
+        """
+        config_path = os.path.join(self.DEFAULT_CKPT_DIR, "config.json")
+        params_path = os.path.join(self.DEFAULT_CKPT_DIR, "params.json")
 
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+                if "transformers_version" in config:
+                    return CheckpointType.HuggingFace
 
-def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
-    checkpoint = {}
+        if os.path.exists(params_path):
+            return CheckpointType.Meta
 
-    (f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        if n_layers:
-            # Layer range is in the file name, like layers_start-end.pth
-            layer_range = ckpt.stem.split("_")[1]
-            start_layer, end_layer = map(int, layer_range.split("-"))
-            if start_layer > n_layers + start_layer_idx:
-                continue
-            if end_layer < start_layer_idx:
-                continue
+        raise ValueError(
+            f"Could not detect Meta or HuggingFace checkpoint format in {self.DEFAULT_CKPT_DIR}. "
+            "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
+        )
 
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        checkpoint.update(loaded_ckpt)
-    return checkpoint
+    def create_tokenizer(self):
+        """Create and return a Tokenizer instance based on the checkpoint type."""
+        if self.checkpoint_type == CheckpointType.Meta:
+            # Use the Meta Tokenizer
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 
-
-def load_sharded_checkpoints(checkpoints, n_layers):
-    checkpoint = {}
-    logger.info(f"Loading {len(checkpoints)} checkpoint files")
-    for ckpt in tqdm(checkpoints):
-        loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for (
-            key,
-            value,
-        ) in loaded_ckpt.items():
-            if "layers." in key:
-                layer_num = int(key.split("layers.")[1].split(".")[0])
-                if n_layers and layer_num >= n_layers:
-                    continue
-            if key in checkpoint:
-                checkpoint[key] += [value]
-            else:
-                checkpoint[key] = [value]
-        del loaded_ckpt
-
-    # concat checkpoint values
-    for key, value in checkpoint.items():
-        if len(value) == 1 or "norm" in key:
-            checkpoint[key] = value[0]
+            return Tokenizer(self.tokenizer_path)
         else:
-            if key == "tok_embeddings.weight" or key == "output.weight":
-                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
-                # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
-                checkpoint[key] = torch.cat(value, dim=0)
-            else:
-                # cat_dim is index of the smallest dimension in value[0].shape
-                cat_dim = torch.argmin(torch.tensor(value[0].shape))
-                checkpoint[key] = torch.cat(value, dim=cat_dim)
+            # Create a HuggingFace AutoTokenizer
+            from transformers import AutoTokenizer
 
-    return checkpoint
+            tokenizer = AutoTokenizer.from_pretrained(self.DEFAULT_TOKENIZER_PATH)
+
+            # Add meta-compatible stop token list to the HF tokenizer
+            if not "stop_tokens" in tokenizer.__dict__:
+                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            return tokenizer
+
+    def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        if self.checkpoint_type == CheckpointType.Meta:
+            if instruct:
+                return encode_prompt_llama_instruct(self.tokenizer, prompt_text, system_prompt_text)
+            else:
+                return self.tokenizer.encode(prompt_text, bos=True, eos=False)
+        else:
+            if instruct:
+                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+            else:
+                return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+
+    def reference_lm_head(self):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import ColumnParallelLinear
+
+            return ColumnParallelLinear(self.dim, self.vocab_size, bias=False, init_method=lambda x: x)
+        else:
+            model = self.reference_transformer(wrap=False)
+            layer = model.lm_head
+            layer._load_state_dict = layer.load_state_dict
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            return layer
+
+    def reference_transformer(self, wrap=True, load_checkpoint=False):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+
+            model = Transformer(self)
+            if load_checkpoint:
+                model.load_state_dict(self.load_state_dict())
+            return model
+        else:
+            from transformers import AutoConfig, AutoModelForCausalLM
+
+            if not load_checkpoint:
+                config = AutoConfig.from_pretrained(self.DEFAULT_CKPT_DIR)
+                config.num_layers = self.n_layers
+                model = AutoModelForCausalLM.from_config(config)
+            else:
+                model = AutoModelForCausalLM.from_pretrained(self.DEFAULT_CKPT_DIR)
+            if wrap:
+                wrapper = HfModelWrapper(model, self.head_dim)
+                return wrapper
+            else:
+                return model
+
+    def reference_rms_norm(self):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
+
+            return RMSNorm(self.dim, self.norm_eps)
+        else:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.norm
+            layer._load_state_dict = layer.load_state_dict
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            return layer
+
+    def reference_mlp(self):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
+
+            return FeedForward(self.dim, 4 * self.dim, self.multiple_of, self.ffn_dim_multiplier)
+        else:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.layers[0].mlp
+            layer._load_state_dict = layer.load_state_dict
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            return layer
+
+    def reference_embedding(self, reference_model=None):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.llama3.tt.llama_common import HostEmbedding
+
+            return HostEmbedding(self)
+        else:
+            if reference_model is None:
+                model = self.reference_transformer(wrap=False)
+            else:
+                model = reference_model
+            layer = model.model.embed_tokens
+            layer._load_state_dict = layer.load_state_dict
+            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            return layer
+
+    def reference_decoder(self):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
+
+            return TransformerBlock(layer_id=0, args=self)
+        else:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.layers[0]
+            wrapper = HfDecoderWrapper(layer, self.head_dim)
+            return wrapper
+
+    def reference_attention(self):
+        if self.checkpoint_type == CheckpointType.Meta:
+            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
+
+            return Attention(self)
+        else:
+            model = self.reference_transformer(wrap=False)
+            layer = model.model.layers[0].self_attn
+            wrapper = HfAttentionWrapper(layer, self.head_dim)
+            return wrapper
+
+    def set_tg_attention_config(self):
+        shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})
+
+        self.model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
+            None
+            if self.dim < 4096
+            else ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    shard_spec_n_cores_grid,
+                    [
+                        32,
+                        32,
+                    ],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+        )
+
+        if self.is_galaxy:
+            num_cores = 40 if self.dim == 8192 else (24 if self.dim == 4096 else (20 if self.dim == 3072 else 12))
+
+            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+                core_grid=num_to_coregrid(num_cores),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_rows, self.dim // 4 // min(32, self.dim // 4 // 32)),
+                core_grid=num_to_coregrid(min(32, self.dim // 4 // 32)),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+                core_grid=num_to_coregrid(min(32, self.dim // 8 // 32)),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
+            self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+                (
+                    self.tile_size * mesh_rows,
+                    self.dim // qkv_core_grid.num_cores,
+                ),  # Shard shape: [32, 128] -> 1 shard per core
+                core_grid=qkv_core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            gather_core_grid = self.dram_shard_core_grid_for_k(self.dim // 4)
+            self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+                (
+                    self.tile_size * mesh_rows,
+                    self.dim // 4 // gather_core_grid.num_cores,
+                ),
+                core_grid=gather_core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            users_core_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
+            self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+                (
+                    self.tile_size * mesh_cols,
+                    self.dim // 8 // users_core_grid.num_cores,
+                ),
+                core_grid=users_core_grid,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+
+class HfAttentionWrapper:
+    def __init__(self, attention, head_dim):
+        from transformers import DynamicCache
+
+        super().__init__()
+        self.attention = attention
+        self.past_key_value = DynamicCache()
+        self.head_dim = head_dim
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        output, _, self.past_key_value = self.attention(
+            x,
+            past_key_value=self.past_key_value,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+    @property
+    def cache_k(self):
+        [(k, v)] = self.past_key_value.to_legacy_cache()
+        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+
+        meta_k = torch.zeros_like(hf_k)
+        for b in range(batch_size):
+            for s in range(seq_len):
+                # Flatten just heads and head_dim
+                flat = hf_k[b, s].flatten()
+                # Apply reverse_permute
+                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                # Restore heads and head_dim shape
+                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+
+        return meta_k
+
+    @property
+    def cache_v(self):
+        [(k, v)] = self.past_key_value.to_legacy_cache()
+        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+
+
+class HfDecoderWrapper:
+    def __init__(self, decoder, head_dim):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        output, self.past_key_values = self.decoder.forward(
+            x,
+            past_key_value=self.past_key_values,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+
+class HfModelWrapper:
+    def __init__(self, model, head_dim):
+        from transformers import DynamicCache
+
+        self.model = model
+        self.head_dim = head_dim
+        self.past_key_values = DynamicCache()
+
+    def forward(self, inputs_embeds, start_pos, mode="decode"):
+        position_ids = torch.tensor(
+            [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
+        )
+        logits, new_cache, hidden_states = self.model.forward(
+            inputs_embeds=inputs_embeds,
+            position_ids=position_ids,
+            use_cache=True,
+            past_key_values=self.past_key_values,
+            return_dict=False,
+            output_hidden_states=True,
+        )
+        self.past_key_values = new_cache
+        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+    def eval(self):
+        self.model.eval()
 
 
 def num_to_corerange(x):
@@ -1388,51 +1788,3 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
-
-
-def set_tg_attention_config(model_config, dim):
-    shard_spec_n_cores_grid = ttnn.CoreRangeSet({num_to_corerange(40)})
-
-    model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
-        None
-        if dim < 4096
-        else ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                shard_spec_n_cores_grid,
-                [
-                    32,
-                    32,
-                ],
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-    )
-
-    num_cores = 40 if dim == 8192 else (24 if dim == 4096 else (20 if dim == 3072 else 12))
-
-    model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-        shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-        core_grid=num_to_coregrid(num_cores),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
-        shape=(32 * mesh_rows, dim // 4 // min(32, dim // 4 // 32)),
-        core_grid=num_to_coregrid(min(32, dim // 4 // 32)),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
-        shape=(32 * mesh_cols, 32),  # mesh_cols = 4
-        core_grid=num_to_coregrid(min(32, dim // 8 // 32)),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    return model_config
