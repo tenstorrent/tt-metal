@@ -415,7 +415,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 20480,
+                     .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
@@ -429,7 +429,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
                      .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 20480,
+                     .l1_buffers_peak_per_core = 10240,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{

@@ -75,7 +75,7 @@ std::map<std::string, std::string> get_defines(
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
             break;
-        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::DIV:
             // Divide by a non-zero tensor
             defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
@@ -206,7 +206,7 @@ std::map<std::string, std::string> get_defines_fp32(
             new_defines.insert({"BINOP_INIT", fmt::format("power_binary_tile_init();")});
             op_name = "power_binary_tile";
             break;
-        case BinaryOpType::DIV_FAST:
+        case BinaryOpType::DIV:
             new_defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
             op_name = "div_binary_tile";
             break;
