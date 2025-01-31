@@ -142,27 +142,40 @@ class TtModelArgs:
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
         logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
 
+        # Some consumers like SentencePiece only accept str not Path for files
+        self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
+        self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
+
+        # Load weights and tokenizer
+        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+
+        self.instruct = instruct
+        # If the weights file contain the keyword `instruct` also set self.instruct to true
+        if "instruct" in self.DEFAULT_CACHE_PATH.lower():
+            self.instruct = True
+
         # Set the model name based on the checkpoint directory being loaded
         # FIXME: add a llama prefix to all llama-specific models and names
         if "3.2-1B" in LLAMA_DIR:
             local_params = "LLAMA3_2_1B_PARAMS"
-            self.model_name = "Llama3.2-1B"
+            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 32
         elif "3.2-3B" in LLAMA_DIR:
             local_params = "LLAMA3_2_3B_PARAMS"
-            self.model_name = "Llama3.2-3B"
+            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 32
         elif "3.1-8B" in LLAMA_DIR:
             local_params = "LLAMA3_1_8B_PARAMS"
-            self.model_name = "Llama3.1-8B"
+            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 8
         elif "3.2-11B" in LLAMA_DIR:
             local_params = "LLAMA3_2_11B_PARAMS"
-            self.model_name = "Llama3.2-11B"
+            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in LLAMA_DIR:
             local_params = "LLAMA3_1_70B_PARAMS"
-            self.model_name = "Llama3.1-70B"
+            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
@@ -192,9 +205,7 @@ class TtModelArgs:
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
             }
             try:
-                max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[
-                    self.model_name.replace("-Instruct", "")
-                ][self.device_name]
+                max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
             except KeyError:
                 raise ValueError(
                     f"Unknown model {self.model_name} on device {self.device_name}, try setting MAX_PREFILL_CHUNK_SIZE between 4 (compatible) and 128 (faster)"
@@ -209,18 +220,6 @@ class TtModelArgs:
         else:
             self.optimizations = optimizations
 
-        # Some consumers like SentencePiece only accept str not Path for files
-        self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
-        self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
-
-        # Load weights and tokenizer
-        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-
-        self.instruct = instruct
-        # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.DEFAULT_CACHE_PATH.lower():
-            self.instruct = True
         self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
