@@ -1,1 +1,2 @@
 git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
+transformers >= 4.46.3

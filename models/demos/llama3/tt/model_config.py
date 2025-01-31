@@ -174,6 +174,7 @@ class TtModelArgs:
                 "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -985,7 +986,6 @@ class TtModelArgs:
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
-                "DeepSeek-R1-Distill-Llama-70B": 32,
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
             }.get(self.base_model_name, 0)

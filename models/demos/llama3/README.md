@@ -64,12 +64,6 @@ pip install -r models/demos/llama3/requirements.txt
 
 ### HuggingFace models (e.g. DeepSeek R1 Distill Llama 3.3 70B)
 
-Make sure you have a recent version of `transformers` installed:
-
-```
-pip install -U transformers
-```
-
 Download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B). Your model directory should have the following structure:
 
 ```
