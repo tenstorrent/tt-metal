@@ -389,7 +389,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
-template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -403,24 +403,26 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool multicast_path_reserve,
     bool posted = false,
     uint32_t trid = 0) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write<proc_type, noc_mode, use_trid>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve,
-            posted,
-            trid);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
+    if constexpr (!one_packet) {
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            ncrisc_noc_fast_write<proc_type, noc_mode, use_trid>(
+                noc,
+                cmd_buf,
+                src_addr,
+                dest_addr,
+                NOC_MAX_BURST_SIZE,
+                vc,
+                mcast,
+                linked,
+                num_dests,
+                multicast_path_reserve,
+                posted,
+                trid);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dest_addr += NOC_MAX_BURST_SIZE;
+            len_bytes -= NOC_MAX_BURST_SIZE;
+        }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     ncrisc_noc_fast_write<proc_type, noc_mode, use_trid>(
