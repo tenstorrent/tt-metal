@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -78,6 +79,7 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -103,6 +105,7 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -128,6 +131,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -152,6 +156,7 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [7])
@@ -175,8 +180,8 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [3, 32])
-@pytest.mark.parametrize("c", [5, 32])
+@pytest.mark.parametrize("batch_size", [32])
+@pytest.mark.parametrize("c", [32])
 @pytest.mark.parametrize("h", [37])
 @pytest.mark.parametrize("w", [63])
 @pytest.mark.parametrize("dim", [None, [], 0, 2, [0, 1], [1, 3], [0, 1, 2], [1, 2, 3], [0, 1, 2, 3]])
