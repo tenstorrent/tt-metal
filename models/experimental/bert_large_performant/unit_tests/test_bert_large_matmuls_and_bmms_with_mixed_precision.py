@@ -120,7 +120,7 @@ def run_bert_large_matmul_test(
         logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape.with_tile_padding() == expected_output_shape
+    assert t2.padded_shape == expected_output_shape
     pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)
@@ -201,7 +201,7 @@ def run_bert_large_bmm_test(
     logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape.with_tile_padding() == expected_output_shape
+    assert t2.padded_shape == expected_output_shape
     pyt_got_back_rm = ttnn.to_torch(t2)
 
     if bert_large_op == custom_matmuls.bert_large_pre_softmax_bmm:

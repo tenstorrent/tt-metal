@@ -203,7 +203,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     output_shard_spec = None
     if input_shard_spec is not None:
         output_shard_shape = list(input_shard_spec.shape)
-        if dim == 3:
+        if dim == len(per_chip_output_shape) - 1:
             output_shard_shape[1] *= num_devices_per_line
         else:
             output_shard_shape[0] *= num_devices_per_line
