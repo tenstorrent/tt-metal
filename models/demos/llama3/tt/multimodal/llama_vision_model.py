@@ -322,7 +322,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_mask, (0, 0, 0, padded_seq_len - full_text_mask.shape[2]), "constant", 0
         )
         full_text_mask_expand_1NSH = full_text_mask.expand(
-            -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
+            -1, self.configuration.n_heads // self.configuration.num_devices_tp, -1, self.configuration.head_dim
         )
         tt_full_text_mask_expand_1NSH = ttnn.from_torch(
             full_text_mask_expand_1NSH,
@@ -500,7 +500,9 @@ class CrossAttentionTransformer(torch.nn.Module):
                 [xattn_mask, torch.zeros(1, 1, B - unpadded_batch_size, xattn_mask.shape[-1])], dim=2
             )
 
-        xattn_mask_expand = xattn_mask.expand(-1, self.configuration.n_heads // self.configuration.num_devices, -1, -1)
+        xattn_mask_expand = xattn_mask.expand(
+            -1, self.configuration.n_heads // self.configuration.num_devices_tp, -1, -1
+        )
         xattn_mask_expand = xattn_mask_expand.transpose(1, 2).contiguous()
 
         tt_xattn_mask = ttnn.from_torch(
@@ -520,7 +522,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 [full_text_mask, torch.zeros(1, 1, B - unpadded_batch_size, full_text_mask.shape[-1])], dim=2
             )
         full_text_mask_expand_1NSH = full_text_mask.expand(
-            -1, self.configuration.n_heads // self.configuration.num_devices, -1, self.configuration.head_dim
+            -1, self.configuration.n_heads // self.configuration.num_devices_tp, -1, self.configuration.head_dim
         )
         full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.transpose(1, 2).contiguous()
         tt_full_text_mask_expand_1NSH = ttnn.from_torch(
@@ -579,7 +581,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 [
                     S,
                     B,
-                    self.configuration.n_heads // self.configuration.num_devices,
+                    self.configuration.n_heads // self.configuration.num_devices_tp,
                     tt_xattn_mask.shape[-1],
                 ],
                 [S, B, 32, tt_xattn_mask.shape[-1]],
@@ -592,7 +594,7 @@ class CrossAttentionTransformer(torch.nn.Module):
                 [
                     S,
                     B,
-                    self.configuration.n_heads // self.configuration.num_devices,
+                    self.configuration.n_heads // self.configuration.num_devices_tp,
                     self.configuration.head_dim,
                 ],
                 [
