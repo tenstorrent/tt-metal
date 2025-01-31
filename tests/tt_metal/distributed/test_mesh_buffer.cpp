@@ -14,7 +14,8 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshBufferTest = T3000MultiDeviceFixture;
+using MeshBufferTestT3000 = T3000MeshDeviceFixture;
+using MeshBufferTestSuite = GenericMeshDeviceFixture;
 
 struct DeviceLocalShardedBufferTestConfig {
     Shape2D num_pages_per_core;
@@ -47,36 +48,8 @@ struct DeviceLocalShardedBufferTestConfig {
     }
 };
 
-TEST_F(MeshBufferTest, ConfigValidation) {
-    const DeviceLocalBufferConfig device_local_config{
-        .page_size = 1024,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
-
-    ASSERT_EQ(mesh_device_->num_rows(), 2);
-    ASSERT_EQ(mesh_device_->num_cols(), 4);
-
-    // Unaligned shard shape
-    EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
-        device_local_config,
-        mesh_device_.get()));
-
-    // Number of shards exceeds the number of devices
-    EXPECT_ANY_THROW(MeshBuffer::create(
-        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {16, 16}},
-        device_local_config,
-        mesh_device_.get()));
-
-    // 32x32 shards distributed across 2x4 mesh, resulting in 64x128 global shape.
-    auto buffer = MeshBuffer::create(
-        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 32}},
-        device_local_config,
-        mesh_device_.get());
-}
-
-TEST_F(MeshBufferTest, ShardedBufferInitialization) {
+// MeshBuffer tests on T3000
+TEST_F(MeshBufferTestT3000, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
         .buffer_type = BufferType::DRAM,
@@ -93,7 +66,7 @@ TEST_F(MeshBufferTest, ShardedBufferInitialization) {
     EXPECT_EQ(sharded_buffer->device_local_size(), 2 << 10);
 }
 
-TEST_F(MeshBufferTest, ReplicatedBufferInitialization) {
+TEST_F(MeshBufferTestT3000, ReplicatedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
         .buffer_type = BufferType::DRAM,
@@ -108,7 +81,7 @@ TEST_F(MeshBufferTest, ReplicatedBufferInitialization) {
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
 
-TEST_F(MeshBufferTest, Deallocation) {
+TEST_F(MeshBufferTestT3000, Deallocation) {
     // Verify that a buffer is deallocated on the MeshDevice when it goes
     // out of scope on host. Create a buffer with a certain config in limited
     // scope. Record its address. Create another buffer with the same config
@@ -149,7 +122,7 @@ TEST_F(MeshBufferTest, Deallocation) {
     EXPECT_FALSE(buffer_view->is_allocated());
 }
 
-TEST_F(MeshBufferTest, GetDeviceBuffer) {
+TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
         .buffer_type = BufferType::DRAM,
@@ -165,50 +138,8 @@ TEST_F(MeshBufferTest, GetDeviceBuffer) {
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(Coordinate{1, 3}));
 }
 
-TEST_F(MeshBufferTest, InterleavedShardsReadWrite) {
-    constexpr uint32_t NUM_ITERS = 100;
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-
-    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
-        DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = single_tile_size,
-            .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = false};
-
-        std::uniform_int_distribution<int> gen_num_tiles(1, 1024);
-        std::mt19937 rng(seed);
-        for (int i = 0; i < NUM_ITERS; i++) {
-            uint32_t num_random_tiles = gen_num_tiles(rng);
-            ReplicatedBufferConfig global_buffer_config = {
-                .size = num_random_tiles * single_tile_size,
-            };
-
-            std::shared_ptr<MeshBuffer> buf =
-                MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
-
-            std::vector<uint32_t> src_vec(num_random_tiles * single_tile_size / sizeof(uint32_t), 0);
-            std::iota(src_vec.begin(), src_vec.end(), i);
-            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-                    WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, Coordinate(logical_y, logical_x));
-                }
-            }
-
-            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-                    std::vector<uint32_t> dst_vec = {};
-                    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
-                    EXPECT_EQ(dst_vec, src_vec);
-                }
-            }
-        }
-    }
-}
-
 class DeviceLocalMeshBufferShardingTest
-    : public MeshBufferTest,
+    : public MeshBufferTestT3000,
       public testing::WithParamInterface<
           std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>, TensorMemoryLayout>> {};
 
@@ -274,7 +205,7 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(
             TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED)));
 
-TEST_F(MeshBufferTest, SweepShardAndConcat) {
+TEST_F(MeshBufferTestT3000, SweepShardAndConcat) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
@@ -312,7 +243,79 @@ TEST_F(MeshBufferTest, SweepShardAndConcat) {
     }
 }
 
-TEST_F(MeshBufferTest, RowMajorShardingAndReplication) {
+// MeshBuffer tests on N300 and T3000
+TEST_F(MeshBufferTestSuite, ConfigValidation) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 1024,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = false};
+
+    // Unaligned shard shape
+    EXPECT_ANY_THROW(MeshBuffer::create(
+        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {32, 120}},
+        device_local_config,
+        mesh_device_.get()));
+
+    // Number of shards exceeds the number of devices
+    EXPECT_ANY_THROW(MeshBuffer::create(
+        ShardedBufferConfig{.global_size = 16 << 10, .global_buffer_shape = {64, 128}, .shard_shape = {16, 16}},
+        device_local_config,
+        mesh_device_.get()));
+
+    // Buffer with a global shape of 64x128 distributed across a 2x4 or 2x1 Mesh.
+    auto buffer = MeshBuffer::create(
+        ShardedBufferConfig{
+            .global_size = 16 << 10,
+            .global_buffer_shape = {64, 128},
+            .shard_shape = {64 / mesh_device_->num_rows(), 128 / mesh_device_->num_cols()}},
+        device_local_config,
+        mesh_device_.get());
+}
+
+TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
+    constexpr uint32_t NUM_ITERS = 100;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+
+    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
+        DeviceLocalBufferConfig per_device_buffer_config{
+            .page_size = single_tile_size,
+            .buffer_type = BufferType::L1,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            .bottom_up = false};
+
+        std::uniform_int_distribution<int> gen_num_tiles(1, 1024);
+        std::mt19937 rng(seed);
+        for (int i = 0; i < NUM_ITERS; i++) {
+            uint32_t num_random_tiles = gen_num_tiles(rng);
+            ReplicatedBufferConfig global_buffer_config = {
+                .size = num_random_tiles * single_tile_size,
+            };
+
+            std::shared_ptr<MeshBuffer> buf =
+                MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+            std::vector<uint32_t> src_vec(num_random_tiles * single_tile_size / sizeof(uint32_t), 0);
+            std::iota(src_vec.begin(), src_vec.end(), i);
+            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, Coordinate(logical_y, logical_x));
+                }
+            }
+
+            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    std::vector<uint32_t> dst_vec = {};
+                    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
+                    EXPECT_EQ(dst_vec, src_vec);
+                }
+            }
+        }
+    }
+}
+
+TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
@@ -366,7 +369,7 @@ TEST_F(MeshBufferTest, RowMajorShardingAndReplication) {
     }
 }
 
-TEST_F(MeshBufferTest, ColMajorShardingAndReplication) {
+TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{

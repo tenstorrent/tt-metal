@@ -9,7 +9,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-TEST_F(T3000MultiDeviceFixture, SimpleMeshDeviceTest) {
+TEST_F(T3000MeshDeviceFixture, SimpleMeshDeviceTest) {
     EXPECT_EQ(mesh_device_->num_devices(), 8);
     EXPECT_EQ(mesh_device_->num_rows(), 2);
     EXPECT_EQ(mesh_device_->num_cols(), 4);
