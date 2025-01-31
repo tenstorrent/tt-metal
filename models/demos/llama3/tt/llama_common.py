@@ -64,16 +64,15 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float):
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # Llama-3.x specific scaling
     # Values obtained from grid search
     low_freq_factor = 1
     high_freq_factor = 4
-    old_context_len = 8192  # original llama3 length
-    assert False, "FIXME: need to take this from the model config"
+    orig_context_len = 8192  # original llama3 length
 
-    low_freq_wavelen = old_context_len / low_freq_factor
-    high_freq_wavelen = old_context_len / high_freq_factor
+    low_freq_wavelen = orig_context_len / low_freq_factor
+    high_freq_wavelen = orig_context_len / high_freq_factor
     new_freqs = []
     for freq in freqs:
         wavelen = 2 * math.pi / freq
@@ -83,12 +82,12 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float):
             new_freqs.append(freq / scale_factor)
         else:
             assert low_freq_wavelen != high_freq_wavelen
-            smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor):
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -103,7 +102,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -133,8 +132,10 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, theta, scale_factor, start_pos=0):
-    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, theta, scale_factor=scale_factor)
+def get_prefill_rot_mat(
+    head_dim, max_seq_len, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0
+):
+    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, theta, scale_factor, orig_context_len)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
@@ -172,14 +173,15 @@ def get_single_rot_mat(
     dhead,
     mesh_device,
     num_devices,
-    start_pos=0,
-    theta: float = 500000.0,
-    use_scaled=True,
+    start_pos,
+    theta,
+    scale_factor,
+    orig_context_len,
     on_host=False,
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
-    if use_scaled:
-        freqs = apply_scaling(freqs_unscaled)
+    if scale_factor is not None:
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
     rot_matrix = torch.zeros(dhead, dhead)
     rot_matrix[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
@@ -190,8 +192,8 @@ def get_single_rot_mat(
 
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
-    if use_scaled:
-        freqs = apply_scaling(freqs)
+    if scale_factor is not None:
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
     sin_freqs, cos_freqs = torch.sin(freqs), torch.cos(freqs)
     current_rot_mat = torch.zeros(dhead, dhead)
     current_rot_mat[torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()

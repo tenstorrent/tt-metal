@@ -123,7 +123,8 @@ class TtTransformer(LightweightModule):
             self.mesh_device,
             S,
             self.args.rope_theta,
-            scale_factor=self.args.rope_scaling_factor,
+            self.args.rope_scaling_factor,
+            self.args.orig_context_len,
             start_pos=start_pos,
         )
 

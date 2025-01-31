@@ -346,7 +346,8 @@ def run_llama3_demo(
                 mesh_device,
                 prefill_seq_len,
                 model_args.rope_theta,
-                scale_factor=model_args.rope_scaling_factor,
+                model_args.rope_scaling_factor,
+                model_args.orig_context_len,
             )
             if decoding_pos[batch_id] < prefill_seq_len:
                 pt_prefill_input[batch_id][

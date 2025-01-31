@@ -219,7 +219,8 @@ def test_llama_cross_attention_transformer_text_inference(
                     mesh_device,
                     seq_len,
                     model_args.rope_theta,
-                    scale_factor=model_args.rope_scaling_factor,
+                    model_args.rope_scaling_factor,
+                    model_args.orig_context_len,
                 )
                 tt_out = tt_model(
                     tt_h,

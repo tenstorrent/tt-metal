@@ -346,6 +346,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             seq_len=S,
             rope_theta=self.configuration.rope_theta,
             scale_factor=self.configuration.rope_scaling_factor,
+            orig_context_len=self.configuration.orig_context_len,
         )
 
         full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, self.configuration.dim)

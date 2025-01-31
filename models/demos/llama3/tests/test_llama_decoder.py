@@ -142,6 +142,7 @@ def test_llama_decoder_inference(
         model_args.max_seq_len * 2,
         model_args.rope_theta,
         model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     freqs_cis = torch.complex(cos, sin)
 

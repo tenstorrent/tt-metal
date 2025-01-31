@@ -93,7 +93,8 @@ def test_llama_decoder_inference(
         mesh_device,
         max_seq_len,
         model_args.rope_theta,
-        scale_factor=model_args.rope_scaling_factor,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(

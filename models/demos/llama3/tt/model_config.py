@@ -210,7 +210,7 @@ class TtModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.cos, self.sin = precompute_freqs(
-            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor
+            self.head_dim, self.max_seq_len * 2, self.rope_theta, self.rope_scaling_factor, self.orig_context_len
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
@@ -1010,12 +1010,16 @@ class TtModelArgs:
         self.use_scaled_rope = params.get("use_scaled_rope", False)
         if "rope_scaling" in params:
             self.rope_scaling_factor = params.get("factor", None)
-            self.original_max_position_embeddings = params.get("original_max_position_embeddings", None)
+            self.orig_context_len = params.get("original_max_position_embeddings", None)
             if not "use_scaled_rope" in params:
                 self.use_scaled_rope = True
         else:
-            self.rope_scaling_factor = None
-            self.original_max_position_embeddings = None
+            if "Qwen" in self.model_name:
+                self.rope_scaling_factor = 4.0
+                self.orig_context_len = 32768
+            else:
+                self.rope_scaling_factor = None
+                self.orig_context_len = None
 
         # Vision params (Meta-specific)
         self.vision_chunk_size = params.get("vision_chunk_size", -1)
@@ -1091,6 +1095,7 @@ class TtModelArgs:
             self.model_name = "Unknown"
             self.rope_scaling_factor = 4
             logger.warning(f"Unknown model: {LLAMA_DIR}")
+        self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
         config_file = os.path.join(checkpoint_dir, "config.json")

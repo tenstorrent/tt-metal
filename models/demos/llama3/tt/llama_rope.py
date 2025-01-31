@@ -11,8 +11,8 @@ from models.utility_functions import nearest_32
 from loguru import logger
 
 
-def compute_gather_cos_sin(dhead, end, theta, position_ids, scale_factor):
-    cos, sin = precompute_freqs(dhead, end, theta, scale_factor)
+def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
+    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
     return gather_cos_sin(position_ids, cos, sin)
 
 
@@ -25,6 +25,7 @@ class TtLlamaRotarySetup(LightweightModule):
         max_seq_len: int,
         rope_theta: float,
         scale_factor: float,  # use None to disable rope scaling
+        orig_context_len: int,  # only used if scaling enabled
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -45,8 +46,9 @@ class TtLlamaRotarySetup(LightweightModule):
             dhead=head_dim,
             end=max_seq_len * 2,
             theta=rope_theta,
-            position_ids=torch.arange(max_seq_len),
             scale_factor=scale_factor,
+            orig_context_len=orig_context_len,
+            position_ids=torch.arange(max_seq_len),
         )
 
         self.cos_matrix = ttnn.from_torch(

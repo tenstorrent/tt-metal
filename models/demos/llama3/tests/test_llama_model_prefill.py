@@ -137,7 +137,8 @@ def test_llama_model_inference(
         mesh_device,
         seq_len,
         model_args.rope_theta,
-        scale_factor=model_args.rope_scaling_factor,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     # Setup page table
     page_table_tt = None
