@@ -42,19 +42,22 @@ def run_with_trace(
     output_mem_config,
     num_iters=40,
     topology=ttnn.Topology.Ring,
-    subdevice_id=None,
+    from_remote_semaphore_handles=None,
+    to_remote_semaphore_handles=None,
+    worker_sub_device_id=None,
 ):
     # Compile Run
     logger.info("Compiling model")
-    output_tensor_mesh = ttnn.reduce_scatter_async(
+    output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
         input_tensor_mesh,
         dim=dim,
+        from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+        to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
         math_op=math_op,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=topology,
-        subdevice_id=subdevice_id,
-        create_semaphore_handles=True,
+        subdevice_id=worker_sub_device_id,
     )
     for device_id in t3k_mesh_device.get_device_ids():
         ttnn.synchronize_device(t3k_mesh_device.get_device(device_id))
@@ -63,15 +66,16 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.reduce_scatter_async(
+        output_tensor_mesh = ttnn.experimental.reduce_scatter_async(
             input_tensor_mesh,
             dim=dim,
+            from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
+            to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
             math_op=math_op,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=topology,
-            subdevice_id=subdevice_id,
-            create_semaphore_handles=False,
+            subdevice_id=worker_sub_device_id,
         )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     for device_id in t3k_mesh_device.get_device_ids():
@@ -124,7 +128,7 @@ def run_reduce_scatter_test(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
         )
         output_shard_shape = list(input_shard_shape)
-        if dim == 3:
+        if dim == len(per_chip_output_shape) - 1:
             output_shard_shape[1] *= num_devices
         else:
             output_shard_shape[0] *= num_devices
@@ -223,7 +227,9 @@ def run_reduce_scatter_test(
             output_mem_config,
             num_iters=num_iters,
             topology=topology,
-            subdevice_id=worker_sub_device_id,
+            from_remote_semaphore_handles=from_remote_semaphore_handles,
+            to_remote_semaphore_handles=to_remote_semaphore_handles,
+            worker_sub_device_id=worker_sub_device_id,
         )
     else:
         logger.info(f"Running {num_iters} iterations of reduce scatter")

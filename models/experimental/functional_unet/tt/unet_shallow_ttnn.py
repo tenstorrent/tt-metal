@@ -84,6 +84,21 @@ def is_valid_device_for_unet(device):
         return 8 == device.core_grid.x and 8 == device.core_grid.y
 
 
+def preprocess_unet_input_tensor(input_tensor, min_channels=16):
+    N, C, H, W = input_tensor.shape
+    if C < min_channels:
+        channel_padding_needed = min_channels - C
+        nchw = ttnn.pad(input_tensor, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        ttnn.deallocate(input_tensor)
+    else:
+        nchw = input_tensor
+
+    nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # N, C, H, W -> N, H, W, C
+    ttnn.deallocate(nchw)
+
+    return ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])  # 1, 1, NHW, C
+
+
 class UNetConv2D:
     def __init__(
         self,
@@ -155,26 +170,32 @@ class UNetConv2D:
         self.weight = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         self.bias = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
+    def get_conv2d_kwargs(self):
+        return {
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": self.kernel_size,
+            "stride": self.stride,
+            "padding": self.padding,
+            "dilation": [1, 1],
+            "groups": 2,
+            "device": self.device,
+            "conv_config": self.conv_config,
+        }
+
     def __call__(self, x):
         x, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            device=self.device,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            input_height=self.input_height,
-            input_width=self.input_width,
-            batch_size=self.batch_size,
-            kernel_size=self.kernel_size,
-            stride=self.stride,
-            padding=self.padding,
-            conv_config=self.conv_config,
             compute_config=self.compute_config,
             conv_op_cache=self.cache,
-            groups=2,
             return_output_dim=False,
             return_weights_and_bias=True,
+            **self.get_conv2d_kwargs(),
         )
         return x
 
@@ -419,36 +440,18 @@ class UNet:
             activation_dtype=ttnn.bfloat16,
         )
 
-        self.parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            batch_size=self.downblock1.conv1.batch_size,
-            input_channels=self.downblock1.conv1.in_channels,
-            output_height=self.downblock1.conv2.input_height,
-            output_width=self.downblock1.conv2.input_width,
-            output_channels=self.downblock1.conv1.out_channels,
-            compute_grid_size=device.compute_with_storage_grid_size(),
-            block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            is_out_tiled=True,
-            enable_channels_padding=True,
-        )
-        self.input_sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            tensor_shape=ttnn.Shape(
-                [
-                    1,
-                    1,
-                    self.downblock1.conv1.batch_size
-                    * self.downblock1.conv1.input_height
-                    * self.downblock1.conv1.input_width,
-                    nearest_16(self.downblock1.conv1.in_channels),
-                ]
-            ),
-            parallel_config=self.parallel_config,
-            tile_size=32,
+        self.input_sharded_memory_config = ttnn.create_sharded_memory_config(
+            [1, 16, 1056, 160],
+            ttnn.CoreGrid(x=8, y=6),
+            ttnn.ShardStrategy.HEIGHT,
         )
 
     def bottleneck(self, x):
         x = self.bnc(x)
         return self.bnc2(x)
+
+    def preprocess_input_tensor(self, x):
+        return preprocess_unet_input_tensor(x, 16)
 
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
@@ -470,6 +473,8 @@ class UNet:
 
         if move_input_tensor_to_device:
             x = ttnn.to_device(x, device=self.device, memory_config=self.input_sharded_memory_config)
+
+        x = self.preprocess_input_tensor(x)
 
         x, c1_residual = self.downblock1(x)
         x, c2_residual = self.downblock2(x)

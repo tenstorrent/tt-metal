@@ -14,7 +14,7 @@
 #include "noc/noc_parameters.h"
 
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 extern bool debug_g;
@@ -137,11 +137,11 @@ DeviceData::DeviceData(
     }
 
     // Always populate DRAM
-    auto num_banks = device->num_banks(BufferType::DRAM);
+    auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
         CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
-        int32_t bank_offset = device->bank_offset(BufferType::DRAM, bank_id);
+        int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
         this->all_data[phys_core][bank_id].phys_core = phys_core;
@@ -152,11 +152,11 @@ DeviceData::DeviceData(
 
     // TODO: make banked L1 tests play nicely w/ non-banked L1 tests
     if (is_banked) {
-        num_banks = device->num_banks(BufferType::L1);
+        num_banks = device->allocator()->get_num_banks(BufferType::L1);
         for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-            CoreCoord core = device->logical_core_from_bank_id(bank_id);
+            CoreCoord core = device->allocator()->get_logical_core_from_bank_id(bank_id);
             CoreCoord phys_core = device->worker_core_from_logical_core(core);
-            int32_t bank_offset = device->bank_offset(BufferType::L1, bank_id);
+            int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::L1, bank_id);
             this->all_data[core][bank_id] = one_core_data_t();
             this->all_data[core][bank_id].logical_core = core;
             this->all_data[core][bank_id].phys_core = phys_core;
@@ -184,11 +184,11 @@ DeviceData::DeviceData(
 
 // Populate interleaved DRAM with data for later readback.  Can we extended to L1 if needed.
 void DeviceData::prepopulate_dram(IDevice* device, uint32_t size_words) {
-    uint32_t num_dram_banks = device->num_banks(BufferType::DRAM);
+    uint32_t num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        auto offset = device->bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+        auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
+        auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
         auto bank_core = device->logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
@@ -573,10 +573,10 @@ void configure_kernel_variant(
 inline uint32_t get_min_required_buffer_addr(IDevice* device, bool is_dram) {
     int32_t smallest_offset = std::numeric_limits<int32_t>::max();
     BufferType buffer_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    uint32_t num_banks = device->num_banks(buffer_type);
+    uint32_t num_banks = device->allocator()->get_num_banks(buffer_type);
 
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        int32_t offset = device->bank_offset(buffer_type, bank_id);
+        int32_t offset = device->allocator()->get_bank_offset(buffer_type, bank_id);
         smallest_offset = offset < smallest_offset ? offset : smallest_offset;
     }
 
@@ -640,7 +640,7 @@ inline void generate_random_paged_payload(
     bool is_dram) {
     static uint32_t coherent_count = 0x100;  // Abitrary starting value, avoid 0x0 since matches with DRAM prefill.
     auto buf_type = is_dram ? BufferType::DRAM : BufferType::L1;
-    uint32_t num_banks = device->num_banks(buf_type);
+    uint32_t num_banks = device->allocator()->get_num_banks(buf_type);
     uint32_t words_per_page = cmd.write_paged.page_size / sizeof(uint32_t);
     log_debug(
         tt::LogTest,
@@ -651,17 +651,17 @@ inline void generate_random_paged_payload(
         words_per_page);
 
     // Note: the dst address marches in unison regardless of whether or not a core is written to
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
+    uint32_t page_size_alignment_bytes = device->allocator()->get_config().alignment;
     for (uint32_t page_id = start_page; page_id < start_page + cmd.write_paged.pages; page_id++) {
         CoreCoord bank_core;
         uint32_t bank_id = page_id % num_banks;
         uint32_t bank_offset = tt::align(cmd.write_paged.page_size, page_size_alignment_bytes) * (page_id / num_banks);
 
         if (is_dram) {
-            auto dram_channel = device->dram_channel_from_bank_id(bank_id);
+            auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(bank_id);
             bank_core = device->logical_core_from_dram_channel(dram_channel);
         } else {
-            bank_core = device->logical_core_from_bank_id(bank_id);
+            bank_core = device->allocator()->get_logical_core_from_bank_id(bank_id);
         }
 
         // Generate data and add to cmd for sending to device, and device_data for correctness checking.
@@ -931,8 +931,8 @@ inline void gen_dispatcher_paged_write_cmd(
     uint32_t start_page,
     uint32_t page_size,
     uint32_t pages) {
-    uint32_t page_size_alignment_bytes = device->get_allocator_alignment();
-    uint32_t num_banks = device->num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
+    uint32_t page_size_alignment_bytes = device->allocator()->get_config().alignment;
+    uint32_t num_banks = device->allocator()->get_num_banks(is_dram ? BufferType::DRAM : BufferType::L1);
     CoreType core_type = is_dram ? CoreType::DRAM : CoreType::WORKER;
 
     // Not safe to mix paged L1 and paged DRAM writes currently in this test since same book-keeping.

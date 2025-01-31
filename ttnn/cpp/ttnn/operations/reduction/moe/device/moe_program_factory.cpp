@@ -4,7 +4,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_log.h>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
@@ -57,7 +56,7 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     uint32_t num_out_tiles = out_tensor.volume() / tt::constants::TILE_HW;
     uint32_t scale_tiles = 1;
 
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
     // for streaming in input

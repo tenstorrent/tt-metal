@@ -49,7 +49,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Printing, only enabled with log_debug
     this->routing_table_generator_->print_routing_tables();
 
-    this->print_ethernet_channels();
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
     this->configure_routing_tables();
 
@@ -196,19 +195,18 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
     } else {
         TT_FATAL(false, "Unsupported mesh graph descriptor file {}", mesh_graph_desc_file);
     }
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc =
-        tt_ClusterDescriptor::create_from_yaml(cluster_desc_file_path.string());
 
     // Must pin a NW chip
     // TODO: need to rework how this is determined
-    chip_id_t nw_chip_physical_chip_id;
-    for (const auto& [physical_chip_id, eth_coord] : cluster_desc->get_chip_locations()) {
+    chip_id_t nw_chip_physical_chip_id = 0;
+    for (const auto& [physical_chip_id, eth_coord] : tt::Cluster::instance().get_user_chip_ethernet_coordinates()) {
         if (eth_coord == nw_chip_eth_coord) {
             nw_chip_physical_chip_id = physical_chip_id;
             break;
         }
     }
     const std::uint32_t num_ports_per_side = routing_table_generator_->get_chip_spec().num_eth_ports_per_direction;
+    // Main board
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.push_back(
         this->get_mesh_physical_chip_ids(mesh_ns_size, mesh_ew_size, num_ports_per_side, nw_chip_physical_chip_id));
 
@@ -221,49 +219,48 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
     for (mesh_id_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
         this->router_port_directions_to_physical_eth_chan_map_[mesh_id].resize(intra_mesh_connectivity[mesh_id].size());
         for (chip_id_t chip_id = 0; chip_id < intra_mesh_connectivity[mesh_id].size(); chip_id++) {
+            auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
+            const auto& connected_chips_and_eth_cores =
+                tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[mesh_id][chip_id]) {
-                const auto& physical_chip_id =
-                    this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
                 const auto& physical_connected_chip_id =
                     this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_connected_chip_id];
-                const auto& connected_eth_channels =
-                    cluster_desc->get_directly_connected_ethernet_channels_between_chips(
-                        physical_chip_id, physical_connected_chip_id);
+                const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
                 TT_FATAL(
-                    connected_eth_channels.size() == edge.connected_chip_ids.size(),
+                    connected_eth_cores.size() == edge.connected_chip_ids.size(),
                     "Expected {} eth links from physical chip {} to physical chip {}",
                     edge.connected_chip_ids.size(),
                     physical_chip_id,
                     physical_connected_chip_id);
 
-                for (const auto& eth_chan : connected_eth_channels) {
+                for (const auto& eth_core : connected_eth_cores) {
                     // There could be an optimization here to create entry for both chips here, assuming links are
                     // bidirectional
                     this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
-                        .push_back(std::get<0>(eth_chan));
+                        .push_back(tt::Cluster::instance()
+                                       .get_soc_desc(physical_chip_id)
+                                       .logical_eth_core_to_chan_map.at(eth_core));
                 }
             }
         }
     }
     for (mesh_id_t mesh_id = 0; mesh_id < inter_mesh_connectivity.size(); mesh_id++) {
         for (chip_id_t chip_id = 0; chip_id < inter_mesh_connectivity[mesh_id].size(); chip_id++) {
+            auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
+            const auto& connected_chips_and_eth_cores =
+                tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
             for (const auto& [connected_mesh_id, edge] : inter_mesh_connectivity[mesh_id][chip_id]) {
                 // Loop over edges connected chip ids, they could connect to different chips for intermesh traffic
                 for (const auto& logical_connected_chip_id : edge.connected_chip_ids) {
-                    auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
-                    const auto& connected_eth_channels =
-                        cluster_desc->get_directly_connected_ethernet_channels_between_chips(
-                            physical_chip_id,
-                            this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
-                                                                                   [logical_connected_chip_id]);
-                    TT_ASSERT(
-                        connected_eth_channels.size() == 1,
-                        "Expect exactly one connected eth channel");  // Since we are looping over the connected chip
-                                                                      // ids
-
-                    for (const auto& eth_chan : connected_eth_channels) {
+                    const auto& physical_connected_chip_id =
+                        this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
+                                                                               [logical_connected_chip_id];
+                    const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
+                    for (const auto& eth_core : connected_eth_cores) {
                         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
-                            .push_back(std::get<0>(eth_chan));
+                            .push_back(tt::Cluster::instance()
+                                           .get_soc_desc(physical_chip_id)
+                                           .logical_eth_core_to_chan_map.at(eth_core));
                     }
                 }
             }

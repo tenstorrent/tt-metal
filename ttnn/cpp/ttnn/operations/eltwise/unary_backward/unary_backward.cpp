@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -1774,7 +1773,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     const Tensor& grad,
     const Tensor& input,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -1794,7 +1793,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::SimpleShape(intended_shape_array);
+        const auto required = ttnn::Shape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,
@@ -1813,7 +1812,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         ttnn::SmallVector<int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
         std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::SimpleShape(intended_shape_array);
+        const auto required = ttnn::Shape(intended_shape_array);
         Tensor result = ttnn::moreh_sum(
             grad,
             dim,

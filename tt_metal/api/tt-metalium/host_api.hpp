@@ -12,6 +12,7 @@
 #include "device.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
+#include "lightmetal_binary.hpp"
 
 /** @file */
 
@@ -31,11 +32,13 @@ class CoreRangeSet;
 namespace tt {
 
 namespace tt_metal {
+
+class CommandQueue;
+struct TraceDescriptor;
 inline namespace v0 {
 
 class Program;
 class IDevice;
-class CommandQueue;
 class Trace;
 class CircularBuffer;
 class Event;
@@ -435,7 +438,7 @@ void DeallocateBuffer(Buffer& buffer);
 *  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
 */
 // clang-format on
-void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program);
+void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program);
 
 // clang-format off
 // ==================================================
@@ -504,7 +507,7 @@ void SetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::shared_ptr<RuntimeArgs> runtime_args);
+    const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 // clang-format off
 /**
@@ -742,7 +745,7 @@ void EnqueueWriteBuffer(
 // clang-format on
 void EnqueueWriteSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     const BufferRegion& region,
     bool blocking);
@@ -765,7 +768,7 @@ void EnqueueWriteSubBuffer(
 template <typename DType>
 void EnqueueWriteSubBuffer(
     CommandQueue& cq,
-    std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>> buffer,
+    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     std::vector<DType>& src,
     const BufferRegion& region,
     bool blocking) {
@@ -882,6 +885,43 @@ void ReleaseTrace(IDevice* device, const uint32_t tid);
  */
 // clang-format on
 void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
+
+// clang-format off
+/**
+ * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
+ * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
+ * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: void
+ */
+// clang-format on
+void LightMetalBeginCapture();
+
+// clang-format off
+/**
+ * Ends Light Metal Binary capturing on host and all devices returns the binary blob to the user.
+ * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
+ *
+ * Return value: LightMetalBinary
+ */
+// clang-format on
+LightMetalBinary LightMetalEndCapture();
+
+// clang-format off
+/**
+ * Load an existing trace descriptor onto a particular device and command queue and assign it as user-provided trace id. Useful for Light Metal Binary replay.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | device       | The device to load the trace onto.                                     | IDevice *                     |                                    | Yes      |
+ * | cq_id        | The command queue id to load the trace onto.                           | uint8_t                       |                                    | Yes      |
+ * | trace_id     | A unique id to represent the trace on device.                          | uint32_t                      |                                    | Yes      |
+ * | trace_desc   | The trace descriptor to load onto the device.                          | TraceDescriptor&              |                                    | Yes      |
+ */
+// clang-format on
+void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc);
 
 // clang-format off
 /**

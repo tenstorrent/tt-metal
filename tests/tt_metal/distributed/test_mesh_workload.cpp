@@ -4,13 +4,13 @@
 
 #include <random>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_metal/distributed/distributed.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -325,9 +325,9 @@ std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
 
 std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
     std::shared_ptr<MeshDevice>& mesh_device,
-    std::vector<std::shared_ptr<Buffer>>& src0_bufs,
-    std::vector<std::shared_ptr<Buffer>>& src1_bufs,
-    std::vector<std::shared_ptr<Buffer>>& output_bufs) {
+    std::vector<std::shared_ptr<MeshBuffer>>& src0_bufs,
+    std::vector<std::shared_ptr<MeshBuffer>>& src1_bufs,
+    std::vector<std::shared_ptr<MeshBuffer>>& output_bufs) {
     const std::vector<std::string> op_id_to_op_define = {"add_tiles", "mul_tiles"};
     const std::vector<std::string> op_id_to_op_type_define = {"EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL"};
 
@@ -344,23 +344,26 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
             single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
         uint32_t page_size = single_tile_size;
 
-        for (auto device : mesh_device->get_devices()) {
-            tt_metal::InterleavedBufferConfig dram_config{
-                .device = device,
-                .size = dram_buffer_size,
-                .page_size = page_size,
-                .buffer_type = tt_metal::BufferType::DRAM};
-            for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-                for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                    auto src0_dram_buffer = CreateBuffer(dram_config);
-                    src0_bufs.push_back(src0_dram_buffer);
+        ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
+        DeviceLocalBufferConfig per_device_buffer_config{
+            .page_size = page_size,
+            .buffer_type = tt_metal::BufferType::DRAM,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            .bottom_up = true};
 
-                    auto src1_dram_buffer = CreateBuffer(dram_config);
-                    src1_bufs.push_back(src1_dram_buffer);
+        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+                auto src0_dram_buffer =
+                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+                src0_bufs.push_back(src0_dram_buffer);
 
-                    auto dst_dram_buffer = CreateBuffer(dram_config);
-                    output_bufs.push_back(dst_dram_buffer);
-                }
+                auto src1_dram_buffer =
+                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+                src1_bufs.push_back(src1_dram_buffer);
+
+                auto dst_dram_buffer =
+                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+                output_bufs.push_back(dst_dram_buffer);
             }
         }
 
@@ -452,7 +455,7 @@ void verify_cb_config(
             for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
                  logical_y++) {
                 auto device = mesh_device->get_device(logical_y, logical_x);
-                uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 for (const auto& core_range : crs.ranges()) {
                     for (const auto& core_coord : core_range) {
                         ::tt::tt_metal::detail::ReadFromDeviceL1(
@@ -505,7 +508,7 @@ void validate_sems(
 
 using MeshWorkloadTest = T3000MultiDeviceFixture;
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEth) {
+TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEth) {
     uint32_t num_workloads = 10;
     auto random_seed = 0;
     uint32_t num_iters = 500;
@@ -519,7 +522,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEth) {
                 IDevice* device = mesh_device_->get_device(logical_y, logical_x);
                 auto programs = create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
                 AddProgramToMeshWorkload(*workload, *programs[0], devices);
             }
         }
@@ -537,7 +540,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEth) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadMixedTensixEth) {
+TEST_F(MeshWorkloadTest, MeshWorkloadMixedTensixEth) {
     uint32_t num_workloads = 20;
     auto random_seed = 0;
     uint32_t num_iters = 30;
@@ -557,7 +560,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadMixedTensixEth) {
         for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
                 IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
                 if (run_on_eth) {
                     auto programs = create_random_programs(
                         1,
@@ -587,7 +590,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadMixedTensixEth) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEthRandomGridSize) {
+TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthRandomGridSize) {
     uint32_t num_workloads = 30;
     auto random_seed = 0;
     uint32_t num_iters = 500;
@@ -606,7 +609,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEthRandomGridSize) {
                 IDevice* device = mesh_device_->get_device(logical_y, logical_x);
                 auto programs = create_random_programs(
                     1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
                 AddProgramToMeshWorkload(*workload, *programs[0], devices);
             }
         }
@@ -624,7 +627,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadOnActiveEthRandomGridSize) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
     uint32_t num_iterations = 1000;
@@ -642,13 +645,13 @@ TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
     for (int i = 0; i < num_programs; i += 2) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         if (i % 2) {
-            LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {4, 1});
-            LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {4, 2});
+            LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
+            LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
             AddProgramToMeshWorkload(*random_workload, *programs[i], devices_0);
             AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
         } else {
-            LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {2, 2});
-            LogicalDeviceRange devices_1 = LogicalDeviceRange({2, 0}, {4, 2});
+            LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {1, 1});
+            LogicalDeviceRange devices_1 = LogicalDeviceRange({2, 0}, {3, 1});
             AddProgramToMeshWorkload(*random_workload, *programs[i], devices_0);
             AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
         }
@@ -658,10 +661,10 @@ TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
     programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_programs; i += 4) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
-        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {1, 2});
-        LogicalDeviceRange devices_1 = LogicalDeviceRange({1, 0}, {2, 2});
-        LogicalDeviceRange devices_2 = LogicalDeviceRange({2, 0}, {3, 2});
-        LogicalDeviceRange devices_3 = LogicalDeviceRange({3, 0}, {4, 2});
+        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {0, 1});
+        LogicalDeviceRange devices_1 = LogicalDeviceRange({1, 0}, {1, 1});
+        LogicalDeviceRange devices_2 = LogicalDeviceRange({2, 0}, {2, 1});
+        LogicalDeviceRange devices_3 = LogicalDeviceRange({3, 0}, {3, 1});
         AddProgramToMeshWorkload(*random_workload, *programs[i], devices_0);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 2], devices_2);
@@ -672,14 +675,14 @@ TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
     programs = create_random_programs(num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_heterogeneous_programs; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
-        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {1, 1});
-        LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {1, 2});
-        LogicalDeviceRange devices_2 = LogicalDeviceRange({1, 0}, {2, 1});
-        LogicalDeviceRange devices_3 = LogicalDeviceRange({1, 1}, {2, 2});
-        LogicalDeviceRange devices_4 = LogicalDeviceRange({2, 0}, {3, 1});
-        LogicalDeviceRange devices_5 = LogicalDeviceRange({2, 1}, {3, 2});
-        LogicalDeviceRange devices_6 = LogicalDeviceRange({3, 0}, {4, 1});
-        LogicalDeviceRange devices_7 = LogicalDeviceRange({3, 1}, {4, 2});
+        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {0, 0});
+        LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {0, 1});
+        LogicalDeviceRange devices_2 = LogicalDeviceRange({1, 0}, {1, 0});
+        LogicalDeviceRange devices_3 = LogicalDeviceRange({1, 1}, {1, 1});
+        LogicalDeviceRange devices_4 = LogicalDeviceRange({2, 0}, {2, 0});
+        LogicalDeviceRange devices_5 = LogicalDeviceRange({2, 1}, {2, 1});
+        LogicalDeviceRange devices_6 = LogicalDeviceRange({3, 0}, {3, 0});
+        LogicalDeviceRange devices_7 = LogicalDeviceRange({3, 1}, {3, 1});
 
         AddProgramToMeshWorkload(*random_workload, *programs[i], devices_0);
         AddProgramToMeshWorkload(*random_workload, *programs[i + 1], devices_1);
@@ -704,7 +707,7 @@ TEST_F(MeshWorkloadTest, TestSimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, TestRandomizedMeshWorkload) {
+TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
@@ -723,7 +726,7 @@ TEST_F(MeshWorkloadTest, TestRandomizedMeshWorkload) {
     log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
     for (int i = 0; i < num_programs; i += 1) {
         // Choose a grid of random dimensions and run a MeshWorkload on it
-        LogicalDeviceRange device_range = LogicalDeviceRange({0, 0}, {gen_x(rng), gen_y(rng)});
+        LogicalDeviceRange device_range = LogicalDeviceRange({0, 0}, {gen_x(rng) - 1, gen_y(rng) - 1});
         auto random_workload = std::make_shared<MeshWorkload>();
         AddProgramToMeshWorkload(*random_workload, *programs[i], device_range);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
@@ -741,80 +744,88 @@ TEST_F(MeshWorkloadTest, TestRandomizedMeshWorkload) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, TestEltwiseBinaryMeshWorkload) {
-    std::vector<std::shared_ptr<Buffer>> src0_bufs = {};
-    std::vector<std::shared_ptr<Buffer>> src1_bufs = {};
-    std::vector<std::shared_ptr<Buffer>> output_bufs = {};
+TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
+    std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
+    std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
+    std::vector<std::shared_ptr<MeshBuffer>> output_bufs = {};
 
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
     auto programs = create_eltwise_bin_programs(mesh_device_, src0_bufs, src1_bufs, output_bufs);
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {4, 1});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {4, 2});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
     AddProgramToMeshWorkload(mesh_workload, *programs[0], devices_0);
     AddProgramToMeshWorkload(mesh_workload, *programs[1], devices_1);
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
-    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 3);
+    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), 3);
 
-    uint32_t buffer_idx = 0;
-    for (auto device : mesh_device_->get_devices()) {
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                EnqueueWriteBuffer(device->command_queue(), src0_bufs.at(buffer_idx), src0_vec, false);
-                EnqueueWriteBuffer(device->command_queue(), src1_bufs.at(buffer_idx), src1_vec, false);
-                buffer_idx++;
-            }
+    for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+        for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+            EnqueueWriteMeshBuffer(
+                mesh_device_->mesh_command_queue(), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
+            EnqueueWriteMeshBuffer(
+                mesh_device_->mesh_command_queue(), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
         }
     }
+
     // Run workload multiple times
     for (int i = 0; i < 1000; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     }
 
-    buffer_idx = 0;
-    uint32_t dev_idx = 0;
-    for (auto device : mesh_device_->get_devices()) {
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                std::vector<bfloat16> dst_vec = {};
-                EnqueueReadBuffer(device->command_queue(), output_bufs.at(buffer_idx), dst_vec, true);
-                if (dev_idx < 4) {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), 5);
-                    }
-                } else {
-                    for (int i = 0; i < dst_vec.size(); i++) {
-                        EXPECT_EQ(dst_vec[i].to_float(), 6);
+    for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
+        for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
+            for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+                for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+                    std::vector<bfloat16> dst_vec = {};
+                    ReadShard(
+                        mesh_device_->mesh_command_queue(),
+                        dst_vec,
+                        output_bufs[col_idx * worker_grid_size.y + row_idx],
+                        Coordinate(logical_y, logical_x));
+                    if (logical_y == 0) {
+                        for (int i = 0; i < dst_vec.size(); i++) {
+                            EXPECT_EQ(dst_vec[i].to_float(), 5);
+                        }
+                    } else {
+                        for (int i = 0; i < dst_vec.size(); i++) {
+                            EXPECT_EQ(dst_vec[i].to_float(), 6);
+                        }
                     }
                 }
-                buffer_idx++;
             }
         }
-        dev_idx++;
     }
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadSanity) {
+TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
 
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     // Create buffers
-    std::vector<std::shared_ptr<Buffer>> input_buffers = {};
-    std::vector<std::shared_ptr<Buffer>> output_buffers = {};
-    for (auto device : mesh_device_->get_devices()) {
-        InterleavedBufferConfig dram_config{
-            .device = device, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    std::vector<std::shared_ptr<MeshBuffer>> input_buffers = {};
+    std::vector<std::shared_ptr<MeshBuffer>> output_buffers = {};
 
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                input_buffers.push_back(CreateBuffer(dram_config));
-                output_buffers.push_back(CreateBuffer(dram_config));
-            }
+    ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = dram_buffer_size,
+        .buffer_type = tt_metal::BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = true};
+
+    for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+        for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+            input_buffers.push_back(
+                MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get()));
+            output_buffers.push_back(
+                MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get()));
         }
     }
+
     // Create MeshWorkload
     Program program = CreateProgram();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -853,26 +864,18 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {4, 1});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {4, 2});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices_0);
     AddProgramToMeshWorkload(mesh_workload, *program_1, devices_1);
 
     std::size_t buffer_idx = 0;
     std::vector<uint32_t> src_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 1);
-    for (auto device : mesh_device_->get_devices()) {
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                EnqueueWriteBuffer(device->command_queue(), input_buffers.at(buffer_idx), src_vec, false);
-                buffer_idx++;
-            }
-        }
-    }
-    std::unordered_set<uint32_t> devices_with_output_populated = {};
 
-    for (std::size_t logical_x = devices_0.start_coord.x; logical_x < devices_0.end_coord.x; logical_x++) {
-        for (std::size_t logical_y = devices_0.start_coord.y; logical_y < devices_0.end_coord.y; logical_y++) {
-            devices_with_output_populated.insert(mesh_device_->get_device(logical_y, logical_x)->id());
+    for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+        for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+            EnqueueWriteMeshBuffer(
+                mesh_device_->mesh_command_queue(), input_buffers[col_idx * worker_grid_size.y + row_idx], src_vec);
         }
     }
 
@@ -887,13 +890,16 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSanity) {
         }
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
         buffer_idx = 0;
-        for (auto device : mesh_device_->get_devices()) {
-            for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-                for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                    std::vector<bfloat16> dst_vec = {};
-                    EnqueueReadBuffer(device->command_queue(), output_buffers.at(buffer_idx), dst_vec, true);
-                    buffer_idx++;
-                    if (devices_with_output_populated.find(device->id()) != devices_with_output_populated.end()) {
+        for (std::size_t logical_x = devices_0.start_coord.x; logical_x < devices_0.end_coord.x; logical_x++) {
+            for (std::size_t logical_y = devices_0.start_coord.y; logical_y < devices_0.end_coord.y; logical_y++) {
+                for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
+                    for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
+                        std::vector<bfloat16> dst_vec = {};
+                        ReadShard(
+                            mesh_device_->mesh_command_queue(),
+                            dst_vec,
+                            output_buffers[col_idx * worker_grid_size.y + row_idx],
+                            Coordinate(logical_y, logical_x));
                         for (int i = 0; i < dst_vec.size(); i++) {
                             float ref_val = std::pow(2, (iter % 2) + 1);
                             if (i >= 512) {
@@ -908,7 +914,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadCBUpdate) {
+TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
     std::shared_ptr<Program> program = std::make_shared<Program>();
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -924,7 +930,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadCBUpdate) {
     initialize_dummy_kernels(*program, cr_set);
 
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {4, 2});
+    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
 
     AddProgramToMeshWorkload(mesh_workload, *program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
@@ -943,7 +949,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadCBUpdate) {
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreSanity) {
+TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program;
@@ -954,7 +960,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreSanity) {
         expected_semaphore_values.push_back(sem);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {4, 2});
+    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
@@ -964,7 +970,7 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreDifferentPrograms) {
+TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program0;
@@ -980,8 +986,8 @@ TEST_F(MeshWorkloadTest, TestMeshWorkloadSemaphoreDifferentPrograms) {
         expected_semaphore_values_1.push_back(sem + 1);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {4, 1});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {4, 2});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
 
     AddProgramToMeshWorkload(mesh_workload, program0, devices_0);
     AddProgramToMeshWorkload(mesh_workload, program1, devices_1);

@@ -16,12 +16,14 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/basic_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/hardware_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/launch_message_ring_buffer_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/worker_config_buffer.cpp
@@ -45,6 +47,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
 )
 
+# Include helper functions and generate headers from flatbuffer schemas
+include(flatbuffers)
+
+set(FLATBUFFER_SCHEMAS) # Empty to start, coming soon.
+
+foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
+    GENERATE_FBS_HEADER(${FBS_FILE})
+    list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER_FILE})
+endforeach()
+
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
@@ -55,11 +67,13 @@ target_link_libraries(
         Tracy::TracyClient
     PRIVATE
         Boost::smart_ptr
+        FlatBuffers::FlatBuffers
         range-v3::range-v3
         Metalium::Metal::Common
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
+        Metalium::Metal::LLRT
 )
 
 target_include_directories(
@@ -67,7 +81,10 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${PROJECT_SOURCE_DIR}/tt_metal/include
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)

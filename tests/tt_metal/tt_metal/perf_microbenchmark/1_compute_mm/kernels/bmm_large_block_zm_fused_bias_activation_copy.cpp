@@ -302,7 +302,7 @@ void MAIN {
 #endif
 
         reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
         // reconfigure unpacker df for src B
         cb_wait_front(bias_cb_id, in1_per_core_w);
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -360,7 +360,7 @@ void MAIN {
 #endif
 #endif  // FUSE_BIAS
             pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(mm_partials_cb_id);
             for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                 reblock_and_untilize<out_subblock_w, out_block_w>(
                     in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);

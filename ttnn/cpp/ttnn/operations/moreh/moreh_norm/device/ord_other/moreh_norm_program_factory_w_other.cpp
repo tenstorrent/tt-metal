@@ -25,7 +25,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
     const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
@@ -36,7 +36,7 @@ MorehNormOperation::ProgramFactoryWOther::cached_program_t MorehNormOperation::P
 
     const auto num_units = input.volume() / H / W * Ht;
 
-    const auto origin_w = input_shape.without_padding()[input_rank - 1];
+    const auto origin_w = input.get_logical_shape()[input_rank - 1];
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup

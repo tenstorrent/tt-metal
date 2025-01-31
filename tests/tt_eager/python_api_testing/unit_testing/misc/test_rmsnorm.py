@@ -133,3 +133,27 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
 )
 def test_rmsnorm_test(test_id, dtype, in0_mem_config, out_mem_config, device):
     run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device)
+
+
+@pytest.mark.parametrize("h", [128, 1024, 8192, 65536])
+@pytest.mark.parametrize("w", [2048, 3072, 4096])
+def test_llama_4D_rms_norm(device, h, w):
+    """
+    Llama rms input shape: [1, 1, seqlen, hidden_dim]
+    Llama weight shape: [1, 1, hidden_dim/32, 32]
+    Hidden dims for Llama: {1B:2048, 3B:3072, 8B:4096}
+    """
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((1, 1, 1, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.rms_norm)
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT)
+    weight = ttnn.from_torch(torch_weight.reshape(1, 1, w // 32, 32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    is_close(torch_output_tensor, output_tensor)

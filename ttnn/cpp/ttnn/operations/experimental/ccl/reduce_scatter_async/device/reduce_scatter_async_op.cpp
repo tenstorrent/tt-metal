@@ -4,7 +4,6 @@
 
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "cpp/ttnn/global_semaphore.hpp"
 
 #include <ranges>
@@ -81,11 +80,11 @@ ReduceScatterAsync create_reduce_scatter_struct(
 void ReduceScatterAsync::validate(const std::vector<Tensor>& input_tensors) const {
     for (auto const& t : input_tensors) {
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] / this->ring_size > 0,
+            t.get_padded_shape()[this->scatter_dim] / this->ring_size > 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
         TT_FATAL(
-            t.get_legacy_shape()[this->scatter_dim] % this->ring_size == 0,
+            t.get_padded_shape()[this->scatter_dim] % this->ring_size == 0,
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }
@@ -160,8 +159,20 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program(
 }
 
 operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    auto input_shape = input_tensors[0].get_padded_shape();
+    auto input_memory_layout = input_tensors[0].get_layout();
+    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
     return operation::hash_operation<ReduceScatterAsync>(
-        this->binary_op_type, this->scatter_dim, this->ring_size, this->ring_index, this->topology);
+        this->binary_op_type,
+        this->scatter_dim,
+        this->ring_size,
+        this->ring_index,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config);
 }
 
 namespace {

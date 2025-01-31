@@ -295,11 +295,11 @@ auto create_override_addresses_callback(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank);
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim);
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim);
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape);
+void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape);
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim);
 
@@ -310,10 +310,10 @@ void initialize_dims_with_range(ttnn::SmallVector<int64_t>& dims, uint32_t input
 ttnn::SmallVector<int64_t> get_dim(
     const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim, uint32_t input_rank);
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape);
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape);
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
-    const ttnn::SimpleShape& shape, uint32_t dim);
+    const ttnn::Shape& shape, uint32_t dim);
 
 }  // namespace operations
 }  // namespace ttnn

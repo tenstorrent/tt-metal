@@ -42,7 +42,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
         }
     }
 
-    return ttnn::Shape(shape);
+    return ttnn::Shape(std::move(shape));
 }
 }  // namespace
 

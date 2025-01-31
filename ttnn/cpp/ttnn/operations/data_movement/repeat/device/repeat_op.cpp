@@ -13,7 +13,7 @@ namespace ttnn::operations::data_movement {
 
 void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    tt::tt_metal::LegacyShape input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     TT_FATAL(this->repeat_dim < input_shape.rank(), "Repeat dim specified is larger than input tensor rank.");
     if (input_tensor.get_layout() == Layout::ROW_MAJOR && this->repeat_dim == input_shape.rank() - 1) {
         TT_FATAL(
@@ -35,7 +35,7 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
 std::vector<ttnn::TensorSpec> RepeatDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    ttnn::SimpleShape shape_out = input_tensor.get_logical_shape();
+    ttnn::Shape shape_out = input_tensor.get_logical_shape();
     shape_out[this->repeat_dim] *= this->num_repeats;
     return {TensorSpec(
         shape_out, TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};

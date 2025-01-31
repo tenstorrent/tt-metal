@@ -189,6 +189,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMulticastInvalidRange = 8,
     DebugSanitizeNocAlignment = 9,
     DebugSanitizeNocMixedVirtualandPhysical = 10,
+    DebugSanitizeNocAddrMailbox = 11,
 };
 
 struct debug_assert_msg_t {
@@ -323,7 +324,9 @@ struct core_info_msg_t {
     volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
     volatile uint8_t noc_size_x;
     volatile uint8_t noc_size_y;
-    volatile uint8_t pad[27];
+    volatile uint8_t worker_grid_size_x;
+    volatile uint8_t worker_grid_size_y;
+    volatile uint8_t pad[25];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 4;

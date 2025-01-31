@@ -20,7 +20,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
 }
 
 inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
-    const auto input_rank = input.get_legacy_shape().rank();
+    const auto input_rank = input.get_padded_shape().rank();
     TT_FATAL(
         (dim >= 0 && dim <= tt::tt_metal::MAX_NUM_DIMENSIONS),
         "dim must be between 0 and {}.",
@@ -110,7 +110,7 @@ void MorehNormOperation::validate_inputs(
 MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
-    const auto input_rank = tensor_args.input.get_legacy_shape().rank();
+    const auto input_rank = tensor_args.input.get_padded_shape().rank();
     auto INF = std::numeric_limits<float>::infinity();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
@@ -159,7 +159,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
         shape.push_back(input_shape[i]);
     }
     return TensorSpec(
-        ttnn::SimpleShape(shape),
+        ttnn::Shape(shape),
         TensorLayout(tensor_args.input.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 

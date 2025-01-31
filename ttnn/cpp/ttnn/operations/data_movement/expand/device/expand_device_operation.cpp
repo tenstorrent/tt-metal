@@ -33,7 +33,7 @@ void validate(
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Expand: Input tensor need to be allocated in buffers on device");
     if (output.has_value()) {
         TT_FATAL(
-            output->get_shape().logical_shape() == operation_attributes.output_shape,
+            output->get_logical_shape() == operation_attributes.output_shape,
             "Expand: Output shape must match operation attributes");
         TT_FATAL(input.get_layout() == output->get_layout(), "Expand: Input and output must have same layout");
         TT_FATAL(input.get_dtype() == output->get_dtype(), "Expand: Input and output must have same dtype");
@@ -57,7 +57,7 @@ ExpandOperation::spec_return_value_t ExpandOperation::compute_output_specs(
         return tensor_args.output->get_tensor_spec();
     }
     return TensorSpec(
-        SimpleShape{operation_attributes.output_shape},
+        Shape{operation_attributes.output_shape},
         TensorLayout(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),

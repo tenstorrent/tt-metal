@@ -30,7 +30,8 @@ public:
         MAX_NUM_SUB_DEVICES <= std::numeric_limits<SubDeviceId::Id>::max(),
         "MAX_NUM_SUB_DEVICES must be less than or equal to the max value of SubDeviceId::Id");
     // Constructor used for the default/global device
-    SubDeviceManager(IDevice* device, std::unique_ptr<Allocator>&& global_allocator);
+    SubDeviceManager(
+        IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices);
     // Constructor used for regular sub-devices
     SubDeviceManager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device);
 
@@ -53,7 +54,7 @@ public:
     uint8_t noc_mcast_data_start_index(SubDeviceId sub_device_id) const;
     uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
-    const std::unique_ptr<Allocator>& get_initialized_allocator(SubDeviceId sub_device_id) const;
+    const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
 
     std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);
@@ -67,10 +68,6 @@ public:
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const;
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids);
     void reset_sub_device_stall_group();
-
-    // TODO #15944: Temporary until migration to actual fabric is complete
-    void set_fabric_sub_device_id(SubDeviceId sub_device_id);
-    std::optional<SubDeviceId> fabric_sub_device_id() const;
 
 private:
     void validate_sub_devices() const;

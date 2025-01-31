@@ -131,7 +131,7 @@ def test_split_tiled_w(dim, refshape, in_mem_config, out_mem_config, device, dty
     assert len(dev_buffers) == num_splits
     for index, buff in enumerate(dev_buffers):
         logger.debug(f"buff{index} is on: {buff.memory_config().buffer_type}")
-        assert list(buff.shape.with_tile_padding()) == chunk_shape
+        assert list(buff.padded_shape) == chunk_shape
         tt_host_rm_buff = buff.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
         pyt_got_back_rm_buff = tt_host_rm_buff.to_torch()
         pyt_buff_list.append(pyt_got_back_rm_buff)

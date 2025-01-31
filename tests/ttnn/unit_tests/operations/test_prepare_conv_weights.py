@@ -164,7 +164,7 @@ def test_prepare_conv_weights(
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
-        input_memory_config=tt_input_tensor.memory_config(),
+        input_memory_config=ttnn.L1_MEMORY_CONFIG,
         **conv_kwargs,
     )
     tt_bias_tensor_formatted = (

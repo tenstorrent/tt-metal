@@ -41,7 +41,7 @@ MorehMeanBackwardOperation::spec_return_value_t MorehMeanBackwardOperation::comp
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad->get_tensor_spec();
     }
-    auto input_grad_shape = operation_attributes.input_grad_shape.value().logical_shape();
+    auto input_grad_shape = operation_attributes.input_grad_shape.value();
     return TensorSpec(
         input_grad_shape,
         TensorLayout(
@@ -63,7 +63,7 @@ MorehMeanBackwardOperation::invoke(
     const Tensor& output_grad,
     const ttnn::SmallVector<int64_t>& dims,
     const bool keepdim,
-    const std::optional<Shape>& input_grad_shape,
+    const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {

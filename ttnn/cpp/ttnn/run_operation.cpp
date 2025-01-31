@@ -301,11 +301,11 @@ template OptionalTensors run_without_autoformat<OptionalTensors>(
     const OptionalTensors& optional_output_tensors,
     uint8_t cq_id);
 
-std::vector<SimpleShape> extract_padded_shapes(
+std::vector<Shape> extract_padded_shapes(
     const std::vector<ttnn::TensorSpec>& tensor_specs,
     const std::function<TensorLayout(size_t idx)>& layout_provider,
     const bool use_tensor_layout_from_tensor_spec) {
-    std::vector<SimpleShape> padded_shapes;
+    std::vector<Shape> padded_shapes;
     padded_shapes.reserve(tensor_specs.size());
     for (size_t idx = 0; idx < tensor_specs.size(); idx++) {
         const auto& tensor_spec = tensor_specs[idx];

@@ -18,17 +18,17 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <semaphore.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include <device.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 #include <device_command.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include <llrt.hpp>
+#include "llrt.hpp"
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>
+#include <tuple>
 
 namespace tt::tt_metal {
 
@@ -155,52 +155,51 @@ class Program_ {
     // debug/test
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
    private:
-    HWCommandQueue *last_used_command_queue_for_testing = nullptr;
+       CommandQueue* last_used_command_queue_for_testing = nullptr;
 
-    // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+       // Buffers temporarily owned by the program
+       std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
 
-    // The buffer that holds the kernel/binaries/etc for this program
-    std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
-    ProgramTransferInfo program_transfer_info;
+       // The buffer that holds the kernel/binaries/etc for this program
+       std::unordered_map<chip_id_t, std::shared_ptr<Buffer>> kernels_buffer_;
+       ProgramTransferInfo program_transfer_info;
 
-    bool finalized_;
-    bool cached_;
+       bool finalized_;
+       bool cached_;
 
-    // TODO: Should map based on the hash of the configured sub-devices
-    // This way we can cache it agnostic of the device
-    std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
+       // TODO: Should map based on the hash of the configured sub-devices
+       // This way we can cache it agnostic of the device
+       std::unordered_map<chip_id_t, std::unordered_map<SubDeviceManagerId, std::vector<SubDeviceId>>> sub_device_ids_;
 
-    struct CircularBufferAllocator {
-        CircularBufferAllocator(const CoreRange &core_range_) : core_range(core_range_) {}
+       struct CircularBufferAllocator {
+           CircularBufferAllocator(const CoreRange& core_range_) : core_range(core_range_) {}
 
-        // Circular buffers are created and allocated at core range granularity
-        CoreRange core_range;
+           // Circular buffers are created and allocated at core range granularity
+           CoreRange core_range;
 
-        // Holds vector of addresses where circular buffers are allocated [start, end)
-        // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning multiple cores must share the same address
-        // To enable this, circular buffer address is the maximum address amongst all of its target cores
-        // This vector is sorted from lower to higher address spaces
-        std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
+           // Holds vector of addresses where circular buffers are allocated [start, end)
+           // There are multiple ranges because per core L1 regions are not in lockstep but circular buffers spanning
+           // multiple cores must share the same address To enable this, circular buffer address is the maximum address
+           // amongst all of its target cores This vector is sorted from lower to higher address spaces
+           std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
-        // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the last L1 region
-        uint64_t get_cb_region_end() const {
-            return this->l1_regions.empty() ? 0 : this->l1_regions.back().second;
-        }
+           // Returns address for next circular buffer
+           // Circular buffers are placed sequentially on a core so the next available address gets appended to the last
+           // L1 region
+           uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-        // If address is the end of the last L1 region, the last region is extended by size bytes,
-        //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
-        void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
+           // If address is the end of the last L1 region, the last region is extended by size bytes,
+           //  otherwise address must be higher than existing regions and a new L1 region [address, size) is added
+           void mark_address(uint64_t address, uint64_t size, uint64_t base_address);
 
-        // Reset when circular buffer allocation is invalidated
-        void reset_available_addresses() { this->l1_regions.clear(); }
-    };
+           // Reset when circular buffer allocation is invalidated
+           void reset_available_addresses() { this->l1_regions.clear(); }
+       };
 
     uint64_t id; // Need to make non-const due to move constructor
     uint64_t runtime_id;
@@ -227,8 +226,6 @@ class Program_ {
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<std::vector<uint8_t>> core_to_kernel_group_index_table_;
 
-    std::vector<std::shared_ptr<Buffer>> config_buffers_;
-
     std::vector<ProgramConfig> program_configs_;
     // Counts how much space is needed for each core + each launch buffer msg queue.
     std::vector<uint32_t> program_config_sizes_;
@@ -252,9 +249,6 @@ class Program_ {
 
     void add_semaphore(const CoreRangeSet & crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
-    friend void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
-    void add_config_buffer(const std::shared_ptr<Buffer>& config_buffer);
-
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
 
@@ -274,7 +268,6 @@ class Program_ {
     bool runs_on_noc_multicast_only_cores();
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
     friend Internal_;
@@ -295,10 +288,6 @@ std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHand
 // Checks that circular buffers do not grow into L1 buffer space
 void ValidateCircularBufferRegion(const Program &program, const IDevice* device) {
     program.pimpl_->validate_circular_buffer_region(device);
-}
-
-void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer) {
-    program.pimpl_->add_config_buffer(std::move(config_buffer));
 }
 
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
@@ -558,6 +547,7 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
+                bool logged_noncontiguous = false;
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[programmable_core_type_index][y * grid_extent_[programmable_core_type_index].x + x] = index;
@@ -569,6 +559,62 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                             max_local_cb_end_index = std::max(
                                 max_local_cb_end_index,
                                 NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(local_val->second.to_ulong()));
+
+                            uint32_t used_cbs = local_val->second.to_ulong();
+                            if (used_cbs > 0 && !logged_noncontiguous) {
+                                // Zeroso out the contiguous run of set bits starting at zero. Anything remaining is
+                                // above a zero bit.
+                                uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
+                                if (non_contiguous_cbs) {
+                                    // ~used_cbs is always nonzero, because otherwise all CBs are in use and therefore
+                                    // contiguous.
+                                    uint32_t first_unused_index = (uint32_t)__builtin_ctz(~used_cbs);
+                                    std::string kernels;
+                                    for (auto id : kg_to_cores.first.kernel_ids) {
+                                        if (id.has_value()) {
+                                            std::shared_ptr<Kernel> kernel = get_kernel(*id);
+                                            if (!kernels.empty()) {
+                                                kernels += ", ";
+                                            }
+                                            kernels += kernel->kernel_source().name();
+                                        }
+                                    }
+
+                                    static std::mutex m;
+                                    std::lock_guard lock(m);
+                                    // Keep track of which programs have been logged to avoid spamming the log. This is
+                                    // particularly important for mesh devices.
+                                    static std::set<std::tuple<uint32_t, uint32_t, std::string>> logged;
+                                    auto cb_tuple = std::make_tuple(non_contiguous_cbs, first_unused_index, kernels);
+
+                                    if (!logged.contains(cb_tuple)) {
+                                        logged.insert(cb_tuple);
+                                        // This code should be modified to log the core type index if it isn't obvious.
+                                        TT_ASSERT(
+                                            programmable_core_type_index ==
+                                            hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+
+                                        std::string cb_ids;
+                                        for (int i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
+                                            if (non_contiguous_cbs & (1 << i)) {
+                                                if (!cb_ids.empty()) {
+                                                    cb_ids += ",";
+                                                }
+                                                cb_ids += std::to_string(i);
+                                            }
+                                        }
+                                        log_warning(
+                                            tt::LogMetal,
+                                            "Circular buffer indices are not contiguous starting at 0. This will hurt "
+                                            "dispatch performance. Non-contiguous indices: {}. "
+                                            "First unused index: {}. Kernels: {}",
+                                            cb_ids,
+                                            first_unused_index,
+                                            kernels);
+                                    }
+                                    logged_noncontiguous = true;
+                                }
+                            }
                         }
                         auto remote_val = per_core_remote_cb_indices_.find(core);
                         if (remote_val != per_core_remote_cb_indices_.end()) {
@@ -790,7 +836,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
+    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
@@ -806,7 +852,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
+        computed_addr = tt::align(computed_addr, device->allocator()->get_config().alignment);
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -893,8 +939,6 @@ void detail::Program_::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore
 void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
     pimpl_->add_semaphore(crs, semaphore_id, init_value, core_type);
 }
-
-void detail::Program_::add_config_buffer(const std::shared_ptr<Buffer>& config_buffer) { config_buffers_.emplace_back(config_buffer); }
 
 std::vector<std::vector<CoreCoord>> detail::Program_::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
@@ -1422,21 +1466,19 @@ uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord logical_core, Core
     return base_addr + get_program_config(hal.get_programmable_core_type_index(programmable_core_type)).cb_offset;
 }
 
-void detail::Program_::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+void detail::Program_::set_last_used_command_queue_for_testing(CommandQueue* queue) {
     this->last_used_command_queue_for_testing = queue;
 }
 
-HWCommandQueue* detail::Program_::get_last_used_command_queue() const {
+CommandQueue* detail::Program_::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
-void Program::set_last_used_command_queue_for_testing(HWCommandQueue *queue) {
+void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
     pimpl_->set_last_used_command_queue_for_testing(queue);
 }
 
-HWCommandQueue* Program::get_last_used_command_queue() const {
-    return pimpl_->get_last_used_command_queue();
-}
+CommandQueue* Program::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
 
 uint32_t detail::Program_::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);

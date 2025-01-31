@@ -48,6 +48,7 @@ struct LayerNorm {
     MemoryConfig output_mem_config;
     LayerNormProgramConfig program_config;
     const DeviceComputeKernelConfig compute_kernel_config;
+    std::optional<DataType> dtype;
 
     void validate(
         const std::vector<Tensor>& input_tensors,

@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
         uint32_t Kt = 2;
         uint32_t Nt = 4;
         uint32_t B = 5;
-        ttnn::SimpleShape shapea({B, 1, Mt * TILE_HEIGHT, Kt * TILE_WIDTH});
+        ttnn::Shape shapea({B, 1, Mt * TILE_HEIGHT, Kt * TILE_WIDTH});
         ttnn::Shape shapeb({B, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
         ttnn::Shape shapeb1({1, 1, Kt * TILE_HEIGHT, Nt * TILE_WIDTH});
 

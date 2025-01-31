@@ -56,17 +56,19 @@ namespace distributed {
     class MeshWorkload;
 } // namespace distributed
 
-class EnqueueProgramCommand;
-class HWCommandQueue;
 class JitBuildOptions;
+class EnqueueProgramCommand;
+class CommandQueue;
+// Must be removed. Only here because its a friend of a Program
+class HWCommandQueue;
+
 namespace detail{
     class Program_;
 
     void ValidateCircularBufferRegion(const Program &program, const IDevice* device);
     KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type);
     std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id);
-    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id);
-    void AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
+    std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
 
     class Internal_;
 }
@@ -188,8 +190,8 @@ class Program {
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;
@@ -228,7 +230,6 @@ class Program {
     std::unordered_map<uint64_t, ProgramCommandSequence> &get_cached_program_command_sequences() noexcept;
     bool kernel_binary_always_stored_in_ringbuffer();
 
-    friend void detail::AddConfigBuffer(Program &program, const std::shared_ptr<Buffer>& config_buffer);
     friend void program_dispatch::assemble_device_commands(
         ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id);
     template<typename T> friend void program_dispatch::finalize_program_offsets(T&, IDevice*);

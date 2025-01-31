@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
+#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -252,7 +254,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     // tensor_shape is [N, H, W, C]
     TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
     // uint32_t channels = tensor_shape[3];
-    uint32_t channels = tensor_shape.with_tile_padding()[3];
+    uint32_t channels = tensor_shape[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
     auto shard_scheme = parallel_config.shard_scheme;
@@ -599,7 +601,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
         uint32_t input_num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         uint32_t input_num_cores_c = get_num_cores_channels_from_parallel_config(parallel_config);
 
-        // TT_ASSERT(input_tensor.get_legacy_shape() == input_tensor.get_shape());
+        // TT_ASSERT(input_tensor.get_padded_shape() == input_tensor.get_shape());
         const auto& input_shape = input_tensor.get_logical_shape();
         uint32_t tensor_height = input_shape[0] * input_shape[1] * input_shape[2];
         uint32_t round_up_size = tt::constants::TILE_HEIGHT;
@@ -616,22 +618,25 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_i
                 tt::round_up(input_shape[3], conv_config.input_channels_alignment);
         }
 
-        auto input_padded_shape = ttnn::Shape(std::array<uint32_t, 4>{
-            1,
-            1,
-            input_tensor_height_snapped_to_tile,
-            input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
-                                                                 // tt::tt_metal::LegacyShape issue to clean up next
-                                                                 // line
+        auto input_padded_shape = ttnn::Shape(
+            {1,
+             1,
+             input_tensor_height_snapped_to_tile,
+             input_tensor_width_snapped_to_channels_alignment});  // TODO: resolve ttnn::types::Shape and
+                                                                  // tt::tt_metal::LegacyShape issue to clean up next
+                                                                  // line
         MemoryConfig input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            ttnn::Shape(std::array<uint32_t, 4>{
-                input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
+            ttnn::Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
             parallel_config,
             round_up_size);
 
         return {input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard, use_non_tile_height};
     } else {
-        return {input_tensor.shape(), input_tensor.memory_config(), needs_shard_or_reshard, use_non_tile_height};
+        return {
+            input_tensor.get_logical_shape(),
+            input_tensor.memory_config(),
+            needs_shard_or_reshard,
+            use_non_tile_height};
     }
 }
 
@@ -677,7 +682,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
         if (input_shape[0] != 1 or input_shape[1] != 1) {
             const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
             const uint32_t channels = input_shape[3];
-            ttnn::SimpleShape new_shape({1, 1, nhw, channels});
+            ttnn::Shape new_shape({1, 1, nhw, channels});
             input_tensor = ttnn::reshape(input_tensor, new_shape);
             input_shape = new_shape;
         }
@@ -742,13 +747,13 @@ void validate_weight_and_bias_tensors(
     TT_ASSERT(weight_tensor.get_layout() == Layout::ROW_MAJOR);
     TT_ASSERT(weight_tensor.get_logical_shape().rank() == 4);
     // TODO: enable this assert
-    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_legacy_shape());
+    // TT_ASSERT(weight_tensor.get_shape() == weight_tensor.get_padded_shape());
     if (bias_tensor.has_value()) {
         TT_ASSERT(!ttnn::has_storage_type_of(bias_tensor.value(), ttnn::DEVICE_STORAGE_TYPE));
         TT_ASSERT(bias_tensor.value().get_logical_shape().rank() == 4);
         TT_ASSERT(bias_tensor.value().get_layout() == Layout::ROW_MAJOR);
         // TODO: enable this assert
-        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_legacy_shape());
+        // TT_ASSERT(bias_tensor.value().get_shape() == bias_tensor.value().get_padded_shape());
     }
 }
 
@@ -888,9 +893,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         out_channels_padded = tt::round_up(out_channels, 32);
     }
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(std::array<uint32_t, 4>{1, 1, nhw_out, out_channels_padded}),
-        output_parallel_config,
-        round_up_size);
+        ttnn::Shape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
     ParallelConfig largest_parallel_config =
         output_parallel_config.grid.num_cores() > input_parallel_config.grid.num_cores() ? output_parallel_config
                                                                                          : input_parallel_config;
@@ -934,9 +937,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape,
-    const Shape& weights_shape,
-    const Shape& output_shape,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& padded_weights_shape,
+    const ttnn::Shape& output_shape,
     uint32_t output_channels,
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
@@ -967,8 +970,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * act_block_w_ntiles;
 
-    uint32_t weight_matrix_height = weights_shape.padded_shape()[2];
-    uint32_t weight_matrix_width = weights_shape.padded_shape()[3];
+    uint32_t weight_matrix_height = padded_weights_shape[2];
+    uint32_t weight_matrix_width = padded_weights_shape[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 
@@ -980,6 +983,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t num_blocks_act_h_per_core =
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
+
+    // TODO: this needs to be changed - needs to be independent from dram alignment
+    const uint32_t alignment_bytes = std::max(hal.get_alignment(HalMemType::L1), hal.get_alignment(HalMemType::DRAM));
 
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
@@ -1059,7 +1065,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1162,7 +1168,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

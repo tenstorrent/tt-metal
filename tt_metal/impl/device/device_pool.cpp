@@ -7,10 +7,18 @@
 
 #include <numa.h>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dprint_server.hpp"
+#include "host_api.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -191,7 +199,10 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -246,7 +257,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -550,9 +560,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

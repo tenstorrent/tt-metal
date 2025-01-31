@@ -92,9 +92,7 @@ def run_resnet50_trace_inference(
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     test_infra.run()
     test_infra.validate()
     test_infra.output_tensor.deallocate(force=True)
@@ -110,13 +108,7 @@ def run_resnet50_trace_inference(
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
-    tt_image_res = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(tt_image_res)
 
@@ -229,9 +221,7 @@ def run_resnet50_trace_2cqs_inference(
     ttnn.record_event(1, write_event)
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     ttnn.record_event(0, op_event)
     test_infra.run()
     test_infra.validate()
@@ -258,13 +248,7 @@ def run_resnet50_trace_2cqs_inference(
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
-    input_tensor = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(input_tensor)
 

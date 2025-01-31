@@ -28,7 +28,7 @@ void MAIN {
     constexpr uint32_t Kt = get_compile_time_arg_val(9);
     constexpr uint32_t logk = get_compile_time_arg_val(10);
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
-    constexpr bool ascending = false;
+    constexpr uint32_t largest = get_compile_time_arg_val(12);
 
     uint32_t direction_init = get_arg_val<uint32_t>(0);
 
@@ -65,7 +65,7 @@ void MAIN {
             transpose_wh_tile(index_cb_index, 1, 3);
 
             // llk_topk_sort -> inplace
-            ckernel::topk_local_sort(0, (int)ascending, logk - 1);
+            ckernel::topk_local_sort(0, (int)direction_init, logk - 1);
 
             // pack value tiles into cb_intermed0
             pack_reconfig_data_format(input_transposed_cb_index);
@@ -108,7 +108,7 @@ void MAIN {
                 copy_tile(index_transposed_cb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge(0, m_iter, K);
+                ckernel::topk_merge<!largest>(0, m_iter, K);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild(0, (uint32_t)direction, m_iter, K, logk, true);
 

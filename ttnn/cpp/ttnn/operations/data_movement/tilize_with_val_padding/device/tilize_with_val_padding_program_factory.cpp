@@ -32,7 +32,7 @@ inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
     auto device = input_tensor_a.device();
     auto lowest_address = device->lowest_occupied_compute_l1_address();
     uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->get_base_allocator_addr(HalMemType::L1);
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     return max_l1_space;
 }
 
@@ -80,7 +80,7 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
 
 operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
-    auto output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -99,8 +99,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     int32_t num_tiles = output.volume() / TILE_HW;
 
-    auto true_input_shape = a.get_legacy_shape();
-    auto true_output_shape = output.get_legacy_shape();
+    auto true_input_shape = a.get_padded_shape();
+    auto true_output_shape = output.get_padded_shape();
 
     auto input_w = true_input_shape.rank() >= 4 ? true_input_shape[-4] : 1;
     auto input_z = true_input_shape.rank() >= 3 ? true_input_shape[-3] : 1;
@@ -119,7 +119,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     uint32_t num_tiles_in_row = output_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (a.element_size() * TILE_HEIGHT * 2 + a.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
@@ -271,8 +272,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t num_blocks = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output.get_padded_shape()[-1] / TILE_WIDTH;
 
     bool enough_space = enough_available_space(a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
     if (!enough_space) {
@@ -284,8 +285,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     bool has_cliff = core_range_cliff.size() > 0;
 
-    uint32_t unpadded_row_size_bytes = a.get_legacy_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
-    uint32_t padded_row_size_bytes = output.get_legacy_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
+    uint32_t unpadded_row_size_bytes = a.get_padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
+    uint32_t padded_row_size_bytes = output.get_padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
@@ -347,7 +348,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t tile_height = output.get_tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output.get_logical_shape(),
-        output.get_padding(),
+        output.get_padded_shape(),
         ncores,
         nblocks_per_core,
         has_cliff,
@@ -455,7 +456,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
 
     auto all_cores = output_shard_spec.grid;
 
-    uint32_t num_batches = output.volume() / (output.get_legacy_shape()[-2] * output.get_legacy_shape()[-1]);
+    uint32_t num_batches = output.volume() / (output.get_padded_shape()[-2] * output.get_padded_shape()[-1]);
 
     uint32_t num_input_rows = input_shard_spec.shape[0];
     uint32_t input_shard_width_bytes = input_shard_spec.shape[1] * a.element_size();
@@ -463,7 +464,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     uint32_t ntiles_per_batch = ntiles_per_core / num_batches;
     uint32_t ntiles_per_block = output_shard_spec.shape[1] / TILE_WIDTH;
     uint32_t nblocks_per_core = output_shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t num_padded_rows = output.get_legacy_shape()[-2] - a.get_legacy_shape()[-2];
+    uint32_t num_padded_rows = output.get_padded_shape()[-2] - a.get_padded_shape()[-2];
 
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_1,

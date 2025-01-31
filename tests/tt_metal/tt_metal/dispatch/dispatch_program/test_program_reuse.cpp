@@ -168,7 +168,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     DummyProgramMultiCBConfig cb_config = {
         .cr_set = sem_cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    uint32_t rta_base_addr = devices_[0]->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_addr = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
     auto program = create_program_multi_core_rta(
         rta_program_config, sem_program_config, dummy_cr0_args, dummy_cr1_args, dummy_sems, cb_config, rta_base_addr);
 
@@ -247,7 +247,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
             detail::ReadFromDeviceL1(device, core_coord, sem_base_addr, semaphore_buffer_size, semaphore_vals);
             for (uint32_t i = 0; i < semaphore_vals.size();
                  i += (hal.get_alignment(HalMemType::L1) / sizeof(uint32_t))) {
-                EXPECT_EQ(semaphore_vals[i], dummy_sems[expected_sem_idx]);
+                EXPECT_EQ(semaphore_vals[i], dummy_sems[expected_sem_idx]) << expected_sem_idx;
                 expected_sem_idx++;
             }
         }
@@ -259,15 +259,14 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
                 program->get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
-            uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+            uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (uint32_t i = 0; i < cb_config.cb_config_vector.size(); i++) {
                 const uint32_t index = cb_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = cb_config.cb_config_vector[i].num_pages;
                 const uint32_t cb_size = cb_num_pages * cb_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == cb_addr;
-                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
-                const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
-                EXPECT_TRUE(addr_match and size_match and num_pages_match);
+                EXPECT_EQ(cb_config_vector.at(index), cb_addr);
+                EXPECT_EQ(cb_config_vector.at(index + 1), cb_size);
+                EXPECT_EQ(cb_config_vector.at(index + 2), cb_num_pages);
 
                 cb_addr += cb_size;
             }

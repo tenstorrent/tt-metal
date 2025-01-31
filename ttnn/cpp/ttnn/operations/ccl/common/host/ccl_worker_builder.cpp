@@ -1148,20 +1148,24 @@ void generate_multi_input_command_stream_kernel_rt_args(
     rt_args.push_back(forward_fabric_connections.has_value());
     if (forward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         append_worker_to_fabric_edm_sender_rt_args(
             forward_fabric_connections.value(),
             sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
             sender_worker_buffer_index_semaphore_id,
             rt_args);
     }
     rt_args.push_back(backward_fabric_connections.has_value());
     if (backward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         append_worker_to_fabric_edm_sender_rt_args(
             backward_fabric_connections.value(),
             sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
             sender_worker_buffer_index_semaphore_id,
             rt_args);
     }
@@ -1232,20 +1236,24 @@ void generate_multi_command_stream_kernel_rt_args(
     rt_args.push_back(forward_fabric_connections.has_value());
     if (forward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         append_worker_to_fabric_edm_sender_rt_args(
             forward_fabric_connections.value(),
             sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
             sender_worker_buffer_index_semaphore_id,
             rt_args);
     }
     rt_args.push_back(backward_fabric_connections.has_value());
     if (backward_fabric_connections.has_value()) {
         auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_core_range, 0);
         append_worker_to_fabric_edm_sender_rt_args(
             backward_fabric_connections.value(),
             sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
             sender_worker_buffer_index_semaphore_id,
             rt_args);
     }
@@ -1419,12 +1427,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {
-        input_tensor.get_legacy_shape()[0],
-        input_tensor.get_legacy_shape()[1],
-        input_tensor.get_legacy_shape()[2],
-        input_tensor.get_legacy_shape()[3]};
+        input_tensor.get_padded_shape()[0],
+        input_tensor.get_padded_shape()[1],
+        input_tensor.get_padded_shape()[2],
+        input_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -1459,9 +1467,11 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args(
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
     const size_t sender_worker_forward_flow_control_semaphore_id,
+    const size_t sender_worker_forward_teardown_semaphore_id,
     const size_t sender_worker_forward_buffer_index_semaphore_id,
     std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
     const size_t sender_worker_backward_flow_control_semaphore_id,
+    const size_t sender_worker_backward_teardown_semaphore_id,
     const size_t sender_worker_backward_buffer_index_semaphore_id,
     const size_t forward_direction_distance_to_end_of_line,
     const size_t backward_direction_distance_to_end_of_line,
@@ -1496,12 +1506,12 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto& output_tensor = this->op_config.get_output_tensor(0);
-    TT_ASSERT(output_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for ccl");
+    TT_ASSERT(output_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for ccl");
     ttnn::ccl::Shape4D<uint32_t> output_tensor_shape = {
-        output_tensor.get_legacy_shape()[0],
-        output_tensor.get_legacy_shape()[1],
-        output_tensor.get_legacy_shape()[2],
-        output_tensor.get_legacy_shape()[3]};
+        output_tensor.get_padded_shape()[0],
+        output_tensor.get_padded_shape()[1],
+        output_tensor.get_padded_shape()[2],
+        output_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(output_tensor.buffer()->address()),
@@ -1544,6 +1554,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
             forward_fabric_connection.value(),
             sender_worker_forward_flow_control_semaphore_id,
+            sender_worker_forward_teardown_semaphore_id,
             sender_worker_forward_buffer_index_semaphore_id,
             args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);
@@ -1574,6 +1585,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         ttnn::ccl::append_worker_to_fabric_edm_sender_rt_args(
             backward_fabric_connection.value(),
             sender_worker_backward_flow_control_semaphore_id,
+            sender_worker_backward_teardown_semaphore_id,
             sender_worker_backward_buffer_index_semaphore_id,
             args);
         logged_arg_idx = ttnn::ccl::log_worker_to_fabric_edm_sender_rt_args(args, logged_arg_idx);

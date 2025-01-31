@@ -165,7 +165,7 @@ enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 // provided, the shard shape will be inferred from the tensor shape and the
 // shard strategy.
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,

@@ -40,7 +40,7 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
 
     // Need to cache on out_subblock_w because it must be a compile time arg for optimal use of templated pack_untilize
     // APIs
-    const uint32_t Nt = input_tensor_b.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t Nt = input_tensor_b.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
     constexpr uint32_t HALF_DST_MAX = 8;  // 8 is the max number of tiles for half DST (assuming out_subblock_h == 1)
     constexpr uint32_t HALF_DST_MAX_FP32 = 4;  // max dst tiles are 4 for fp32
     uint32_t out_subblock_w;
