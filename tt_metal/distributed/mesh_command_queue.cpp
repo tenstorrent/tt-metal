@@ -127,8 +127,9 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
             mesh_workload.get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id)));
 
-        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x; logical_x++) {
-            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
+        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x + 1;
+             logical_x++) {
+            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y + 1;
                  logical_y++) {
                 experimental::write_program_commands(
                     this->mesh_device_->get_device(logical_y, logical_x)->command_queue(this->id_),
@@ -407,8 +408,9 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
     expected_num_workers_completed[0] = expected_num_workers_completed_;
 
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
-        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x; logical_x++) {
-            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
+        for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x + 1;
+             logical_x++) {
+            for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y + 1;
                  logical_y++) {
                 auto device_shard_view = buffer.get_device_buffer(Coordinate(logical_y, logical_x));
                 this->write_shard_to_device(
@@ -425,7 +427,7 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
 
 void MeshCommandQueue::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
-    LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols(), buffer->device()->num_rows()});
+    LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols() - 1, buffer->device()->num_rows() - 1});
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 
