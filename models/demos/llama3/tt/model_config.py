@@ -985,6 +985,7 @@ class TtModelArgs:
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
+                "DeepSeek-R1-Distill-Llama-70B": 32,
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
             }.get(self.base_model_name, 0)

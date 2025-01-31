@@ -8,6 +8,7 @@ The current version supports the following Llama3 models:
 - Llama3.1-8B
 - Llama3.2-11B
 - Llama3.1-70B (T3000 and TG-only)
+- DeepSeek R1 Distill Llama 3.3 70B (T3000 and TG-only)
 
 All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
 - N150 (1-chip)
@@ -25,13 +26,15 @@ Max Prefill Chunk Sizes (text-only):
 | Llama3.1-8B  | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.2-11B | 4k tokens     | 64k tokens    | 128k tokens    | 128k tokens |
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+| DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
+
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Max Context Lengths (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
 
 ## How to Run
 
-### Download the weights
+### Llama models: download the weights
 
 Download the weights [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
 
@@ -59,17 +62,39 @@ Llama3.2-11B multimodal requires extra python dependencies. Install them from:
 pip install -r models/demos/llama3/requirements.txt
 ```
 
+### HuggingFace models (e.g. DeepSeek R1 Distill Llama 3.3 70B)
+
+Make sure you have a recent version of `transformers` installed:
+
+```
+pip install -U transformers
+```
+
+Download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B). Your model directory should have the following structure:
+
+```
+DeepSeek-R1-Distill-Llama-70B/
+    config.json
+    generation_config.json
+    model-00001-of-00062.safetensors
+    ...
+```
+
 ### Setup TT environment
 
 1. Set up environment variables:
 ```
-export LLAMA_DIR=<meta_llama_model_dir>
+export LLAMA_DIR=<model_dir>
+```
+
+On N150, N300 and T3K:
+```
 export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 - `$LLAMA_DIR` sets the path for the Llama3 model weights and caches.
 
-- `$WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and T3000, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models.
+- `$WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and T3000, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models. Do not set this for TG.
 
 On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
 These cache files only need to be created once for each model and each weight (i.e. new finetuned weights will need to be cached) and will be stored accordingly to the machine you are running the models:
@@ -80,7 +105,6 @@ $LLAMA_DIR/T3K   # For T3000
 $LLAMA_DIR/TG   # For TG
 ```
 
-
 ### Run the demo
 
 The Llama3 demo includes 3 main modes of operation and is fully parametrized to support other configurations.
@@ -88,6 +112,7 @@ The Llama3 demo includes 3 main modes of operation and is fully parametrized to 
 - `batch-1`: Runs a small prompt for a single user
 - `batch-32`: Runs a small prompt for a a batch of 32 users
 - `long-context`: Runs a large prompt (64k tokens) for a single user
+- `reasoning-1`: Runs a reasoning prompt for a single user
 
 If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/demo.py`. For convenience we list all the supported params below:
 
