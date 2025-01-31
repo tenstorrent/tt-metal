@@ -24,16 +24,16 @@ on:
 #    branches:
 #      - "main"
 
-concurrency:
-  # Use github.run_id on main branch (or any protected branch)
-  # This ensure that no runs get cancelled on main
-  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
-  # and will cancel obsolete runs
-  # Use github.ref on other branches, so it's unique per branch
-  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
-  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
-  # cancel-in-progress: true
+#concurrency:
+#  # Use github.run_id on main branch (or any protected branch)
+#  # This ensure that no runs get cancelled on main
+#  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+#  # and will cancel obsolete runs
+#  # Use github.ref on other branches, so it's unique per branch
+#  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
+#  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
+#  # group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}
+#  # cancel-in-progress: true
 
 jobs:
   build-artifact:
