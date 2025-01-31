@@ -1350,12 +1350,12 @@ uint32_t Device::dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_dev
 }
 
 CoreCoord Device::dram_core_from_dram_channel(uint32_t dram_channel) const {
-    return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_channel(dram_channel);
+    return tt::Cluster::instance().get_soc_desc(id_).get_preferred_worker_core_for_dram_view(dram_channel);
 }
 
 CoreCoord Device::logical_core_from_dram_channel(uint32_t dram_channel) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(this->id_);
-    return tt::Cluster::instance().get_soc_desc(id_).get_logical_core_for_dram_channel(dram_channel);
+    return tt::Cluster::instance().get_soc_desc(id_).get_logical_core_for_dram_view(dram_channel);
 }
 
 uint32_t Device::dram_channel_from_logical_core(const CoreCoord& logical_core) const {

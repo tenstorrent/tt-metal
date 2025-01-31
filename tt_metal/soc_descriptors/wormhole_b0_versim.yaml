@@ -13,14 +13,15 @@ dram:
     [0-0, 0-1],
   ]
 
-dram_view_eth_endpoint:
-  [ 0-0 ]
-
-dram_view_worker_endpoint:
-  [ 0-1 ]
-
-dram_view_address_offsets:
-  [ 0 ]
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 0
+    }
+  ]
 
 dram_view_size:
   1073741824

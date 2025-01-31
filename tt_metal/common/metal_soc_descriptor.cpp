@@ -12,44 +12,53 @@
 #include "umd/device/cluster.h"
 #include "yaml-cpp/yaml.h"
 
-CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
+CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->view_worker_dram_cores.size(),
-        "dram_chan={} must be within range of view_worker_dram_cores.size={}",
-        dram_chan,
-        this->view_worker_dram_cores.size());
-    return this->view_worker_dram_cores.at(dram_chan);
+        dram_view < this->dram_view_worker_cores.size(),
+        "dram_view={} must be within range of dram_view_worker_cores.size={}",
+        dram_view,
+        this->dram_view_worker_cores.size());
+    return this->dram_view_worker_cores.at(dram_view);
 };
 
-CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
+CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->view_eth_dram_cores.size(),
-        "dram_chan={} must be within range of view_eth_dram_cores.size={}",
-        dram_chan,
-        this->view_eth_dram_cores.size());
-    return this->view_eth_dram_cores.at(dram_chan);
+        dram_view < this->dram_view_eth_cores.size(),
+        "dram_view={} must be within range of dram_view_eth_cores.size={}",
+        dram_view,
+        this->dram_view_eth_cores.size());
+    return this->dram_view_eth_cores.at(dram_view);
 };
 
-CoreCoord metal_SocDescriptor::get_logical_core_for_dram_channel(int dram_chan) const {
+CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        dram_chan < num_dram_views,
-        "dram_chan={} must be within range of num_dram_views={}",
-        dram_chan,
+        dram_view < num_dram_views,
+        "dram_view={} must be within range of num_dram_views={}",
+        dram_view,
         num_dram_views);
-    return CoreCoord(dram_chan, 0);
+    return CoreCoord(dram_view, 0);
 }
 
-size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
+size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->dram_view_address_offsets.size(),
-        "dram_chan={} must be within range of dram_view_address_offsets.size={}",
-        dram_chan,
+        dram_view < this->dram_view_address_offsets.size(),
+        "dram_view={} must be within range of dram_view_address_offsets.size={}",
+        dram_view,
         this->dram_view_address_offsets.size());
-    return this->dram_view_address_offsets.at(dram_chan);
+    return this->dram_view_address_offsets.at(dram_view);
 }
 
-size_t metal_SocDescriptor::get_num_dram_views() const { return this->view_eth_dram_cores.size(); }
+size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+    TT_ASSERT(
+        dram_view < this->dram_view_channels.size(),
+        "dram_view={} must be within range of dram_view_channels.size={}",
+        dram_view,
+        this->dram_view_channels.size());
+    return this->dram_view_channels.at(dram_view);
+}
+
+size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
 bool metal_SocDescriptor::is_harvested_core(const CoreCoord& core) const {
     for (const auto& core_it : this->physical_harvested_workers) {
@@ -122,7 +131,7 @@ CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreC
 }
 
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
-    return this->get_preferred_worker_core_for_dram_channel(this->get_dram_channel_from_logical_core(logical_coord));
+    return this->get_preferred_worker_core_for_dram_view(this->get_dram_channel_from_logical_core(logical_coord));
 }
 
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
@@ -140,67 +149,41 @@ CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(thi
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
-    this->view_eth_dram_cores.clear();
-    for (const auto& core_node : device_descriptor_yaml["dram_view_eth_endpoint"]) {
-        if (core_node.IsScalar()) {
-            tt_xy_pair dram_logical_coords = format_node(core_node.as<std::string>());
-            if (dram_logical_coords.x >= dram_cores.size()) {
-                TT_THROW(
-                    "DRAM channel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view_eth_endpoint",
-                    dram_logical_coords.x);
-            }
-            if (dram_logical_coords.y >= dram_cores[dram_logical_coords.x].size()) {
-                TT_THROW(
-                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view_eth_endpoint",
-                    dram_logical_coords.y);
-            }
-            this->view_eth_dram_cores.push_back(dram_cores[dram_logical_coords.x][dram_logical_coords.y]);
-        } else {
-            TT_THROW("Only NOC coords supported for dram_view_eth_endpoint cores");
+    this->dram_core_size = device_descriptor_yaml["dram_views"].size() * this->dram_view_size;
+    this->dram_view_channels.clear();
+    this->dram_view_eth_cores.clear();
+    this->dram_view_worker_cores.clear();
+    this->dram_view_address_offsets.clear();
+
+    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
+        size_t channel = dram_view["channel"].as<size_t>();
+        int eth_endpoint = dram_view["eth_endpoint"].as<int>();
+        int worker_endpoint = dram_view["worker_endpoint"].as<int>();
+        size_t address_offset = dram_view["address_offset"].as<size_t>();
+
+        if (channel >= dram_cores.size()) {
+            TT_THROW(
+                "DRAM channel {} does not exist in the device descriptor, but is specified in dram_view.channel",
+                channel);
         }
-    }
-    int num_dram_views = this->view_eth_dram_cores.size();
-
-    this->view_worker_dram_cores.clear();
-    for (const auto& core_node : device_descriptor_yaml["dram_view_worker_endpoint"]) {
-        if (core_node.IsScalar()) {
-            tt_xy_pair dram_logical_coords = format_node(core_node.as<std::string>());
-            if (dram_logical_coords.x >= dram_cores.size()) {
-                TT_THROW(
-                    "DRAM channel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view_worker_endpoint",
-                    dram_logical_coords.x);
-            }
-            if (dram_logical_coords.y >= dram_cores[dram_logical_coords.x].size()) {
-                TT_THROW(
-                    "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
-                    "dram_view_worker_endpoint",
-                    dram_logical_coords.y);
-            }
-            this->view_worker_dram_cores.push_back(dram_cores[dram_logical_coords.x][dram_logical_coords.y]);
-        } else {
-            TT_THROW("Only NOC coords supported for dram_view_worker_endpoint");
+        if (eth_endpoint >= dram_cores[channel].size()) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.eth_endpoint",
+                eth_endpoint);
         }
-    }
-    if (this->view_worker_dram_cores.size() != num_dram_views) {
-        TT_THROW(
-            "Expected to specify preferred DRAM endpoint for worker core for {} views but yaml specifies {} "
-            "views through dram_view_eth_endpoint",
-            num_dram_views,
-            this->view_worker_dram_cores.size());
-    }
+        if (worker_endpoint >= dram_cores[channel].size()) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.worker_endpoint",
+                worker_endpoint);
+        }
 
-    this->dram_view_address_offsets = device_descriptor_yaml["dram_view_address_offsets"].as<std::vector<size_t>>();
-    if (this->dram_view_address_offsets.size() != num_dram_views) {
-        TT_THROW(
-            "Expected DRAM offsets for {} views but yaml specified {} views through dram_view_eth_endpoint",
-            num_dram_views,
-            this->dram_view_address_offsets.size());
+        this->dram_view_channels.push_back(channel);
+        this->dram_view_eth_cores.push_back(dram_cores[channel][eth_endpoint]);
+        this->dram_view_worker_cores.push_back(dram_cores[channel][worker_endpoint]);
+        this->dram_view_address_offsets.push_back(address_offset);
     }
-
-    this->dram_core_size = num_dram_views * this->dram_view_size;
 }
 
 // UMD expects virtual NOC coordinates for worker cores

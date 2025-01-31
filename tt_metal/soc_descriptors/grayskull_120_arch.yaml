@@ -11,16 +11,60 @@ pcie:
 dram:
   [[1-0], [1-6], [4-0], [4-6], [7-0], [7-6], [10-0], [10-6]]
 
-# Coords for eth and worker dram endpoints are given in dram coordinates.
-# These are only simple dram arrays, so each coord references the only core in corresponding dram array.
-dram_view_eth_endpoint:
-  [ 0-0, 1-0, 2-0, 3-0, 4-0, 5-0, 6-0, 7-0 ]
-
-dram_view_worker_endpoint:
-  [ 0-0, 1-0, 2-0, 3-0, 4-0, 5-0, 6-0, 7-0 ]
-
-dram_view_address_offsets:
-  [ 0, 0, 0, 0, 0, 0, 0, 0 ]
+# Dram view parameters are used by tt-metal and are not recognized by UMD.
+# Eth and worker dram endpoints represent subchannel id from dram array.
+# These are simple dram views, so each endpoint references the only core in the corresponding dram channel.
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 1,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 2,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 3,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 4,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 5,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 6,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 7,
+      eth_endpoint: 0,
+      worker_endpoint: 0,
+      address_offset: 0
+    }
+  ]
 
 dram_view_size:
   1073741824

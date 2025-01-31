@@ -18,17 +18,84 @@ dram:
     [5-5, 5-6, 5-7]
   ]
 
-# Dram view parameters are used by tt-metal and are not supported in UMD.
-# Coords for eth and worker dram endpoints are given in dram coordinates.
-# For example 0-2 means third core in the first dram cores array which would resolve to 0-11.
-dram_view_eth_endpoint:
-  [ 0-0, 0-0, 1-1, 1-1, 2-0, 2-0, 3-2, 3-2, 4-1, 4-1, 5-1, 5-1 ]
-
-dram_view_worker_endpoint:
-  [ 0-2, 0-1, 1-0, 1-2, 2-1, 2-2, 3-0, 3-1, 4-2, 4-0, 5-0, 5-2 ]
-
-dram_view_address_offsets:
-  [ 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824, 0, 1073741824 ]
+# Dram view parameters are used by tt-metal and are not recognized by UMD.
+# Eth and worker dram endpoints represent subchannel id from dram array.
+# For example, a dram view where channel is 0 and worker_endpoint is 2 would resolve to dram core at position [0,2] which is 0-11.
+dram_views:
+  [
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 2,
+      address_offset: 0
+    },
+    {
+      channel: 0,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 1073741824
+    },
+    {
+      channel: 1,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 1,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    },
+    {
+      channel: 2,
+      eth_endpoint: 0,
+      worker_endpoint: 1,
+      address_offset: 0
+    },
+    {
+      channel: 2,
+      eth_endpoint: 0,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    },
+    {
+      channel: 3,
+      eth_endpoint: 2,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 3,
+      eth_endpoint: 2,
+      worker_endpoint: 1,
+      address_offset: 1073741824
+    },
+    {
+      channel: 4,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 0
+    },
+    {
+      channel: 4,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 1073741824
+    },
+    {
+      channel: 5,
+      eth_endpoint: 1,
+      worker_endpoint: 0,
+      address_offset: 0
+    },
+    {
+      channel: 5,
+      eth_endpoint: 1,
+      worker_endpoint: 2,
+      address_offset: 1073741824
+    }
+  ]
 
 dram_view_size:
   1073741824
