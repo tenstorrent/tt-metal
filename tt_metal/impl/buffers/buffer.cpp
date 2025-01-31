@@ -162,7 +162,7 @@ void validate_sub_device_id(
 }
 
 void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device_manager_id, IDevice* device) {
-    if (!sub_device_manager_id.has_value()) {
+    if (sub_device_manager_id.has_value()) {
         TT_FATAL(
             sub_device_manager_id.value() == device->get_active_sub_device_manager_id(),
             "Sub-device manager id mismatch. Buffer sub-device manager id: {}, Device active sub-device manager id: {}",
