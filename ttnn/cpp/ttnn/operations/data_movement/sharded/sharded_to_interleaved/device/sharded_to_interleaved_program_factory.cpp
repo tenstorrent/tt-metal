@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     const Tensor& input, const Tensor& output, bool is_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt_metal::Program program{};
-
+    is_l1_aligned = true;
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;

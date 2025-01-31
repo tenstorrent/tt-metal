@@ -32,7 +32,7 @@ void Allocator::init_one_bank_per_channel() {
         BufferType::DRAM,
         bank_offsets,
         dram_bank_size,
-        config_.alignment,
+        config_.dram_alignment,
         config_.dram_unreserved_base,
         config_.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < config_.num_dram_channels; bank_id++) {
@@ -47,7 +47,7 @@ void Allocator::init_one_bank_per_channel() {
         BufferType::TRACE,
         bank_offsets,
         config_.trace_region_size,
-        config_.alignment,
+        config_.dram_alignment,
         dram_bank_size + config_.dram_unreserved_base,
         config_.disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < config_.num_dram_channels; bank_id++) {
@@ -68,7 +68,7 @@ void Allocator::init_one_bank_per_l1() {
         BufferType::L1,
         bank_offsets,
         l1_bank_size,
-        config_.alignment,
+        config_.l1_alignment,
         config_.l1_unreserved_base,
         config_.disable_interleaved);
 
@@ -219,6 +219,18 @@ const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
 }
 
 const AllocatorConfig& Allocator::get_config() const { return config_; }
+
+uint32_t Allocator::get_alignment(BufferType buffer_type) const {
+    switch (buffer_type) {
+        case BufferType::DRAM:
+        case BufferType::TRACE: return config_.dram_alignment;
+        case BufferType::L1:
+        case BufferType::L1_SMALL: return config_.l1_alignment;
+        default: {
+            TT_THROW("Unsupported buffer type!");
+        }
+    }
+}
 
 DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
     switch (mem_type) {

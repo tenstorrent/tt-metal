@@ -6,8 +6,7 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-
-	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
     constexpr bool read_from_dram = get_compile_time_arg_val(1);
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
