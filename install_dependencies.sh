@@ -20,6 +20,17 @@
 
 set -e
 
+usage()
+{
+    echo "Usage: sudo ./install_dependencies.sh [options]"
+    echo
+    echo "[--help, -h]                List this help"
+    echo "[--validate, -v]            Validate that required packages are installed"
+    echo "[--docker, -d]              Specialize execution for docker"
+    echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
+    exit 1
+}
+
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
@@ -31,22 +42,12 @@ if [ $FLAVOR != "ubuntu" ]; then
 fi
 
 UBUNTU_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | awk -F= '{print $2}' | tr -d '"')
+export UBUNTU_CODENAME
 
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Please use sudo."
     usage
 fi
-
-usage()
-{
-    echo "Usage: sudo ./install_dependencies.sh [options]"
-    echo
-    echo "[--help, -h]                List this help"
-    echo "[--validate, -v]            Validate that required packages are installed"
-    echo "[--docker, -d]              Specialize execution for docker"
-    echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
-    exit 1
-}
 
 validate=0
 docker=0
@@ -89,8 +90,8 @@ ub_runtime_packages()
      python3-pip \
      libhwloc-dev \
      libnuma-dev \
-     libc++1-17 \
-     libc++abi1-17 \
+     libc++1 \
+     libc++abi1 \
     )
 }
 
@@ -100,13 +101,14 @@ ub_buildtime_packages()
      libpython3-dev \
      python3-pip \
      cmake \
-     ninja-build
+     ninja-build \
      libhwloc-dev \
      libc++-17-dev \
      libc++abi-17-dev \
      gcc-12 \
      g++-12 \
      build-essential \
+     xz-utils \
     )
 }
 
@@ -167,7 +169,7 @@ prep_ubuntu_build()
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
     # The below is to get g++-12 on ubuntu 20.04
     if [[ "$VERSION" =~ ^20\.04 ]]; then
-        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+        add-apt-repository -y ppa:ubuntu-toolchain-r/test
     fi
     apt-get update
 }
@@ -216,15 +218,15 @@ install() {
                 prep_ubuntu_build
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
-		sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-		sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+		update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
-		sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-		sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+		update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
                 configure_hugepages
                 ;;
         esac
