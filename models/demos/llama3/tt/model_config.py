@@ -155,35 +155,6 @@ class TtModelArgs:
         if "instruct" in self.DEFAULT_CACHE_PATH.lower():
             self.instruct = True
 
-        # Set the model name based on the checkpoint directory being loaded
-        # FIXME: add a llama prefix to all llama-specific models and names
-        if "3.2-1B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_1B_PARAMS"
-            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_3B_PARAMS"
-            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_8B_PARAMS"
-            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in LLAMA_DIR:
-            local_params = "LLAMA3_2_11B_PARAMS"
-            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in LLAMA_DIR:
-            local_params = "LLAMA3_1_70B_PARAMS"
-            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        else:
-            local_params = "UNKNOWN"
-            self.model_name = "Unknown"
-            self.rope_scaling_factor = 4
-            logger.warning(f"Unknown model: {LLAMA_DIR}")
-
         # Load model params
         if not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
@@ -1090,6 +1061,36 @@ class TtModelArgs:
         with open(params_file, "r") as f:
             params = json.load(f)
         self._set_params_from_dict(params)
+
+        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Set the model name based on the checkpoint directory being loaded
+        # FIXME: add a llama prefix to all llama-specific models and names
+        if "3.2-1B" in checkpoint_dir:
+            local_params = "LLAMA3_2_1B_PARAMS"
+            self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 32
+        elif "3.2-3B" in checkpoint_dir:
+            local_params = "LLAMA3_2_3B_PARAMS"
+            self.model_name = "Llama3.2-3B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 32
+        elif "3.1-8B" in checkpoint_dir:
+            local_params = "LLAMA3_1_8B_PARAMS"
+            self.model_name = "Llama3.1-8B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8
+        elif "3.2-11B" in checkpoint_dir:
+            local_params = "LLAMA3_2_11B_PARAMS"
+            self.model_name = "Llama3.2-11B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8  # shared with 3.1-8B
+        elif "3.1-70B" in checkpoint_dir:
+            local_params = "LLAMA3_1_70B_PARAMS"
+            self.model_name = "Llama3.1-70B" + "-Instruct" if self.instruct else ""
+            self.rope_scaling_factor = 8
+            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+        else:
+            local_params = "UNKNOWN"
+            self.model_name = "Unknown"
+            self.rope_scaling_factor = 4
+            logger.warning(f"Unknown model: {LLAMA_DIR}")
 
     def _set_hf_params(self, checkpoint_dir):
         config_file = os.path.join(checkpoint_dir, "config.json")
