@@ -23,7 +23,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto shape = input.get_shape();
+    const auto shape = input.get_padded_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -32,14 +32,14 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
 
-    uint32_t W = shape.value[-1], H = shape.value[-2];
+    uint32_t W = shape[-1], H = shape[-2];
     uint32_t HW = H * W;
 
     uint32_t Wt = W / constants::TILE_WIDTH;
     uint32_t Ht = H / constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = shape.value.without_padding();
+    const auto input_shape_without_padding = input.get_logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % constants::TILE_WIDTH : constants::TILE_WIDTH;

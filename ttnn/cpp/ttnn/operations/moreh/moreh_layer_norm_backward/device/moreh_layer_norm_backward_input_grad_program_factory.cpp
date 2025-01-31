@@ -36,8 +36,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto output_grad_shape = output_grad.get_shape().value;
-    const auto output_grad_shape_without_padding = output_grad_shape.without_padding();
+    const auto output_grad_shape = output_grad.get_padded_shape();
+    const auto output_grad_shape_without_padding = output_grad.get_logical_shape();
     const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
@@ -52,8 +52,8 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     const bool do_mask_w = (origin_W % TILE_WIDTH) != 0;
     const uint32_t mask_w = do_mask_w ? origin_W % TILE_WIDTH : TILE_WIDTH;
 
-    const auto mean_rstd_shape = mean.get_shape().value;
-    const auto mean_rstd_shape_without_padding = mean_rstd_shape.without_padding();
+    const auto mean_rstd_shape = mean.get_padded_shape();
+    const auto mean_rstd_shape_without_padding = mean.get_logical_shape();
     auto mean_rstd_height = mean_rstd_shape_without_padding[-2];
     auto mean_rstd_width = mean_rstd_shape_without_padding[-1];
 

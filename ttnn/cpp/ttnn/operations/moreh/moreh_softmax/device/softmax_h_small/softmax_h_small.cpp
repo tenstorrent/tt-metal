@@ -21,7 +21,7 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
     // split work
-    auto shape = input.get_shape().value;
+    auto shape = input.get_padded_shape();
     auto H = shape[-2];
     auto W = shape[-1];
 
@@ -126,7 +126,7 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
         }
 
         float scaler = 1.0f;
-        uint32_t mask_h = shape.without_padding()[-2] % tt::constants::TILE_HEIGHT;
+        uint32_t mask_h = input.get_logical_shape()[-2] % tt::constants::TILE_HEIGHT;
         if (mask_h == 0) {
             mask_h = tt::constants::TILE_HEIGHT;
         }

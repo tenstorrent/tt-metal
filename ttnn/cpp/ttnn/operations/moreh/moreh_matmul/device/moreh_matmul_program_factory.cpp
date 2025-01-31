@@ -184,7 +184,7 @@ MorehMatmulOperation::MultiCoreProgramFactory::cached_program_t MorehMatmulOpera
     bool is_scalar_bias = false;
     if (bias.has_value()) {
         const auto& bias_tensor = bias.value();
-        const auto& bias_shape_wo_padding = bias_tensor.get_shape().value.without_padding();
+        const auto& bias_shape_wo_padding = bias_tensor.get_logical_shape();
         is_scalar_bias = (bias_shape_wo_padding[-1] == 1) ? (true) : (false);
         log_debug(tt::LogOp, "{}:{} bias tensor. is_scalar_bias {}", __func__, __LINE__, is_scalar_bias);
     }
