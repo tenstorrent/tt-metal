@@ -321,7 +321,6 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
-          - eltwise.binary.add.add_llama
           - eltwise.binary.atan2.atan2
           - eltwise.binary.atan2.atan2_sharded
           - eltwise.unary.gtz.gtz
