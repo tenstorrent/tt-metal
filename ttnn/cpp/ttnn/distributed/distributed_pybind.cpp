@@ -6,6 +6,7 @@
 #include <pybind11/pytypes.h>
 #include <utility>
 
+#include "tt-metalium/assert.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -35,9 +36,8 @@ py::object get_torch_type(DataType& dtype, const py::object& torch) {
         return torch.attr("float32");
     } else if (dtype == DataType::BFLOAT16) {
         return torch.attr("bfloat16");
-    } else {
-        static_assert("Unsupported buffer!");
     }
+    TT_THROW("Unsupported DataType: {}", dtype);
 }
 
 // duplicated from pytensor.cpp
