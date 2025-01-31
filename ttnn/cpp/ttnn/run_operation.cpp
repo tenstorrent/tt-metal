@@ -836,15 +836,4 @@ void launch_op_func<OptionalTensors>(
     const OptionalTensors optional_output_tensors,
     bool enable_autoformat_device);
 
-/*
-template<>
-void launch_op_func<Tensor>(
-    const std::function<Tensor(const Tensors, const OptionalConstTensors, const OptionalTensors)>& op_func,
-    const Tensors input_tensors,
-    Tensor& output_tensors,
-    const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device);
-*/
-
 }  // namespace tt::tt_metal::operation
