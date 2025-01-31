@@ -17,10 +17,21 @@ import ttnn
 import torch
 import pytest
 from models.experimental.functional_stable_diffusion3_5.reference.sd3_transformer_2d_model import SD3Transformer2DModel
+from models.demos.wormhole.stable_diffusion_3_5.tests.perf_e2e_stable_diffusion3_5 import SD35mTrace
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 13631488}], indirect=True)
 def test_demo(device):
+    ## Trace
+    ttnn.enable_program_cache(device)
+    transformer_traced = SD35mTrace()
+    transformer_traced.initialize_sd35m_trace_inference(
+        device,
+        device_batch_size=1,
+        model_location_generator=None,
+    )
+
+    ## Conventional
     pipe = StableDiffusion3Pipeline.from_pretrained(
         "stabilityai/stable-diffusion-3.5-medium", torch_dtype=torch.bfloat16
     )
@@ -52,6 +63,7 @@ def test_demo(device):
     parameters["pos_embed"]["proj"]["weight"] = ttnn.from_device(parameters["pos_embed"]["proj"]["weight"])
     parameters["pos_embed"]["proj"]["bias"] = ttnn.from_device(parameters["pos_embed"]["proj"]["bias"])
 
+    """
     ttnn_model = ttnn_SD3Transformer2DModel(
         sample_size=128,
         patch_size=2,
@@ -69,22 +81,30 @@ def test_demo(device):
         config=config,
         parameters=parameters,
     )
+    """
 
-    ttnn_pipe = ttnnStableDiffusion3Pipeline(
-        ttnn_model,
-        pipe.scheduler,
-        pipe.vae,
-        pipe.text_encoder,
-        pipe.tokenizer,
-        pipe.text_encoder_2,
-        pipe.tokenizer_2,
-        time_steps=pipe.transformer.time_text_embed.time_proj,
-    )
     while 1:
+        ttnn_pipe = ttnnStableDiffusion3Pipeline(
+            # ttnn_model,
+            pipe.scheduler,
+            pipe.vae,
+            pipe.text_encoder,
+            pipe.tokenizer,
+            pipe.text_encoder_2,
+            pipe.tokenizer_2,
+            time_steps=pipe.transformer.time_text_embed.time_proj,
+            device=device,
+            transformer_traced=transformer_traced,
+        )
+
         print("Enter the input prompt, or q to exit:")
         new_prompt = input()
         print("Enter the  num_inference_steps:")
-        num_inference_steps = int(input())
+        steps = input()
+        if len(steps) > 0:
+            num_inference_steps = int(steps)
+        else:
+            num_inference_steps = 40
         if len(new_prompt) > 0:
             prompt = [new_prompt]
         if prompt[0] == "q":
@@ -94,7 +114,7 @@ def test_demo(device):
             new_prompt,
             num_inference_steps=num_inference_steps,
             guidance_scale=4.5,
-            parameters_transformer=parameters,
+            parameters_transformer=parameters,  # None
             device_ttnn=device,
             width=512,
             height=512,

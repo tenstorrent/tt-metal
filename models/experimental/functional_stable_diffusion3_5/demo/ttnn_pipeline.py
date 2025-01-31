@@ -31,6 +31,8 @@ from diffusers.pipelines.stable_diffusion_3.pipeline_stable_diffusion_3 import (
 import torch
 from typing import Tuple, Optional, Union, List, Dict, Callable, Any
 
+torch.manual_seed(12345)
+
 
 # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.retrieve_timesteps
 def retrieve_timesteps(
@@ -124,7 +126,7 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
 
     def __init__(
         self,
-        transformer,
+        # transformer,
         scheduler: FlowMatchEulerDiscreteScheduler,
         vae: AutoencoderKL,
         text_encoder: CLIPTextModelWithProjection,
@@ -132,10 +134,13 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         text_encoder_2: CLIPTextModelWithProjection,
         tokenizer_2: CLIPTokenizer,
         time_steps,
+        device,
+        transformer_traced,
     ):
         super().__init__()
 
-        self.transformer = transformer
+        # self.transformer = transformer
+        self.transformer_traced = transformer_traced
         self.scheduler = scheduler
         self.vae = vae
         self.text_encoder = text_encoder
@@ -153,6 +158,7 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         self.tokenizer_max_length = (
             self.tokenizer.model_max_length if hasattr(self, "tokenizer") and self.tokenizer is not None else 77
         )
+        """
         self.default_sample_size = (
             self.transformer.config.sample_size
             if hasattr(self, "transformer") and self.transformer is not None
@@ -161,6 +167,9 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         self.patch_size = (
             self.transformer.config.patch_size if hasattr(self, "transformer") and self.transformer is not None else 2
         )
+        """
+        self.default_sample_size = 128
+        self.patch_size = 2
 
     def prepare_latents(
         self,
@@ -212,7 +221,8 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
                 (
                     batch_size * num_images_per_prompt,
                     self.tokenizer_max_length,
-                    self.transformer.config.joint_attention_dim,
+                    self.transformer_traced.test_infra.ttnn_model.config.joint_attention_dim,
+                    # self.transformer.config.joint_attention_dim,
                 ),
                 device=device,
                 dtype=dtype,
@@ -654,7 +664,12 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         self._num_timesteps = len(timesteps)
 
         # 5. Prepare latent variables
-        num_channels_latents = self.transformer.config.in_channels
+        # num_channels_latents = self.transformer.config.in_channels
+        num_channels_latents = self.transformer_traced.test_infra.ttnn_model.config.in_channels
+        # print("num_channels_latents", num_channels_latents, batch_size, num_images_per_prompt, prompt_embeds.dtype)
+        # num_channels_latents 16 1 1 torch.bfloat16
+        # print(latents) #--> None
+
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             num_channels_latents,
@@ -667,19 +682,23 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
         )
 
         # Preprocess timesteps_proj
+        if parameters_transformer is None:
+            parameters_transformer = {}
         parameters_transformer["timesteps_proj"] = {}
         for i in range(num_inference_steps):
             parameters_transformer["timesteps_proj"][i] = {}
             parameters_transformer["timesteps_proj"][i] = ttnn.from_torch(
                 self.time_steps(
                     timesteps[i].expand(latents.shape[0] * 2 if self.do_classifier_free_guidance else latents.shape[0])
-                ),
+                )
+                .unsqueeze(0)
+                .unsqueeze(0),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
-                device=device_ttnn,
+                # device=device_ttnn,
             )
 
-        print("Entering loop")
+        # print("Entering loop")
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
@@ -688,21 +707,40 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                if i == -1:
+                    latents = torch.load("pt_demo_trace/demo_inL_noTrace_" + str(i) + ".pt")
+                    latent_model_input = torch.load("pt_demo_trace/demo_in0_noTrace_" + str(i) + ".pt")
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
+                latent_model_input = latent_model_input.permute(0, 2, 3, 1)
                 ttnn_latent_model_input = ttnn.from_torch(
-                    latent_model_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device_ttnn
+                    latent_model_input,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16
+                    # , device=device_ttnn
+                    # unsqueeze work is done inside the patch_emd code
                 )
-                ttnn_timestep_proj = parameters_transformer["timesteps_proj"][
-                    i
-                ]  # This is a 2D tensor  currently, reshape to make it 4d.
+                ttnn_timestep_proj = parameters_transformer["timesteps_proj"][i]  # .unsqueeze(0)
+                # This is a 2D tensor  currently, reshape to make it 4d.
+
                 ttnn_prompt_embeds = ttnn.from_torch(
-                    prompt_embeds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device_ttnn
+                    prompt_embeds.unsqueeze(1),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16
+                    # , device=device_ttnn
+                    # prompt_embeds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device_ttnn
                 )
+
                 ttnn_pooled_prompt_embeds = ttnn.from_torch(
-                    pooled_prompt_embeds, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device_ttnn
+                    pooled_prompt_embeds.unsqueeze(0).unsqueeze(0),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16
+                    # , device=device_ttnn
+                    # pooled_prompt_embeds.unsqueeze(0), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device_ttnn
                 )
-                print("Entering transformer")
+                ##print(ttnn_prompt_embeds.shape, ttnn_pooled_prompt_embeds.shape)
+                # print("Entering transformer")
+                """
                 noise_pred = ttnn.to_torch(
                     self.transformer(
                         hidden_states=ttnn_latent_model_input,
@@ -714,16 +752,38 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
                         parameters=parameters_transformer,
                     )[0]
                 )
+                """
+                torch.save(latent_model_input, "demo_in0_yesssTrace_" + str(i) + ".pt")
+                torch.save(prompt_embeds, "demo_in1_yesssTrace_" + str(i) + ".pt")
+                torch.save(pooled_prompt_embeds, "demo_in2_yesssTrace_" + str(i) + ".pt")
+                torch.save(ttnn.to_torch(ttnn_timestep_proj), "demo_in3_yesssTrace_" + str(i) + ".pt")
 
-                print("Eneded transformer")
+                ttnn_noise_pred = self.transformer_traced.execute_sd35m_trace_inference(
+                    (
+                        ttnn_latent_model_input,
+                        ttnn_prompt_embeds,
+                        ttnn_pooled_prompt_embeds,
+                        ttnn_timestep_proj,
+                    )
+                )[0]
+                noise_pred = ttnn.to_torch(ttnn_noise_pred)
+
+                torch.save(noise_pred, "noise_pred_yesssTrace_" + str(i) + ".pt")
+
+                # print("Eneded transformer")
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
+                torch.save(noise_pred, "noise_pred_b_yesssTrace_" + str(i) + ".pt")
+                # print("self.do_classifier_free_guidance", self.do_classifier_free_guidance, self.guidance_scale)
+
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
+                torch.save(latents, "latents_a_yessTrace_" + str(i) + ".pt")
 
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
@@ -751,6 +811,7 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
 
                 # if XLA_AVAILABLE:
                 #     xm.mark_step()
+                torch.save(latents, "latents_b_yesssTrace_" + str(i) + ".pt")
 
         # Save the NumPy array to a .npy file
         import numpy as np
@@ -760,8 +821,8 @@ class ttnnStableDiffusion3Pipeline(DiffusionPipeline, SD3LoraLoaderMixin, FromSi
             "models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512.npy",
             numpy_array,
         )
-        print("completed forloop")
-        exit(0)
+        # print("completed forloop")
+        # exit(0)
         if output_type == "latent":
             image = latents
 

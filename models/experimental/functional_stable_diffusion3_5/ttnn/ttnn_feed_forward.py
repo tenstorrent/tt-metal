@@ -32,9 +32,33 @@ class ttnn_FeedForward:
         self.net.append(ttnn.linear)
 
     def __call__(self, hidden_states: ttnn.Tensor, parameters=None) -> ttnn.Tensor:
+        hifi2_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+        )
+
+        mm_a_y = 8
+        mm_a_x = 8
+        mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+        mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        dtype_ff = ttnn.bfloat8_b
+        if hidden_states.shape[-2] < 512:
+            mm_a_y = 6
+            mm_a_x_strategy = ttnn.ShardStrategy.WIDTH
+            mm_a_x_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+            # dtype_ff = ttnn.bfloat16
+
         for module in self.net:
             if module == ttnn.linear:
-                hidden_states = module(hidden_states, parameters["net"][2]["weight"], bias=parameters["net"][2]["bias"])
+                hidden_states = module(
+                    hidden_states,
+                    parameters["net"][2]["weight"],
+                    bias=parameters["net"][2]["bias"],
+                    # memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=mm_a_x_memory_config,
+                    core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+                    compute_kernel_config=hifi2_kernel_config,
+                    dtype=dtype_ff,
+                )
             else:
                 hidden_states = module(hidden_states, parameters=parameters["net"][0])
         return hidden_states

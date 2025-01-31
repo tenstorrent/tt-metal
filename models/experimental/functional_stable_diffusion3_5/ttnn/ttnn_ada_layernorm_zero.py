@@ -32,6 +32,8 @@ class ttnn_AdaLayerNormZero:
         if self.emb is not None:
             emb = self.emb(timestep, class_labels, hidden_dtype=hidden_dtype)
         emb = self.linear(self.silu(emb), parameters["linear"]["weight"], bias=parameters["linear"]["bias"])
+
+        """
         emb = ttnn.to_torch(emb)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = emb.chunk(6, 1)
 
@@ -46,3 +48,41 @@ class ttnn_AdaLayerNormZero:
             shift_msa, (shift_msa.shape[0], 1, shift_msa.shape[1])
         )  # shift_msa[:, None] replaced with ttnn.reshape(shift_msa,(shift_msa.shape[0],1,shift_msa.shape[1])) same for scale_msa[:,None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
+        """
+
+        emb = ttnn.to_memory_config(emb, ttnn.L1_MEMORY_CONFIG)
+        one_chunk = emb.shape[-1] // 6
+
+        emb = ttnn.permute(emb, (2, 0, 1, 3))
+        # emb = ttnn.permute(emb, (1,0,2))
+
+        i_beg = 0
+        i_end = one_chunk
+        shift_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        scale_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        gate_msa = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        shift_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        scale_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+        i_beg += one_chunk
+        i_end += one_chunk
+        gate_mlp = ttnn.slice(emb, [0, 0, 0, i_beg], [2, 1, 1, i_end])
+
+        ttnn.deallocate(emb)
+
+        # print("zero", x.shape)
+        norm_hidden_states = self.norm(x)  # , compute_kernel_config=hifi2_kernel_config)
+        scale_msa = scale_msa + 1
+        # TODO: can we shard the hidden state but keep scale tensor as interleaved?
+        norm_hidden_states = norm_hidden_states * scale_msa
+        norm_hidden_states = norm_hidden_states + shift_msa
+        # print("zero", norm_hidden_states.shape)
+
+        return norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp

@@ -17,8 +17,12 @@ class ttnn_CombinedTimestepTextProjEmbeddings:
         self.text_embedder = ttnn_PixArtAlphaTextProjection(parameters.text_embedder)
 
     def __call__(self, timestep, pooled_projection, device):
+        # timesteps_proj = ttnn.clone(timestep)
+        timestep = ttnn.to_memory_config(timestep, ttnn.L1_MEMORY_CONFIG)  # , ttnn.DRAM_MEMORY_CONFIG)
         timesteps_proj = ttnn.clone(timestep)
         timesteps_emb = self.timestep_embedder(timesteps_proj, device)
+        # timesteps_emb = self.timestep_embedder(timestep, device)
+        pooled_projection = ttnn.to_memory_config(pooled_projection, ttnn.L1_MEMORY_CONFIG)
         pooled_projections = self.text_embedder(pooled_projection, device)
         conditioning = ttnn.add(timesteps_emb, pooled_projections)
 

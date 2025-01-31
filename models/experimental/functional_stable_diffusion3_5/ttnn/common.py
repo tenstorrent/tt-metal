@@ -46,8 +46,8 @@ class Conv:
     def __call__(self, device, input_tensor):
         if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            input_tensor = ttnn.from_device(input_tensor)
+        # else:
+        #     input_tensor = ttnn.from_device(input_tensor)
         conv_config = ttnn.Conv2dConfig(
             dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
@@ -56,6 +56,7 @@ class Conv:
             input_channels_alignment=(
                 16
                 if self.use_shallow_conv_variant or (input_tensor.shape[3] == 16 and input_tensor.shape[1] == 115)
+                # if self.use_shallow_conv_variant or input_tensor.shape[3] == 16
                 else 32
             ),
             # reshard_if_not_optimal=self.reshard,
@@ -75,7 +76,8 @@ class Conv:
         )
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
-        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
+
+        output_tensor, [self.weights, self.bias] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -91,16 +93,10 @@ class Conv:
             conv_config=conv_config,
             debug=False,
             groups=self.groups,
-            return_output_dim=True,
-            return_weights_and_bias=False,
+            return_output_dim=False,
+            return_weights_and_bias=True,
             compute_config=compute_config,
             dilation=(self.dilation, self.dilation),
         )
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        )
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
-        del _out_height, _out_width
+
         return output_tensor
