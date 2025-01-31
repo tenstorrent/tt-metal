@@ -15,6 +15,7 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include "common.h"
+#include "tt_cluster.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
 
@@ -54,6 +55,8 @@ constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
+
+constexpr CoreType DISPATCH_CORE_TYPE = CoreType::WORKER;
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -113,6 +116,8 @@ uint32_t l1_buf_base_g;
 uint32_t test_device_id_g = 0;
 
 void init(int argc, char** argv) {
+    auto default_settings = DispatchSettings::defaults(DISPATCH_CORE_TYPE, tt::Cluster::instance(), 1);
+
     std::vector<std::string> input_args(argv, argv + argc);
 
     if (test_args::has_command_option(input_args, "-h") || test_args::has_command_option(input_args, "--help")) {
@@ -138,10 +143,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, "  -hp: host huge page issue buffer size (default {})", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
         log_info(LogTest, "  -pq: prefetch queue entries (default {})", DEFAULT_PREFETCH_Q_ENTRIES);
         log_info(LogTest, "  -cs: cmddat q size (default {})", DEFAULT_CMDDAT_Q_SIZE);
-        log_info(
-            LogTest,
-            "-pdcs: prefetch_d cmddat cb size (default {})",
-            DispatchMemMap::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
+        log_info(LogTest, "-pdcs: prefetch_d cmddat cb size (default {})", default_settings.prefetch_d_buffer_size_);
         log_info(LogTest, "  -ss: scratch cb size (default {})", DEFAULT_SCRATCH_DB_SIZE);
         log_info(
             LogTest,
@@ -174,8 +176,8 @@ void init(int argc, char** argv) {
     pcie_transfer_size_g = test_args::get_command_option_uint32(input_args, "-pcies", PCIE_TRANSFER_SIZE_DEFAULT);
     dram_page_size_g = test_args::get_command_option_uint32(input_args, "-dpgs", DRAM_PAGE_SIZE_DEFAULT);
     dram_pages_to_read_g = test_args::get_command_option_uint32(input_args, "-dpgr", DRAM_PAGES_TO_READ_DEFAULT);
-    prefetch_d_buffer_size_g = test_args::get_command_option_uint32(
-        input_args, "-pdcs", DispatchMemMap::get(CoreType::WORKER, 1).prefetch_d_buffer_size());
+    prefetch_d_buffer_size_g =
+        test_args::get_command_option_uint32(input_args, "-pdcs", default_settings.prefetch_d_buffer_size_);
 
     test_type_g = test_args::get_command_option_uint32(input_args, "-t", DEFAULT_TEST_TYPE);
     all_workers_g.end_coord.x = test_args::get_command_option_uint32(input_args, "-wx", all_workers_g.end_coord.x);
@@ -849,7 +851,7 @@ void gen_rnd_linear_cmd(
     size &= ~(sizeof(uint32_t) - 1);
     uint32_t offset = std::rand() % dispatch_buffer_page_size_g;
     offset = (offset >> 2) << 2;
-    device_data.relevel(CoreType::WORKER);  // XXXXX shouldn't be needed
+    device_data.relevel(DISPATCH_CORE_TYPE);  // XXXXX shouldn't be needed
     if (device_data.size_at(worker_core, 0) * sizeof(uint32_t) < max_linear_cmd_read_size + offset) {
         // Not enough data yet, just bail on this cmd
         return;
@@ -1699,8 +1701,7 @@ void configure_for_single_chip(
     uint32_t& packetized_path_test_results_addr,
     uint32_t packetized_path_test_results_size,
     uint32_t dev_hugepage_base_g) {
-    const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = DispatchMemMap::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() *
+    uint32_t dispatch_buffer_pages = DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages() *
                                      DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores =
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
@@ -1766,9 +1767,9 @@ void configure_for_single_chip(
     uint32_t* host_hugepage_completion_buffer = (uint32_t*)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    uint32_t completion_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+    uint32_t completion_q_wr_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-    uint32_t completion_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+    uint32_t completion_q_rd_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
@@ -2105,19 +2106,19 @@ void configure_for_single_chip(
     }
 
     uint32_t host_completion_queue_wr_ptr =
-        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_wr_ptr =
-        DispatchMemMap::get(CoreType::WORKER)
+        DispatchMemMap::get(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_rd_ptr =
-        DispatchMemMap::get(CoreType::WORKER)
+        DispatchMemMap::get(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
     std::vector<uint32_t> dispatch_compile_args = {
         dispatch_buffer_base,
         DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            DispatchMemMap::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
+            DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages(),
         dispatch_cb_sem,  // overridden below for h
         split_prefetcher_g ? prefetch_d_downstream_cb_sem
                            : prefetch_downstream_cb_sem,  // overridden below for dispatch_h
@@ -2395,8 +2396,7 @@ void configure_for_multi_chip(
     uint32_t& packetized_path_test_results_addr,
     uint32_t packetized_path_test_results_size,
     uint32_t dev_hugepage_base_g) {
-    const CoreType dispatch_core_type = CoreType::WORKER;
-    uint32_t dispatch_buffer_pages = DispatchMemMap::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages() *
+    uint32_t dispatch_buffer_pages = DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages() *
                                      DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     uint32_t num_compute_cores =
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
@@ -2478,9 +2478,9 @@ void configure_for_multi_chip(
     uint32_t* host_hugepage_completion_buffer = (uint32_t*)host_hugepage_completion_buffer_base_g;
     vector<uint32_t> tmp = {dev_hugepage_completion_buffer_base >> 4};
     CoreCoord phys_dispatch_host_core = split_dispatcher_g ? phys_dispatch_h_core : phys_dispatch_core;
-    uint32_t completion_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+    uint32_t completion_q_wr_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
-    uint32_t completion_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+    uint32_t completion_q_rd_ptr = DispatchMemMap::get(DISPATCH_CORE_TYPE)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_wr_ptr);
     tt::llrt::write_hex_vec_to_core(device->id(), phys_dispatch_host_core, tmp, completion_q_rd_ptr);
@@ -2972,18 +2972,18 @@ void configure_for_multi_chip(
     }
 
     uint32_t host_completion_queue_wr_ptr =
-        DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+        DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_wr_ptr =
-        DispatchMemMap::get(CoreType::WORKER)
+        DispatchMemMap::get(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
     uint32_t dev_completion_queue_rd_ptr =
-        DispatchMemMap::get(CoreType::WORKER)
+        DispatchMemMap::get(DISPATCH_CORE_TYPE)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
     std::vector<uint32_t> dispatch_compile_args = {
         dispatch_buffer_base,
         DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS *
-            DispatchMemMap::get(dispatch_core_type, 1).dispatch_buffer_block_size_pages(),
+            DispatchMemMap::get(DISPATCH_CORE_TYPE, 1).dispatch_buffer_block_size_pages(),
         dispatch_cb_sem,  // overridden below for h
         split_prefetcher_g ? prefetch_d_downstream_cb_sem : prefetch_downstream_cb_sem,
         DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS,
@@ -3321,7 +3321,7 @@ int main(int argc, char** argv) {
         CoreCoord phys_dispatch_relay_demux_core;
         uint32_t packetized_path_test_results_addr;
         uint32_t cq_start =
-            DispatchMemMap::get(CoreType::WORKER).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            DispatchMemMap::get(DISPATCH_CORE_TYPE).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t dev_hugepage_base_g = 2 * (cq_start * sizeof(uint32_t));  // HOST_CQ uses some at the start address
 
         if (test_device_id_g == 0) {
