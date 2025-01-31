@@ -323,7 +323,9 @@ def test_joint_transformer_block(device, reset_seeds, context_pre_only, use_dual
     ttnn_input_encoder_hidden_states = ttnn.from_torch(
         torch_input_encoder_hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
     )
-    ttnn_input_temb = ttnn.from_torch(torch_input_temb, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_input_temb = ttnn.from_torch(
+        torch_input_temb.unsqueeze(0), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=device
@@ -345,5 +347,5 @@ def test_joint_transformer_block(device, reset_seeds, context_pre_only, use_dual
     )
 
     if context_pre_only != True:
-        assert_with_pcc(torch_output[0], ttnn.to_torch(ttnn_output[0]), pcc=0.99)
-    assert_with_pcc(torch_output[1], ttnn.to_torch(ttnn_output[1]), pcc=0.99)
+        assert_with_pcc(torch_output[0], ttnn.to_torch(ttnn_output[0]), pcc=0.999)
+    assert_with_pcc(torch_output[1], ttnn.to_torch(ttnn_output[1]), pcc=0.999)
