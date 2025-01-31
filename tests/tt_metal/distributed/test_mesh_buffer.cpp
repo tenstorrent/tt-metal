@@ -14,7 +14,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshBufferTest = T3000MultiDeviceFixture;
+using MeshBufferTest = T3000MeshDeviceFixture;
 
 struct DeviceLocalShardedBufferTestConfig {
     Shape2D num_pages_per_core;

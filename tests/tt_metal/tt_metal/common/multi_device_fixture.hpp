@@ -50,7 +50,7 @@ protected:
     }
 };
 
-class T3000MultiDeviceFixture : public ::testing::Test {
+class T3000MeshDeviceFixture : public ::testing::Test {
 protected:
     void SetUp() override {
         using tt::tt_metal::distributed::MeshDevice;
@@ -61,10 +61,10 @@ protected:
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
-            GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
+            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
-        if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
+        if (num_devices != 8 or arch != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Skipping T3K Mesh-Device test suite on non T3K machine.";
         }
         mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
     }
@@ -79,3 +79,40 @@ protected:
     }
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
 };
+
+class N300MeshDeviceFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        using tt::tt_metal::distributed::MeshDevice;
+        using tt::tt_metal::distributed::MeshDeviceConfig;
+        using tt::tt_metal::distributed::MeshShape;
+
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (slow_dispatch) {
+            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (num_devices != 2 or arch != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Skipping N300 Mesh-Device test suite on non N300 machine.";
+        }
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 1}});
+    }
+
+    void TearDown() override {
+        if (!mesh_device_) {
+            return;
+        }
+
+        mesh_device_->close();
+        mesh_device_.reset();
+    }
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+};
+
+using MeshFixtureTypes = ::testing::Types<T3000MeshDeviceFixture, N300MeshDeviceFixture>;
+template <typename T>
+class MeshTestSuite : public T {};
+
+// Register the fixture types
+TYPED_TEST_SUITE(MeshTestSuite, MeshFixtureTypes);
