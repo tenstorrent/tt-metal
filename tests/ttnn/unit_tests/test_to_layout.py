@@ -25,6 +25,7 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
     pad_h = (ttnn.TILE_SIZE - height % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
     pad_w = (ttnn.TILE_SIZE - width % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
     if start_with_padding:
+        pytest.skip("Modifying logical shape with borrowed buffer is not supported!")
         torch_padded_input_tensor = torch.nn.functional.pad(
             torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0.0
         )

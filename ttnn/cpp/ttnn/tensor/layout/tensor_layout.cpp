@@ -236,7 +236,8 @@ Shape2D TensorLayout::get_logical_shard_shape() const {
     TT_FATAL(
         memory_config_.shard_spec.has_value(), "Shard spec must have value for TensorLayout::get_logical_shard_shape!");
 
-    // Shape in shard spec will always represent logical shard shape in either mode
+    // In physical mode, shape in shard spec is logical shard shape if no padding
+    // Otherwise, not possible to infer logical shard shape in general
     return Shape2D(memory_config_.shard_spec.value().shape);
 }
 

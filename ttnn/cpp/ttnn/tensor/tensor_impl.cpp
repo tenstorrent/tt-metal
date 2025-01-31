@@ -882,23 +882,23 @@ Tensor to_device_mesh_tensor<bfloat8_b>(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
+// TODO: Remove when we get rid of physical sharding and generalize interleaved and sharded; when we do, directly get
+// from TensorLayout
 std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
-    if (tensor_spec.memory_config().is_sharded()) {
+    const auto& logical_shape = tensor_spec.logical_shape();
+    const auto& padded_shape = tensor_spec.padded_shape();
+
+    // TODO: get_logical_shard_shape always returns shard shape from shard spec, which is not correct in physical mode
+    // if there is padding
+    if (tensor_spec.memory_config().is_sharded() and
+        (tensor_spec.memory_config().shard_spec.value().mode == ShardMode::LOGICAL or logical_shape == padded_shape)) {
         return {
             tensor_spec.tensor_layout().get_logical_shard_shape(),
             tensor_spec.tensor_layout().get_physical_shard_shape()};
     }
 
-    const auto& logical_shape = tensor_spec.logical_shape();
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
-    auto physical_shard_shape = logical_shard_shape;
-    if (tensor_spec.layout() == Layout::TILE) {
-        const auto& tile = tensor_spec.tile();
-        auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
-        auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
-        physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
-    }
+    Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
     return {logical_shard_shape, physical_shard_shape};
 }
 
@@ -942,6 +942,10 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 
 template <typename T>
 std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
+    if (logical_data.size() == 0) {
+        return {};
+    }
+
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
@@ -1005,6 +1009,10 @@ template std::vector<uint8_t> encode_tensor_data<uint8_t>(
 
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+    if (physical_data.size() == 0) {
+        return {};
+    }
+
     const auto& physical_shape = tensor_spec.physical_shape();
     TT_FATAL(
         physical_data.size() == physical_shape.height() * physical_shape.width(),
