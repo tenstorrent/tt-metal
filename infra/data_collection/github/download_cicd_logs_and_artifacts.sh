@@ -29,13 +29,29 @@ download_logs_for_all_jobs() {
     local workflow_run_id=$2
     local max_attempts=$3
 
-    echo "[info] downloading logs for job with id $job_id for all attempts up to $max_attempts"
+    echo "[info] downloading logs for all jobs in workflow run $workflow_run_id for all attempts up to $max_attempts"
     for attempt_number in $(seq 1 $max_attempts); do
         echo "[Info] Downloading for attempt $attempt_number"
 
         gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
             echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+
+            set +e
+            logs_exist=$(gh api /repos/$repo/actions/jobs/$job_id/logs --silent 2>&1)
+            logs_exist_status=$?
+            set -e
+            if [[ $logs_exist_status -ne 0 ]]; then
+                # May have more conditions in the future
+                if [[ "$logs_exist" == *"gh: Not Found (HTTP 404)"* ]]; then
+                    echo "[warning] Logs for $job_id do not exist, skipping"
+                else
+                    echo $logs_exist
+                    echo "[error] There was some other error while checking if logs for $job_id exist"
+                    exit 1
+                fi
+            else
+                gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+            fi
         done
     done
 
