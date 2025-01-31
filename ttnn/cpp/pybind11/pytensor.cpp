@@ -1509,7 +1509,7 @@ void pytensor_module(py::module& m_tensor) {
             py::return_value_policy::reference)
         .def(
             "to_torch",
-            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self, true); },
+            [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self); },
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
             WARNING: Will be deprecated soon!
