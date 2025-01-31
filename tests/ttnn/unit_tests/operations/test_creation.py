@@ -321,7 +321,7 @@ def test_arange_multi_device(mesh_device, start, end, step):
     )
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    output_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(output_tensor)
     for output_tensor in output_tensors:
         output_tensor = output_tensor[-1, -1, -1, :]
         if divup((end - start), step) % 2 != 0:
@@ -368,7 +368,7 @@ def test_empty_multi_device(mesh_device, input_shapes):
     output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    output_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(output_tensor)
     for output_tensor in output_tensors:
         assert list(torch_output_tensor.shape) == list(output_tensor.shape)
 
@@ -416,6 +416,6 @@ def test_empty_like_multi_device(mesh_device, input_shapes):
     output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(mesh_device))
+    output_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(output_tensor)
     for output_tensor in output_tensors:
         assert list(torch_input_tensor.shape) == list(output_tensor.shape)
