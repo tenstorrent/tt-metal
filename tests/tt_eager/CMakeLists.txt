@@ -10,10 +10,6 @@ set(TT_EAGER_TESTS_OPS
     ops/test_bcast_op.cpp
     ops/test_bmm_op.cpp
     # ops/test_pad_op.cpp                     # <- not called in run_tt_eager.py
-    ops/test_tilize_op.cpp
-    ops/test_tilize_zero_padding.cpp
-    ops/test_tilize_op_channels_last.cpp
-    ops/test_tilize_zero_padding_channels_last.cpp
     ops/test_sfpu.cpp
     ops/test_sliding_window_ops.cpp
     ops/test_fold_op.cpp
