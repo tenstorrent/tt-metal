@@ -59,6 +59,12 @@ uint32_t dest_device;
 constexpr uint32_t signal_address = get_compile_time_arg_val(19);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
 
+constexpr bool mcast_data = get_compile_time_arg_val(23);
+constexpr uint32_t e_depth = get_compile_time_arg_val(24);
+constexpr uint32_t w_depth = get_compile_time_arg_val(25);
+constexpr uint32_t n_depth = get_compile_time_arg_val(26);
+constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+
 volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
@@ -133,14 +139,26 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
-
-    fabric_async_write_add_header(
-        data_buffer_start_addr,  // source address in sender’s memory
-        dest_device >> 16,
-        dest_device & 0xFFFF,
-        dst_addr,                   // destination write address
-        max_packet_size_words * 16  // number of bytes to write to remote destination
-    );
+    if constexpr (mcast_data) {
+        fabric_async_write_multicast_add_header(
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                    // destination write address
+            max_packet_size_words * 16,  // number of bytes to write to remote destination
+            e_depth,
+            w_depth,
+            n_depth,
+            s_depth);
+    } else {
+        fabric_async_write_add_header(
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                   // destination write address
+            max_packet_size_words * 16  // number of bytes to write to remote destination
+        );
+    }
 
     // make sure fabric node gatekeeper is available.
     fabric_endpoint_init();
@@ -161,14 +179,30 @@ void kernel_main() {
 
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
-        fabric_async_write<ASYNC_WR_SEND>(
-            0,                       // the network plane to use for this transaction
-            data_buffer_start_addr,  // source address in sender’s memory
-            dest_device >> 16,
-            dest_device & 0xFFFF,
-            dst_addr,                   // destination write address
-            max_packet_size_words * 16  // number of bytes to write to remote destination
-        );
+        if constexpr (mcast_data) {
+            fabric_async_write_multicast<ASYNC_WR_SEND>(
+                0,                       // the network plane to use for this transaction
+                data_buffer_start_addr,  // source address in sender’s memory
+                dest_device >> 16,
+                dest_device & 0xFFFF,
+                dst_addr,                    // destination write address
+                max_packet_size_words * 16,  // number of bytes to write to remote destination
+                e_depth,
+                w_depth,
+                n_depth,
+                s_depth
+            );
+        } else {
+            fabric_async_write<ASYNC_WR_SEND>(
+                0,                       // the network plane to use for this transaction
+                data_buffer_start_addr,  // source address in sender’s memory
+                dest_device >> 16,
+                dest_device & 0xFFFF,
+                dst_addr,                   // destination write address
+                max_packet_size_words * 16  // number of bytes to write to remote destination
+            );
+        }
+
         data_words_sent += max_packet_size_words;
         packet_count++;
         uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;

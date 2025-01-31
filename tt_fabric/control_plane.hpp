@@ -43,6 +43,9 @@ class ControlPlane {
            chip_id_t dst_chip_id,
            chan_id_t src_chan_id) const;
 
+       std::vector<chip_id_t> get_intra_chip_neighbors(
+           mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const;
+
    private:
        std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
        std::vector<std::vector<chip_id_t>> logical_mesh_chip_id_to_physical_chip_id_mapping_;

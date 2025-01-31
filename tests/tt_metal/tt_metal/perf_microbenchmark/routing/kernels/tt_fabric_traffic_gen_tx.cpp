@@ -60,6 +60,12 @@ constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
 
 constexpr bool fixed_async_wr_notif_addr = get_compile_time_arg_val(22);
 
+constexpr bool mcast_data = get_compile_time_arg_val(23);
+constexpr uint32_t e_depth = get_compile_time_arg_val(24);
+constexpr uint32_t w_depth = get_compile_time_arg_val(25);
+constexpr uint32_t n_depth = get_compile_time_arg_val(26);
+constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
@@ -144,7 +150,7 @@ inline bool test_buffer_handler_async_wr() {
                 target_address = base_target_address;
             }
 
-            packet_header.routing.flags = FORWARD | MCAST_DATA;
+            packet_header.routing.flags = FORWARD | (mcast_data ? MCAST_DATA : 0);
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
             packet_header.routing.dst_mesh_id = dest_device >> 16;
             packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
@@ -163,11 +169,12 @@ inline bool test_buffer_handler_async_wr() {
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = noc_offset;
             target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
-            // packet_header.packet_parameters.misc_parameters.words[1] = input_queue_state.packet_rnd_seed;
-            packet_header.packet_parameters.mcast_parameters.east = 7;
-            packet_header.packet_parameters.mcast_parameters.west = 0;
-            packet_header.packet_parameters.mcast_parameters.north = 0;
-            packet_header.packet_parameters.mcast_parameters.south = 0;
+            if constexpr (mcast_data) {
+                packet_header.packet_parameters.mcast_parameters.east = e_depth;
+                packet_header.packet_parameters.mcast_parameters.west = w_depth;
+                packet_header.packet_parameters.mcast_parameters.north = n_depth;
+                packet_header.packet_parameters.mcast_parameters.south = s_depth;
+            }
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
             bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
