@@ -319,11 +319,12 @@ std::shared_ptr<Buffer> Buffer::create(
     buffer->device_->push_work([buffer] {
         try {
             buffer->allocate_impl();
-            std::unique_lock lock(buffer->allocation_mutex_);
             buffer->allocation_cv_.notify_all();
         } catch (...) {
-            std::unique_lock lock(buffer->allocation_mutex_);
-            buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
+            {
+                std::unique_lock lock(buffer->allocation_mutex_);
+                buffer->allocation_status_.store(AllocationStatus::ALLOCATION_FAILED, std::memory_order::relaxed);
+            }
             buffer->allocation_cv_.notify_all();
             throw;
         }
@@ -385,7 +386,10 @@ void Buffer::allocate_impl() {
     }
 
     // Important! Graph tracker must called after the allocation status is updated.
-    allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
+    {
+        std::unique_lock lock(allocation_mutex_);
+        allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::release);
+    }
     GraphTracker::instance().track_allocate(this);
 }
 
