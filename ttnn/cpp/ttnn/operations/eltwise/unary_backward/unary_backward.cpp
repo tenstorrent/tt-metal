@@ -5,10 +5,8 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -25,6 +23,7 @@
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::unary_backward {
 
@@ -1774,7 +1773,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     const Tensor& grad,
     const Tensor& input,
-    const tt::tt_metal::LegacyShape& shape,
+    const ttnn::SimpleShape& shape,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -1803,7 +1802,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
                 required,
                 input.get_dtype(),
                 input.get_layout(),
-                std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+                std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
                 output_memory_config),
             output_memory_config,
             std::nullopt);
@@ -1822,7 +1821,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
                 required,
                 input.get_dtype(),
                 input.get_layout(),
-                std::optional<std::reference_wrapper<tt::tt_metal::Device>>(*ttnn_device),
+                std::optional<std::reference_wrapper<tt::tt_metal::IDevice>>(*ttnn_device),
                 output_memory_config),
             output_memory_config,
             std::nullopt);
@@ -1837,7 +1836,7 @@ Tensor change_layout_to_tile(const Tensor& temp, const MemoryConfig& output_mem_
     auto formatted_input_tensor = temp;
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-            temp.get_legacy_shape(), false, false, true, true);
+            temp.get_padded_shape(), false, false, true, true);
         if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor = ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                 temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -1857,7 +1856,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
-    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, output_memory_config);
+    Tensor prod_result = ttnn::prod(input, all_dimensions, dim, true, output_memory_config);
     if (prod_result.get_layout() == Layout::ROW_MAJOR && prod_result.storage_type() == StorageType::DEVICE) {
         prod_result = ttnn::operations::unary_backward::change_layout_to_tile(prod_result, output_memory_config);
     }

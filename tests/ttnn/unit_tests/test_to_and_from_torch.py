@@ -84,3 +84,43 @@ def test_from_torch_large(device):
     x_tensor = ttnn.from_torch(torch_x, layout=ttnn.TILE_LAYOUT)
     x_tensor = ttnn.to_torch(x_tensor)
     assert torch.allclose(torch_x, x_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (),
+        (1),
+        (2),
+        (127),
+        (0),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_to_for_01_rank(shape, layout, dtype):
+    torch_input_tensor = torch.rand(shape, dtype=dtype)
+    tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
+    torch_output_tensor = ttnn.to_torch(tensor)
+    assert torch_input_tensor.shape == torch_output_tensor.shape
+    assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (),
+        (1),
+        (2),
+        (127),
+        (0),
+    ],
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_to_for_01_rank_on_device(device, shape, layout, dtype):
+    torch_input_tensor = torch.rand(shape, dtype=dtype)
+    tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    torch_output_tensor = ttnn.to_torch(tensor)
+    assert torch_input_tensor.shape == torch_output_tensor.shape
+    assert torch.allclose(torch_input_tensor, torch_output_tensor)

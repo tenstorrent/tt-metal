@@ -63,8 +63,8 @@ class TtFalconLayernorm:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.is_sharded:
-            row_height = x.shape.with_tile_padding()[2]
-            shard_width_hidden_dim_across_32_cores = x.shape.with_tile_padding()[3] // 32
+            row_height = x.padded_shape[2]
+            shard_width_hidden_dim_across_32_cores = x.padded_shape[3] // 32
             shard_spec_32_cores_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -89,7 +89,6 @@ class TtFalconLayernorm:
             #                 shard_width_hidden_dim_across_32_cores,
             #             ],
             #             ttnn.ShardOrientation.ROW_MAJOR,
-            #             False,
             #         ),
             #     ),
             #     program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -117,7 +116,6 @@ class TtFalconLayernorm:
                             1024,
                         ],
                         ttnn.ShardOrientation.ROW_MAJOR,
-                        False,
                     ),
                 ),
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -197,7 +195,6 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
         #                 config.hidden_size // 32,
         #             ],
         #             ttnn.ShardOrientation.ROW_MAJOR,
-        #             False,
         #         ),
         #     ),
         # )
@@ -223,7 +220,6 @@ def run_test_FalconLayernorm_inference(pcc, device, model_location_generator, ge
                         1024,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             ),
         )

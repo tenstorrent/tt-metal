@@ -12,7 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window.hpp"
+#include "cpp/ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations {
@@ -46,6 +46,7 @@ struct Pool2D {
             CBHandle cb_out;
             uint32_t ncores;
             uint32_t ncores_w;
+            std::shared_ptr<Buffer> reader_indices_buffer;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

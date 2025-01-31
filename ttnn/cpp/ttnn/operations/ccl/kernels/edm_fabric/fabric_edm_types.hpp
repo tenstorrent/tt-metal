@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 
 namespace tt::fabric {
@@ -48,6 +48,7 @@ enum SendStatus : uint8_t {
 
 struct EDMChannelWorkerLocationInfo {
     uint32_t worker_semaphore_address;
+    uint32_t worker_teardown_semaphore_address;
     ttnn::ccl::WorkerXY worker_xy;
 };
 

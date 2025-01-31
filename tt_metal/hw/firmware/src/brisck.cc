@@ -18,12 +18,12 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
-#include "circular_buffer_init.h"
+#include "remote_circular_buffer_api.h"
 #endif
 
 void kernel_launch(uint32_t kernel_base_addr) {
-
 #if defined(DEBUG_NULL_KERNELS) && !defined(DISPATCH_KERNEL)
+    wait_for_go_message();
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
     while (c_tensix_core::read_wall_clock() < end_time);
@@ -40,6 +40,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
+    wait_for_go_message();
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         kernel_main();

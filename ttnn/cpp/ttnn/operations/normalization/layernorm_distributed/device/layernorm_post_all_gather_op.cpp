@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <magic_enum/magic_enum.hpp>
 
@@ -39,10 +38,10 @@ void LayerNormPostAllGather::validate(
     }
 
     // stats has 2 or 1 tile columns per device if layernorm or rmsnorm
-    TT_FATAL(stats.get_legacy_shape()[-1] % TILE_WIDTH == 0, "Error");
-    TT_FATAL(stats.get_legacy_shape()[0] == a.get_legacy_shape()[0], "Error");
-    TT_FATAL(stats.get_legacy_shape()[1] == a.get_legacy_shape()[1], "Error");
-    TT_FATAL(stats.get_legacy_shape()[2] == a.get_legacy_shape()[2], "Error");
+    TT_FATAL(stats.get_padded_shape()[-1] % TILE_WIDTH == 0, "Error");
+    TT_FATAL(stats.get_padded_shape()[0] == a.get_padded_shape()[0], "Error");
+    TT_FATAL(stats.get_padded_shape()[1] == a.get_padded_shape()[1], "Error");
+    TT_FATAL(stats.get_padded_shape()[2] == a.get_padded_shape()[2], "Error");
     // TODO: How to check if number of tile columns is correct? Would have to know # of devices and is_rmsnorm
 
     TT_FATAL(gamma.has_value(), "Error");
@@ -51,18 +50,18 @@ void LayerNormPostAllGather::validate(
     TT_FATAL(gamma_tensor.get_layout() == Layout::ROW_MAJOR, "Error");  // Only support packed RM right now
     if (gamma_tensor.get_layout() == Layout::TILE) {
         TT_FATAL(
-            a.get_legacy_shape()[-1] == gamma.value().get_legacy_shape()[-1],
+            a.get_padded_shape()[-1] == gamma.value().get_padded_shape()[-1],
             "{} != {}",
-            a.get_legacy_shape()[-1],
-            gamma.value().get_legacy_shape()[-1]);
+            a.get_padded_shape()[-1],
+            gamma.value().get_padded_shape()[-1]);
         TT_FATAL(gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == gamma.value().device(), "Error");
-        TT_FATAL(gamma.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
+        TT_FATAL(gamma.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
     } else {
         TT_FATAL(gamma_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
         TT_FATAL(
-            (gamma_tensor.get_legacy_shape()[-1] == TILE_WIDTH &&
-             gamma_tensor.volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH),
+            (gamma_tensor.get_padded_shape()[-1] == TILE_WIDTH &&
+             gamma_tensor.volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
             "Error");
         TT_FATAL(gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == gamma_tensor.device(), "Error");
@@ -77,16 +76,16 @@ void LayerNormPostAllGather::validate(
         TT_FATAL(gamma_tensor.get_layout() == beta_tensor.get_layout(), "Gamma and beta must have the same layout!");
         TT_FATAL(beta_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
         if (beta_tensor.get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[-1] == beta_tensor.get_legacy_shape()[-1], "Error");
+            TT_FATAL(a.get_padded_shape()[-1] == beta_tensor.get_padded_shape()[-1], "Error");
             TT_FATAL(
                 beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta_tensor.device(), "Error");
-            TT_FATAL(beta.value().get_legacy_shape()[-2] == TILE_HEIGHT, "Error");
+            TT_FATAL(beta.value().get_padded_shape()[-2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(beta_tensor.get_layout() == Layout::ROW_MAJOR, "Error");
             TT_FATAL(
-                (beta_tensor.get_legacy_shape()[-1] == TILE_WIDTH &&
-                 beta_tensor.volume() / TILE_WIDTH == a.get_legacy_shape()[-1] / TILE_WIDTH),
+                (beta_tensor.get_padded_shape()[-1] == TILE_WIDTH &&
+                 beta_tensor.volume() / TILE_WIDTH == a.get_padded_shape()[-1] / TILE_WIDTH),
                 "Error");
             TT_FATAL(
                 beta_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -100,7 +99,7 @@ std::vector<TensorSpec> LayerNormPostAllGather::compute_output_specs(const std::
     auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
         input_tensor.get_logical_shape(),
-        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), memory_config))};
+        TensorLayout(this->dtype.value_or(input_tensor.get_dtype()), PageConfig(Layout::TILE), memory_config))};
 }
 
 operation::ProgramWithCallbacks LayerNormPostAllGather::create_program(

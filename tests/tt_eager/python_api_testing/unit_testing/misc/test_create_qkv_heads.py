@@ -57,7 +57,6 @@ def run_create_qkv_heads_test(
             QKV.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
@@ -73,13 +72,13 @@ def run_create_qkv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.shape.with_tile_padding()) == [batch, num_q_heads, seq_len, head_dim]
+    assert list(q.padded_shape) == [batch, num_q_heads, seq_len, head_dim]
     if transpose_k:
-        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, head_dim, seq_len]
+        assert list(k.padded_shape) == [batch, num_kv_heads, head_dim, seq_len]
     else:
-        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, seq_len, head_dim]
+        assert list(k.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
 
-    assert list(v.shape.with_tile_padding()) == [batch, num_kv_heads, seq_len, head_dim]
+    assert list(v.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)
@@ -214,7 +213,6 @@ def run_create_q_and_kv_heads_test(
             KV_interleaved.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     q_shard_spec = ttnn.ShardSpec(
@@ -231,7 +229,6 @@ def run_create_q_and_kv_heads_test(
             Q_flattened.shape[-1] // cores_w,
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
 
     kv_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, kv_shard_spec)
@@ -251,13 +248,13 @@ def run_create_q_and_kv_heads_test(
         memory_config=out_mem_config,
     )
 
-    assert list(q.shape.with_tile_padding()) == [batch, num_q_heads, q_seq_len, head_dim]
+    assert list(q.padded_shape) == [batch, num_q_heads, q_seq_len, head_dim]
     if transpose_k:
-        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, head_dim, kv_seq_len]
+        assert list(k.padded_shape) == [batch, num_kv_heads, head_dim, kv_seq_len]
     else:
-        assert list(k.shape.with_tile_padding()) == [batch, num_kv_heads, kv_seq_len, head_dim]
+        assert list(k.padded_shape) == [batch, num_kv_heads, kv_seq_len, head_dim]
 
-    assert list(v.shape.with_tile_padding()) == [batch, num_kv_heads, kv_seq_len, head_dim]
+    assert list(v.padded_shape) == [batch, num_kv_heads, kv_seq_len, head_dim]
 
     pyt_got_back_rm_q = tt2torch_tensor(q)
     pyt_got_back_rm_k = tt2torch_tensor(k)

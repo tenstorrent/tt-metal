@@ -13,7 +13,7 @@
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-inline void setup_local_cb_read_write_interfaces(
+FORCE_INLINE void setup_local_cb_read_write_interfaces(
     uint32_t tt_l1_ptr* cb_l1_base,
     uint32_t start_cb_index,
     uint32_t max_cb_index,

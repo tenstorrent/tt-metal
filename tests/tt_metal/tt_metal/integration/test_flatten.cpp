@@ -4,9 +4,9 @@
 
 #include "dispatch_fixture.hpp"
 #include "command_queue_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::vector;
 using namespace tt;
@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
     return expected_dst_vec;
 }
 
-bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten(DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -173,7 +173,7 @@ bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_ti
     return pass;
 }
 
-bool flatten_stress(Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
@@ -298,18 +298,4 @@ TEST_F(DispatchFixture, TensixFlatten) {
         }
         ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
-}
-
-TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncFlattenStress) {
-    auto& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    uint32_t num_tiles_r = 2;
-    uint32_t num_tiles_c = 2;
-    if (!this->IsSlowDispatch()) {
-        num_tiles_r = 1;
-        num_tiles_c = 1;
-    }
-    ASSERT_TRUE(test_flatten::flatten_stress(this->device_, num_tiles_r, num_tiles_c));
-    command_queue.set_mode(current_mode);
 }

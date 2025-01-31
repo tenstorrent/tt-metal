@@ -6,9 +6,8 @@
 
 #include <utility>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 using namespace tt::tt_metal;
@@ -338,6 +337,13 @@ operation::OpPerformanceModel BinaryDeviceOperation::create_op_performance_model
         tt::log_info(tt::LogOp, "\t ideal_eltwise_cycles: {}", ideal_eltwise_cycles);
 #endif
     return result;
+}
+
+bool BinaryDeviceOperation::skip_launch(
+    const operation_attributes_t& attributes,
+    const tensor_args_t& tensor_args,
+    const tensor_return_value_t& tensor_return_value) {
+    return tensor_return_value.logical_shape().volume() == 0;
 }
 
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>

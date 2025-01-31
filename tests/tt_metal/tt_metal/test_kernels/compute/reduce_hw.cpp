@@ -25,7 +25,7 @@
  * argument is tested. Reference llk_pack_reduce_config_v2 for more details.
  */
 template <bool at_start, PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void dummy_init(uint32_t icb = 0, uint32_t icb_scaler = 1, uint32_t ocb = 16) {
+ALWI void dummy_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
 #ifdef SHORT_INIT
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb, icb_scaler)));
 
@@ -44,11 +44,11 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
     constexpr bool at_start = get_compile_time_arg_val(3);
-    dummy_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    dummy_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #ifndef SHORT_INIT
-    reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #else
-    reduce_init_delta<at_start>(tt::CBIndex::c_16, tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init_delta<at_start>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader

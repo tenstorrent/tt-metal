@@ -8,7 +8,7 @@
 #include "moreh_nll_loss_helper.hpp"
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "cpp/ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss {
 
@@ -33,7 +33,7 @@ Tensor MorehNllLoss::invoke(
             ignore_index,
             reduction,
             output_tensor.has_value() ? output_tensor.value().get_dtype() : input_tensor.get_dtype(),
-            input_tensor.get_shape().value[1],
+            input_tensor.get_padded_shape()[1],
             memory_config,
             compute_kernel_config_val);
 

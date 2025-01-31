@@ -87,7 +87,7 @@ def run_whisper_encoder_layer(layer, device, for_audio_classification=False):
     # First check: attention output
 
     # Unpad output tensor
-    input_tensors_shape = ttm_output[0].shape.with_tile_padding()
+    input_tensors_shape = ttm_output[0].padded_shape
     logger.info(input_tensors_shape)
 
     ttm_output_to_torch_0 = tt2torch_tensor(ttm_output[0])

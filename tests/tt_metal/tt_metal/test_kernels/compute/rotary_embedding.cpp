@@ -21,7 +21,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
 #ifdef DECODE_MODE
     ACQ();
-    mul_bcast_rows_init_short();
+    mul_bcast_rows_init_short(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
     pack_tile(0, out_cb);
     REL();
@@ -51,7 +51,7 @@ ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
 }
 
 ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32_t num_tiles) {
-    tilize_init_short(in0_cb, num_tiles);
+    tilize_init_short(in0_cb, num_tiles, out_cb);
     cb_wait_front(sync_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     tilize_block(in0_cb, num_tiles, out_cb);
@@ -60,7 +60,7 @@ ALWI void TILIZE_ROWS(uint32_t in0_cb, uint32_t sync_cb, uint32_t out_cb, uint32
     // Pop shared cbs after tilize
     cb_pop_front(in0_cb, num_tiles);
     cb_pop_front(sync_cb, num_tiles);
-    tilize_uninit(in0_cb);
+    tilize_uninit(in0_cb, out_cb);
 }
 
 namespace NAMESPACE {
@@ -112,7 +112,7 @@ void MAIN {
                 cb_wait_front(rotated_in_cb, onetile);
                 cb_reserve_back(rotated_in_interm_cb, onetile);
                 ACQ();
-                mul_tiles_bcast_scalar_init_short();
+                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 pack_tile(0, rotated_in_interm_cb);
                 REL();

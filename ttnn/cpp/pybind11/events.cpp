@@ -4,8 +4,9 @@
 
 #include "events.hpp"
 
-#include "tt_metal/impl/event/event.hpp"
+#include <tt-metalium/event.hpp>
 #include "pybind11/pybind11.h"
+#include <pybind11/stl.h>
 
 using namespace tt::tt_metal;
 
@@ -20,7 +21,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_event",
-        py::overload_cast<Device*>(&create_event),
+        py::overload_cast<IDevice*>(&create_event),
         py::arg("device"),
         R"doc(
             Create an Event Object on a single device.
@@ -41,7 +42,7 @@ void py_module(py::module& module) {
             Args:
                 cq_id (int): The Command Queue on which event completion will be recorded.
                 event (event): The event used to record completion of preceeding commands.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to all sub-devices.
+                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
             )doc");
 
     module.def(
@@ -94,7 +95,7 @@ void py_module(py::module& module) {
             Args:
                 cq_id (int): The Command Queue on which event completion will be recorded.
                 event (event): The event used to record completion of preceeding commands.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to all sub-devices.
+                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
             )doc");
 }
 

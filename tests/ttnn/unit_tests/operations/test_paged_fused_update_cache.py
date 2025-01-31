@@ -93,20 +93,18 @@ def run_test_paged_fused_update_cache_decode(
     input_shard_spec1 = ttnn.ShardSpec(
         shard_grid1,
         [
-            xt1.volume() // xt1.shape.with_tile_padding()[-1] // num_cores_per_cache,
-            xt1.shape.with_tile_padding()[-1],
+            xt1.volume() // xt1.padded_shape[-1] // num_cores_per_cache,
+            xt1.padded_shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     input_shard_spec2 = ttnn.ShardSpec(
         shard_grid2,
         [
-            xt1.volume() // xt1.shape.with_tile_padding()[-1] // num_cores_per_cache,
-            xt1.shape.with_tile_padding()[-1],
+            xt1.volume() // xt1.padded_shape[-1] // num_cores_per_cache,
+            xt1.padded_shape[-1],
         ],
         ttnn.ShardOrientation.ROW_MAJOR,
-        False,
     )
     input_mem_config1 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec1)
     input_mem_config2 = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec2)
@@ -257,11 +255,10 @@ def test_paged_fused_update_cache_decode_program_caching(
         input_shard_spec = ttnn.ShardSpec(
             shard_grid,
             [
-                xt.volume() // xt.shape.with_tile_padding()[-1] // num_cores,
-                xt.shape.with_tile_padding()[-1],
+                xt.volume() // xt.padded_shape[-1] // num_cores,
+                xt.padded_shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec

@@ -17,7 +17,7 @@ protected:
 };
 
 TEST_F(DistributedTest, TestSystemMeshTearDownWithoutClose) {
-    auto& sys = tt::tt_metal::distributed::SystemMesh::instance();
+    auto& sys = SystemMesh::instance();
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
@@ -29,9 +29,9 @@ TEST_F(DistributedTest, TestSystemMeshTearDownWithoutClose) {
 TEST_F(DistributedTest, TestMemoryAllocationStatistics) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-    auto stats = mesh->get_memory_allocation_statistics(tt::tt_metal::BufferType::DRAM);
+    auto stats = mesh->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
     for (auto* device : mesh->get_devices()) {
-        auto device_stats = device->get_memory_allocation_statistics(tt::tt_metal::BufferType::DRAM);
+        auto device_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::DRAM);
         EXPECT_EQ(stats.total_allocatable_size_bytes, device_stats.total_allocatable_size_bytes);
     }
 }

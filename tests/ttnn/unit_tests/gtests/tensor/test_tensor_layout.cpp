@@ -2,11 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <host_api.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/shape2d.hpp>
 #include <ttnn/tensor/tensor.hpp>
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -26,7 +27,7 @@ struct Inputs {
 };
 
 struct Expected {
-    Size physical_size;
+    Shape2D physical_size;
     Alignment alignment;
     Strides strides;
     bool tensor_creation_works = true;
@@ -166,11 +167,8 @@ class TensorLayoutLegacyPaddingRoundtipTests : public ::testing::TestWithParam<L
 
 TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     const auto& params = GetParam();
-    TensorLayout layout = TensorLayout::fromLegacyPaddedShape(
-        DataType::BFLOAT16,
-        Layout::ROW_MAJOR,
-        DefaultMemoryConfig,
-        Shape(params.shape.view(), params.padded_shape.view()));
+    TensorLayout layout = TensorLayout::fromPaddedShape(
+        DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 
     test_utils::test_tensor_on_device(params.shape, layout);

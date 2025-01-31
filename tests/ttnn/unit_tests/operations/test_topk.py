@@ -12,19 +12,19 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
-def run_topk_test(N, C, H, W, k, dtype, device):
+def run_topk_test(N, C, H, W, k, largest, dtype, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype)
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1, largest=True, sorted=True)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=-1, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
-    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=True, sorted=True)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True)
 
-    assert list(ttnn_topk_values.shape.with_tile_padding()) == [N, C, H, k]
-    assert list(ttnn_topk_indices.shape.with_tile_padding()) == [N, C, H, k]
+    assert list(ttnn_topk_values.padded_shape) == [N, C, H, k]
+    assert list(ttnn_topk_indices.padded_shape) == [N, C, H, k]
 
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
     ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
@@ -73,5 +73,6 @@ def run_topk_test(N, C, H, W, k, dtype, device):
         (1, 1, 8192, 64, 32),
     ),
 )
-def test_topk(N, C, H, W, k, dtype, device):
-    run_topk_test(N, C, H, W, k, dtype, device)
+@pytest.mark.parametrize("largest", (True, False))
+def test_topk(N, C, H, W, k, largest, dtype, device):
+    run_topk_test(N, C, H, W, k, largest, dtype, device)

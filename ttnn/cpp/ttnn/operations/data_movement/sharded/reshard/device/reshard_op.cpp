@@ -7,9 +7,8 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "reshard_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -26,7 +25,7 @@ void ReshardDeviceOperation::validate_with_output_tensors(
     bool has_output_tensor = output_tensors.size() == 1 && output_tensors[0].has_value();
     if (has_output_tensor) {
         const auto& output_tensor = output_tensors[0].value();
-        TT_FATAL(input_tensor.get_shape() == output_tensor.get_shape(), "Error");
+        TT_FATAL(input_tensor.get_logical_shape() == output_tensor.get_logical_shape(), "Error");
         TT_FATAL(input_tensor.get_dtype() == output_tensor.get_dtype(), "Error");
         TT_FATAL(input_tensor.get_layout() == output_tensor.get_layout(), "Error");
     }
@@ -63,10 +62,21 @@ void ReshardDeviceOperation::validate_with_output_tensors(
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> ReshardDeviceOperation::compute_output_shapes(
-    const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> ReshardDeviceOperation::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
+        return {output_tensors[0]->get_tensor_spec()};
+    }
+
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            input_tensor.get_dtype(),
+            input_tensor.get_layout(),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
 }
 
 operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
@@ -79,19 +89,11 @@ operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
 
 std::vector<Tensor> ReshardDeviceOperation::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
     if (output_tensors.size() == 1 && output_tensors[0].has_value()) {
         return {output_tensors[0].value()};
-    } else {
-        auto mem_config = this->output_mem_config;
-
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            input_tensor.get_dtype(),
-            input_tensor.get_layout(),
-            input_tensor.device(),
-            mem_config)};
     }
+
+    return {create_device_tensor(compute_output_specs(input_tensors, output_tensors)[0], input_tensors.at(0).device())};
 }
 
 }  // namespace ttnn::operations::data_movement

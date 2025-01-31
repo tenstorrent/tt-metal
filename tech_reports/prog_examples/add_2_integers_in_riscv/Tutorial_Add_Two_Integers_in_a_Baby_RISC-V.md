@@ -1,9 +1,8 @@
 # Tutorial - Add Two Integers in a Baby RISC-V 🚧
-1. To build and execute use the following commands:
-
-```export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh  --build-tests
+1. To build and execute, you may use the following commands:
+```bash
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_riscv
 ```
 2. Setup the host program:

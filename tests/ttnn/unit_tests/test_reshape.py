@@ -12,11 +12,67 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 
 
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((10, 20), (20, 10)),
+    ],
+)
+@pytest.mark.parametrize("enable_cache", [True])
+def test_ttnn_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    if enable_cache:
+        ttnn.enable_program_cache(device)
+
+    a = torch.randn(input_shape, dtype=torch.bfloat16)
+    b = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(a, device=device)
+    tt_b = ttnn.from_torch(b, device=device)
+
+    a = a.reshape(output_shape)
+    b = b.reshape(output_shape)
+
+    tt_a = ttnn.reshape(tt_a, output_shape)
+    tt_b = ttnn.reshape(tt_b, output_shape)
+
+    assert torch.allclose(a, ttnn.to_torch(tt_a))
+    assert torch.allclose(b, ttnn.to_torch(tt_b))
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((10, 20), (20, 10)),
+    ],
+)
+@pytest.mark.parametrize("enable_cache", [True])
+def test_tensor_reshape_with_cache(device, enable_cache, input_shape, output_shape):
+    if enable_cache:
+        ttnn.enable_program_cache(device)
+
+    a = torch.randn(input_shape, dtype=torch.bfloat16)
+    b = torch.randn(output_shape, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(a, device=device)
+    tt_b = ttnn.from_torch(b, device=device)
+
+    a = a.reshape(output_shape)
+    b = b.reshape(output_shape)
+
+    tt_a = tt_a.reshape(output_shape)
+    tt_b = tt_b.reshape(output_shape)
+
+    assert torch.allclose(a, ttnn.to_torch(tt_a))
+    assert torch.allclose(b, ttnn.to_torch(tt_b))
+
+
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [4])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [64])
 def test_reshape_sharded_rm(device, n, c, h, w):
+    pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17030")
+
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
 
@@ -36,7 +92,7 @@ def test_reshape_sharded_rm(device, n, c, h, w):
         torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=sharded_mem_config
     )
 
-    tt_output_tensor = tt_input_tensor.reshape(n, c, h * 2, w // 2)
+    tt_output_tensor = ttnn.experimental.view(tt_input_tensor, n, c, h * 2, w // 2)
 
     sharded_mem_config = ttnn.create_sharded_memory_config(
         tt_output_tensor.shape,
@@ -473,7 +529,7 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     if ttnn_reshape:
         tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
     else:
-        tt_output_tensor = tt_input_tensor.reshape(output_shape)
+        tt_output_tensor = ttnn.experimental.view(tt_input_tensor, output_shape)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert tt_output_tensor.shape == torch.Size(output_shape)

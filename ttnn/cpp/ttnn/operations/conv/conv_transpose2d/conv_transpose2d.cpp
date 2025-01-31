@@ -23,7 +23,7 @@ namespace conv_transpose2d {
 
 template <typename T>
 Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel = true) {
-    auto in_w_shape = conv_weight_tensor.get_legacy_shape();
+    auto in_w_shape = conv_weight_tensor.get_padded_shape();
     auto dtype = conv_weight_tensor.dtype();
     // in_w_shape = {in_channels, out_channels, kernel_height, kernel_width}
     // out_w_shape = {out_channels, in_channels, kernel_height, kernel_width}
@@ -120,8 +120,7 @@ Result conv_transpose2d(
     const std::optional<const MemoryConfig>& memory_config,
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
-        init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
 
     // Inverse of sliding_window.get_output_shape()
     SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
@@ -168,24 +167,29 @@ Result conv_transpose2d(
     log_debug(LogOp, "Padding : ({},{}) ({},{})", input_pad_top, input_pad_bottom, input_pad_left, input_pad_right);
 
     const bool mm_conv = use_matmul_for_1x1_conv(
-        kernel_size, {1, 1}, {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right}, dilation, groups);
+        kernel_size,
+        {1, 1},
+        {input_pad_top + input_pad_bottom, input_pad_left + input_pad_right},
+        dilation,
+        groups,
+        conv_config);
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
-        adjust_conv_op_config_for_auto_shard_if_necessary(
+        conv_config = determine_conv_config_for_auto_shard(
+            conv_config,
             mm_conv,
             batch_size,
             in_channels,
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_shape()[3],
+            weight_tensor.get_logical_shape()[3],
             full_input_width,
             compute_grid_size,
-            conv_config,
             input_tensor.layout(),
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                                    : std::nullopt);
@@ -237,8 +241,7 @@ Result conv_transpose2d(
 
     // Call Conv2d u_op with Stride = 1, Padding = 0.
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(
-            std::array<uint32_t, 4>{1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::SimpleShape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
         output_parallel_config,
         round_up_size);
 
@@ -268,7 +271,6 @@ Result conv_transpose2d(
         get_fp32_dest_acc_en(compute_config),
         conv_config.enable_split_reader);
 
-    // TODO: Flip the Weights
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -282,6 +284,7 @@ Result conv_transpose2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
@@ -350,7 +353,7 @@ Result ConvTranpose2dOperation::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    Device* device,
+    IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,

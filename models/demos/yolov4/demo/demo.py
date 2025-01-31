@@ -436,7 +436,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
                 }
             )
             n_cores = 64
-            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR, False)
+            shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
             input_mem_config = ttnn.MemoryConfig(
                 ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
             )
@@ -450,7 +450,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             img = input_tensor
             t1 = time.time()
 
-            output = model(device, img)
+            output = model(img)
 
             output_tensor1 = ttnn.to_torch(output[0])
             output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)
@@ -579,7 +579,7 @@ def test_yolov4_model(device, model_location_generator, reset_seeds, input_path,
         else:
             weights_pth = str(model_path / "yolov4.pth")
 
-        ttnn_model = TtYOLOv4(weights_pth)
+        ttnn_model = TtYOLOv4(device, weights_pth)
         torch_model = Yolov4()
         new_state_dict = {}
         ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
@@ -595,7 +595,7 @@ def test_yolov4_model(device, model_location_generator, reset_seeds, input_path,
     else:
         torch_model = Yolov4.from_random_weights()
         ttnn_weights = update_weight_parameters(OrderedDict(torch_model.state_dict()))
-        ttnn_model = TtYOLOv4(ttnn_weights)
+        ttnn_model = TtYOLOv4(device, ttnn_weights)
 
     n_classes = 80
     namesfile = "models/demos/yolov4/demo/coco.names"

@@ -16,10 +16,6 @@
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
-#if defined(ADD_INT32_INIT) || defined(BITWISE_INIT) || defined(SHIFT_INIT)
-#define INT32_INIT
-#endif
-
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -51,7 +47,7 @@ void MAIN {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
 #if PRE_SCALE
-    copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
@@ -111,10 +107,9 @@ void MAIN {
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_inp1, i, i * 2 + 1);
 
-#ifndef INT32_INIT
-            eltwise_binop_tile_init();
+#ifdef BINOP_INIT
+            BINOP_INIT
 #endif
-
 #ifdef ADD_INT32_INIT
             ADD_INT32_INIT
 #endif

@@ -102,7 +102,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -117,7 +117,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
     output_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -303,7 +303,7 @@ def test_pad_any_input_shape(device, h, w, padding, value):
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    tilezed_input_shape = input_tensor.shape.with_tile_padding()
+    tilezed_input_shape = input_tensor.padded_shape
     th = tilezed_input_shape[-2]
     tw = tilezed_input_shape[-1]
     assert output_tensor.shape == ttnn.Shape((th + padding[0][0] + padding[0][1], tw + padding[1][0] + padding[1][1]))

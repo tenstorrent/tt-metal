@@ -305,3 +305,26 @@ def test_specific_tensor_combination(device):
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ((1, 3, 56, 56, 3), -1),
+        ((3, 5, 63, 56, 33), -2),
+        ((7, 2, 56, 67, 31), -3),
+        ((4, 9, 6, 86, 13), -4),
+        ((32, 32, 32, 32, 32), -5),
+    ],
+)
+def test_5d_softmax(device, input_shape, dim):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_output_tensor = torch.softmax(torch_input_tensor, dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.softmax(input_tensor, dim)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

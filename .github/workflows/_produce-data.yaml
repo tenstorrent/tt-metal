@@ -6,7 +6,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for data"
-        default: 10066309412
+        default: 12788722730
         type: number
       test_workflow_run_attempt:
         description: "Run attempt of the workflow run"
@@ -43,11 +43,18 @@ on:
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "Custom test dispatch"
+      - "PR Gate"
     types:
       - completed
 
 jobs:
   produce-cicd-data:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -143,17 +150,16 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: U014XCQ9CF8 # tt-rkim
-  test-produce-benchmark-environment:
+  test-produce-complete-benchmark-with-environment:
+    if: |
+      # Check if triggered by `workflow_run` with specific conclusion states,
+      # or if it's triggered by `workflow_call` or `workflow_dispatch`
+      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
+      ${{ github.event_name == 'workflow_call' }} ||
+      ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: create dummy
-        shell: bash
-        run: |
-          mkdir -p generated/benchmark_data
-          touch 'generated/benchmark_data/measurement_2024-07-12T05:01:45+0000.csv'
-          touch 'generated/benchmark_data/measurement_2024-07-12T04:59:14+0000.csv'
-          touch 'generated/benchmark_data/measurement_2024-07-12T05:03:29+0000.csv'
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'
@@ -161,11 +167,18 @@ jobs:
           cache-dependency-path: 'infra/requirements-infra.txt'
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
-      - name: Create environment CSV test
+      - name: create dummy partial benchmark JSON
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          mkdir -p generated/benchmark_data
+          python3 .github/scripts/data_analysis/create_dummy_partial_benchmark_json.py
+      - name: Create complete benchmark JSON test
         env:
           PYTHONPATH: ${{ github.workspace }}
           ARCH_NAME: grayskull
-        run: python3 .github/scripts/data_analysis/create_benchmark_environment_csv.py
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Show files
         shell: bash
         run: find generated/benchmark_data -type f | xargs -n 1 -I {} bash -c 'echo {} && cat {}'

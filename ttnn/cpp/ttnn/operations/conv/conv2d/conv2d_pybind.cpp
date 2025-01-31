@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/constants.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include <tt-metalium/constants.hpp>
+#include "cpp/pybind11/decorators.hpp"
 
 #include "conv2d_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
+#include "cpp/ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "conv2d.hpp"
 #include "conv2d_utils.hpp"
 #include "prepare_conv2d_weights.hpp"
@@ -46,7 +46,7 @@ void py_bind_conv2d(py::module& module) {
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::Device* device,
+               ttnn::IDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
                uint32_t batch_size,
@@ -164,7 +164,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_weights",
-        prepare_conv_weights<ttnn::Device>,
+        prepare_conv_weights<ttnn::IDevice>,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -208,7 +208,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_bias",
-        prepare_conv_bias<ttnn::Device>,
+        prepare_conv_bias<ttnn::IDevice>,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),
@@ -293,7 +293,8 @@ void py_bind_conv2d(py::module& module) {
                 compute_grid_size,
                 block_shard_orientation,
                 enable_channels_padding,
-                is_out_tiled);
+                is_out_tiled,
+                false);
         },
         py::arg("shard_layout"),
         py::arg("batch_size"),

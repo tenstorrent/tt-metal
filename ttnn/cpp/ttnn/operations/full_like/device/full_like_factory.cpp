@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "full_like_device_operation.hpp"
-#include "host_api.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::full_like {
@@ -53,7 +53,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
     Layout layout{operation_attributes.layout};
-    Device* device = input.device();
+    IDevice* device = input.device();
     MemoryConfig memory_config{operation_attributes.memory_config};
 
     auto num_tiles = input.volume() / TILE_HW;

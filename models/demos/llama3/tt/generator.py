@@ -141,10 +141,12 @@ class LlamaGenerator:
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                 )
-                logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
 
                 if chunk_start == last_chunk_start:
+                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
                     return logits
+                else:
+                    del tt_logits
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
@@ -314,18 +316,27 @@ class LlamaGenerator:
         """
         B = tokens.shape[0]
         last_token_idx = prefill_len - 1
-        vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = self.model.compute_vision_tokens_masks(
-            batch_images=[vision_images],
-            batch_masks=[vision_mask],
-            total_len=total_len,
-        )
+
+        text_only_inference = vision_images is None
+        if not text_only_inference:
+            (
+                vision_tokens,
+                cross_attention_masks,
+                full_text_row_masked_out_mask,
+            ) = self.model.compute_vision_tokens_masks(
+                batch_images=[vision_images],
+                batch_masks=[vision_mask],
+                total_len=total_len,
+            )
+
+            if cross_page_table is not None:
+                num_vision_tokens = vision_tokens.shape[2]
+                cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
+        else:
+            vision_tokens, cross_attention_masks, full_text_row_masked_out_mask = None, None, None
 
         if page_table is not None:
             page_table = self._get_prefill_user_page_table(page_table, kv_cache, prefill_len)
-
-        if cross_page_table is not None:
-            num_vision_tokens = vision_tokens.shape[2]
-            cross_page_table = self._get_prefill_user_page_table(cross_page_table, kv_cache, num_vision_tokens)
 
         (
             tt_h,
@@ -342,6 +353,7 @@ class LlamaGenerator:
             prefill_len=prefill_len,
             page_table=page_table,
             cross_page_table=cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         tt_logits = self.model.ttnn_prefill_forward(
@@ -357,6 +369,7 @@ class LlamaGenerator:
             kv_cache=kv_cache,
             get_last_token=(last_token_idx // 32) * 32,
             cross_page_table=tt_cross_page_table,
+            text_only_inference=text_only_inference,
         )
 
         del tt_page_table
@@ -476,6 +489,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
@@ -493,6 +507,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -521,6 +536,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rot_mats,
             tt_page_table,
@@ -539,6 +555,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -553,6 +570,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -570,6 +588,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -579,6 +598,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -596,11 +616,13 @@ class LlamaGenerator:
             tt_rot_mats,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
+            tt_full_text_mask_expand_11SD_transform,
         ) = self.model.transform_decode_inputs_device(
             tt_h,
             tt_rope_id,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             B=B,
         )
 
@@ -608,6 +630,7 @@ class LlamaGenerator:
             tt_h_transform,
             tt_xattn_mask_transform,
             tt_full_text_mask_expand_1NSH_transform,
+            tt_full_text_mask_expand_11SD_transform,
             xattn_caches,
             tt_position_id,
             tt_rot_mats,
@@ -625,6 +648,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -644,6 +668,7 @@ class LlamaGenerator:
         trace_h,
         trace_xattn_mask,
         trace_full_text_mask_expand_1NSH,
+        trace_full_text_mask_expand_11SD,
         trace_position_id,
         trace_rope_id,
         trace_page_table,
@@ -656,6 +681,7 @@ class LlamaGenerator:
             tt_h,
             tt_xattn_mask,
             tt_full_text_mask_expand_1NSH,
+            tt_full_text_mask_expand_11SD,
             tt_position_id,
             tt_rope_id,
             tt_page_table,
@@ -674,6 +700,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -683,6 +710,7 @@ class LlamaGenerator:
                 trace_h,
                 trace_xattn_mask,
                 trace_full_text_mask_expand_1NSH,
+                trace_full_text_mask_expand_11SD,
                 trace_position_id,
                 trace_rope_id,
                 trace_page_table,
@@ -715,6 +743,7 @@ class LlamaGenerator:
                 tt_h,
                 tt_xattn_mask,
                 tt_full_text_mask_expand_1NSH,
+                tt_full_text_mask_expand_11SD,
                 tt_position_id,
                 tt_rope_id,
                 tt_page_table,
@@ -734,6 +763,7 @@ class LlamaGenerator:
                 "tt_h": tt_h,
                 "tt_xattn_mask": tt_xattn_mask,
                 "tt_full_text_mask_expand_1NSH": tt_full_text_mask_expand_1NSH,
+                "tt_full_text_mask_expand_11SD": tt_full_text_mask_expand_11SD,
                 "tt_position_id": tt_position_id,
                 "tt_rope_id": tt_rope_id,
                 "tt_page_table": tt_page_table,
@@ -755,6 +785,7 @@ class LlamaGenerator:
             self.trace_inputs["tt_h"],
             self.trace_inputs["tt_xattn_mask"],
             self.trace_inputs["tt_full_text_mask_expand_1NSH"],
+            self.trace_inputs["tt_full_text_mask_expand_11SD"],
             self.trace_inputs["tt_position_id"],
             self.trace_inputs["tt_rope_id"],
             self.trace_inputs["tt_page_table"],

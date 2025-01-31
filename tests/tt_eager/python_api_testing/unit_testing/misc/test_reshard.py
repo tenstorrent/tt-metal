@@ -48,7 +48,7 @@ def run_reshard_test(
 
     output_shard_grid = ttnn.CoreRangeSet(output_shard_grid_set)
 
-    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, ttnn.BufferType.L1, output_shard_spec)
     if input_layout == ttnn.ROW_MAJOR_LAYOUT and tt_dtype == ttnn.bfloat8_b:
         pytest.skip("Illegal layout/dtype config")
@@ -531,20 +531,19 @@ def test_dram_reshard(
     output_sharding_scheme,
     output_buffer_type,
 ):
-    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, input_shard_orientation, False)
+    input_shard_spec = ttnn.ShardSpec(input_shard_grid, input_shard_shape, input_shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_sharding_scheme, input_buffer_type, input_shard_spec)
-    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation, False)
+    output_shard_spec = ttnn.ShardSpec(output_shard_grid, output_shard_shape, output_shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, output_buffer_type, output_shard_spec)
 
     input = torch.randn(input_shape).bfloat16()
-
     input_tensor = ttnn.Tensor(input, ttnn.bfloat16).to(input_layout).to(device, input_mem_config)
 
     output_tensor = ttnn.reshard(input_tensor, output_mem_config)
 
     output = ttnn.to_torch(output_tensor)
-
-    passing, output_log = comp_equal(input, output)
+    passing, output_log = comp_pcc(input, output, 1.0)
+    assert passing, output_log
 
 
 @skip_for_blackhole("GH Issue #15234")

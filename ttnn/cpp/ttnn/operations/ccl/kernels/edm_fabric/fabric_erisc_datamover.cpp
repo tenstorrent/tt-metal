@@ -8,13 +8,13 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover_channels.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 using ttnn::ccl::WorkerXY;
 
@@ -258,7 +258,7 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL = 0;
+static constexpr uint32_t SWITCH_INTERVAL = get_compile_time_arg_val(0);
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
 static constexpr size_t num_workers_ctor = 1;
@@ -747,8 +747,8 @@ void kernel_main() {
     //
     // COMMON CT ARGS (not specific to sender or receiver)
     //
-    static constexpr bool is_handshake_sender = get_compile_time_arg_val(0) != 0;
-    static constexpr size_t handshake_addr = get_compile_time_arg_val(1);
+    static constexpr bool is_handshake_sender = get_compile_time_arg_val(1) != 0;
+    static constexpr size_t handshake_addr = get_compile_time_arg_val(2);
     *reinterpret_cast<volatile uint32_t*>(handshake_addr) = 0;
     auto eth_transaction_ack_word_addr = handshake_addr + sizeof(eth_channel_sync_t);
 
@@ -764,26 +764,26 @@ void kernel_main() {
     // the size of one of the buffers within a sender channel
     // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
     // then the total amount of buffering for that
-    static constexpr size_t channel_buffer_size = get_compile_time_arg_val(2);
+    static constexpr size_t channel_buffer_size = get_compile_time_arg_val(3);
 
-    static constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(3);
-    static constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(4);
-    static constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(5);
-    static constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(6);
-    static constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(7);
-    static constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(8);
-    static constexpr size_t local_receiver_channel_buffer_address = get_compile_time_arg_val(9);
-    static constexpr size_t remote_receiver_channel_buffer_address = get_compile_time_arg_val(10);
-    static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(11);
-    static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(12);
+    static constexpr size_t SENDER_NUM_BUFFERS = get_compile_time_arg_val(4);
+    static constexpr size_t RECEIVER_NUM_BUFFERS = get_compile_time_arg_val(5);
+    static constexpr size_t local_sender_0_channel_address = get_compile_time_arg_val(6);
+    static constexpr size_t local_sender_channel_0_connection_info_addr = get_compile_time_arg_val(7);
+    static constexpr size_t local_sender_1_channel_address = get_compile_time_arg_val(8);
+    static constexpr size_t local_sender_channel_1_connection_info_addr = get_compile_time_arg_val(9);
+    static constexpr size_t local_receiver_channel_buffer_address = get_compile_time_arg_val(10);
+    static constexpr size_t remote_receiver_channel_buffer_address = get_compile_time_arg_val(11);
+    static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(12);
+    static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(13);
 
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
-        reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(13));
+        reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(14));
     // In persistent mode, we must rely on static addresses for our local semaphores that are locally
     // initialized, rather than metal device APIs. This way different subdevice programs can reliably
     // resolve the semaphore addresses on the EDM core
-    static constexpr bool persistent_mode = get_compile_time_arg_val(14) != 0;
+    static constexpr bool persistent_mode = get_compile_time_arg_val(15) != 0;
 
     static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
     static_assert(RECEIVER_NUM_BUFFERS > 0, "compile time argument [2]: RECEIVER_NUM_BUFFERS must be > 0");
@@ -823,6 +823,8 @@ void kernel_main() {
     // The downstream EDM should be sending semaphore updates to this address any time it can
     // accept a new message
     const auto edm_forwarding_semaphore_address =
+        get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
+    const auto edm_teardown_semaphore_address =
         get_semaphore<ProgrammableCoreType::ACTIVE_ETH>(get_arg_val<uint32_t>(arg_idx++));
 
     ////////////////////////
@@ -875,6 +877,7 @@ void kernel_main() {
                   channel_buffer_size,
                   local_sender_channel_1_connection_buffer_index_id,
                   reinterpret_cast<volatile uint32_t *const>(edm_forwarding_semaphore_address),
+                  reinterpret_cast<volatile uint32_t *const>(edm_teardown_semaphore_address),
                   downstream_noc_interface_buffer_index_local_addr)
             : tt::fabric::WorkerToFabricEdmSender();
 

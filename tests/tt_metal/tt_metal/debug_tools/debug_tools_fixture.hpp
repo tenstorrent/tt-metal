@@ -9,6 +9,8 @@
 #include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
 
+#include "dprint_server.hpp"
+
 class DebugToolsFixture : public DispatchFixture {
    protected:
     bool watcher_previous_enabled;
@@ -19,7 +21,7 @@ class DebugToolsFixture : public DispatchFixture {
     }
 
     template <typename T>
-    void RunTestOnDevice(const std::function<void(T*, Device*)>& run_function, Device* device) {
+    void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
         auto run_function_no_args = [=]() { run_function(static_cast<T*>(this), device); };
         DispatchFixture::RunTestOnDevice(run_function_no_args, device);
     }
@@ -31,7 +33,7 @@ public:
     inline static const string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program) {
+    void RunProgram(IDevice* device, Program& program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
@@ -42,7 +44,7 @@ protected:
     // Running with dprint + watcher enabled can make the code size blow up, so let's force watcher
     // disabled for DPRINT tests.
     void SetUp() override {
-        // The core range (physical) needs to be set >= the set of all cores
+        // The core range (virtual) needs to be set >= the set of all cores
         // used by all tests using this fixture, so set dprint enabled for
         // all cores and all devices
         tt::llrt::RunTimeOptions::get_instance().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
@@ -87,8 +89,8 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void(DPrintFixture*, Device*)>& run_function,
-        Device* device
+        const std::function<void(DPrintFixture*, IDevice*)>& run_function,
+        IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
         tt::DPrintServerClearLogFile();
@@ -117,7 +119,7 @@ public:
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(Device* device, Program& program, bool wait_for_dump = false) {
+    void RunProgram(IDevice* device, Program& program, bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
@@ -174,8 +176,8 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void(WatcherFixture*, Device*)>& run_function,
-        Device* device
+        const std::function<void(WatcherFixture*, IDevice*)>& run_function,
+        IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
         // Wait for a final watcher poll and then clear the log.

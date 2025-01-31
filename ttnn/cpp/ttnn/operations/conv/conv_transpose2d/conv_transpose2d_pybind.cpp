@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "conv_transpose2d_pybind.hpp"
 #include "conv_transpose2d.hpp"
@@ -92,7 +92,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             [](const decltype(ttnn::conv_transpose2d)& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
-               ttnn::Device* device,
+               ttnn::IDevice* device,
                uint32_t in_channels,
                uint32_t out_channels,
                uint32_t batch_size,

@@ -110,7 +110,7 @@ def get_updated_device_params(device_params):
     new_device_params = device_params.copy()
     dispatch_core_axis = new_device_params.pop(
         "dispatch_core_axis",
-        ttnn.DispatchCoreAxis.COL if os.environ["ARCH_NAME"] == "blackhole" else ttnn.DispatchCoreAxis.ROW,
+        ttnn.DispatchCoreAxis.COL if ttnn.get_arch_name() == "blackhole" else ttnn.DispatchCoreAxis.ROW,
     )
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     new_device_params["dispatch_core_config"] = dispatch_core_config
@@ -403,10 +403,12 @@ ALL_ARCHS = set(
 
 
 def pytest_addoption(parser):
+    import ttnn
+
     parser.addoption(
         "--tt-arch",
         choices=[*ALL_ARCHS],
-        default=os.environ.get("ARCH_NAME", "grayskull"),
+        default=ttnn.get_arch_name(),
         help="Target arch, ex. grayskull, wormhole_b0",
     )
     parser.addoption(
@@ -643,8 +645,9 @@ def pytest_handlecrashitem(crashitem, report, sched):
 
 
 def reset_tensix(tt_open_devices=None):
-    metal_env = copy.deepcopy(os.environ)
-    arch = metal_env.get("ARCH_NAME")
+    import ttnn
+
+    arch = ttnn.get_arch_name()
     if arch != "grayskull" and arch != "wormhole_b0":
         raise Exception(f"Unrecognized arch for tensix-reset: {arch}")
 

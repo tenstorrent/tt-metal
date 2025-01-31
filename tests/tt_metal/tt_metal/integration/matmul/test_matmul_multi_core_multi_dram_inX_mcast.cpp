@@ -5,11 +5,11 @@
 #include <algorithm>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
@@ -22,7 +22,7 @@ namespace unit_tests_common::matmul::test_matmul_multi_core_multi_dram_inX_mcast
 std::
     tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt_metal::KernelHandle, uint32_t, uint32_t>
     create_program(
-        tt_metal::Device* device,
+        tt_metal::IDevice* device,
         int start_core_x,
         int start_core_y,
         int num_cores_r,
@@ -168,7 +168,7 @@ std::
 
 bool write_runtime_args_to_device(
     int in1_or_in0,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int start_core_x,
     int start_core_y,
@@ -290,7 +290,7 @@ bool write_runtime_args_to_device(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device* device, int in1_or_in0) {
+bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::IDevice* device, int in1_or_in0) {
     bool pass = true;
     int start_core_x = 0;
     int start_core_y = 0;
@@ -305,7 +305,7 @@ bool matmul_multi_core_multi_dram_inX_mcast(tt_metal::Device* device, int in1_or
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t in0_dram_addr = device->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 

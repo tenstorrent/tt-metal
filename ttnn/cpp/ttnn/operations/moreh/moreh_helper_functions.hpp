@@ -9,7 +9,7 @@
 #include <optional>
 #include <variant>
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
@@ -295,9 +295,9 @@ auto create_override_addresses_callback(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank);
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_inner(const ttnn::SimpleShape& shape, uint32_t dim);
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim);
+uint32_t compute_outer(const ttnn::SimpleShape& shape, uint32_t dim);
 
 void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape);
 

@@ -10,10 +10,12 @@
 #include <filesystem>
 #include <thread>
 
-#include "tt_metal/impl/device/device.hpp"
+#include <device.hpp>
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 
 #include "tt_gdb.hpp"
+
+#include "llrt.hpp"
 
 using json = nlohmann::json;
 
@@ -422,7 +424,7 @@ void tt_gdb(int chip_id, const vector<CoreCoord> worker_cores, vector<string> op
 namespace tt {
 namespace tt_metal {
 
-void tt_gdb(Device* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops) {
+void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> logical_cores, vector<string> ops) {
     vector<CoreCoord> worker_cores;
 
     for (const auto& logical_core : logical_cores) {

@@ -7,7 +7,7 @@
 #include <numeric>
 #include <ostream>
 #include "ttnn/tensor/shape/small_vector.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace tt::tt_metal {
 
@@ -19,6 +19,30 @@ size_t SimpleShape::rank() const { return this->size(); }
 
 uint64_t SimpleShape::volume() const {
     return std::accumulate(cbegin(), cend(), uint64_t{1}, std::multiplies<uint64_t>());
+}
+
+std::array<uint32_t, 4> SimpleShape::to_array_4D() const {
+    TT_FATAL(rank() == 4, "to_array_4D is only valid for 4D shapes! Called for {}.", *this);
+    std::array<uint32_t, 4> ret_array;
+    for (int i = 0; i < rank(); i++) {
+        ret_array[i] = this->operator[](i);
+    }
+    return ret_array;
+}
+
+SimpleShape SimpleShape::to_rank(size_t new_rank) const {
+    SmallVector<uint32_t> new_shape(new_rank, 1);
+
+    int cur_idx = static_cast<int>(rank()) - 1;
+    int new_idx = static_cast<int>(new_rank) - 1;
+    for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+        new_shape[new_idx] = (*this)[cur_idx];
+    }
+    for (; cur_idx >= 0; cur_idx--) {
+        TT_FATAL((*this)[cur_idx] == 1, "Can't convert shape rank");
+    }
+
+    return SimpleShape(std::move(new_shape));
 }
 
 const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
@@ -33,7 +57,7 @@ const uint32_t SimpleShape::get_normalized_index(std::int64_t index) const {
 }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shape) {
-    os << "SimpleShape([";
+    os << "Shape([";
     for (size_t i = 0; i < shape.rank(); ++i) {
         if (i > 0) {
             os << ", ";
