@@ -4,8 +4,9 @@ on:
   workflow_call:
     inputs:
       version:
-        required: true
+        required: false
         type: string
+        default: latest
 
 concurrency:
   # Note that people may spam the post-commit pipeline on their branch, and
