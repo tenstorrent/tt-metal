@@ -282,10 +282,6 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        # print(f'x.shape: {x.shape}')
-        # print(f'x: {first_five(x, self.mesh_device)}')
-        # print(f'self.wqkv.shape: {self.wqkv.shape}')
-        # print(f'self.wqkv: {first_five(self.wqkv, self.mesh_device)}')
 
         as_torch = lambda tensor: torch.Tensor(
             ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
@@ -304,19 +300,6 @@ class TtLlamaAttention(LightweightModule):
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias is not None:
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias
-
-        # torch_xqkv = as_torch(xqkv_fused_sharded)[0, 0, 0]
-        # torch_q = torch_xqkv[:self.head_dim * self.n_local_heads]
-        # torch_k = torch_xqkv[self.head_dim * self.n_local_heads:self.head_dim * (self.n_local_heads + self.n_local_kv_heads)]
-        # torch_v = torch_xqkv[self.head_dim * (self.n_local_heads + self.n_local_kv_heads):]
-        # to_hf = lambda t: permute(t.unsqueeze(-1), t.shape[0] // self.head_dim, t.shape[0], 1).squeeze(-1)
-        # torch_q = to_hf(torch_q)
-        # torch_k = to_hf(torch_k)
-        # torch_v = torch_v
-
-        # print("our q:", " ".join(f'{t:+3.1f}' for t in torch_q.flatten()))
-        # print("our k:", " ".join(f'{t:+3.1f}' for t in torch_k.flatten()))
-        # print("our v:", " ".join(f'{t:+3.1f}' for t in torch_v.flatten()))
 
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
@@ -343,8 +326,6 @@ class TtLlamaAttention(LightweightModule):
             xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(xqkv_fused_sharded)
-        # print(f'xqkv_fused: {xqkv_fused.shape}')
-        # print(f'xqkv_fused: {first_five(xqkv_fused, self.mesh_device)}')
 
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
@@ -377,9 +358,6 @@ class TtLlamaAttention(LightweightModule):
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
-
-        # q_heads_1BQD = q_heads_pre_rot_1BQD
-        # k_heads_1BKD = k_heads_pre_rot_1BKD
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
@@ -574,11 +552,6 @@ class TtLlamaAttention(LightweightModule):
         # FIXME: surely ttnn.linear bias should work?
         if self.wqkv_bias is not None:
             xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
-            # wqkv_bias_unsqueezed = ttnn.unsqueeze(ttnn.unsqueeze(self.wqkv_bias, 0), 0)
-            # bias_broadcast = ttnn.repeat(wqkv_bias_unsqueezed, ttnn.Shape([xqkv_fused.shape[0], xqkv_fused.shape[1], xqkv_fused.shape[2] // wqkv_bias_unsqueezed.shape[2], 1]))
-            # # print(f"bias_broadcast.shape: {bias_broadcast.shape}")
-            # # print(f"xqkv_fused.shape: {xqkv_fused.shape}")
-            # xqkv_fused = xqkv_fused + bias_broadcast
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -594,13 +567,6 @@ class TtLlamaAttention(LightweightModule):
             torch_k = to_hf(torch_k)
             torch_v = torch_v
             return torch_k.flatten()
-
-        # print("our q:", " ".join(f'{t:+3.1f}' for t in torch_q.flatten()))
-        # torch_xqkv = as_torch(xqkv_fused)[0, 0]
-        # print("our torch_xqkv.shape:", torch_xqkv.shape)
-        # print("our k[0, 0]:", " ".join(f'{t:+5.1f}' for t in fix(torch_xqkv[0])))
-        # print("our k[0, -1]:", " ".join(f'{t:+5.1f}' for t in fix(torch_xqkv[-1])))
-        # print("our v:", " ".join(f'{t:+3.1f}' for t in torch_v.flatten()))
 
         ttnn.deallocate(x_11SH)
 
@@ -619,12 +585,6 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
 
-        # fix_head = lambda t: permute(t.unsqueeze(-1), t.shape[0] // self.head_dim, t.shape[0], 1).squeeze(-1)
-        # key_states = as_torch(k_heads_1KSD_pre_rot)
-        # print(f"our {key_states.shape=}")
-        # print(f"our key_states[0, 0, 0] :", " ".join(f'{t:+5.1f}' for t in fix_head(key_states[0, 0, 0])))
-        # print(f"our key_states[0, 0, -1]:", " ".join(f'{t:+5.1f}' for t in fix_head(key_states[0, 0, -1])))
-
         ###
         # Rotary embeddings
         ###
@@ -641,13 +601,6 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        # print(f"our {rot_mats[0].shape=}")
-        # print(f"our {rot_mats[1].shape=}")
-        # print(f"our cos[0, 0, -1]:", " ".join(f'{x:+5.1f}' for x in as_torch(rot_mats[0])[0, 0, -1]))
-        # print(f"our sin[0, 0, -1]:", " ".join(f'{x:+5.1f}' for x in as_torch(rot_mats[1])[0, 0, -1]))
-        # print(f"our {self.transformation_mats['prefill'].shape=}")
-        # print(f"our self.transformation_mats['prefill']: {as_torch(self.transformation_mats['prefill'])}")
-
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
@@ -659,14 +612,6 @@ class TtLlamaAttention(LightweightModule):
             is_decode_mode=False,
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
-        # q_heads_1QSD = q_heads_1QSD_pre_rot
-        # k_heads_1KSD = k_heads_1KSD_pre_rot
-
-        # key_states = as_torch(k_heads_1KSD)
-        # print(f"our post_rope[0, 0, 0] :", " ".join(f'{t:+5.1f}' for t in fix_head(key_states[0, 0, 0])))
-        # print(f"our post_rope[0, 0, -1]:", " ".join(f'{t:+5.1f}' for t in fix_head(key_states[0, 0, -1])))
-        # print(f"our unfixed post_rope[0, 0, 0] :", " ".join(f'{t:+5.1f}' for t in key_states[0, 0, 0]))
-        # print(f"our unfixed post_rope[0, 0, -1]:", " ".join(f'{t:+5.1f}' for t in key_states[0, 0, -1]))
 
         # Fill KV-Cache
         if kv_cache:
