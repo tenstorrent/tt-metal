@@ -293,6 +293,10 @@ def test_llama_demo_text(
     if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
+    # TODO This can be tackled by reducing the number of iterations we run on CI on N150/N300 machines
+    if is_ci_env and mesh_device.get_num_devices() < 4 and batch_size == 32:
+        pytest.skip("Some llama3 models may run out of memory with CI settings when batch_size=32")
+
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
