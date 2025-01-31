@@ -232,6 +232,7 @@ Buffer::Buffer(
     device_(device),
     size_(size),
     page_size_(page_size),
+    num_pages_(page_size == 0 ? 0 : size / page_size),
     buffer_type_(buffer_type),
     buffer_layout_(buffer_layout),
     shard_parameters_(shard_parameters),
@@ -380,9 +381,7 @@ void Buffer::set_page_size(DeviceAddr page_size) {
     this->buffer_page_mapping_ = nullptr;
 }
 
-uint32_t Buffer::num_pages() const {
-    return page_size() == 0 ? 0 : size() / page_size();
-}
+uint32_t Buffer::num_pages() const { return num_pages_; }
 
 // TODO: Remove
 uint32_t Buffer::num_dev_pages() const { return this->num_pages(); }

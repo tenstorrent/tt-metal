@@ -282,6 +282,7 @@ class Buffer final {
 
     IDevice* const device_;
     const DeviceAddr size_; // Size in bytes
+    const uint32_t num_pages_;
     const BufferType buffer_type_;
     const TensorMemoryLayout buffer_layout_;
     const bool bottom_up_;
