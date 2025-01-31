@@ -369,6 +369,7 @@ on:
           - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.logical_and.logical_and_sharded
           - eltwise.binary.polyval.polyval
+          - eltwise.binary.polyval.polyval_sharded
           - eltwise.binary.remainder.remainder
           - eltwise.binary.remainder.remainder_scalar_pytorch2
           - eltwise.binary.remainder.remainder_forge
