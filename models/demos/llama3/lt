@@ -839,6 +839,8 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "demo-acc": "pytest models/demos/llama3/demo/simple_text_demo.py -k accuracy-batch-1",
         "demo-32": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-batch-32",
         "demo-long": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-long",
+        "demo-ci-1": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-ci-1",
+        "demo-ci-32": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-ci-32",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
