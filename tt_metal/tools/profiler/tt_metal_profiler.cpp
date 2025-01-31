@@ -589,7 +589,7 @@ void InitDeviceProfiler(IDevice* device) {
             }
         }
 
-        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
+        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_views();
         uint32_t coreCountPerDram =
             tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
 

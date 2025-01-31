@@ -167,7 +167,7 @@ void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
+    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel_id);
 }
 
 namespace internal_ {
