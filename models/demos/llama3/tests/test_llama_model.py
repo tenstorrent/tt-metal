@@ -131,20 +131,20 @@ def test_llama_model_inference(
             "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
         }[model_name]
 
-    final_k_cache_pcc = {
-        "llama32_1b": 0.9998,
-        "llama32_3b": 0.9998,
-        "llama31_8b": 0.9997,
-        "llama32_11b": 0.9995,
-        "llama31_70b": 0.9997,
-    }[model_name]
-    final_v_cache_pcc = {
-        "llama32_1b": 0.9996,
-        "llama32_3b": 0.9998,
-        "llama31_8b": 0.9997,
-        "llama32_11b": 0.9996,
-        "llama31_70b": 0.9997,
-    }[model_name]
+        final_k_cache_pcc = {
+            "llama32_1b": 0.9998,
+            "llama32_3b": 0.9998,
+            "llama31_8b": 0.9997,
+            "llama32_11b": 0.9995,
+            "llama31_70b": 0.9997,
+        }[model_name]
+        final_v_cache_pcc = {
+            "llama32_1b": 0.9996,
+            "llama32_3b": 0.9998,
+            "llama31_8b": 0.9997,
+            "llama32_11b": 0.9996,
+            "llama31_70b": 0.9997,
+        }[model_name]
 
         quick_iterations = {"llama32_1b": 2, "llama32_3b": 4, "llama31_8b": 6, "llama32_11b": 6, "llama31_70b": 6}[
             model_name
