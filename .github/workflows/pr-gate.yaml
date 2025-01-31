@@ -12,6 +12,9 @@ name: PR Gate
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - afuller/tests-shift-left
 #  pull_request:
 #    types:
 #      - opened
