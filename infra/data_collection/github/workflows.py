@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
+import json
 from datetime import datetime
 from functools import partial
 from typing import List
@@ -106,6 +107,25 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
         github_job_id_to_test_reports[github_job_id] = workflow_run_uuids_to_test_report_paths[uuid]
 
     return github_job_id_to_test_reports
+
+
+def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
+    # Read <job_id>_annotations.json inside the logs dir
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    annot_json_files = logs_dir.glob("*_annotations.json")
+
+    github_job_ids_to_annotation_jsons = {}
+    for annot_json_file in annot_json_files:
+        annot_json_info = None
+        with open(annot_json_file, "r") as f:
+            annot_json_info = json.load(f)
+        if annot_json_info:
+            # Map job id to annotation info (list of dict)
+            github_job_id = annot_json_file.name.replace("_annotations.json", "")
+            assert github_job_id.isnumeric(), f"{github_job_id}"
+            github_job_id = int(github_job_id)
+            github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
+    return github_job_ids_to_annotation_jsons
 
 
 def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime.now()):

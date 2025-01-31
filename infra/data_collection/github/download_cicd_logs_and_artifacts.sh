@@ -33,9 +33,17 @@ download_logs_for_all_jobs() {
     for attempt_number in $(seq 1 $max_attempts); do
         echo "[Info] Downloading for attempt $attempt_number"
 
-        gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
+        gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
+            job_id=$(echo "$job" | jq -r '.id')
+            job_conclusion=$(echo "$job" | jq -r '.conclusion')
             echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
             gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+
+            # Only download annotations for failed jobs
+            if [[ "$job_conclusion" == "failure" ]]; then
+                echo "[info] downloading annotations for failed job $job_id"
+                gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
+            fi
         done
     done
 

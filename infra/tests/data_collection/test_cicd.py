@@ -43,7 +43,7 @@ def get_non_success_jobs_(pipeline):
     return matching_jobs
 
 
-def test_create_pipeline_json_to_detect_generic_set_up_error_v1(workflow_run_gh_environment):
+def test_create_pipeline_json_to_detect_job_timeout_error_v1(workflow_run_gh_environment):
     github_runner_environment = workflow_run_gh_environment
     github_pipeline_json_filename = (
         "tests/_data/data_collection/cicd/all_post_commit_runner_died_12626_10996802864/workflow.json"
@@ -73,12 +73,14 @@ def test_create_pipeline_json_to_detect_generic_set_up_error_v1(workflow_run_gh_
 
     for job in pipeline.jobs:
         if job.github_job_id == 30531878948:
-            assert job.failure_signature == str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+            assert job.failure_signature == str(InfraErrorV1.JOB_CUMULATIVE_TIMEOUT_FAILURE)
+            assert job.failure_description is not None
         else:
             assert job.failure_signature is None
+            assert job.failure_description is None
 
 
-def test_create_pipeline_json_to_detect_generic_set_up_error_v1_among_other_failures(workflow_run_gh_environment):
+def test_create_pipeline_json_to_detect_runner_comm_error_v1_among_other_failures(workflow_run_gh_environment):
     github_runner_environment = workflow_run_gh_environment
     github_pipeline_json_filename = (
         "tests/_data/data_collection/cicd/all_post_commit_runner_died_12626_11110261767/workflow.json"
@@ -109,9 +111,11 @@ def test_create_pipeline_json_to_detect_generic_set_up_error_v1_among_other_fail
 
     for job in pipeline.jobs:
         if job.github_job_id == 30868260202:
-            assert job.failure_signature == str(InfraErrorV1.GENERIC_SET_UP_FAILURE)
+            assert job.failure_signature == str(InfraErrorV1.RUNNER_COMM_FAILURE)
+            assert job.failure_description is not None
         else:
             assert job.failure_signature is None
+            assert job.failure_description is None
 
 
 def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_environment):
