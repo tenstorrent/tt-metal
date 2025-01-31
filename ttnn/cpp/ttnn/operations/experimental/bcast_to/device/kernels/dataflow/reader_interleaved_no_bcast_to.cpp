@@ -15,6 +15,8 @@ void kernel_main() {
     uint32_t c_stride = get_arg_val<uint32_t>(5);
     uint32_t N = get_arg_val<uint32_t>(6);
     uint32_t C = get_arg_val<uint32_t>(7);
+    uint32_t Ht = get_arg_val<uint32_t>(8);
+    uint32_t Wt = get_arg_val<uint32_t>(9);
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
@@ -35,23 +37,21 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride;
-
-    uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
+    uint32_t next_channel_shift = c_stride - HtWt;
 
     // DPRINT << "broadcast_to reader, number of tile " << num_tiles << ENDL();
-    tile_offset += start_t;
     uint32_t num_tiles_read = 0;
+    tile_offset += start_t;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
-                // DPRINT << "broadcast_to reader no_change start, number of tile read " << num_tiles_read << ENDL();
+            for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t) {
                 cb_reserve_back(cb_id_src, onetile);
                 uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                noc_async_read_tile(tile_offset, src, l1_write_addr_src);
+                noc_async_read_tile(tile_offset++, src, l1_write_addr_src);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_src, onetile);
-                // DPRINT << "broadcast_to reader no_change end, number of tile read " << num_tiles_read + 1 << ENDL();
+                ++num_tiles_read;
             }
             tile_offset += next_channel_shift;
         }
