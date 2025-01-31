@@ -57,7 +57,7 @@ struct shard_coord_info get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
     struct shard_coord_info coord_info;
     uint32_t page_row = page_num / total_pages_last_dim;
-    uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_num%total_pages_last_dim
+    uint32_t page_col = page_num - page_row * total_pages_last_dim;
     uint32_t w_core_id = page_col / columns_per_shard;
     uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     coord_info.core_num = w_core_id;
@@ -102,13 +102,13 @@ experimental::shard_addr_gen_utils::shard_coord_info get_block_sharded_coordinat
     experimental::shard_addr_gen_utils::shard_coord_info coord_info;
     // Get row and column ID of this page
     uint32_t page_row = page_num / total_pages_last_dim;
-    uint32_t page_col = page_num - page_row * total_pages_last_dim;  // page_col = page_num%total_pages_last_dim;
+    uint32_t page_col = page_num - page_row * total_pages_last_dim;
     // Find the w direction core and the offset within it
     uint32_t w_core_id = page_col / columns_per_shard;
-    uint32_t w_offset = page_col - w_core_id * columns_per_shard;  // w_offset = page_col%columns_per_shard;
+    uint32_t w_offset = page_col - w_core_id * columns_per_shard;
     // Find the h direction core and the offset within it
     uint32_t h_core_id = page_row / rows_per_shard;
-    uint32_t h_offset = page_row - h_core_id * rows_per_shard;  // h_offset = page_row%rows_per_shard;
+    uint32_t h_offset = page_row - h_core_id * rows_per_shard;
     // Find the coord_info
     coord_info.core_num = w_core_id + h_core_id * cores_per_block_row;
     coord_info.page_num = w_offset + h_offset * columns_per_shard;
