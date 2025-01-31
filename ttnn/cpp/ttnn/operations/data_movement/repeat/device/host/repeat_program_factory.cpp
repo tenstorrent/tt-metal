@@ -19,7 +19,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-#define READ_ALIGNMENT 64
+constexpr uint32_t READ_ALIGNMENT = 64;
 
 namespace ttnn::operations::data_movement::repeat {
 
