@@ -319,11 +319,9 @@ void write_interleaved_buffer_to_device(
     uint32_t data_offsetB = hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                                                                   // + CQ_DISPATCH_CMD_WRITE_PAGED
     const uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
-    const uint32_t starting_dst_page_index = dispatch_params.dst_page_index;
     while (dispatch_params.total_pages_to_write > 0) {
         dispatch_params.issue_wait =
-            (dispatch_params.dst_page_index == starting_dst_page_index and
-             dispatch_params.address == buffer.address());  // only stall for the first write of the buffer
+            dispatch_params.total_pages_written == 0;  // only stall for the first write of the buffer
 
         update_offset_on_issue_wait_cmd(data_offsetB, dispatch_params.issue_wait, sub_device_ids.size());
 
@@ -339,14 +337,10 @@ void write_interleaved_buffer_to_device(
             continue;
         }
 
-        dispatch_params.pages_per_txn = std::min(
-            {(uint32_t)num_pages_available,
-             //  dispatch_params.max_num_pages_to_write,
-             dispatch_params.total_pages_to_write});
+        dispatch_params.pages_per_txn = std::min({(uint32_t)num_pages_available, dispatch_params.total_pages_to_write});
 
         if (dispatch_params.write_partial_pages) {
             dispatch_params.pages_per_txn = std::min(dispatch_params.pages_per_txn, (uint32_t)1);
-            // dispatch_params.address += dispatch_params.page_size_to_write;
         }
 
         // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
