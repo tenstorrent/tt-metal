@@ -25,8 +25,8 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 | Llama3.2-11B   | N300   | 87        | 98        | 38.6          |
 | Llama3.2-11B   | T3K    | 88        | 98        | 52.6          |
 | Llama3.2-11B   | TG     | 86        | 98        | 29.5          |
-| Llama3.2-70B   | T3K    | 95        | 99        | 14.7          |
-| Llama3.2-70B   | TG     | 95        | 100       | 12.7          |
+| Llama3.1-70B   | T3K    | 95        | 99        | 14.7          |
+| Llama3.1-70B   | TG     | 95        | 100       | 12.7          |
 | Qwen2.5-7B     | N300   | 81        | 96        | 37.9          |
 | Qwen2.5-72B    | T3K    | 99        | 100       | 12.8          |
 
