@@ -9,6 +9,8 @@ Function reads from RM and writes to RM repeating the last dimension
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
+using namespace tt::data_movement::common;
+
 void kernel_main() {
     // We are guranteed to be in 2D going to 2D
 
@@ -77,8 +79,9 @@ void kernel_main() {
     constexpr uint64_t w_mask_to_use = MASK_16;
     constexpr uint64_t w_offset_to_use = OFFSET_16;
 
-    alignment_buffer = (alignment_buffer & w_mask_to_use) + w_alignment_requirement;  // Guaranteed aligned for write
-    input_buffer = (input_buffer & r_mask_to_use) + r_alignment_requirement;          // Guaranteed aligned for reads
+    alignment_buffer =
+        align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);         // Guaranteed aligned for write
+    input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);  // Guaranteed aligned for reads
 
     uint32_t cur_page_size = original_page_size_bytes;
     for (uint32_t i = page_start; i < page_end; i++) {
@@ -87,8 +90,7 @@ void kernel_main() {
         uint64_t dst_noc_addr = d.get_noc_addr(i, 0);
         uint32_t data_location =
             input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed to be aligned for our read
-        tt::data_movement::common::enhanced_noc_async_read<original_page_size_bytes, false>(
-            src_noc_addr, data_location, original_page_size_bytes);
+        enhanced_noc_async_read<original_page_size_bytes, false>(src_noc_addr, data_location, original_page_size_bytes);
         cur_page_size = original_page_size_bytes;
         noc_async_read_barrier();
         if constexpr (num_doublings != 0) {
@@ -97,7 +99,7 @@ void kernel_main() {
             uint32_t target_offset = original_page_size_bytes;
             for (uint32_t j = 0; j < num_doublings; j++) {
                 // This ensures the cur_page_size will be alligned to 16B so future walk retains allignment
-                tt::data_movement::common::tt_memmove<false, false, false, 16 * original_page_size_bytes>(
+                tt_memmove<false, false, false, 16 * original_page_size_bytes>(
                     data_location + target_offset, data_location, cur_page_size);
                 target_offset += cur_page_size;
                 cur_page_size *= 2;
@@ -107,7 +109,7 @@ void kernel_main() {
         // data is at data_location and there is cur_page_size bytes worth of data there
         if ((data_location & w_offset_to_use) != (dst_noc_addr & w_offset_to_use)) {
             // Can't directly copy due to alignment
-            tt::data_movement::common::tt_memmove<false, false, false, 16 * original_page_size_bytes>(
+            tt_memmove<false, false, false, 16 * original_page_size_bytes>(
                 alignment_buffer + (dst_noc_addr & w_offset_to_use), data_location, cur_page_size);
             data_location = alignment_buffer + (dst_noc_addr & w_offset_to_use);
         }
@@ -118,8 +120,7 @@ void kernel_main() {
             uint32_t to_write = (dest_page_size_bytes - num_written) > cur_page_size
                                     ? cur_page_size
                                     : (dest_page_size_bytes - num_written);
-            tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
-                data_location, dst_noc_addr + num_written, to_write);
+            enhanced_noc_async_write<dest_page_size_bytes, false>(data_location, dst_noc_addr + num_written, to_write);
             num_written += to_write;
         }
         noc_async_write_barrier();

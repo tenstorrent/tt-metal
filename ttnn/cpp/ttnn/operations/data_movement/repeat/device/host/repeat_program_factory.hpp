@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/constants.hpp>
-
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::data_movement::repeat {

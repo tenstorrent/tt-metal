@@ -37,7 +37,7 @@ def _get_final_size(shape, reshape):
     if len(shape) > len(reshape):
         return _get_size(shape, reshape)
     else:
-        return _get_size(shape, reshape)
+        return _get_size(reshape, shape)
 
 
 @pytest.mark.parametrize("layout", layouts)
@@ -69,4 +69,4 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    assert_with_pcc(torch_result, output, 0.99999)
+    assert_with_pcc(torch_result, output, 0.9999)

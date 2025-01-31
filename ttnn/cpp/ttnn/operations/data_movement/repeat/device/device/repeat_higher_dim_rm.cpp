@@ -6,6 +6,8 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
+using namespace tt::data_movement::common;
+
 void kernel_main() {
     // We are guranteed to be in 4D going to 4D
     //<higher_dim,rep_dim,lower_dim,page_size>
@@ -68,8 +70,9 @@ void kernel_main() {
     cb_push_back(cb_id_in1, 1);
     cb_push_back(cb_id_in0, 1);
 
-    alignment_buffer = (alignment_buffer & w_mask_to_use) + w_alignment_requirement;  // alligned for writes
-    input_buffer = (input_buffer & r_mask_to_use) + r_alignment_requirement;          // alligned for reads
+    alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
+    input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads
+
     uint64_t src_noc_addr = 0;
     uint32_t data_location = 0;
 
@@ -82,7 +85,7 @@ void kernel_main() {
                 uint32_t read_offset = h_offset + r_offset + l;
                 src_noc_addr = s.get_noc_addr(read_offset, 0);
                 data_location = input_buffer + (src_noc_addr & r_offset_to_use);  // Guaranteed aligned to src_noc_addr
-                tt::data_movement::common::enhanced_noc_async_read<original_page_size_bytes, false>(
+                enhanced_noc_async_read<original_page_size_bytes, false>(
                     src_noc_addr, data_location, original_page_size_bytes);
                 noc_async_read_barrier();
 
@@ -95,7 +98,7 @@ void kernel_main() {
                         const uint32_t target_align_buffer =
                             alignment_buffer +
                             (dst_noc_addr & w_offset_to_use);  // Guaranteed aligned to target page addr
-                        tt::data_movement::common::tt_memmove<false, false, false, original_page_size_bytes>(
+                        tt_memmove<false, false, false, original_page_size_bytes>(
                             target_align_buffer,
                             data_location,
                             original_page_size_bytes);  // Data is copied to align buffer
@@ -104,7 +107,7 @@ void kernel_main() {
                     }
                     // Now we are ensured the data is at write_buffer and it is aligned for the write
                     // Orchestrate the write
-                    tt::data_movement::common::enhanced_noc_async_write<original_page_size_bytes, false>(
+                    enhanced_noc_async_write<original_page_size_bytes, false>(
                         data_location, dst_noc_addr, original_page_size_bytes);
                 }
                 noc_async_write_barrier();
