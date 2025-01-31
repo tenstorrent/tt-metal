@@ -4,12 +4,14 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "risc_attribs.h"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::constants;
 void kernel_main() {
-    uint32_t in_tile_offset_by_batch = get_arg_val<uint32_t>(0);
-    uint32_t q_start_addr = get_arg_val<uint32_t>(1);
+    uint32_t q_start_addr = get_arg_val<uint32_t>(0);
+    uint32_t batch_offset_tensor_addr = get_arg_val<uint32_t>(1);
+    uint32_t index_in_cores = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(0);
     constexpr uint32_t SUBTILE_LINE_BYTES = get_compile_time_arg_val(1);
@@ -25,9 +27,34 @@ void kernel_main() {
     constexpr uint32_t in_num_cores = get_compile_time_arg_val(10);
     constexpr uint32_t PROCESS_QV = get_compile_time_arg_val(11);
     constexpr uint32_t PROCESS_K = get_compile_time_arg_val(12);
+    constexpr bool use_batch_offset = get_compile_time_arg_val(13) == 1;
+    constexpr bool index_is_dram = get_compile_time_arg_val(14) == 1;
+    constexpr uint32_t index_stick_size = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(16);
 
-    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(2 + in_num_cores));
+    tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
+    tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + in_num_cores));
+
+    uint32_t device_batch_offset = 0;
+
+    if constexpr (use_batch_offset) {
+        const InterleavedAddrGen<index_is_dram> addrg = {
+            .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+        cb_reserve_back(cb_batch_offset_id, 1);
+        uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
+        // Read the batch offset 1 page to read
+        uint64_t batch_offset_index_noc_addr = get_noc_addr(0, addrg);
+        noc_async_read(batch_offset_index_noc_addr, index_cb_wr_ptr, index_stick_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_batch_offset_id, 1);
+        volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
+        // Always pick 1st value in tensor as batch offset
+        device_batch_offset = index_ptr[0];
+    }
+    device_batch_offset += index_in_cores;
+    uint32_t in_tile_offset_by_batch = device_batch_offset < 16
+                                           ? device_batch_offset * SUBTILE_LINE_BYTES
+                                           : (device_batch_offset - 16) * SUBTILE_LINE_BYTES + 512 * ELEMENT_SIZE;
 
     // Q
     uint32_t cur_core_idx = 0;
