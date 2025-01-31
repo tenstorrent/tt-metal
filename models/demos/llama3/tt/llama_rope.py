@@ -72,7 +72,7 @@ class TtLlamaRotarySetup(LightweightModule):
             1,
             1,
             batch_size,
-            1
+            1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
@@ -88,13 +88,15 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
-            mesh_mapper=ShardTensor2dMesh(
-                device,
-                dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
-                mesh_shape=list(device.shape),
-            )
-            if self.is_mesh_device
-            else None,
+            mesh_mapper=(
+                ShardTensor2dMesh(
+                    device,
+                    dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                    mesh_shape=list(device.shape),
+                )
+                if self.is_mesh_device
+                else None
+            ),
         )
 
         # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?

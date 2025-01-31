@@ -39,11 +39,9 @@ class TtLlamaMLP(LightweightModule):
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
-            if args.is_galaxy
-            else w2_mem_config
-            if "w2" in name
-            else w1_w3_mem_config,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
+            ),
             cache_file_name=cache_name(name),
         )
 
@@ -91,9 +89,11 @@ class TtLlamaMLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
+            ),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
@@ -103,9 +103,9 @@ class TtLlamaMLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
+            ),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
@@ -192,9 +192,11 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=(ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
-            if TG
-            else w2_in.memory_config(),
+            memory_config=(
+                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
+                if TG
+                else w2_in.memory_config()
+            ),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
@@ -208,9 +210,11 @@ class TtLlamaMLP(LightweightModule):
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
-            memory_config=(self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(
+                (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),

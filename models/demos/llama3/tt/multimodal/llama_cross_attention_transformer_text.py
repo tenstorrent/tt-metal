@@ -291,9 +291,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 h = xattn_layer(
                     h,
                     xattn_mask=xattn_mask,
-                    xattn_cache=xattn_caches[xattn_layer_idx]
-                    if cross_page_table is None
-                    else kv_cache[total_layer_idx],
+                    xattn_cache=(
+                        xattn_caches[xattn_layer_idx] if cross_page_table is None else kv_cache[total_layer_idx]
+                    ),
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,

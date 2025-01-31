@@ -198,9 +198,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d")
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else cache_name("wo"),
+            cache_file_name=(
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            ),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -256,9 +256,11 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -508,12 +510,14 @@ class TtLlamaAttention(LightweightModule):
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
                 topology=self.ccl_topology,
                 memory_config=(
-                    self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                    if self.hidden_size == 8192
-                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                )
-                if self.TG
-                else self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    (
+                        self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
+                        if self.hidden_size == 8192
+                        else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
+                    )
+                    if self.TG
+                    else self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                ),
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,

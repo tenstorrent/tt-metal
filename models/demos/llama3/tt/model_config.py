@@ -347,13 +347,11 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
-            mlp1_3_grid = (
-                lambda seq_len: (8, min(min(seq_len, 1024) // 32, 4))
-                if self.is_galaxy
-                else self.find_grid(self.dim // self.tile_size)
+            mlp1_3_grid = lambda seq_len: (
+                (8, min(min(seq_len, 1024) // 32, 4)) if self.is_galaxy else self.find_grid(self.dim // self.tile_size)
             )
-            mlp2_grid = (
-                lambda seq_len: (8, min(min(seq_len, 1024) // 32, 4))
+            mlp2_grid = lambda seq_len: (
+                (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
                 else self.find_grid(self.hidden_dim // self.tile_size)
             )
