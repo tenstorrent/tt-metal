@@ -54,6 +54,7 @@ class TtTransformer(LightweightModule):
             args.max_seq_len,
             args.rope_theta,
             args.rope_scaling_factor,
+            args.orig_context_len,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 

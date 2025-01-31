@@ -116,6 +116,7 @@ def test_llama_attention_inference(
     #     model_args.max_seq_len,
     #     model_args.rope_theta,
     #     model_args.use_scaled_rope,
+    #     model_args.orig_context_len,
     # )
 
     # transformation_mats = rope_setup.get_both_trans_mats()
