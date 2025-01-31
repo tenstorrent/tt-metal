@@ -30,7 +30,11 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 
     # Parse the table and find the row for our model and device
     # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
-    correct_line = lambda line: "|" in line and base_model_name in line.split("|")[1].strip() and device_name in line.split("|")[2].strip()
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+    )
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
         for line in target_section.split("\n")
