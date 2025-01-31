@@ -14,6 +14,7 @@
 #include "hal.hpp"
 #include "dispatch_settings.hpp"
 #include "helpers.hpp"
+#include "buffer.hpp"
 
 // FIXME: Don't do this in header files
 using namespace tt::tt_metal;

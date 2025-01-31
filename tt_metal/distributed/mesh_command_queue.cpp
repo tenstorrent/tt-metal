@@ -210,7 +210,7 @@ void MeshCommandQueue::read_shard_from_device(
             buffer_dispatch::copy_sharded_buffer_from_core_to_completion_queue(
                 core_id, *shard_view, dispatch_params, sub_device_ids, cores[core_id], this->dispatch_core_type());
             if (dispatch_params.pages_per_txn > 0) {
-                auto read_descriptor = std::get<tt::tt_metal::detail::ReadBufferDescriptor>(
+                auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                     *buffer_dispatch::generate_sharded_buffer_read_descriptor(dst, dispatch_params, *shard_view));
                 buffer_dispatch::copy_completion_queue_data_into_user_space(
                     read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
@@ -222,7 +222,7 @@ void MeshCommandQueue::read_shard_from_device(
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
             dispatch_params, *shard_view, sub_device_ids, this->dispatch_core_type());
         if (dispatch_params.pages_per_txn > 0) {
-            auto read_descriptor = std::get<tt::tt_metal::detail::ReadBufferDescriptor>(
+            auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                 *buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
