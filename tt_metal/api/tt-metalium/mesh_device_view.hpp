@@ -74,7 +74,7 @@ public:
     // devices are returned in row-major order with start/end coordinates inclusive
     [[nodiscard]] DeviceView get_devices(const Coordinate& start, const Coordinate& end) const;
     [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
-    [[nodiscard]] DeviceView get_devices(MeshType type = MeshType::RowMajor) const;
+    [[nodiscard]] DeviceView get_devices() const;
 
     [[nodiscard]] DeviceView get_devices_on_row(size_t row) const;
     [[nodiscard]] DeviceView get_devices_on_column(size_t col) const;
@@ -101,6 +101,11 @@ public:
     [[nodiscard]] Coordinate find_device(chip_id_t device_id) const;
     [[nodiscard]] chip_id_t find_device_id(const Coordinate& coord) const;
 
+    // These utility methods linearize the set of devices in a mesh into a line or ring.
+    // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
+    // Linearizing a mesh into a ring asserts the condition that device[i-1] is connected to device[i] and device[0] is
+    // connected to device[-1].
+    //
     // Given a starting coordinate, get the coordinates of a line of devices where device[i-1] is connected to device[i]
     // The current support only provides left-to-right and right-to-left snaking of the line.
     [[nodiscard]] static std::vector<Coordinate> get_line_coordinates(
