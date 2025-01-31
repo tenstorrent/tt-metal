@@ -184,6 +184,9 @@ def run_mistral_demo(user_input, batch_size, device, instruct_mode, is_ci_env, n
                 k_cache = k_cache * 0
                 v_cache = v_cache * 0
                 layer.attention.layer_past_list[0] = [k_cache, v_cache]
+                layer.attention.layer_past_list[0][0].deallocate(True)
+                layer.attention.layer_past_list[0][1].deallocate(True)
+                layer.attention.layer_past_list[0] = [k_cache, v_cache]
 
         # Keep track of generated outputs to print out every iteration
         all_outputs = [[] for _ in range(batch_size)]
