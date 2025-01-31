@@ -500,10 +500,10 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         d_view,
         desc_to_use.get_num_dram_views());
+    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_view);
     write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
@@ -519,10 +519,10 @@ void Cluster::read_dram_vec(
         "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
         d_view,
         desc_to_use.get_num_dram_views());
+    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
     size_t offset = desc_to_use.get_address_offset(d_view);
     read_core(vec, sz_in_bytes, dram_core, addr + offset, small_access);
