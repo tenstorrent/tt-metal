@@ -33,7 +33,7 @@ Tensor MorehNllLoss::invoke(
             ignore_index,
             reduction,
             output_tensor.has_value() ? output_tensor.value().get_dtype() : input_tensor.get_dtype(),
-            input_tensor.get_shape().value[1],
+            input_tensor.get_padded_shape()[1],
             memory_config,
             compute_kernel_config_val);
 

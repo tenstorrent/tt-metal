@@ -31,7 +31,9 @@
 #include <sub_device_types.hpp>
 #include <span.hpp>
 #include <types.hpp>
+
 #include "impl/dispatch/topology.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 
 namespace tt {
 
@@ -367,8 +369,8 @@ void Device::initialize_build() {
     this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type, this->num_hw_cqs_).get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
+    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, this->num_hw_cqs_)
+                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     uint32_t num_build_states = hal.get_num_risc_processors();
 
@@ -867,18 +869,6 @@ void Device::clear_l1_state() {
     // TODO: clear idle eriscs as well
 }
 
-bool Device::dispatch_s_enabled() const {
-    // Dispatch_s is always enabled for Tensix Dispatch
-    // Conditionally enabled for Ethernet Dispatch - If a single CQ is being used
-    // This condition may be modified for BH
-    return (this->num_hw_cqs() == 1 or dispatch_core_manager::instance().get_dispatch_core_type(this->id()) == CoreType::WORKER);
-}
-
-bool Device::distributed_dispatcher() const {
-    // Ethernet dispatch with a single CQ. dispatch_s and dispatch_d are on different cores.
-    return (this->num_hw_cqs() == 1 and dispatch_core_manager::instance().get_dispatch_core_type(this->id())  == CoreType::ETH);
-}
-
 void Device::compile_command_queue_programs() {
     ZoneScoped;
     auto command_queue_program_ptr = std::make_unique<Program>();
@@ -924,11 +914,18 @@ void Device::configure_command_queue_programs() {
         for (chip_id_t serviced_device_id : tt::Cluster::instance().get_devices_controlled_by_mmio_device(device_id)) {
             uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(serviced_device_id);
             CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(mmio_device_id);
-            uint32_t host_issue_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-            uint32_t host_issue_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-            uint32_t host_completion_q_wr_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
-            uint32_t host_completion_q_rd_ptr = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-            uint32_t cq_start = dispatch_constants::get(dispatch_core_type).get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+            uint32_t host_issue_q_rd_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
+            uint32_t host_issue_q_wr_ptr = DispatchMemMap::get(dispatch_core_type)
+                                               .get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+            uint32_t host_completion_q_wr_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
+            uint32_t host_completion_q_rd_ptr =
+                DispatchMemMap::get(dispatch_core_type)
+                    .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+            uint32_t cq_start = DispatchMemMap::get(dispatch_core_type)
+                                    .get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
             pointers.resize(cq_start/sizeof(uint32_t));
             for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
                 // Reset the host manager's pointer for this command queue
@@ -970,7 +967,8 @@ void Device::init_command_queue_host() {
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
-        command_queues_.push_back(std::make_unique<CommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
+        command_queues_.push_back(
+            std::make_unique<HWCommandQueue>(this, cq_id, dispatch_downstream_noc, completion_queue_reader_core_));
     }
 }
 
@@ -1068,7 +1066,7 @@ bool Device::close() {
         TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
     }
 
-    for (const std::unique_ptr<CommandQueue>& hw_command_queue : command_queues_) {
+    for (const auto& hw_command_queue : command_queues_) {
         if (hw_command_queue->sysmem_manager().get_bypass_mode()) {
             hw_command_queue->record_end();
         }
@@ -1599,12 +1597,7 @@ uint8_t Device::noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data,
 }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
-    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core;
-}
-
-// Main source to get NOC idx for dispatch core
-NOC Device::dispatch_go_signal_noc() const {
-    return this->dispatch_s_enabled() ? NOC::NOC_1 : NOC::NOC_0;
+    return this->command_queues_[cq_id]->virtual_enqueue_program_dispatch_core();
 }
 
 SubDeviceManagerId Device::get_active_sub_device_manager_id() const {

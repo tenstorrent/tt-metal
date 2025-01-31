@@ -30,6 +30,7 @@
 #include <global_semaphore.hpp>
 #include <sub_device_types.hpp>
 #include <global_circular_buffer.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/include/tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
 
@@ -241,28 +242,51 @@ inline void SetRuntimeArgsImpl(
     }
 }
 
+void SetRuntimeArgsImpl(
+    const std::shared_ptr<Kernel>& kernel,
+    const CoreCoord& core_coord,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
+    bool blocking) {
+    std::vector<uint32_t> resolved_runtime_args = {};
+    resolved_runtime_args.reserve(runtime_args_ptr->size());
+
+    for (const auto& arg : *(runtime_args_ptr)) {
+        std::visit(
+            [&resolved_runtime_args](auto&& a) {
+                using T = std::decay_t<decltype(a)>;
+                if constexpr (std::is_same_v<T, Buffer*>) {
+                    resolved_runtime_args.push_back(a->address());
+                } else {
+                    resolved_runtime_args.push_back(a);
+                }
+            },
+            arg);
+    }
+    kernel->set_runtime_args(core_coord, resolved_runtime_args);
+}
+
 inline void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel> kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::shared_ptr<RuntimeArgs> runtime_args,
+    const std::shared_ptr<RuntimeArgs>& runtime_args,
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode
     std::visit(
         [&](auto&& core_spec) {
             using T = std::decay_t<decltype(core_spec)>;
             if constexpr (std::is_same_v<T, CoreCoord>) {
-                EnqueueSetRuntimeArgs(kernel, core_spec, runtime_args, blocking);
+                SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking);
             } else if constexpr (std::is_same_v<T, CoreRange>) {
                 for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
                     for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
-                        EnqueueSetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
+                        SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
             } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
                 for (const auto& core_range : core_spec.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                            EnqueueSetRuntimeArgs(kernel, CoreCoord(x, y), runtime_args, blocking);
+                            SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
                         }
                     }
                 }
@@ -278,7 +302,7 @@ inline void SetRuntimeArgsImpl(
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode (support vector of runtime args)
     for (size_t i = 0; i < core_spec.size(); i++) {
-        EnqueueSetRuntimeArgs(kernel, core_spec[i], runtime_args[i], blocking);
+        SetRuntimeArgsImpl(kernel, core_spec[i], runtime_args[i], blocking);
     }
 }
 
@@ -967,6 +991,7 @@ IDevice* CreateDeviceMinimal(
     chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
     auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
@@ -1257,7 +1282,7 @@ void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
-    EnqueueAddBufferToProgram(buffer, program, false);
+    program.add_buffer(buffer);
 }
 
 void SetRuntimeArgs(

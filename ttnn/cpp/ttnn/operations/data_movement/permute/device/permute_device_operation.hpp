@@ -33,7 +33,6 @@ struct PermuteDeviceOperation {
 
     // Implementation for a row major tensor where the row dimension is not moved in the permutation
     struct MultiCoreRowInvariant {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
@@ -55,7 +54,6 @@ struct PermuteDeviceOperation {
 
     // Implementation for a row major tensor where the row dimension is moved in the permutation
     struct MultiCoreBlockedGeneric {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
