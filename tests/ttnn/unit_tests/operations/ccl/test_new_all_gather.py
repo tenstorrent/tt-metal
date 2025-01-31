@@ -18,6 +18,53 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
 )
 
+PREFETCHER_NOC1_RING = [
+    (6, 6),
+    (6, 7),
+    (6, 9),
+    (6, 0),
+    (6, 1),
+    (6, 2),
+    (6, 4),
+    (6, 5),
+    (5, 5),
+    (5, 6),
+    (5, 7),
+    (5, 9),
+    (5, 0),
+    (5, 1),
+    (5, 2),
+    (5, 4),
+    (1, 4),
+    (1, 5),
+    (1, 9),
+    (1, 0),
+    (2, 0),
+    (2, 4),
+    (2, 5),
+    (2, 9),
+]
+
+
+def get_core_range_set(output_core_grid):
+    if isinstance(output_core_grid, ttnn.CoreGrid):
+        output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(output_core_grid.x - 1, output_core_grid.y - 1)),
+            ]
+        )
+    else:
+        output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in output_core_grid
+            ]
+        )
+    return output_core_range_set
+
 
 def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
@@ -462,6 +509,33 @@ def test_all_gather(
             (32, 160),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (  # AllGather after Binary Mult
+            4,
+            [1, 1, 32, 3840],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
+            (32, 160),
+            get_core_range_set(PREFETCHER_NOC1_RING),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (  # AllGather after SDPA
+            4,
+            [1, 32, 32, 128],
+            1,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
+            (32, 128),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 1)),
+                }
+            ),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
     ],
 )

@@ -114,10 +114,6 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
     auto input_tensor_shape = input_tensors[0].get_padded_shape();
     auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensors[0].layout();
-    auto input_tensor_memory_config = input_tensors[0].memory_config();
-    auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec->grid.num_cores();
 
     if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
         input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
@@ -139,6 +135,12 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
             this->enable_persistent_fabric_mode);
     }
 
+    auto input_tensor_memory_config = input_tensors[0].memory_config();
+    auto output_tensor_memory_config = output_tensors[0].memory_config();
+    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
+    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec->grid.num_cores();
+
+    tt::log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     tt::log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
     tt::log_debug(tt::LogOp, "output_tensor_memory_config: {}", output_tensor_memory_config);
     tt::log_debug(tt::LogOp, "input_shard_num_cores: {}", input_shard_num_cores);
@@ -157,7 +159,11 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
         output_tensor_memory_config.shard_spec->shape == Shape{32, 160} && input_shard_num_cores == 30 &&
         output_shard_num_cores == 24) {
         tt::log_info(
-            tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_post_binary_matmul is called");
+            tt::LogOp,
+            "Detected all gather specialized shape. all_gather_async_llama_post_binary_matmul is called with input "
+            "shape {}, input cores {}",
+            input_tensor_shape,
+            input_shard_num_cores);
         return all_gather_async_llama_post_binary_matmul(
             input_tensors[0],
             this->forward_device,
@@ -172,6 +178,35 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
             this->enable_persistent_fabric_mode);
     }
 
+    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
+        input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+        output_tensor_memory_config.buffer_type == BufferType::L1 &&
+        input_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        output_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+        input_tensor_memory_config.shard_spec->shape == Shape{32, 128} &&
+        output_tensor_memory_config.shard_spec->shape == Shape{32, 128} && input_shard_num_cores == 8 &&
+        output_shard_num_cores == 32) {
+        tt::log_info(
+            tt::LogOp,
+            "Detected all gather specialized shape. all_gather_async_llama_post_binary_matmul is called with input "
+            "shape {}, input cores {}",
+            input_tensor_shape,
+            input_shard_num_cores);
+        return all_gather_async_llama_post_binary_matmul(
+            input_tensors[0],
+            this->forward_device,
+            this->backward_device,
+            output_tensors[0],
+            this->dim,
+            this->num_links,
+            this->ring_size,
+            this->ring_index,
+            this->topology,
+            this->semaphore,
+            this->enable_persistent_fabric_mode);
+    }
+
+    tt::log_info(tt::LogOp, "Running generic all_gather_async_multi_core_with_workers");
     return all_gather_async_multi_core_with_workers(
         input_tensors[0],
         this->forward_device,
