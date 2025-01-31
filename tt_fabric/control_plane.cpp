@@ -582,6 +582,17 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
     return route;
 }
 
+std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
+    for (const auto& [_, routing_edge] :
+         this->routing_table_generator_->get_intra_mesh_connectivity()[src_mesh_id][src_chip_id]) {
+        if (routing_edge.port_direction == routing_direction) {
+            return routing_edge.connected_chip_ids;
+        }
+    }
+    return {};
+}
+
 void ControlPlane::configure_routing_tables() const {
     // Configure the routing tables on the chips
     TT_ASSERT(
