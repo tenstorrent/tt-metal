@@ -104,7 +104,7 @@ TEST_P(EmptyTensorTest, Combinations) {
     }
 
     auto tensor_layout =
-        tt::tt_metal::TensorLayout::fromLegacyPaddedShape(dtype, PageConfig(layout), memory_config, shape);
+        tt::tt_metal::TensorLayout::fromPaddedShape(dtype, PageConfig(layout), memory_config, shape, shape);
 
     // Ignoring too large single bank allocations
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {

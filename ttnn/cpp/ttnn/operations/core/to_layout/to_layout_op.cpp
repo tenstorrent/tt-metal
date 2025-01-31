@@ -149,11 +149,8 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
             }
 
-            tensor = ttnn::untilize_with_unpadding(
-                tensor,
-                tt::tt_metal::LegacyShape(output_tensor_end.view()),
-                output_memory_config,
-                use_multicore_untilize);
+            tensor =
+                ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::SimpleShape{output_shape});
 
         } else if (layout == ttnn::TILE_LAYOUT) {
@@ -187,8 +184,7 @@ Tensor to_layout_impl(
                 return ttnn::reshape(tensor, original_shape);
             }
 
-            return ttnn::reshape(
-                tensor, ttnn::Shape(tt::tt_metal::LegacyShape{output_shape.view(), padded_output_shape.view()}));
+            return ttnn::reshape(tensor, output_shape, padded_output_shape);
         } else {
             TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
         }

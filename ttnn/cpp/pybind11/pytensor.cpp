@@ -673,7 +673,6 @@ auto parse_external_operation(
 }  // namespace detail
 
 void pytensor_module_types(py::module& m_tensor) {
-    using tt::tt_metal::LegacyShape;
     // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that
     // Device needs to outlive Tensor. This is because when tensors on device are destroyed they need to deallocate
     // their buffers via device. keep_alive increases the ref count of the Device object being passed into the
