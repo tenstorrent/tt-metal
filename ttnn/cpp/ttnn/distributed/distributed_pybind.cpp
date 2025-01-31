@@ -8,7 +8,9 @@
 
 #include "tt-metalium/assert.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -23,23 +25,6 @@ using namespace tt::tt_metal;
 namespace ttnn::distributed {
 
 namespace py = pybind11;
-
-py::object get_torch_type(DataType& dtype, const py::object& torch) {
-    if (dtype == DataType::UINT8) {
-        return torch.attr("uint8");
-    } else if (dtype == DataType::UINT16) {
-        return torch.attr("int16");
-    } else if (dtype == DataType::INT32) {
-        return torch.attr("int32");
-    } else if (dtype == DataType::UINT32) {
-        return torch.attr("int32");
-    } else if (dtype == DataType::FLOAT32) {
-        return torch.attr("float32");
-    } else if (dtype == DataType::BFLOAT16) {
-        return torch.attr("bfloat16");
-    }
-    TT_THROW("Unsupported DataType: {}", dtype);
-}
 
 // duplicated from pytensor.cpp
 template <typename T>
@@ -70,58 +55,79 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool legacy_output) {
     TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED);
 
-    OwnedStorage storage = std::visit(
-        [&tt_tensor](auto&&) -> OwnedBuffer {
-            TT_THROW(
-                "Tensor with {} cannot be converted to torch",
-                tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+    return std::visit(
+        tt::stl::overloaded{
+            [&tt_tensor, legacy_output](const OwnedStorage& storage) -> OwnedBuffer {
+                const auto& tensor_spec = tt_tensor.get_tensor_spec();
+                const auto tt_dtype = tensor_spec.data_type();
+                switch (tt_dtype) {
+                    case DataType::UINT8: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::UINT16: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::INT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::UINT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::FLOAT32: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::BFLOAT16: {
+                        return create_row_major_owned_buffer(
+                            std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, legacy_output);
+                    }
+                    case DataType::BFLOAT8_B:
+                    case DataType::BFLOAT4_B: {
+                        const auto& tile = tensor_spec.tile();
+                        auto uint32_data = owned_buffer::get_as<std::uint32_t>(storage.buffer).get();
+                        auto float_unpacked_data =
+                            tt_dtype == DataType::BFLOAT8_B
+                                ? unpack_bfp8_tiles_into_float_vec(
+                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
+                                : unpack_bfp4_tiles_into_float_vec(
+                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+                        auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
+                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
+                    }
+                    default: {
+                        TT_THROW("Unsupported DataType: {}", tt_dtype);
+                        break;
+                    }
+                }
+            },
+            [&tt_tensor](auto&&) -> OwnedBuffer {
+                TT_THROW(
+                    "Tensor with {} cannot be converted to torch",
+                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
+            },
         },
         tt_tensor.get_storage());
+}
 
-    const auto& tensor_spec = tt_tensor.get_tensor_spec();
-    const auto tt_dtype = tensor_spec.data_type();
-    switch (tt_dtype) {
-        case DataType::UINT8: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::UINT16: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::INT32: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::UINT32: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::FLOAT32: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::BFLOAT16: {
-            return create_row_major_owned_buffer(
-                std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, legacy_output);
-        }
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            const auto& tile = tensor_spec.tile();
-            auto uint32_data = owned_buffer::get_as<std::uint32_t>(storage.buffer).get();
-            auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
-                                           ? unpack_bfp8_tiles_into_float_vec(
-                                                 uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                                           : unpack_bfp4_tiles_into_float_vec(
-                                                 uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-            auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-            return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
-        }
-        default: {
-            TT_THROW("Unsupported DataType: {}", tt_dtype);
-            break;
-        }
+py::object get_torch_type(DataType& dtype, const py::object& torch) {
+    if (dtype == DataType::UINT8) {
+        return torch.attr("uint8");
+    } else if (dtype == DataType::UINT16) {
+        return torch.attr("int16");
+    } else if (dtype == DataType::INT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::UINT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::FLOAT32) {
+        return torch.attr("float32");
+    } else if (dtype == DataType::BFLOAT16) {
+        return torch.attr("bfloat16");
     }
+    TT_THROW("Unsupported DataType: {}", dtype);
 }
 
 // duplicated from pytensor.cpp
@@ -349,13 +355,6 @@ void py_module(py::module& module) {
             )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
-            "get_mesh_device_core_grid",
-            [](MeshDevice& mesh_device) {
-                CoreCoord coords = mesh_device.compute_with_storage_grid_size();
-                new CoreGrid(coords.x, coords.y);
-            },
-            py::arg("mesh_device"))
-        .def(
             "create_sub_device_manager",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
                 return self.mesh_create_sub_device_manager(sub_devices, local_l1_size);
@@ -493,6 +492,13 @@ void py_module(py::module& module) {
         py::arg("tensors"),
         py::kw_only());
     module.def(
+        "get_mesh_device_core_grid",
+        [](MeshDevice& mesh_device) {
+            CoreCoord coords = mesh_device.compute_with_storage_grid_size();
+            new CoreGrid(coords.x, coords.y);
+        },
+        py::arg("mesh_device"));
+    module.def(
         "shardedtensor_to_tensorlist",
         [](const Tensor& tensor) -> std::vector<py::object> {
             std::vector<py::object> tensorlist_local;
@@ -507,7 +513,8 @@ void py_module(py::module& module) {
 
             return tensorlist_local;
         },
-        py::arg("tensor"));
+        py::arg("tensor"),
+        py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
