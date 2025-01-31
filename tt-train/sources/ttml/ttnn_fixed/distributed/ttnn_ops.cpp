@@ -27,7 +27,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
             num_tensor_buffers));
     }
 
-    auto tensor_shape = tensor.get_shape();
+    auto tensor_shape = tensor.get_logical_shape();
     auto tensor_rank = tensor_shape.rank();
     if (tensor_rank != 4U) {
         throw std::logic_error(

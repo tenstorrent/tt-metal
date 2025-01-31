@@ -10,7 +10,8 @@
 namespace ttnn {
 
 struct RM_RESHAPE_STRUCT {
-    const ttnn::Shape output_shape;
+    const ttnn::SimpleShape logical_output_shape;
+    const ttnn::SimpleShape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
 
     //Required functions to all tensor op functions

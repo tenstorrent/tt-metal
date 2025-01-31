@@ -330,8 +330,9 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
     return output;
 }
 
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
-    return ttnn::reshape(input_tensor, new_shape);
+Tensor tensor_reshape(
+    const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) {
+    return ttnn::reshape(input_tensor, new_logical_shape, new_padded_shape);
 }
 
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {

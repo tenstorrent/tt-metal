@@ -101,7 +101,7 @@ Tensor optimized_conv_new(
             TT_FATAL(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
-            const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
+            const auto& ashape = input_tensor_shape;
             auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
                 .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        input_tensor_shape,
+        ttnn::SimpleShape(input_tensor_shape),
         weights_shape,
         sliding_window_config.get_output_shape(),
         output_channels,

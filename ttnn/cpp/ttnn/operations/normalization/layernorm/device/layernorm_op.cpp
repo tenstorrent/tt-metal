@@ -265,11 +265,12 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
 
                 return {ttnn::TensorSpec(
                     output_shape,
-                    TensorLayout::fromLegacyPaddedShape(
+                    TensorLayout::fromPaddedShape(
                         this->dtype.value_or(input_tensor.get_dtype()),
                         PageConfig(Layout::TILE),
                         mem_config,
-                        ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+                        output_shape,
+                        output_padded_shape))};
             } else {
                 return {TensorSpec(
                     output_shape,

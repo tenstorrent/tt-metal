@@ -142,9 +142,9 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
 
 struct CclTensorSlicer {
     CclTensorSlicer(
-        tt::tt_metal::LegacyShape tensor_shape,
-        tt::tt_metal::LegacyShape dim_slice_factors,
-        // tt::tt_metal::LegacyShape page_shape,
+        const tt::tt_metal::SimpleShape& tensor_shape,
+        const tt::tt_metal::SimpleShape& dim_slice_factors,
+        // tt::tt_metal::SimpleShape page_shape,
         std::size_t num_pages,
         std::size_t elem_size,
         std::size_t page_size_in_bytes) :
@@ -158,25 +158,25 @@ struct CclTensorSlicer {
             tensor_shape.rank() == dim_slice_factors.rank(),
             "Tensor shape and dim slice factors must have the same size");
         TT_ASSERT(
-            std::all_of(dim_slice_factors.begin(), dim_slice_factors.end(), [](uint32_t factor) { return factor > 0; }),
+            std::all_of(dim_slice_factors.cbegin(), dim_slice_factors.cend(), [](uint32_t factor) { return factor > 0; }),
             "All factors must be greater than 0");
     }
 
     std::size_t get_num_pages_per_slice() const {
         std::size_t n = std::accumulate(
-            dim_slice_factors_per_rank.begin(), dim_slice_factors_per_rank.end(), 1, std::multiplies<uint32_t>());
+            dim_slice_factors_per_rank.cbegin(), dim_slice_factors_per_rank.cend(), 1, std::multiplies<uint32_t>());
         for (uint32_t i = 0; i < (tensor_shape.rank() - dim_slice_factors_per_rank.rank()); ++i) {
             n *= tensor_shape[i];
         }
         return n;
     }
 
-    tt::tt_metal::LegacyShape const tensor_shape;
-    tt::tt_metal::LegacyShape const dim_slice_factors_per_rank;
-    // tt::tt_metal::LegacyShape const page_shape;
+    tt::tt_metal::SimpleShape const tensor_shape;
+    tt::tt_metal::SimpleShape const dim_slice_factors_per_rank;
+    // tt::tt_metal::SimpleShape const page_shape;
     std::size_t const num_pages;
 
-    // tt::tt_metal::LegacyShape rank_slice_shape;
+    // tt::tt_metal::SimpleShape rank_slice_shape;
 
     std::size_t const page_size_in_bytes;
     std::size_t const elem_size;
