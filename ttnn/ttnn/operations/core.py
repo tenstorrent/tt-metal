@@ -463,13 +463,15 @@ def _golden_function(tensor, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.clone, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor):
+def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
 ttnn.register_python_operation(name="ttnn.reallocate", golden_function=_golden_function)(
     ttnn._ttnn.operations.core.reallocate
 )
+
+ttnn.attach_golden_function(ttnn.reallocate, golden_function=_golden_function)
 
 
 @ttnn.register_python_operation(name="ttnn.load_tensor")
