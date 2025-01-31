@@ -617,7 +617,7 @@ std::vector<IDevice*> get_workers_for_op_output(
 
 template <class OutputType>
 void launch_op_func(
-    const std::function<OutputType(const Tensors, const OptionalConstTensors, const OptionalTensors)>& op_func,
+    const std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors,
@@ -664,7 +664,7 @@ void launch_op_func(
         }
     }
     for (int i = 0; i < output_tensors.size(); i++) {
-        auto output_tensor = get_tensor(output_tensors[i]);
+        auto output_tensor = detail::get_tensor(output_tensors[i]);
         if (output_tensor) {
             output_tensor_ref_count[i] = output_tensor->tensor_attributes->record_main_thread_ref_count();
         }
@@ -757,8 +757,8 @@ void launch_op_func(
                     }
 
                     for (int i = 0; i < local_tensors.size(); i++) {
-                        auto output_tensor = get_tensor(outputs[i]);
-                        auto local_tensor = get_tensor(local_tensors[i]);
+                        auto output_tensor = detail::get_tensor(outputs[i]);
+                        auto local_tensor = detail::get_tensor(local_tensors[i]);
 
                         // not sure if it the case but in my opinion it should not happen
                         // both output and local tensor should be presented or absent
@@ -805,7 +805,7 @@ void launch_op_func(
         }
     }
     for (int i = 0; i < output_tensors.size(); i++) {
-        auto output_tensor = get_tensor(output_tensors[i]);
+        auto output_tensor = detail::get_tensor(output_tensors[i]);
         if (!output_tensor) {
             continue;
         }
@@ -819,17 +819,15 @@ void launch_op_func(
     }
 }
 
-template <>
-void launch_op_func<Tensors>(
-    const std::function<Tensors(const Tensors, const OptionalConstTensors, const OptionalTensors)>& op_func,
+template void launch_op_func<Tensors>(
+    const std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
     const OptionalTensors optional_output_tensors,
     bool enable_autoformat_device);
-template <>
-void launch_op_func<OptionalTensors>(
-    const std::function<OptionalTensors(const Tensors, const OptionalConstTensors, const OptionalTensors)>& op_func,
+template void launch_op_func<OptionalTensors>(
+    const std::function<OptionalTensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OptionalTensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
