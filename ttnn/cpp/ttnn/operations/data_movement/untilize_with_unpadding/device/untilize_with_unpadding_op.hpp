@@ -12,7 +12,7 @@
 namespace ttnn::operations::data_movement {
 
 struct UntilizeWithUnpadding {
-    const ttnn::SimpleShape output_tensor_end;
+    const ttnn::Shape output_tensor_end;
     const MemoryConfig output_mem_config;
     const bool use_multicore;
     const bool use_pack_untilize;

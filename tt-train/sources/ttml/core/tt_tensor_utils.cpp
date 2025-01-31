@@ -84,10 +84,7 @@ tt::tt_metal::OwnedBuffer create_owned_buffer_from_vector_of_floats(
 
 template <typename T>
 tt::tt_metal::Tensor ttml_create_owned_tensor(
-    std::vector<T>&& data,
-    const ttnn::SimpleShape& shape,
-    tt::tt_metal::DataType data_type,
-    tt::tt_metal::Layout layout) {
+    std::vector<T>&& data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = OwnedStorage{std::move(buffer)};
     return {std::move(storage), shape, data_type, layout};
@@ -105,20 +102,20 @@ tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
 }
 
 tt::tt_metal::Tensor empty(
-    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config) {
     return ttnn::empty(shape, DataType::BFLOAT16, Layout::TILE, device, memory_config);
 }
 
 tt::tt_metal::Tensor full(
-    const ttnn::SimpleShape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype) {
+    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype) {
     return ttnn::full(shape, value, dtype, Layout::TILE, std::ref(*device));
 }
 
-tt::tt_metal::Tensor zeros(const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
+tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
     return core::full(shape, 0.F, device, dtype);
 }
 
-tt::tt_metal::Tensor ones(const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
+tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
 
@@ -174,10 +171,7 @@ template tt::tt_metal::Tensor from_xtensors_to_host<int32_t, tt::tt_metal::DataT
 
 template <>
 tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
-    const std::vector<float>& buffer,
-    const ttnn::SimpleShape& shape,
-    ttnn::distributed::MeshDevice* device,
-    Layout layout) {
+    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
     assert(device != nullptr);
     const DataType data_type = DataType::BFLOAT16;
     MemoryConfig output_mem_config{};
@@ -210,10 +204,7 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
 // it is expected that tilize will be fixed in the after next tt-metal main update
 template <>
 tt::tt_metal::Tensor from_vector<float, DataType::FLOAT32>(
-    const std::vector<float>& buffer,
-    const ttnn::SimpleShape& shape,
-    ttnn::distributed::MeshDevice* device,
-    Layout layout) {
+    const std::vector<float>& buffer, const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, Layout layout) {
     auto tensor = from_vector<float, DataType::BFLOAT16>(buffer, shape, device, layout);
     return ttnn::typecast(tensor, DataType::FLOAT32);
 }
@@ -224,7 +215,7 @@ From vector uint32 doesn't support tilize_with_zero_padding on device
 template <>
 tt::tt_metal::Tensor from_vector<uint32_t, DataType::UINT32>(
     const std::vector<uint32_t>& buffer,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
     Layout layout) {
     MemoryConfig output_mem_config{};
@@ -253,7 +244,7 @@ From vector int32 doesn't support tilize_with_zero_padding on device
 template <>
 tt::tt_metal::Tensor from_vector<int32_t, DataType::INT32>(
     const std::vector<int32_t>& buffer,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
     Layout layout) {
     MemoryConfig output_mem_config{};
@@ -280,8 +271,8 @@ bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
 }
 
-ttnn::SimpleShape create_shape(const std::array<uint32_t, 4>& args) {
-    return ttnn::SimpleShape{args};
+ttnn::Shape create_shape(const std::array<uint32_t, 4>& args) {
+    return ttnn::Shape{args};
 }
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {

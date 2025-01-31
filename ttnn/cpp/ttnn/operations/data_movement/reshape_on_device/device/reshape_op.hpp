@@ -10,8 +10,8 @@
 namespace ttnn::operations::data_movement {
 
 struct ReshapeDeviceOperation {
-    const ttnn::SimpleShape logical_output_shape;
-    const ttnn::SimpleShape padded_output_shape;
+    const ttnn::Shape logical_output_shape;
+    const ttnn::Shape padded_output_shape;
     const tt::tt_metal::MemoryConfig output_mem_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;

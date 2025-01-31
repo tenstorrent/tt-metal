@@ -18,7 +18,7 @@ namespace matmul {
 
 namespace detail {
 
-bool is_input_batched(const ttnn::SimpleShape& shape) {
+bool is_input_batched(const ttnn::Shape& shape) {
     auto is_batched = false;
     for (auto i = 0; i < shape.rank() - 2; ++i) {
         if (shape[i] > 1) {

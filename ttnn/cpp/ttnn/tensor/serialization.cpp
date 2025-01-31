@@ -38,7 +38,7 @@ struct LegacyShape {
     Padding padding_;
 
     LegacyShape() = default;
-    LegacyShape(const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+    LegacyShape(const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
         rank_ = padded_shape.rank();
         padding_.rank_ = padded_shape.rank();
         for (int index = 0; index < padded_shape.rank(); index++) {
@@ -51,21 +51,21 @@ struct LegacyShape {
         }
     }
 
-    ttnn::SimpleShape logical_shape() const {
+    ttnn::Shape logical_shape() const {
         ttnn::SmallVector<uint32_t> values(rank_);
         for (size_t i = 0; i < values.size(); i++) {
             auto [front_pad, back_pad] = padding_.pad_dimensions_[i];
             values[i] = dimensions_[i] - front_pad - back_pad;
         }
-        return ttnn::SimpleShape(std::move(values));
+        return ttnn::Shape(std::move(values));
     }
 
-    ttnn::SimpleShape padded_shape() const {
+    ttnn::Shape padded_shape() const {
         ttnn::SmallVector<uint32_t> values(rank_);
         for (size_t i = 0; i < values.size(); i++) {
             values[i] = dimensions_[i];
         }
-        return ttnn::SimpleShape(std::move(values));
+        return ttnn::Shape(std::move(values));
     }
 };
 

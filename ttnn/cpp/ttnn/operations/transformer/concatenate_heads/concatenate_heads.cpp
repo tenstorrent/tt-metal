@@ -36,8 +36,8 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
 
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const {
         const auto& input_tensor = input_tensors.at(0);
-        const ttnn::SimpleShape input_logical_shape = input_tensor.get_logical_shape();
-        const ttnn::SimpleShape input_padded_shape = input_tensor.get_padded_shape();
+        const ttnn::Shape input_logical_shape = input_tensor.get_logical_shape();
+        const ttnn::Shape input_padded_shape = input_tensor.get_padded_shape();
 
         auto batch_size = input_logical_shape[0];
         auto num_heads = input_logical_shape[1];
@@ -46,8 +46,8 @@ struct ConcatenateHeads : public ttnn::operations::experimental::transformer::NL
         auto head_size = input_logical_shape[3];
         auto padded_head_size = input_padded_shape[3];
 
-        SimpleShape intended_output_shape({batch_size, sequence_size, num_heads * head_size});
-        SimpleShape padded_output_shape({batch_size, padded_sequence_size, num_heads * padded_head_size});
+        Shape intended_output_shape({batch_size, sequence_size, num_heads * head_size});
+        Shape padded_output_shape({batch_size, padded_sequence_size, num_heads * padded_head_size});
 
         if (this->output_mem_config.is_sharded()) {
             ShardSpec shard_spec = input_tensor.shard_spec().value();

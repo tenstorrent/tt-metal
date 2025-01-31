@@ -120,7 +120,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
         }
         output_size_vec[index_dims.back()] = index_size;
 
-        output_shape = ttnn::SimpleShape(std::move(output_size_vec));
+        output_shape = ttnn::Shape(std::move(output_size_vec));
     } else {
         // compute output shape
         // ex)
@@ -148,7 +148,7 @@ MorehGetItemOperation::spec_return_value_t MorehGetItemOperation::compute_output
             }
         }
 
-        output_shape = ttnn::SimpleShape(std::move(output_size_vec));
+        output_shape = ttnn::Shape(std::move(output_size_vec));
     }
     return TensorSpec(
         output_shape,
