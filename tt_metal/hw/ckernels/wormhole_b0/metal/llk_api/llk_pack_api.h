@@ -201,7 +201,7 @@ inline void llk_pack_untilize_init(
     } else {
         TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     }
-    //
+    // Reconfigure pack_reads_per_xy_plane with the new face_r_dim
     _llk_pack_hw_configure_<true, is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
