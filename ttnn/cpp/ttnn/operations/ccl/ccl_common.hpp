@@ -142,8 +142,8 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
 
 struct CclTensorSlicer {
     CclTensorSlicer(
-        tt::tt_metal::SimpleShape tensor_shape,
-        tt::tt_metal::SimpleShape dim_slice_factors,
+        const tt::tt_metal::SimpleShape& tensor_shape,
+        const tt::tt_metal::SimpleShape& dim_slice_factors,
         // tt::tt_metal::SimpleShape page_shape,
         std::size_t num_pages,
         std::size_t elem_size,

@@ -799,8 +799,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     Program program{};
 
     auto output_shape = output_padded_shape;
-    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
-             N = a.get_logical_shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
@@ -1191,8 +1191,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     Program program{};
 
     auto output_shape = output_padded_shape;
-    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
-             N = a.get_logical_shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];

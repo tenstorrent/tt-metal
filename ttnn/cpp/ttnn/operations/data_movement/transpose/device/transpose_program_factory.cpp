@@ -632,8 +632,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
-             N = a.get_logical_shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = N * C * H;
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
