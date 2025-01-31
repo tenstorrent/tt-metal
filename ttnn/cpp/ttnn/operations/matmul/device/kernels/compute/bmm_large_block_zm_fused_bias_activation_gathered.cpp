@@ -150,6 +150,7 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
+    constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr uint32_t ring_size = num_blocks;
 
     // Runtime args
@@ -223,6 +224,11 @@ void MAIN {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
 
+            // Wait for in1 block
+            if constexpr (in1_is_dram_interleaved) {
+                cb_wait_front(in1_cb_id, in1_block_num_tiles);
+            }
+
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
@@ -258,7 +264,8 @@ void MAIN {
 #ifdef ENABLE_GLOBAL_CB
                 int in1_index_subblock_offset = 0;
 #else
-                int in1_index_subblock_offset = in1_block_num_tiles * (curr_ring_idx);
+                // This should always be 0 when reading in1 from DRAM
+                int in1_index_subblock_offset = in1_is_dram_interleaved ? 0 : in1_block_num_tiles * (curr_ring_idx);
 #endif
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
@@ -377,6 +384,9 @@ void MAIN {
 #endif
 
             cb_pop_front(input0_cb_id, in0_block_num_tiles);
+            if constexpr (in1_is_dram_interleaved) {
+                cb_pop_front(in1_cb_id, in1_block_num_tiles);
+            }
 #ifdef ENABLE_GLOBAL_CB
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
