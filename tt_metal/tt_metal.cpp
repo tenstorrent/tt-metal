@@ -244,7 +244,7 @@ inline void SetRuntimeArgsImpl(
 void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel>& kernel,
     const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
+    const std::shared_ptr<RuntimeArgs>& runtime_args_ptr,
     bool blocking) {
     std::vector<uint32_t> resolved_runtime_args = {};
     resolved_runtime_args.reserve(runtime_args_ptr->size());
@@ -267,7 +267,7 @@ void SetRuntimeArgsImpl(
 inline void SetRuntimeArgsImpl(
     const std::shared_ptr<Kernel> kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::shared_ptr<RuntimeArgs> runtime_args,
+    const std::shared_ptr<RuntimeArgs>& runtime_args,
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode
     std::visit(

@@ -49,8 +49,6 @@ enum class EnqueueCommandType {
     INVALID
 };
 
-string EnqueueCommandTypeToString(EnqueueCommandType ctype);
-
 class Command {
 public:
     Command() {}
