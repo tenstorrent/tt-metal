@@ -284,8 +284,6 @@ inline void SetRuntimeArgsImpl(
 
 }  // namespace
 
-// #define DEBUG_PRINT_SHARD
-
 namespace detail {
 
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
@@ -426,7 +424,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     auto device = buffer.device();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
-    auto total_pages = buffer.num_pages();
+    const auto total_pages = buffer.shard_spec().tensor2d_shape[0] * buffer.shard_spec().tensor2d_shape[1];
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int host_page_id = 0; host_page_id < total_pages; host_page_id++) {
@@ -577,9 +575,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
-#ifdef DEBUG_PRINT_SHARD
-    std::cout << "Reading From Device Height Sharded " << std::endl;
-#endif
 
     auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();

@@ -110,7 +110,7 @@ struct ShardSpecBuffer {
     ShardOrientation orientation() const { return tensor_shard_spec.orientation; }
     void set_shard_spec(const ShardSpec& shard_spec) { tensor_shard_spec = shard_spec; };
 
-    /* Shape in pages of the full tensor, not per core */
+    /* Shape in pages of the full shard */
     std::array<uint32_t, 2> shape_in_pages() const;
     DeviceAddr size() const;
 };

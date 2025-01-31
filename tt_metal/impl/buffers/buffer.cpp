@@ -174,8 +174,9 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
         std::vector<std::optional<uint32_t>>(num_dev_pages, std::nullopt);
     buffer_page_mapping.dev_page_to_core_mapping_ = std::vector<uint32_t>(num_dev_pages);
 
-    buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(buffer.num_pages());
-    buffer_page_mapping.host_page_to_dev_page_mapping_ = std::vector<uint32_t>(buffer.num_pages());
+    const auto host_num_pages = buffer.shard_spec().tensor2d_shape[0] * buffer.shard_spec().tensor2d_shape[1];
+    buffer_page_mapping.host_page_to_local_shard_page_mapping_ = std::vector<uint32_t>(host_num_pages);
+    buffer_page_mapping.host_page_to_dev_page_mapping_ = std::vector<uint32_t>(host_num_pages);
     buffer_page_mapping.core_shard_shape_ = std::move(shard_shape);
     uint32_t dev_page_index = 0;
 
@@ -383,13 +384,8 @@ uint32_t Buffer::num_pages() const {
     return page_size() == 0 ? 0 : size() / page_size();
 }
 
-uint32_t Buffer::num_dev_pages() const {
-    if (!is_sharded(this->buffer_layout_)) {
-        return this->num_pages();
-    }
-
-    return this->shard_spec().size() * this->num_cores().value();
-}
+// TODO: Remove
+uint32_t Buffer::num_dev_pages() const { return this->num_pages(); }
 
 CoreType Buffer::core_type() const {
     switch (this->buffer_type_) {
@@ -512,9 +508,9 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto width_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
-    auto height_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
-    return {width_in_pages, height_in_pages};
+    auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
+    auto width_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
+    return {height_in_pages, width_in_pages};
 }
 
 DeviceAddr ShardSpecBuffer::size() const {

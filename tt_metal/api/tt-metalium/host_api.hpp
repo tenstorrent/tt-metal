@@ -624,7 +624,7 @@ void EnqueueReadBuffer(
 // clang-format on
 template <typename DType>
 void EnqueueReadBuffer(CommandQueue& cq, Buffer& buffer, std::vector<DType>& dst, bool blocking) {
-    dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
+    // dst.resize(buffer.page_size() * buffer.num_pages() / sizeof(DType));
     EnqueueReadBuffer(cq, buffer, static_cast<void*>(dst.data()), blocking);
 }
 template <typename DType>
