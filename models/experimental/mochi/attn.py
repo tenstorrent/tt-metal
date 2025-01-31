@@ -173,10 +173,10 @@ class TtAsymmetricAttention(LightweightModule):
 
     def prepare_qkv(
         self,
-        x: ttnn.Tensor,  # (B, M, dim_x)
-        y: ttnn.Tensor,  # (B, L, dim_y)
+        x_1BNX: ttnn.Tensor,  # (B, M, dim_x)
+        y_1BLY: ttnn.Tensor,  # (B, L, dim_y)
         *,
-        scale_x: ttnn.Tensor,
+        scale_x: ttnn.Tensor,  # TODO: add shape metadata
         scale_y: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
@@ -197,15 +197,15 @@ class TtAsymmetricAttention(LightweightModule):
 
         Returns:
             q, k, v: Query, key and value tensors prepared for attention
+            joint_q, joint_k, joint_v: Query, key and value tensors prepared for joint attention
         """
-        B = x.shape[1]
-        seq_x = x.shape[2]
-        seq_y = y.shape[2]
+        B = x_1BNX.shape[1]
         assert B == 1, f"Batch size must be 1, got {B}"
-        assert x.shape[0] == 1, f"x dim0 must be 1, got {x.shape[0]}"
-        assert (
-            seq_x % self.X_MM_SEQ_LEN == 0
-        ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
+        assert x_1BNX.shape[0] == 1, f"x dim0 must be 1, got {x_1BNX.shape[0]}"
+        # NOTE: I removed this check because with unpadded input reshape fails
+        # assert (
+        #     seq_x % self.X_MM_SEQ_LEN == 0
+        # ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -213,26 +213,24 @@ class TtAsymmetricAttention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-
-        x = modulated_rmsnorm(x, scale_x)
+        x_1BNX = modulated_rmsnorm(x_1BNX, scale_x)
 
         # Process visual features
-        x = ttnn.reshape(x, (1, seq_x // self.X_MM_SEQ_LEN, self.X_MM_SEQ_LEN, x.shape[3]))
-        qkv_x = ttnn.linear(
-            x,
+        qkv_x_1BNE = ttnn.linear(
+            x_1BNX,
             self.qkv_x,
             bias=self.qkv_x_bias,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.qkv_x_config,
+            # NOTE: Running without program config is functional and keeps padding
+            program_config=None,  # self.qkv_x_config,
         )
-        qkv_x = ttnn.reshape(qkv_x, (1, B, seq_x, qkv_x.shape[3]))
 
         # Split qkv_x into q, k, v
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings
-        q_x, k_x, v_x = ttnn.experimental.nlp_create_qkv_heads(
-            qkv_x,
+        q_x_BHND, k_x_BHND, v_x_BHND = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_x_1BNE,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_heads,
             transpose_k_heads=False,
@@ -240,65 +238,57 @@ class TtAsymmetricAttention(LightweightModule):
         )
 
         # Apply normalization and rotary embeddings to visual features
-        q_x = self.q_norm_x(q_x, mode="prefill")
-        q_x = ttnn.experimental.rotary_embedding_llama(q_x, rope_cos, rope_sin, trans_mat)
-        k_x = self.k_norm_x(k_x, mode="prefill")
-        k_x = ttnn.experimental.rotary_embedding_llama(k_x, rope_cos, rope_sin, trans_mat)
-
-        B, _, N, _ = q_x.shape
+        q_x_BHND = self.q_norm_x(q_x_BHND, mode="prefill")
+        q_x_BHND = ttnn.experimental.rotary_embedding_llama(q_x_BHND, rope_cos, rope_sin, trans_mat)
+        k_x_BHND = self.k_norm_x(k_x_BHND, mode="prefill")
+        k_x_BHND = ttnn.experimental.rotary_embedding_llama(k_x_BHND, rope_cos, rope_sin, trans_mat)
 
         # Process text features if present
         if B == 1:
             if not uncond:
                 # Process text features
                 # TODO: Removing until we support padded sequences
-                # y = y[:, :text_seqlen] # Remove padding tokens
-                y = modulated_rmsnorm(y, scale_y)
-                q_y, k_y, v_y = self.run_qkv_y(y)
-
-                # Concatenate visual and text features on the sequence dimension
-                q = ttnn.concat([q_x, q_y], dim=2)
-                k = ttnn.concat([k_x, k_y], dim=2)
-                v = ttnn.concat([v_x, v_y], dim=2)
-
+                y_1BLY = modulated_rmsnorm(y_1BLY, scale_y)
+                q_y_BHND, k_y_BHND, v_y_BHND = self.run_qkv_y(y_1BLY)
             else:
-                q, k, v = q_x, k_x, v_x
-            # # TODO: Pad up to necessary length
-            attn_padded_len = 44 * 1024  # TODO: GENERALIZE!
-            q = ttnn.pad(q, [q.shape[0], q.shape[1], attn_padded_len, q.shape[3]], [0, 0, 0, 0], value=0)
-            k = ttnn.pad(k, [k.shape[0], k.shape[1], attn_padded_len, k.shape[3]], [0, 0, 0, 0], value=0)
-            v = ttnn.pad(v, [v.shape[0], v.shape[1], attn_padded_len, v.shape[3]], [0, 0, 0, 0], value=0)
-            print("after pad")
-            print(f"q: {q.shape}, k: {k.shape}, v: {v.shape}")
+                q_y_BHND, k_y_BHND, v_y_BHND = None, None, None
         else:
             assert False, "Batch size > 1 not supported"
 
-        return q, k, v
+        return q_x_BHND, k_x_BHND, v_x_BHND, q_y_BHND, k_y_BHND, v_y_BHND
 
     def run_attention(
         self,
-        q: ttnn.Tensor,  # (total <= B * (N + L), num_heads, head_dim)
-        k: ttnn.Tensor,  # (total <= B * (N + L), num_heads, head_dim)
-        v: ttnn.Tensor,  # (total <= B * (N + L), num_heads, head_dim)
+        q_x_BHND: ttnn.Tensor,
+        k_x_BHND: ttnn.Tensor,
+        v_x_BHND: ttnn.Tensor,
+        q_y_BHLD: ttnn.Tensor,
+        k_y_BHLD: ttnn.Tensor,
+        v_y_BHLD: ttnn.Tensor,
         *,
         B: int,
-        attn_mask,
     ) -> ttnn.Tensor:
         """Run attention computation.
 
         Args:
-            q: Query tensor (total <= B * (N + L), num_heads, head_dim)
-            k: Key tensor (total <= B * (N + L), num_heads, head_dim)
-            v: Value tensor (total <= B * (N + L), num_heads, head_dim)
+            q_x_BHND: Query tensor (B, H, N, D)
+            k_x_BHND: Key tensor (B, H, N, D)
+            v_x_BHND: Value tensor (B, H, N, D)
+            q_y_BHLD: Joint query tensor (B, H, L, D)
+            k_y_BHLD: Joint key tensor (B, H, L, D)
+            v_y_BHLD: Joint value tensor (B, H, L, D)
             B: Batch size (must be 1)
 
         Returns:
-            out: Attention output tensor (total, local_dim)
+            out_1BNX: Attention output tensor (1, B, N, X)
+            out_1BLX: Joint attention output tensor (1, B, L, X)
         """
         assert B == 1, "Only batch size 1 is supported"
-        assert q.shape[0] == B, "Batch size must be B"
-        assert q.shape == k.shape == v.shape, "q, k, v must have the same shape"
-
+        assert q_x_BHND.shape[0] == B, "Batch size must be B"
+        assert q_x_BHND.shape == k_x_BHND.shape == v_x_BHND.shape, "q_x, k_x, v_x must have the same shape"
+        is_joint = q_y_BHLD is not None
+        if is_joint:
+            assert q_y_BHLD.shape == k_y_BHLD.shape == v_y_BHLD.shape, "q_y, k_y, v_y must have the same shape"
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -309,32 +299,45 @@ class TtAsymmetricAttention(LightweightModule):
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=256,  # TODO: Make this dynamic
+            q_chunk_size=128,  # TODO: Make this dynamic
             k_chunk_size=512,
             exp_approx_mode=False,
         )
-
         # Run attention
-        out = ttnn.transformer.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=False,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            attn_mask=attn_mask,
-        )  # (B, num_heads, seq_len, head_dim)
+        if is_joint:
+            out_BHND, out_joint_BHLD = ttnn.transformer.joint_scaled_dot_product_attention(
+                q_x_BHND,
+                k_x_BHND,
+                v_x_BHND,
+                q_y_BHLD,
+                k_y_BHLD,
+                v_y_BHLD,
+                joint_strategy="rear",
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            out_joint_1BLX = ttnn.experimental.nlp_concat_heads(out_joint_BHLD, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            out_BHND = ttnn.transformer.scaled_dot_product_attention(
+                q_x_BHND,
+                k_x_BHND,
+                v_x_BHND,
+                is_causal=False,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+            )
+            out_joint_1BLX = None
 
         # Reshape output
-        out = ttnn.experimental.nlp_concat_heads(out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out_1BNX = ttnn.experimental.nlp_concat_heads(out_BHND, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        return out
+        return out_1BNX, out_joint_1BLX
 
     def post_attention(
         self,
-        out: ttnn.Tensor,  # (total <= B * (N + L), local_dim)
+        out_1BNX: ttnn.Tensor,
+        out_joint_1BLX: ttnn.Tensor,
         B: int,
-        M: int,
         L: int,
         dtype: ttnn.bfloat16,
         uncond: bool = False,
@@ -354,36 +357,23 @@ class TtAsymmetricAttention(LightweightModule):
             y: (B, L, dim_y) Text token features
         """
         assert B == 1, "Batch size must be 1"
-        assert out.shape[1] == B, "Batch size must be 1"
-        N = M  # No context parallel support yet
+        assert out_1BNX.shape[1] == B, "Batch size must be 1"
+        assert (out_joint_1BLX is None) == uncond
         local_dim = self.dim_x // self.num_devices  # No head parallel support yet
-
-        print(f"B: {B}, M: {M}, L: {L}, N: {N}")
 
         # Split sequence into visual and text tokens, adding back padding
         if B == 1:
-            # out = ttnn.reshape(out, (B, -1, local_dim))
-            if not uncond:
-                print(f"in post_attention: {out.shape=}")
-                # Split into visual and text features
-                x = out[:, :, :N, :]  # (B, N, local_dim)
-                y = out[:, :, N : N + L, :]  # (B, <=L, local_dim)
-                # Pad text features if needed
-                if y.shape[2] < L:
-                    raise ValueError("Not supporting padded text features")
-                    # y = ttnn.pad(y, (0, 0, 0, L - y.shape[1], 0, 0))  # (B, L, local_dim)
-            else:
-                # Empty prompt case
-                x = out[:, :, :N, :]
-                # TODO: see if I can remove Y from uncond case
-                y = ttnn.as_tensor(
+            if uncond:
+                # TODO: Remove this
+                out_joint_1BLX = ttnn.as_tensor(
                     torch.zeros(1, B, L, local_dim),
-                    dtype=ttnn.bfloat16,
+                    dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     device=self.mesh_device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 )
+
         else:
             raise ValueError("Batch size > 1 not supported")
 
@@ -394,31 +384,30 @@ class TtAsymmetricAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
-        x = ttnn.reshape(x, (1, x.shape[2] // self.X_MM_SEQ_LEN, self.X_MM_SEQ_LEN, x.shape[3]))
         if self.num_devices > 1:
-            x = ttnn.all_gather(
-                x,
-                dim=-1,
+            out_1BNX = ttnn.all_gather(
+                out_1BNX,
+                dim=3,
             )
-        x = ttnn.linear(
-            x,
+        # BUG
+        # This linear clobbers `out_joint_1BLX` if padded
+        out_1BNX = ttnn.linear(
+            out_1BNX,
             self.proj_x,
             bias=self.proj_x_bias,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.proj_x_config,
+            # program_config=self.proj_x_config,
         )
-        x = ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[3]))
-
         if self.update_y:
             if self.num_devices > 1:
-                y = ttnn.all_gather(
-                    y,
-                    dim=-1,
+                out_joint_1BLX = ttnn.all_gather(
+                    out_joint_1BLX,
+                    dim=3,
                 )
-            y = ttnn.linear(
-                y,
+            out_joint_1BLY = ttnn.linear(
+                out_joint_1BLX,
                 self.proj_y,
                 bias=self.proj_y_bias,
                 compute_kernel_config=compute_kernel_config,
@@ -426,31 +415,32 @@ class TtAsymmetricAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            out_joint = out_joint_1BLY
+        else:
+            out_joint = out_joint_1BLX
 
-        return x, y
+        return out_1BNX, out_joint
 
     def forward(
         self,
-        x: ttnn.Tensor,
-        y: ttnn.Tensor,
+        x_1BNX: ttnn.Tensor,
+        y_1BLY: ttnn.Tensor,
         *,
         scale_x: ttnn.Tensor,
         scale_y: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        packed_indices,
-        attn_mask,
         uncond: bool = False,
     ) -> ttnn.Tensor:
         # input is replicated
-        B, L = y.shape[1], y.shape[2]
-        M = x.shape[2]
+        B, L = y_1BLY.shape[1], y_1BLY.shape[2]
+        M = x_1BNX.shape[2]
 
         # output is head-sharded q, k, v
-        q, k, v = self.prepare_qkv(
-            x=x,
-            y=y,
+        q_x_BHND, k_x_BHND, v_x_BHND, q_y_BHLD, k_y_BHLD, v_y_BHLD = self.prepare_qkv(
+            x_1BNX,
+            y_1BLY,
             scale_x=scale_x,
             scale_y=scale_y,
             rope_cos=rope_cos,
@@ -460,22 +450,24 @@ class TtAsymmetricAttention(LightweightModule):
         )
 
         # output is col-sharded
-        out = self.run_attention(
-            q,
-            k,
-            v,
+        out_1BNX, out_joint_1BLX = self.run_attention(
+            q_x_BHND,
+            k_x_BHND,
+            v_x_BHND,
+            q_y_BHLD,
+            k_y_BHLD,
+            v_y_BHLD,
             B=B,
-            attn_mask=attn_mask,
         )
 
         # output is col-sharded x, y
-        x, y = self.post_attention(
-            out,
+        x_1BNX, y_1BLY = self.post_attention(
+            out_1BNX,
+            out_joint_1BLX,
             B=B,
-            M=M,
             L=L,
-            dtype=out.dtype,
+            dtype=out_1BNX.dtype,
             uncond=uncond,
         )
 
-        return x, y
+        return x_1BNX, y_1BLY
