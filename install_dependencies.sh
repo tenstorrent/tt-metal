@@ -104,6 +104,9 @@ ub_buildtime_packages()
      libhwloc-dev \
      libc++-17-dev \
      libc++abi-17-dev \
+     gcc-12 \
+     g++-12 \
+     build-essential \
     )
 }
 
@@ -158,9 +161,14 @@ prep_ubuntu_build()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
+    # The below is to bring cmake from kitware
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
     echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    # The below is to get g++-12 on ubuntu 20.04
+    if [[ "$VERSION" =~ ^20\.04 ]]; then
+        sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+    fi
     apt-get update
 }
 
@@ -208,11 +216,15 @@ install() {
                 prep_ubuntu_build
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+		sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+		sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
                 configure_hugepages
                 ;;
         esac
