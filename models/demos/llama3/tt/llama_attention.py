@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce, tt_all_gather
+from models.demos.llama3.tt.llama_common import first_five
+from models.demos.llama3.tt.load_checkpoints import permute
 
 
 class TtLlamaAttention(LightweightModule):
@@ -99,10 +100,44 @@ class TtLlamaAttention(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq.weight"
-        wk_str = f"{layer_name}.wk.weight"
-        wv_str = f"{layer_name}.wv.weight"
-        wo_str = f"{layer_name}.wo.weight"
+        wq_str = f"{layer_name}.wq"
+        wk_str = f"{layer_name}.wk"
+        wv_str = f"{layer_name}.wv"
+        wo_str = f"{layer_name}.wo"
+
+        # Initialize bias tensors as None
+        self.wqkv_bias = None
+
+        # Create combined QKV bias if present in state dict
+        if f"{wq_str}.bias" in self.state_dict:
+            qkv_bias = torch.concat(
+                [
+                    torch.concat(
+                        [
+                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                        ],
+                        dim=-1,
+                    )
+                    for i in range(configuration.num_devices)
+                ],
+                dim=-1,
+            )
+            # Expand bias to a whole tile - FIXME: we wouldn't need to do if matmul bias terms worked
+            qkv_bias = qkv_bias.unsqueeze(0).expand(32, -1)
+            self.wqkv_bias = ttnn.as_tensor(
+                qkv_bias,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wqkv_bias_sharded"),
+            )
+            self.wqkv_bias_prefill = ttnn.reshape(
+                self.wqkv_bias, ttnn.Shape([1, 1, 1, self.wqkv_bias.shape[-1]], [1, 1, 32, self.wqkv_bias.shape[-1]])
+            )
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
@@ -118,9 +153,9 @@ class TtLlamaAttention(LightweightModule):
         qkv_list = []
         for i in range(self.num_devices_per_group):
             # Chunk weights
-            wq_selected = torch.chunk(self.state_dict[wq_str], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(self.state_dict[wk_str], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(self.state_dict[wv_str], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(self.state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
@@ -146,7 +181,7 @@ class TtLlamaAttention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-        pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim // configuration.num_devices, configuration.dim
@@ -163,9 +198,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d")
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else cache_name("wo"),
+            cache_file_name=(
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            ),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -221,9 +256,11 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -245,14 +282,25 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+
+        as_torch = lambda tensor: torch.Tensor(
+            ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        )
+
+        # print(f"our x:", " ".join(f'{t:+3.1f}' for t in as_torch(x)[0, 0, 0].flatten()))
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
+            # bias=self.wqkv_bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
         )
+        # FIXME: File bug against dram-sharded matmuls with bias
+        if self.wqkv_bias is not None:
+            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias
+
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
@@ -263,6 +311,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
+            topology=self.ccl_topology,
         )
 
         if self.TG:
@@ -437,13 +486,16 @@ class TtLlamaAttention(LightweightModule):
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
+                topology=self.ccl_topology,
                 memory_config=(
-                    self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                    if self.hidden_size == 8192
-                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                )
-                if self.TG
-                else self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    (
+                        self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
+                        if self.hidden_size == 8192
+                        else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
+                    )
+                    if self.TG
+                    else self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                ),
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
@@ -497,8 +549,24 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype,
         )
 
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wqkv_bias is not None:
+            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        def fix(xqkv):
+            torch_q = xqkv[: self.head_dim * self.n_local_heads]
+            torch_k = xqkv[
+                self.head_dim * self.n_local_heads : self.head_dim * (self.n_local_heads + self.n_local_kv_heads)
+            ]
+            torch_v = xqkv[self.head_dim * (self.n_local_heads + self.n_local_kv_heads) :]
+            to_hf = lambda t: permute(t.unsqueeze(-1), t.shape[0] // self.head_dim, t.shape[0], 1).squeeze(-1)
+            torch_q = to_hf(torch_q)
+            torch_k = to_hf(torch_k)
+            torch_v = torch_v
+            return torch_k.flatten()
 
         ttnn.deallocate(x_11SH)
 
@@ -677,6 +745,7 @@ class TtLlamaAttention(LightweightModule):
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
+                topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
             )

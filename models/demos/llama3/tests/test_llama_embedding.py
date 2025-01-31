@@ -8,13 +8,11 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.demos.llama3.tt.llama_common import HostEmbedding
 
 
 @torch.no_grad()
@@ -44,9 +42,9 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
-    reference_emb = HostEmbedding(model_args)
+    reference_emb = model_args.reference_embedding()
     if model_args.is_vision():
         layer_name = "text_model.tok_embeddings.weight"
     else:
@@ -62,7 +60,7 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
     )
 
     prompts = ["Joy"] * 32
-    pt_input = torch.tensor([tokenizer.encode(prompt, bos=False, eos=False) for prompt in prompts])
+    pt_input = torch.tensor([model_args.encode_prompt(prompt, instruct=False) for prompt in prompts])
     reference_output = reference_emb(pt_input)
     logger.info(f"reference_output: {reference_output.shape}")
 
