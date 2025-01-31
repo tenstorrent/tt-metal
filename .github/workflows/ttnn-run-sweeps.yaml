@@ -227,6 +227,8 @@ on:
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw
           - eltwise.unary_backward.rsqrt_bw.rsqrt_bw_sharded
           - eltwise.unary_backward.sigmoid_bw.sigmoid_bw
+          - eltwise.unary_backward.tan_bw.sub_bw
+          - eltwise.unary_backward.tan_bw.sub_bw_sharded
           - eltwise.unary_backward.tan_bw.tan_bw
           - eltwise.unary_backward.tan_bw.tan_bw_sharded
           - eltwise.unary_backward.trunc_bw.trunc_bw
@@ -319,6 +321,9 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_llama
+          - eltwise.binary.atan2.atan2
+          - eltwise.binary.atan2.atan2_sharded
           - eltwise.unary.gtz.gtz
           - eltwise.unary.ltz.ltz
           - eltwise.unary.gez.gez
@@ -416,6 +421,7 @@ on:
           - eltwise.binary_backward.hypot_bw.hypot_bw
           - eltwise.binary_backward.add_bw.add_bw
           - eltwise.binary_backward.sub_bw.sub_bw
+          - eltwise.binary_backward.sub_bw.sub_bw_sharded
           - eltwise.binary_backward.mul_bw.mul_bw
           - eltwise.binary_backward.div_bw.div_bw
           - eltwise.binary_backward.fmod_bw.fmod_bw
