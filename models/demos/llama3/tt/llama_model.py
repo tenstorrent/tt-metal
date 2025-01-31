@@ -174,8 +174,10 @@ class TtTransformer(LightweightModule):
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
+        # Necessary padding to be full tile sized when on device
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
-            tokens.view(-1),
+            tokens,
             device=None,
             dtype=ttnn.uint32,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -254,10 +256,10 @@ class TtTransformer(LightweightModule):
                     num_links=2,
                     cluster_axis=0,
                     mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    topology=self.args.ccl_topology(),
                 )
             else:
-                tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=self.args.ccl_topology())
         tt_out = ttnn.untilize(tt_out, use_multicore=True)
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
