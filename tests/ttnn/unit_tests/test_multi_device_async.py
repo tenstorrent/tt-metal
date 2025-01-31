@@ -100,7 +100,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
         )
         ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-        loopback_replicated_tensors = ttnn.shardedtensor_to_tensorlist(ttnn_loop_back_tensor)
+        loopback_replicated_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(ttnn_loop_back_tensor)
         for loopback_replicated_tensor in loopback_replicated_tensors:
             assert torch.all(full_tensor == loopback_replicated_tensor)
 
