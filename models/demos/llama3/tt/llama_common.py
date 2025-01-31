@@ -65,11 +65,10 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
 
 
 def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # Llama-3.x specific scaling
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
     low_freq_factor = 1
     high_freq_factor = 4
-    orig_context_len = 8192  # original llama3 length
 
     low_freq_wavelen = orig_context_len / low_freq_factor
     high_freq_wavelen = orig_context_len / high_freq_factor
