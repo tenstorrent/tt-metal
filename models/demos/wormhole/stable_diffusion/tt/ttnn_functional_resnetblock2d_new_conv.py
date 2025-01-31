@@ -755,6 +755,7 @@ class resnetBlock2D:
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 input_tensor_dtype=hidden_states.dtype,
+                has_bias=True,
                 **conv_kwargs_3,
             )
             self.conv2_bias = ttnn.prepare_conv_bias(
