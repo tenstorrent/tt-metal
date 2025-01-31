@@ -7,9 +7,12 @@
 #include <utility>
 
 #include "tt-metalium/assert.hpp"
+<<<<<<< HEAD
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/overloaded.hpp"
+=======
+>>>>>>> change assert to tt_throw to satisfy compiler
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -27,6 +30,26 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
+<<<<<<< HEAD
+=======
+py::object get_torch_type(DataType& dtype, const py::object& torch) {
+    if (dtype == DataType::UINT8) {
+        return torch.attr("uint8");
+    } else if (dtype == DataType::UINT16) {
+        return torch.attr("int16");
+    } else if (dtype == DataType::INT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::UINT32) {
+        return torch.attr("int32");
+    } else if (dtype == DataType::FLOAT32) {
+        return torch.attr("float32");
+    } else if (dtype == DataType::BFLOAT16) {
+        return torch.attr("bfloat16");
+    }
+    TT_THROW("Unsupported DataType: {}", dtype);
+}
+
+>>>>>>> change assert to tt_throw to satisfy compiler
 // duplicated from pytensor.cpp
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
