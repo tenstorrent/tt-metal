@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "tt-metalium/assert.hpp"
+#include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/overloaded.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -95,8 +96,16 @@ OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor, const bool lega
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                                 : unpack_bfp4_tiles_into_float_vec(
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                        auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
+                        std::vector<bfloat16> bfloat16_unpacked_data;
+                        bfloat16_unpacked_data.reserve(float_unpacked_data.size());
+                        std::transform(
+                            float_unpacked_data.begin(),
+                            float_unpacked_data.end(),
+                            std::back_inserter(bfloat16_unpacked_data),
+                            [](float f) { return bfloat16(f); });
+                        auto input_bfloat16_buffer = owned_buffer::create<bfloat16>(std::move(bfloat16_unpacked_data));
+                        return create_row_major_owned_buffer(
+                            std::move(input_bfloat16_buffer), tensor_spec, legacy_output);
                     }
                     default: {
                         TT_THROW("Unsupported DataType: {}", tt_dtype);
@@ -126,21 +135,27 @@ py::object get_torch_type(DataType& dtype, const py::object& torch) {
         return torch.attr("float32");
     } else if (dtype == DataType::BFLOAT16) {
         return torch.attr("bfloat16");
+    } else if (dtype == DataType::BFLOAT4_B) {
+        return torch.attr("bfloat16");
+    } else if (dtype == DataType::BFLOAT8_B) {
+        return torch.attr("bfloat16");
     }
     TT_THROW("Unsupported DataType: {}", dtype);
 }
 
 // duplicated from pytensor.cpp
 py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool legacy_output = false) {
-    // TODO: Remove legacy_output flag which supports old behaviour of returning tensors with padded shape.
-    // These cases need to be fixed:
-    //     ROW_MAJOR tensors with padding (since ROW_MAJOR has no alignment, cannot automatically strip data unless
-    //     padded shape is queried) Physical sharding on padded shape (unlike interleaved tensors, cannot derive an
-    //     equivalent logical shard spec to strip out data)
-    // One way to clean this up is:
-    //     1. Update tests to use ttnn.from_torch and ttnn.to_torch
-    //     2. Fix usage of tensor.to_torch inside ttnn functional APIs
-    //     3. Deprecate old tensor.to_torch and rename tensor.to_torch_with_logical_shape back to tensor.to_torch
+    // TODO: Always | WARNING  | Tensor layout must be Layout::TILE for bfloat8_b or bfloat4_b! Conversion from
+    //       Layout::TILE to Layout::ROW_MAJOR was not executed!
+    //  TODO: Remove legacy_output flag which supports old behaviour of returning tensors with padded shape.
+    //  These cases need to be fixed:
+    //      ROW_MAJOR tensors with padding (since ROW_MAJOR has no alignment, cannot automatically strip data unless
+    //      padded shape is queried) Physical sharding on padded shape (unlike interleaved tensors, cannot derive an
+    //      equivalent logical shard spec to strip out data)
+    //  One way to clean this up is:
+    //      1. Update tests to use ttnn.from_torch and ttnn.to_torch
+    //      2. Fix usage of tensor.to_torch inside ttnn functional APIs
+    //      3. Deprecate old tensor.to_torch and rename tensor.to_torch_with_logical_shape back to tensor.to_torch
     auto buffer = get_host_buffer_from_tensor(tt_tensor, legacy_output);
 
     py::object torch = py::module_::import("torch");
@@ -514,7 +529,15 @@ void py_module(py::module& module) {
             return tensorlist_local;
         },
         py::arg("tensor"),
-        py::kw_only());
+        py::kw_only(),
+        R"doc(
+            Convert a sharded multidevice tensor into a locally stored (StorageType::OWNED) list of tensors,
+            with each tensor representing a shard. All bfloat8_b or bfloat4_b shards will be converted to
+            bfloat16 tensors.
+
+            Returns:
+                List[torch.tensor]: A list of locally stored tensors representing the multidevice shards.
+        )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
