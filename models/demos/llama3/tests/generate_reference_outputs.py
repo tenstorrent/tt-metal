@@ -32,7 +32,6 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         model_args = TtModelArgs(mesh_device=None)
         model_args.max_seq_len = total_length
         tokenizer = Tokenizer(model_args.tokenizer_path)
-        
 
     # Special-case Hf models as they can load directly from the safetensors much more efficiently
     if model_args.checkpoint_type == CheckpointType.Meta:
