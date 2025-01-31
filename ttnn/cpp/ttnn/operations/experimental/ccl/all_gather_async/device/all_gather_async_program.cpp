@@ -73,13 +73,18 @@ static void print_tensor_slice(const ttnn::ccl::v2::TensorSlice& slice_v2) {
 }
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device) {
+    size_t num_links,
+    size_t num_workers_per_link,
+    bool persistent_fabric_mode,
+    IDevice* device,
+    const std::optional<SubDeviceId>& sub_device_id) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
-        const auto available_cores =
-            device->worker_cores(HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        const auto available_cores = device->worker_cores(
+            HalProgrammableCoreType::TENSIX,
+            sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,
@@ -131,6 +136,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
+    const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -174,7 +180,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
