@@ -18,6 +18,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set -e
+
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 MAJOR=${VERSION%.*}
@@ -27,6 +29,8 @@ if [ $FLAVOR != "ubuntu" ]; then
     echo "Error: Only Ubuntu is supported"
     exit 1
 fi
+
+UBUNTU_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | awk -F= '{print $2}' | tr -d '"')
 
 if [ "$EUID" -ne 0 ]; then
     echo "This script must be run as root. Please use sudo."
@@ -156,7 +160,7 @@ prep_ubuntu_build()
     apt-get update
     apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-    echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ focal main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
     apt-get update
 }
 
@@ -202,13 +206,13 @@ install() {
                 ;;
             build)
                 prep_ubuntu_build
-                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 install_llvm
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 ;;
             baremetal)
                 prep_ubuntu_build
-                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 install_llvm
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 configure_hugepages
                 ;;
         esac
