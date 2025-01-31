@@ -33,8 +33,8 @@ int main(int argc, char** argv) {
     // this program by enqueueing it across all devices in our 2x4 mesh.
     auto mesh_workload = CreateMeshWorkload();
     auto target_devices = LogicalDeviceRange{
-        DeviceCoord{0, 0} /* start_coord */,
-        DeviceCoord{mesh_device->num_cols(), mesh_device->num_rows()} /* end_coord */
+        DeviceCoord{0, 0} /* start_coord */, DeviceCoord{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}
+        /* end_coord */
     };
 
     AddProgramToMeshWorkload(mesh_workload, example_program, target_devices);

@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
     // Create mesh workload and broadcast the program across all devices
     auto mesh_workload = CreateMeshWorkload();
     auto device_range = LogicalDeviceRange{
-        DeviceCoord{0, 0} /* start_coord */,
-        DeviceCoord{mesh_device->num_cols(), mesh_device->num_rows()} /* end_coord */
+        DeviceCoord{0, 0} /* start_coord */, DeviceCoord{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}
+        /* end_coord */
     };
 
     AddProgramToMeshWorkload(mesh_workload, program, device_range);
