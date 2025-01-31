@@ -24,8 +24,8 @@ namespace tt::tt_metal {
 
 // assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -334,10 +334,10 @@ void SubDeviceManager::populate_noc_data() {
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];
 
         TT_FATAL(
-            idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            idx <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             "NOC data entries {} exceeds maximum supported size {}",
             idx,
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 
