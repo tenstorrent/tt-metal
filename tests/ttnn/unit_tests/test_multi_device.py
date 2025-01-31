@@ -11,7 +11,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 #######
@@ -183,7 +183,7 @@ def test_multi_device_check_per_device_shard(mesh_device, layout, memory_config,
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+    from ttnn import ReplicateTensorToMesh
 
     full_tensor = torch.rand(shape, dtype=torch.bfloat16)
 
@@ -196,7 +196,7 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    loopback_replicated_tensors = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(mesh_device))
+    loopback_replicated_tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(ttnn_loop_back_tensor)
     for loopback_replicated_tensor in loopback_replicated_tensors:
         assert torch.all(full_tensor == loopback_replicated_tensor)
 
