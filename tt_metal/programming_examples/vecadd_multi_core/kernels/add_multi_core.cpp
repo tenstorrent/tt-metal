@@ -11,7 +11,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
-    uint32_t core_id = get_arg_val<uint32_t>(1);  // Add core ID argument
+    uint32_t start_tile_id = get_arg_val<uint32_t>(1);
 
     // We are going to read from these two circular buffers
     constexpr auto cb_in0 = get_compile_time_arg_val(0);
@@ -36,12 +36,10 @@ void MAIN {
     add_tiles_init();
 
     // Calculate the range of tiles this core should process
-    const uint32_t tiles_per_core = n_tiles;
-    const uint32_t start_tile = core_id * tiles_per_core;
-    const uint32_t end_tile = start_tile + tiles_per_core;
+    const uint32_t end_tile_id = start_tile_id + n_tiles;
 
     // Loop over the assigned tiles and perform the computation
-    for (uint32_t i = start_tile; i < end_tile; i++) {
+    for (uint32_t i = start_tile_id; i < end_tile_id; i++) {
         // Make sure there is a valid register we can use.
         acquire_dst();
         // Wait until there is a tile in both input circular buffers
