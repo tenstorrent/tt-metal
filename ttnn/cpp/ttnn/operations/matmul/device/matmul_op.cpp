@@ -1015,10 +1015,9 @@ MatmulProgramConfig get_matmul_program_config(
         auto out_subblock_h = std::get<0>(subblock_hw);
         auto out_subblock_w = std::get<1>(subblock_hw);
 
-        // TODO: Temporarily allow for single core; should support bcast_batch in
-        // general
-        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_legacy_shape());
-        uint32_t batch_size_b = get_batch_size(input_tensor_b.get_legacy_shape());
+        // TODO: Temporarily allow for single core; should support bcast_batch in general
+        uint32_t batch_size_a = get_batch_size(input_tensor_a.get_padded_shape());
+        uint32_t batch_size_b = get_batch_size(input_tensor_b.get_padded_shape());
         bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
         TT_FATAL(!broadcast_batch, "Error");
 
