@@ -1280,7 +1280,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 
 void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
-void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program) {
+void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(not buffer->device()->using_slow_dispatch());
     program.add_buffer(buffer);
 }
@@ -1315,7 +1315,7 @@ void SetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::shared_ptr<RuntimeArgs> runtime_args) {
+    const std::shared_ptr<RuntimeArgs>& runtime_args) {
     detail::DispatchStateCheck(not device->using_slow_dispatch());
     SetRuntimeArgsImpl(kernel, core_spec, std::move(runtime_args), false);
 }
