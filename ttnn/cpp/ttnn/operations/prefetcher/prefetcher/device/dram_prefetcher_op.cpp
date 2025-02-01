@@ -74,7 +74,7 @@ void DramPrefetcher::validate(const std::vector<Tensor>& input_tensors) const {
 // TODO: Remove output tensor entirely (if possible)
 std::vector<ttnn::TensorSpec> DramPrefetcher::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     return {TensorSpec(
-        ttnn::SimpleShape{32, 32},
+        ttnn::Shape{32, 32},
         TensorLayout(input_tensors[0].get_dtype(), PageConfig(input_tensors[0].get_layout()), MemoryConfig{}))};
 }
 operation::ProgramWithCallbacks DramPrefetcher::create_program(

@@ -22,8 +22,8 @@ namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks pad_rm_reader_writer(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -43,7 +43,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
@@ -176,8 +176,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 operation::ProgramWithCallbacks pad_tile(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     tt::tt_metal::Program program{};
 
@@ -450,8 +450,8 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -474,7 +474,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
             .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
@@ -697,7 +697,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -793,8 +793,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -1020,7 +1020,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
     uint32_t num_cores_x_padded,
@@ -1185,8 +1185,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -1364,8 +1364,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
 operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     const Tensor& input_tensor,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     Program program{};
 

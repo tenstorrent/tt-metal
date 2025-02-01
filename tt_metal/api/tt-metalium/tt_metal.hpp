@@ -331,10 +331,6 @@ bool ReadFromDeviceL1(
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 
-DeviceAddr AllocateBuffer(Buffer* buffer);
-
-void DeallocateBuffer(Buffer* buffer);
-
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail
 }  // namespace tt::tt_metal

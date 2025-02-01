@@ -123,11 +123,7 @@ inline std::vector<NewT> cast(const tt::tt_metal::borrowed_buffer::Buffer<OldT>&
 
 template <typename T>
 Tensor create_owned_tensor(
-    std::vector<T>&& data,
-    const SimpleShape& logical_shape,
-    const SimpleShape& padded_shape,
-    DataType data_type,
-    Layout layout) {
+    std::vector<T>&& data, const Shape& logical_shape, const Shape& padded_shape, DataType data_type, Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = tt::tt_metal::OwnedStorage{std::move(buffer)};
     return Tensor(
@@ -140,8 +136,8 @@ Tensor create_owned_tensor(
 template <typename T>
 inline Tensor create_tensor_from_buffer(
     const tt::tt_metal::borrowed_buffer::Buffer<T>& input_buffer,
-    const SimpleShape& logical_shape,
-    const SimpleShape& padded_shape,
+    const Shape& logical_shape,
+    const Shape& padded_shape,
     const Layout& input_layout,
     const DataType& dtype) {
     switch (dtype) {

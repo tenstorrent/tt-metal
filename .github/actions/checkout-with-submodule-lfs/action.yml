@@ -23,6 +23,8 @@ runs:
           file semicolon_delimited_script
           head semicolon_delimited_script
         fi
+        sudo rm -rf deleteme
+        sudo rm -rf docker-job
         if [ -d ".git" ]; then
           echo 'Cleaning repo'
           git clean -xffd

@@ -188,8 +188,8 @@ inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
 }
 
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     uint32_t num_cores,
     uint32_t blocks_per_core,
     bool has_cliff,
