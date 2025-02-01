@@ -1,6 +1,5 @@
 acl
 emacs
-jq
 less
 nano
 openssh-server
