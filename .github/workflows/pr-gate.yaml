@@ -82,6 +82,8 @@ jobs:
           pwd
           ls -al
       - name: Run a test
+        env:
+          LD_LIBRARY_PATH: /work/build/lib
         run: |
           ./build/test/tt_metal/test_add_two_ints
 
