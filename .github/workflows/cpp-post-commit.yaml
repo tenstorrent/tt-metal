@@ -107,8 +107,7 @@ jobs:
             pip install -r tt_metal/python_env/requirements-dev.txt
             pip install -e .
             ${{ matrix.test-group.cmd }}
-            sleep 600
-            lcov --directory . --capture --gcov-tool /work/llvm-gcov-wrapper --output-file coverage.info
+            lcov --directory . --capture --gcov-tool /work/scripts/llvm-gcov-wrapper --output-file coverage.info
       - uses: codecov/codecov-action@v5
         if: ${{ inputs.upload_coverage }}
         with:
