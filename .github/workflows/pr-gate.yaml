@@ -87,8 +87,8 @@ jobs:
         run: |
           mkdir -p tt_metal
           ls -al tt_metal
-          cp -a deleteme/tt_metal/soc_descriptors tt_metal/
-          ls -al tt_metal/soc_descriptors
+          cp -a deleteme/tt_metal/core_descriptors tt_metal/
+          ls -al tt_metal/core_descriptors
 
       - name: Run a test
         env:
