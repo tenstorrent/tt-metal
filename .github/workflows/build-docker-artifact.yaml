@@ -46,7 +46,7 @@ jobs:
         uses: tj-actions/changed-files@v45
         with:
           files: |
-              dockerfile/**.Dockerfile
+              dockerfile/Dockerfile
               scripts/docker/install_test_deps.sh
               scripts/docker/requirements*
               pyproject.toml
@@ -61,7 +61,8 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
-          file: dockerfile/${{ inputs.os }}.Dockerfile
+          file: dockerfile/Dockerfile
+          target: dev
           push: true
           tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
           cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
