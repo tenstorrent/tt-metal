@@ -95,6 +95,7 @@ on:
           - eltwise.unary.atanh.atanh_sharded
           - eltwise.unary.atan.atan
           - eltwise.unary.atan.atan_sharded
+          - eltwise.unary.atan.atan_output
           - eltwise.unary.sign.sign
           - eltwise.unary.rad2deg.rad2deg
           - eltwise.unary.deg2rad.deg2rad
@@ -155,8 +156,10 @@ on:
           - eltwise.unary.sigmoid.sigmoid
           - eltwise.unary.sigmoid.sigmoid_sharded
           - eltwise.unary.sigmoid.sigmoid_pytorch2
+          - eltwise.unary.sigmoid.sigmoid_output
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate
           - eltwise.unary.sigmoid_accurate.sigmoid_accurate_sharded
+          - eltwise.unary.sigmoid_accurate.sigmoid_accurate_output
           - eltwise.unary.tril.tril
           - eltwise.unary.tril.tril_sharded
           - eltwise.unary.triu.triu
@@ -165,6 +168,7 @@ on:
           - eltwise.unary.normalize_global.normalize_global
           - eltwise.unary.heaviside.heaviside
           - eltwise.unary.heaviside.heaviside_sharded
+          - eltwise.unary.heaviside.heaviside_output
           - eltwise.unary.hardtanh.hardtanh
           - eltwise.unary.hardtanh.hardtanh_sharded
           - eltwise.unary.hardswish.hardswish
