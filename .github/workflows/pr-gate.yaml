@@ -21,13 +21,13 @@ on:
     outputs:
       docker-image.ci-build.exists:
         description: "Whether the image exists to build TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.output1 }}
-      docker-image.ci-build.tag:
-      docker-image.ci-test.exists:
-      docker-image.ci-test.tag:
-      secondword:
-        description: "The second output string"
-        value: ${{ jobs.example_job.outputs.output2 }}
+        value: ${{ jobs.check-docker-images.outputs.ci-build-exists }}
+      # docker-image.ci-build.tag:
+      # docker-image.ci-test.exists:
+      # docker-image.ci-test.tag:
+      # secondword:
+      #   description: "The second output string"
+      #   value: ${{ jobs.example_job.outputs.output2 }}
 #  pull_request:
 #    types:
 #      - opened
@@ -118,7 +118,7 @@ jobs:
     # Map the job outputs to step outputs
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      # ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
