@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
+
 namespace shard_pf_builder {
 static void add_sharding_ct_to_existing_ct(
     const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args);
