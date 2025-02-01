@@ -89,8 +89,8 @@ jobs:
           ls -al tt_metal
           cp -a deleteme/tt_metal/soc_descriptors tt_metal/
           cp -a deleteme/tt_metal/core_descriptors tt_metal/
-          ls -al tt_metal/soc_descriptors
-          ls -al tt_metal/core_descriptors
+          mkdir -p tt_metal/hw/firmware
+          cp -a deleteme/tt_metal/hw/firmware/src tt_metal/hw/firmware/
 
       - name: Run a test
         env:
