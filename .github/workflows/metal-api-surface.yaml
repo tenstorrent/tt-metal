@@ -29,26 +29,13 @@ jobs:
       - name: Run script
         id: compute_api
         run: |
-          output=$(python3 compute_public_api_surface.py)
-          echo "result=$output" >> $GITHUB_ENV
-          python3 compute_public_api_surface.py
-
-      - name: Parse JSON output
-        id: parse_json
-        run: |
-          echo '${{ env.result }}' | jq -r '"date=\(.date)\nnum_files=\(.num_files)\nnum_types=\(.num_types)\nnum_methods=\(.num_methods)"' >> $GITHUB_ENV
+          python3 compute_public_api_surface.py > api_surface.json
+          cat api_surface.json
 
       - name: Send Slack message to a channel
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          payload: |
-            {
-              "text": "*Public API Surface Report* 📊\n
-              📅 *Date:* ${{ env.date }}\n
-              📂 *Files:* ${{ env.num_files }}\n
-              🔠 *Types:* ${{ env.num_types }}\n
-              🔧 *Methods:* ${{ env.num_methods }}"
-            }
+          payload-file-path: "./api_surface.json"
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_CHANNEL_ID: C08BAGE4410
