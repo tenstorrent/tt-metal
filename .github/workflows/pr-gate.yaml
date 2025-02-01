@@ -47,37 +47,37 @@ jobs:
     runs-on:
       - in-service
       - cloud-virtual-machine
-      - BH
+      # - BH
     container:
       image: ubuntu:22.04
       env:
         ENV_VAR: foo
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
       options: >
         --device /dev/tenstorrent
         -w /work
-        --entrypoint "bash -c 'set -ex; MOUNT_USER=\$(stat -c \"%u\" /work); MOUNT_GROUP=\$(stat -c \"%g\" /work); if [ \"\$MOUNT_USER\" -ne 0 ]; then groupadd -g \"\$MOUNT_GROUP\" runnergroup || true; useradd -m -u \"\$MOUNT_USER\" -g \"\$MOUNT_GROUP\" runner || true; exec su - runner -c \"/bin/bash \$@\"; else exec \"\$@\"; fi'"
+        # --entrypoint "bash -c 'set -ex; MOUNT_USER=\$(stat -c \"%u\" /work); MOUNT_GROUP=\$(stat -c \"%g\" /work); if [ \"\$MOUNT_USER\" -ne 0 ]; then groupadd -g \"\$MOUNT_GROUP\" runnergroup || true; useradd -m -u \"\$MOUNT_USER\" -g \"\$MOUNT_GROUP\" runner || true; exec su - runner -c \"/bin/bash \$@\"; else exec \"\$@\"; fi'"
     steps:
-      - name: Detect and Set Correct User
-        shell: bash
-        run: |
-          set -euo pipefail
-          set -x
-          # Detect the owner of the mounted /work directory
-          MOUNT_USER=$(stat -c "%u" /work)
-          MOUNT_GROUP=$(stat -c "%g" /work)
+      #- name: Detect and Set Correct User
+      #  shell: bash
+      #  run: |
+      #    set -euo pipefail
+      #    set -x
+      #    # Detect the owner of the mounted /work directory
+      #    MOUNT_USER=$(stat -c "%u" /work)
+      #    MOUNT_GROUP=$(stat -c "%g" /work)
 
-          echo "Detected user/group: ${MOUNT_USER}:${MOUNT_GROUP}"
+      #    echo "Detected user/group: ${MOUNT_USER}:${MOUNT_GROUP}"
 
-          # If the mount user is not root, create a matching user in the container
-          if [ "$MOUNT_USER" -ne 0 ]; then
-            groupadd -g "$MOUNT_GROUP" runnergroup || true
-            useradd -m -u "$MOUNT_USER" -g "$MOUNT_GROUP" runner || true
-          fi
+      #    # If the mount user is not root, create a matching user in the container
+      #    if [ "$MOUNT_USER" -ne 0 ]; then
+      #      groupadd -g "$MOUNT_GROUP" runnergroup || true
+      #      useradd -m -u "$MOUNT_USER" -g "$MOUNT_GROUP" runner || true
+      #    fi
 
-          # Adjust permissions and switch user
-          # chown -R "$MOUNT_USER:$MOUNT_GROUP" /work
+      #    # Adjust permissions and switch user
+      #    # chown -R "$MOUNT_USER:$MOUNT_GROUP" /work
       - name: Inspect
         shell: bash
         run: |
