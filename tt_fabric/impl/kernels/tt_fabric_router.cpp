@@ -9,13 +9,24 @@
 
 using namespace tt::tt_fabric;
 
-router_state_t router_state __attribute__((aligned(16)));
-fvc_consumer_state_t fvc_consumer_state __attribute__((aligned(16)));                // replicate for each fvc
-fvc_producer_state_t fvc_producer_state __attribute__((aligned(16)));                // replicate for each fvc
-fvcc_inbound_state_t fvcc_inbound_state __attribute__((aligned(16)));    // inbound fabric virtual control channel
-fvcc_outbound_state_t fvcc_outbound_state __attribute__((aligned(16)));  // outbound fabric virtual control channel
-volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16)));  // replicate for each fvc
+router_state_t router_state __attribute__((aligned(16), section(".fabric_router_data")));
+fvc_consumer_state_t fvc_consumer_state
+    __attribute__((aligned(16), section(".fabric_router_data")));  // replicate for each fvc
+fvc_producer_state_t fvc_producer_state
+    __attribute__((aligned(16), section(".fabric_router_data")));  // replicate for each fvc
+fvcc_inbound_state_t fvcc_inbound_state
+    __attribute__((aligned(16), section(".fabric_router_data")));  // inbound fabric virtual control channel
+fvcc_outbound_state_t fvcc_outbound_state
+    __attribute__((aligned(16), section(".fabric_router_data")));  // outbound fabric virtual control channel
+volatile local_pull_request_t local_pull_request_temp
+    __attribute__((aligned(16), section(".fabric_router_data")));                    // replicate for each fvc
 volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;        // replicate for each fvc
+
+constexpr uint32_t router_global_data_size = sizeof(router_state_t) + sizeof(fvc_consumer_state_t) +
+                                             sizeof(fvc_producer_state_t) + sizeof(fvcc_inbound_state_t) +
+                                             sizeof(fvcc_outbound_state_t) + sizeof(local_pull_request_t);
+
+static_assert(router_global_data_size <= eth_l1_mem::address_map::FABRIC_ROUTER_DATA_SIZE);
 
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
@@ -56,7 +67,8 @@ inline void notify_gatekeeper() {
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
     uint64_t dest_addr =
-        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, router_sync);
+        get_noc_addr_helper(gk_message_addr_h, gk_message_addr_l) + offsetof(gatekeeper_info_t, router_sync);
+    DPRINT << "dest addr for gatekeeper " << HEX() << dest_addr << DEC() << ENDL();
     noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
@@ -72,12 +84,14 @@ inline void notify_gatekeeper() {
     // wait for all device routers to have incremented the sync semaphore.
     // sync_val is equal to number of tt-fabric routers running on a device.
     while (*sync_sem_addr != sync_val) {
+        invalidate_l1_cache();
         // context switch while waiting to allow slow dispatch traffic to go through
         internal_::risc_context_switch();
     }
 }
 
 void kernel_main() {
+    WAYPOINT("ROU0");
 #ifndef ARCH_BLACKHOLE
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 #endif
@@ -106,6 +120,8 @@ void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX + 1, (uint32_t)&fvc_consumer_state);
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX + 1, (uint32_t)&fvc_producer_state);
 
+    WAYPOINT("ROU1");
+
     fvc_consumer_state.init(
         FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
     fvc_producer_state.init(
@@ -113,17 +129,24 @@ void kernel_main() {
         fvc_data_buf_size_words / 2,
         (uint32_t)&fvc_consumer_state.remote_rdptr);
 
+    WAYPOINT("ROU2");
+
     fvcc_outbound_state.init(
         FVCC_OUT_BUF_START, FVCC_SYNC_BUF_START, FVCC_IN_BUF_START, (uint32_t)&fvcc_inbound_state.inbound_wrptr);
     fvcc_inbound_state.init(
         FVCC_IN_BUF_START,
         (uint32_t)&fvcc_outbound_state.remote_rdptr,
-        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
+        (get_noc_addr_helper(gk_message_addr_h, gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf)));
+
+    WAYPOINT("ROU3");
 
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {
+        WAYPOINT("RO11");
         write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
         return;
     }
+
+    WAYPOINT("RO31");
 
     notify_gatekeeper();
     uint64_t start_timestamp = get_timestamp();
@@ -132,7 +155,10 @@ void kernel_main() {
     uint32_t loop_count = 0;
     uint32_t total_words_procesed = 0;
 
+    WAYPOINT("ROU4");
+
     while (1) {
+        invalidate_l1_cache();
         if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
             uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
             chan_request_entry_t* req = (chan_request_entry_t*)fvc_consumer_req_buf->chan_req + req_index;
@@ -140,10 +166,12 @@ void kernel_main() {
             bool can_pull = !fvc_consumer_state.sync_buf_full() && !fvc_consumer_state.sync_pending;
             if (req->bytes[47] == FORWARD) {
                 // Data is packetized.
+                WAYPOINT("ROU5");
                 if (can_pull) {
                     pull_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
                 }
                 if (!fvc_consumer_state.sync_buf_empty()) {
+                    WAYPOINT("ROU6");
                     noc_async_read_barrier();
                     if (fvc_consumer_state.pull_words_in_flight) {
                         // send words cleared count to producer/sender of pull request.

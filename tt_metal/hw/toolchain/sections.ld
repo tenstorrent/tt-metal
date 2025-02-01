@@ -17,7 +17,7 @@
 #define TEXT_START __fw_export_end_text
 #define DATA_START __fw_export_ldm_end
 #else
-#error "Neither TYPE_FIRMARE nor TYPE_KERNEL defined, what am I to be?"
+#error "Neither TYPE_FIRMWARE nor TYPE_KERNEL defined, what am I to be?"
 #endif
 
 #if defined(TYPE_FIRMWARE)
@@ -44,6 +44,9 @@ PHDRS {
   attributes 0x70000003;
   text PT_LOAD;
   data PT_LOAD;
+#if defined(TYPE_KERNEL) && defined(TARGET_AERISC)
+  fabric_router_data PT_LOAD;
+#endif
 #if defined(TYPE_FIRMWARE)
   stack PT_GNU_STACK;
 #endif
@@ -51,6 +54,13 @@ PHDRS {
 
 SECTIONS
 {
+#if defined(TYPE_KERNEL) && defined(TARGET_AERISC)
+  .fabric_router_data :
+  {
+    KEEP(*(.fabric_router_data))
+  } > FABRIC_ROUTER_DATA_MEM :fabric_router_data
+#endif
+
   .text TEXT_START : ALIGN(4)
   {
     /* Because TEXT_START might not be the start of a region, we

@@ -52,7 +52,7 @@ inline void notify_all_routers(uint32_t notification) {
             break;
         }
         if (remaining_cores & (0x1 << i)) {
-            uint64_t dest_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][i] << 32) | FABRIC_ROUTER_SYNC_SEM;
+            uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], FABRIC_ROUTER_SYNC_SEM);
             noc_inline_dw_write(dest_addr, notification);
             remaining_cores &= ~(0x1 << i);
         }
@@ -62,7 +62,17 @@ inline void notify_all_routers(uint32_t notification) {
 inline void sync_all_routers() {
     // wait for all device routers to have incremented the sync semaphore.
     // sync_val is equal to number of tt-fabric routers running on a device.
-    while (gk_info->router_sync.val != sync_val);
+    WAYPOINT("NVAL");
+    WATCHER_RING_BUFFER_PUSH(sync_val);
+    int i = 0;
+    while (gk_info->router_sync.val != sync_val) {
+        if (i < 20) {
+            WATCHER_RING_BUFFER_PUSH(gk_info->router_sync.val);
+            i++;
+        }
+        invalidate_l1_cache();
+    }
+    WAYPOINT("DVAL");
 
     // send semaphore increment to all fabric routers on this device.
     // semaphore notifies all other routers that this router has completed
@@ -148,7 +158,7 @@ inline void socket_open(packet_header_t* packet) {
             // If remote receive socket already opened,
             // set send socket state to active and return.
             handle->status_notification_addr =
-                ((uint64_t)packet->session.ack_offset_h << 32) | packet->session.ack_offset_l;
+                get_noc_addr_helper(packet->session.ack_offset_h, packet->session.ack_offset_l);
             set_socket_active(handle);
             DPRINT << "GK: Receiver Available " << (uint32_t)handle->socket_id << ENDL();
             return;
@@ -165,12 +175,12 @@ inline void socket_open(packet_header_t* packet) {
             handle->socket_direction = packet->packet_parameters.socket_parameters.socket_direction;
             handle->routing_plane = packet->packet_parameters.socket_parameters.routing_plane;
             handle->status_notification_addr =
-                ((uint64_t)packet->session.ack_offset_h << 32) | packet->session.ack_offset_l;
+                get_noc_addr_helper(packet->session.ack_offset_h, packet->session.ack_offset_l);
             handle->socket_state = SocketState::OPENING;
 
             if (handle->socket_direction == SOCKET_DIRECTION_RECV) {
                 handle->pull_notification_adddr =
-                    ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                    get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
                 handle->sender_dev_id = packet->routing.src_dev_id;
                 handle->sender_mesh_id = packet->routing.src_mesh_id;
                 handle->rcvr_dev_id = routing_table[0].my_device_id;
@@ -220,7 +230,7 @@ inline void socket_open_for_connect(packet_header_t* packet) {
             handle->socket_type = packet->packet_parameters.socket_parameters.socket_type;
             handle->socket_direction = SOCKET_DIRECTION_SEND;
             handle->pull_notification_adddr =
-                ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
             handle->routing_plane = packet->packet_parameters.socket_parameters.routing_plane;
             handle->socket_state = SocketState::OPENING;
             handle->sender_dev_id = routing_table[0].my_device_id;
@@ -262,7 +272,7 @@ inline void socket_connect(packet_header_t* packet) {
             }
             found_sender = true;
             handle->pull_notification_adddr =
-                ((uint64_t)packet->session.target_offset_h << 32) | packet->session.target_offset_l;
+                get_noc_addr_helper(packet->session.target_offset_h, packet->session.target_offset_l);
             handle->socket_state = SocketState::ACTIVE;
             set_socket_active(handle);
             DPRINT << "GK: Found Send Socket " << (uint32_t)handle->socket_id << ENDL();
@@ -376,9 +386,8 @@ inline void process_pending_socket() {
                 message->packet_header.packet_parameters.socket_parameters.routing_plane = handle->routing_plane;
                 tt_fabric_add_header_checksum((packet_header_t*)&message->packet_header);
 
-                router_addr =
-                    ((uint64_t)get_next_hop_router_noc_xy(&message->packet_header, handle->routing_plane) << 32) |
-                    FVCC_OUT_BUF_START;
+                router_addr = get_noc_addr_helper(
+                    get_next_hop_router_noc_xy(&message->packet_header, handle->routing_plane), FVCC_OUT_BUF_START);
 
                 if (send_gk_message(router_addr, &message->packet_header)) {
                     DPRINT << "GK: Sending Connect to " << (uint32_t)handle->sender_dev_id << ENDL();
@@ -411,8 +420,8 @@ inline void get_routing_tables() {
     if (temp_mask) {
         for (uint32_t i = 0; i < 4; i++) {
             if (temp_mask & 0x1) {
-                uint64_t router_config_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][channel] << 32) |
-                                              eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
+                uint64_t router_config_addr = get_noc_addr_helper(
+                    eth_chan_to_noc_xy[noc_index][channel], eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
                 noc_async_read_one_packet(
                     router_config_addr,
                     (uint32_t)&routing_table[routing_plane],
@@ -433,6 +442,7 @@ void kernel_main() {
     gk_message_pending = 0;
     router_addr = 0;
 
+    WAYPOINT("GATE");
     tt_fabric_init();
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
@@ -444,6 +454,8 @@ void kernel_main() {
     zero_l1_buf((tt_l1_ptr uint32_t*)&gk_info->gk_msg_buf, FVCC_BUF_SIZE_BYTES);
     zero_l1_buf((tt_l1_ptr uint32_t*)socket_info, sizeof(socket_info_t));
 
+    WAYPOINT("BITU");
+
     sync_all_routers();
     get_routing_tables();
     uint64_t start_timestamp = get_timestamp();
@@ -451,23 +463,32 @@ void kernel_main() {
     uint32_t loop_count = 0;
     uint32_t total_messages_procesed = 0;
     volatile ctrl_chan_msg_buf* msg_buf = &gk_info->gk_msg_buf;
+
+    WAYPOINT("GAT0");
+
     while (1) {
         if (!gk_msg_buf_is_empty(msg_buf) && gk_msg_valid(msg_buf)) {
+            invalidate_l1_cache();
             uint32_t msg_index = msg_buf->rdptr.ptr & FVCC_SIZE_MASK;
             chan_request_entry_t* req = (chan_request_entry_t*)msg_buf->msg_buf + msg_index;
             packet_header_t* packet = &req->packet_header;
+            WAYPOINT("GAT1");
             if (tt_fabric_is_header_valid(packet)) {
+                WAYPOINT("GAT2");
                 total_messages_procesed++;
                 DPRINT << "GK: Message Received " << (uint32_t)packet->session.command
                        << " msg num = " << total_messages_procesed << ENDL();
                 if (packet->routing.flags == SYNC) {
                     if (packet->session.command == SOCKET_OPEN) {
                         DPRINT << "GK: Socket Open " << ENDL();
+                        WAYPOINT("GAT3");
                         socket_open(packet);
                     } else if (packet->session.command == SOCKET_CLOSE) {
+                        WAYPOINT("GAT4");
                         socket_close(packet);
                     } else if (packet->session.command == SOCKET_CONNECT) {
                         DPRINT << "GK: Socket Connect " << ENDL();
+                        WAYPOINT("GAT5");
                         socket_connect(packet);
                     }
                 }
@@ -477,6 +498,7 @@ void kernel_main() {
                 gk_msg_buf_advance_rdptr((ctrl_chan_msg_buf*)msg_buf);
                 loop_count = 0;
             } else {
+                WAYPOINT("GAT6");
                 write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
                 return;
             }
@@ -484,6 +506,7 @@ void kernel_main() {
 
         loop_count++;
 
+        WAYPOINT("GAT7");
         process_pending_socket();
 
         if (gk_info->router_sync.val == 0) {
@@ -496,6 +519,7 @@ void kernel_main() {
         }
     }
 
+    WAYPOINT("GAT8");
     DPRINT << "Gatekeeper messages processed " << total_messages_procesed << ENDL();
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);

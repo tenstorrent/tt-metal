@@ -12,6 +12,7 @@
 #include "tt_fabric/hw/inc/routing_table.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_fabric/hw/inc/eth_chan_noc_mapping.h"
+#include "debug/dprint.h"
 
 using namespace tt::tt_fabric;
 
@@ -498,10 +499,12 @@ typedef struct fvc_producer_state {
             packet_words_remaining -= words_available;
             advance_out_rdptr(words_available);
             // issue noc write to noc target of pull request.
-            uint64_t dest_addr = socket_mode == false
-                                     ? ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START
-                                     : ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                           current_packet_header.session.target_offset_l;
+            uint64_t dest_addr =
+                socket_mode == false
+                    ? get_noc_addr_helper(get_next_hop_router_noc_xy(), FABRIC_ROUTER_REQ_QUEUE_START)
+                    : get_noc_addr_helper(
+                          current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
+            DPRINT << "get_next_hop_router_noc_xy() " << HEX() << (get_next_hop_router_noc_xy()) << DEC() << ENDL();
             packet_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 curr_packet_valid = false;
@@ -558,8 +561,9 @@ typedef struct fvc_producer_state {
             if (current_packet_header.routing.flags == FORWARD) {
                 if (current_packet_header.session.command & ASYNC_WR) {
                     if (packet_in_progress == 0) {
-                        packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                      current_packet_header.session.target_offset_l;
+                        packet_dest = get_noc_addr_helper(
+                            current_packet_header.session.target_offset_h,
+                            current_packet_header.session.target_offset_l);
                         packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
                         advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
                         advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
@@ -600,8 +604,8 @@ typedef struct fvc_producer_state {
                 if (current_packet_header.session.command == SOCKET_CLOSE) {
                     words_processed = pull_data_from_fvc_buffer<fvc_mode, true>();
                 } else {
-                    uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
-                                        current_packet_header.session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header.session.target_offset_h, current_packet_header.session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index,
                         NCRISC_AT_CMD_BUF,
@@ -911,15 +915,15 @@ typedef struct fvcc_inbound_state {
                     forward_message(gk_fvcc_buf_addr);
                 } else if (current_packet_header->session.command == ASYNC_WR_RESP) {
                     // Write response. Decrement transaction count for respective transaction id.
-                    uint64_t noc_addr = ((uint64_t)current_packet_header->session.target_offset_h << 32) |
-                                        current_packet_header->session.target_offset_l;
+                    uint64_t noc_addr = get_noc_addr_helper(
+                        current_packet_header->session.target_offset_h, current_packet_header->session.target_offset_l);
                     noc_fast_atomic_increment(
                         noc_index, NCRISC_AT_CMD_BUF, noc_addr, NOC_UNICAST_WRITE_VC, -1, 31, false);
                 }
             }
         } else {
             // Control message is not meant for local chip. Forward to next router enroute to destination.
-            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << 32) | FVCC_OUT_BUF_START;
+            uint64_t dest_addr = ((uint64_t)get_next_hop_router_noc_xy() << NOC_ADDR_COORD_SHIFT) | FVCC_OUT_BUF_START;
             forward_message(dest_addr);
         }
         curr_packet_valid = false;
@@ -1378,13 +1382,18 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
     router_state->scratch[0] = 0xAA;
 
     while (!src_ready or !dest_ready) {
+        invalidate_l1_cache();
         if (router_state->sync_out != 0xAA) {
+            // WAYPOINT("ROW1");
             internal_::eth_send_packet(0, scratch_addr, sync_in_addr, 1);
         } else {
+            WAYPOINT("ROW2");
             dest_ready = true;
         }
 
+        WAYPOINT("ROD1");
         if (!src_ready && router_state->sync_in == 0xAA) {
+            WAYPOINT("ROW3");
             internal_::eth_send_packet(0, sync_in_addr, sync_out_addr, 1);
             src_ready = true;
         }
@@ -1406,6 +1415,7 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
         }
 #endif
     }
+    WAYPOINT("NEXT");
     return true;
 }
 
@@ -1415,6 +1425,7 @@ bool wait_all_src_dest_ready(volatile router_state_t* router_state, uint32_t tim
 // we can process other fvcs and come back to check status of this pull request later.
 inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request) {
     uint64_t noc_addr = dest_addr + offsetof(chan_req_buf, wrptr);
+    DPRINT << "dest_addr " << HEX() << dest_addr << " offsetof " << (uint32_t)offsetof(chan_req_buf, wrptr) << ENDL();
     noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
@@ -1428,8 +1439,9 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
     uint32_t wrptr = local_pull_request->wrptr.ptr;
     noc_addr = dest_addr + offsetof(chan_req_buf, rdptr);
+    DPRINT << "dest_addr " << HEX() << dest_addr << " offsetof " << (uint32_t)offsetof(chan_req_buf, rdptr) << ENDL();
     while (1) {
-        WAYPOINT("LOVE");
+        WAYPOINT("LOVE");  // stuck here
         noc_async_read_one_packet(noc_addr, (uint32_t)(&local_pull_request->rdptr.ptr), 4);
         noc_async_read_barrier();
         if (!req_buf_ptrs_full(wrptr, local_pull_request->rdptr.ptr)) {

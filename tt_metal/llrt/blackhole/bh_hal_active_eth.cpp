@@ -27,6 +27,9 @@
 namespace tt::tt_metal::blackhole {
 
 HalCoreInfoType create_active_eth_mem_map() {
+    // Until we deprecate eth_l1_address_map we duplicate parts of that in dev_mem_map for BH active eth
+    static_assert(MEM_FABRIC_ROUTER_DATA_BASE == eth_l1_mem::address_map::FABRIC_ROUTER_DATA_BASE);
+
     std::vector<DeviceAddr> mem_map_bases;
 
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));

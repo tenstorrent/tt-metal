@@ -90,6 +90,8 @@ SECTIONS
     __ldm_bss_end = .;
   } > REGION_APP_DATA :data
 
+  PROVIDE(fabric_router_data = .data);
+
   .riscv.attributes 0 : { *(.riscv.attributes) } :attributes
 
   /* Stabs debugging sections.  */

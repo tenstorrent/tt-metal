@@ -33,7 +33,7 @@
 #define MEM_L1_SIZE (1464 * 1024)
 
 #define MEM_ETH_BASE 0x0
-// Top 64K is reserved for syseng
+// Top 64K is reserved for syseng ... should this be the entire L1?
 #define MEM_ETH_SIZE (512 * 1024 - 64 * 1024)
 
 #define MEM_LOCAL_BASE 0xFFB00000
@@ -156,6 +156,18 @@
 #define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
 #define MEM_AERISC_STACK_SIZE 1024
 #define MEM_AERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE - MEM_AERISC_STACK_SIZE)
+
+// reserved size from top of L1 pulled from eth_l1_address_map. Duplicated here so its available for memory.ld
+#define MEM_SYSENG_RESERVED_SIZE (64 * 1024)
+#define MEM_ERISC_BARRIER_SIZE 64
+#define MEM_ERISC_APP_ROUTING_INFO_SIZE 48
+#define MEM_ERISC_APP_SYNC_INFO_SIZE (160 + (16 * 8))
+#define MEM_FABRIC_ROUTER_CONFIG_SIZE 2064
+#define MEM_FABRIC_ROUTER_DATA_SIZE 1024
+
+#define MEM_FABRIC_ROUTER_DATA_BASE                                                                        \
+    ((512 * 1024) - (MEM_SYSENG_RESERVED_SIZE + MEM_ERISC_BARRIER_SIZE + MEM_ERISC_APP_ROUTING_INFO_SIZE + \
+                     MEM_ERISC_APP_SYNC_INFO_SIZE + MEM_FABRIC_ROUTER_CONFIG_SIZE + MEM_FABRIC_ROUTER_DATA_SIZE))
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

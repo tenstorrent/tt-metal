@@ -397,6 +397,8 @@ typedef struct test_device {
             for (auto logical_core : connected_logical_cores) {
                 router_logical_cores.push_back(logical_core);
                 router_physical_cores.push_back(device_handle->ethernet_core_from_logical_core(logical_core));
+                std::cout << "router logical core " << logical_core.str() << " router physical core "
+                          << device_handle->ethernet_core_from_logical_core(logical_core).str() << std::endl;
                 router_mask += 0x1 << logical_core.y;
             }
         }
@@ -414,6 +416,7 @@ typedef struct test_device {
             gk_logical_core = {gk_x, gk_y};
             gk_phys_core = device_handle->worker_core_from_logical_core(gk_logical_core);
         }
+        std::cout << "GK physical core " << gk_phys_core.str() << std::endl;
         gk_noc_offset = tt_metal::hal.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
     }
 
@@ -429,6 +432,10 @@ typedef struct test_device {
                 gk_interface_addr,  // 2: gk_message_addr_l
                 gk_noc_offset,      // 3: gk_message_addr_h
             };
+
+            std::cout << "Num routers " << num_routers << " router mask " << router_mask << " GK interface addr "
+                      << std::hex << gk_interface_addr << " GK noc offset " << std::hex << gk_noc_offset << std::dec
+                      << std::endl;
 
             // initialize the semaphore
             tt::llrt::write_hex_vec_to_core(
@@ -639,6 +646,8 @@ typedef struct test_traffic {
                 gk_interface_addr,                     // 7: gk_message_addr_l
                 tx_device->gk_noc_offset,              // 8: gk_message_addr_h
             };
+
+            std::cout << " router_phys_core " << router_phys_core.str() << std::endl;
 
             if (ASYNC_WR & fabric_command) {
                 runtime_args.push_back(tx_to_rx_address_map[i]);

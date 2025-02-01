@@ -401,6 +401,7 @@ void kernel_main() {
     DPRINT << "router config addr " << HEX() << router_config_addr << DEC() << ENDL();
     noc_async_read_one_packet(router_config_addr, routing_table_start_addr, sizeof(fabric_router_l1_config_t));
     noc_async_read_barrier();
+    WAYPOINT("TX0");
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
@@ -427,6 +428,8 @@ void kernel_main() {
     test_producer.init(data_buffer_start_addr, data_buffer_size_words, 0x0);
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
+    WAYPOINT("TX1");
+
     uint32_t temp = max_packet_size_words;
     max_packet_size_mask = 0;
     temp >>= 1;
@@ -442,7 +445,11 @@ void kernel_main() {
 
     // wait till test sends start signal. This is set by test
     // once tt_fabric kernels have been launched on all the test devices.
-    while (*(tt_l1_ptr volatile uint32_t*)signal_address == 0);
+    while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0) {
+        invalidate_l1_cache();
+    }
+
+    WAYPOINT("TX2");
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
@@ -473,11 +480,13 @@ void kernel_main() {
 #endif
 
         bool all_packets_initialized = test_buffer_handler();
+        WAYPOINT("TX3");
 
         if (test_producer.get_curr_packet_valid()) {
             curr_packet_size =
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
+            WAYPOINT("TX4");
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {
@@ -493,19 +502,23 @@ void kernel_main() {
                 packet_count++;
             }
         } else if (test_producer.packet_corrupted) {
+            WAYPOINT("TX5");
             DPRINT << "Packet Header Corrupted: packet " << packet_count
                    << " Addr: " << test_producer.get_local_buffer_read_addr() << ENDL();
             break;
         } else if (fvcc_test_producer.get_curr_packet_valid()) {
+            WAYPOINT("TX6");
             fvcc_test_producer.fvcc_handler<FVC_MODE_ENDPOINT>();
 #ifdef CHECK_TIMEOUT
             progress_timestamp = get_timestamp_32b();
 #endif
         } else if (fvcc_test_producer.packet_corrupted) {
+            WAYPOINT("TX7");
             DPRINT << "Packet Header Corrupted: packet " << packet_count
                    << " Addr: " << fvcc_test_producer.get_local_buffer_read_addr() << ENDL();
             break;
         } else if (all_packets_initialized) {
+            WAYPOINT("TX8");
             DPRINT << "all packets done" << ENDL();
             break;
         }

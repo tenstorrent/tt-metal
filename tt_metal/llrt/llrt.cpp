@@ -140,14 +140,16 @@ bool test_load_write_read_risc_binary(
 
     uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
 
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
+    log_info(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr = tt::tt_metal::hal.relocate_dev_addr(addr, local_init_addr);
+        std::cout << "Addr to potentially relocate " << std::hex << addr << " relo address " << relo_addr << std::dec
+                  << std::endl;
 
         tt::Cluster::instance().write_core(&*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
     });
 
-    log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
+    log_info(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
     // if (std::getenv("TT_METAL_KERNEL_READBACK_ENABLE") != nullptr) {
     // if (core.y == 1) {

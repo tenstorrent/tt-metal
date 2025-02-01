@@ -135,9 +135,9 @@ inline void fabric_socket_close(socket_handle_t* socket_handle) {
     for (uint32_t i = 0; i < sizeof(pull_request_t) / 4; i++) {
         dst[i] = src[i];
     }
-    uint64_t dest_addr =
-        ((uint64_t)get_next_hop_router_noc_xy(socket_handle->routing_plane, dst_mesh_id, dst_dev_id) << 32) |
-        FABRIC_ROUTER_REQ_QUEUE_START;
+    uint64_t dest_addr = get_noc_addr_helper(
+        get_next_hop_router_noc_xy(socket_handle->routing_plane, dst_mesh_id, dst_dev_id),
+        FABRIC_ROUTER_REQ_QUEUE_START);
     tt_fabric_send_pull_request(dest_addr, (volatile local_pull_request_t*)&client_interface->local_pull_request);
 }
 

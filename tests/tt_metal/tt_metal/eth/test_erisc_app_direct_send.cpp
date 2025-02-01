@@ -263,6 +263,129 @@ bool send_over_eth(
     return pass;
 }
 
+bool eth_handshake_kernels(
+    DispatchFixture* fixture,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
+    const uint32_t sync_in_addr,
+    const uint32_t sync_out_addr,
+    const uint32_t scratch_addr,
+    const CoreCoord& eth_sender_core,
+    const CoreCoord& eth_receiver_core) {
+    bool pass = true;
+    log_debug(
+        tt::LogTest,
+        "Handshaking device {} eth core {} to device {} eth core {} at addrs {} and {}",
+        sender_device->id(),
+        eth_sender_core.str(),
+        receiver_device->id(),
+        eth_receiver_core.str(),
+        sync_in_addr,
+        sync_out_addr);
+
+    // Zero out eth l1
+    uint32_t unreserved_size_bytes = tt_metal::hal.get_dev_size(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+    uint32_t unreserved_base = tt_metal::hal.get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    // Clear expected value at ethernet L1 address
+    std::vector<uint32_t> all_zeros(unreserved_size_bytes / sizeof(uint32_t), 0);
+    llrt::write_hex_vec_to_core(
+        sender_device->id(),
+        sender_device->ethernet_core_from_logical_core(eth_sender_core),
+        all_zeros,
+        unreserved_base);
+
+    llrt::write_hex_vec_to_core(
+        receiver_device->id(),
+        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        all_zeros,
+        unreserved_base);
+
+    tt::Cluster::instance().l1_barrier(sender_device->id());
+    tt::Cluster::instance().l1_barrier(receiver_device->id());
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Sender Device
+    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::Program sender_program = tt_metal::Program();
+
+    auto eth_sender_kernel = tt_metal::CreateKernel(
+        sender_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/handshake.cpp",
+        eth_sender_core,
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+    constexpr uint32_t handshake_value = 0xAA;
+    std::vector<uint32_t> runtime_args = {handshake_value, sync_in_addr, sync_out_addr, scratch_addr};
+
+    tt_metal::SetRuntimeArgs(sender_program, eth_sender_kernel, eth_sender_core, runtime_args);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Receiver Device
+    ////////////////////////////////////////////////////////////////////////////
+    tt_metal::Program receiver_program = tt_metal::Program();
+
+    auto eth_receiver_kernel = tt_metal::CreateKernel(
+        receiver_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/handshake.cpp",
+        eth_receiver_core,
+        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+    tt_metal::SetRuntimeArgs(receiver_program, eth_receiver_kernel, eth_receiver_core, runtime_args);
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Execute Programs
+    ////////////////////////////////////////////////////////////////////////////
+    std::thread t1;
+    std::thread t2;
+    if (fixture->IsSlowDispatch()) {
+        t1 = std::thread([&]() { fixture->RunProgram(sender_device, sender_program); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_device, receiver_program); });
+    } else {
+        fixture->RunProgram(sender_device, sender_program, true);
+        fixture->RunProgram(receiver_device, receiver_program, true);
+    }
+
+    fixture->FinishCommands(sender_device);
+    fixture->FinishCommands(receiver_device);
+
+    if (fixture->IsSlowDispatch()) {
+        t1.join();
+        t2.join();
+    }
+
+    auto sender_sync_in_val = llrt::read_hex_vec_from_core(
+        sender_device->id(),
+        sender_device->ethernet_core_from_logical_core(eth_sender_core),
+        sync_in_addr,
+        sizeof(uint32_t));
+    auto sender_sync_out_val = llrt::read_hex_vec_from_core(
+        sender_device->id(),
+        sender_device->ethernet_core_from_logical_core(eth_sender_core),
+        sync_out_addr,
+        sizeof(uint32_t));
+
+    auto rcvr_sync_in_val = llrt::read_hex_vec_from_core(
+        receiver_device->id(),
+        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        sync_in_addr,
+        sizeof(uint32_t));
+    auto rcvr_sync_out_val = llrt::read_hex_vec_from_core(
+        receiver_device->id(),
+        receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+        sync_out_addr,
+        sizeof(uint32_t));
+
+    pass &= (sender_sync_in_val[0] == handshake_value);
+    pass &= (sender_sync_out_val[0] == handshake_value);
+    pass &= (rcvr_sync_in_val[0] == handshake_value);
+    pass &= (rcvr_sync_out_val[0] == handshake_value);
+
+    return pass;
+}
+
 }  // namespace unit_tests::erisc::direct_send
 
 TEST_F(N300DeviceFixture, ActiveEthSingleCoreDirectSendChip0ToChip1) {
@@ -893,6 +1016,44 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConne
                     1000 * WORD_SIZE,
                     src_eth_l1_byte_address,
                     dst_eth_l1_byte_address,
+                    sender_core,
+                    receiver_core));
+            }
+        }
+    }
+}
+
+TEST_F(CommandQueueMultiDeviceProgramFixture, SpoofFabricHandshake) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    const size_t sync_in_addr =
+        hal.get_dev_size(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t sync_out_addr = sync_in_addr + hal.get_alignment(HalMemType::L1);
+    const size_t scratch_addr = sync_out_addr + hal.get_alignment(HalMemType::L1);
+    for (const auto& sender_device : devices_) {
+        for (const auto& receiver_device : devices_) {
+            if (sender_device->id() >= receiver_device->id()) {
+                continue;
+            }
+            for (const auto& sender_core : sender_device->get_active_ethernet_cores(true)) {
+                if (not tt::Cluster::instance().is_ethernet_link_up(sender_device->id(), sender_core)) {
+                    std::cout << "Ethernet link " << sender_core.str() << " from device " << sender_device->id()
+                              << " is not up" << std::endl;
+                    continue;
+                }
+                auto [device_id, receiver_core] = sender_device->get_connected_ethernet_core(sender_core);
+                if (receiver_device->id() != device_id) {
+                    continue;
+                }
+                std::cout << " Sender device " << sender_device->id() << " sender core " << sender_core.str()
+                          << " Receiver device " << receiver_device->id() << " receiver core " << receiver_core.str()
+                          << std::endl;
+                ASSERT_TRUE(unit_tests::erisc::direct_send::eth_handshake_kernels(
+                    static_cast<DispatchFixture*>(this),
+                    sender_device,
+                    receiver_device,
+                    sync_in_addr,
+                    sync_out_addr,
+                    scratch_addr,
                     sender_core,
                     receiver_core));
             }

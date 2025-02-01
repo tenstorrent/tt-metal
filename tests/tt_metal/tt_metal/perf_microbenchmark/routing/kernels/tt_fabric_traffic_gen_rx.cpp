@@ -64,6 +64,7 @@ void kernel_main() {
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
 
+    WAYPOINT("RX0");
     if constexpr (ASYNC_WR & test_command) {
         uint32_t packet_rnd_seed;
         uint64_t curr_packet_words, curr_payload_words, processed_packet_words_src;
@@ -128,7 +129,9 @@ void kernel_main() {
             }
 
             // read out the data
+            WAYPOINT("RX1");
             while (processed_packet_words_src < total_data_words) {
+                WAYPOINT("RX2");
                 if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
                     packet_rnd_seed = prng_next(packet_rnd_seed);
 
@@ -139,6 +142,7 @@ void kernel_main() {
                     curr_packet_words = max_packet_size_words;
                 }
 
+                WAYPOINT("RX3");
                 curr_payload_words = curr_packet_words - PACKET_HEADER_SIZE_WORDS;
 
                 // check for wrap
@@ -188,6 +192,7 @@ void kernel_main() {
             }
         }
     } else if constexpr (ATOMIC_INC == test_command) {
+        WAYPOINT("RX10");
         poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
         // TODO: read in wrap boundary as well from compile args
         num_packets = num_producers * ((total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS);

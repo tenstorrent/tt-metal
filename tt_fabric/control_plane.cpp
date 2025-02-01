@@ -227,6 +227,8 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
             for (const auto& [logical_connected_chip_id, edge] : intra_mesh_connectivity[mesh_id][chip_id]) {
                 const auto& physical_connected_chip_id =
                     this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][logical_connected_chip_id];
+                std::cout << "Map 0 fails: " << logical_connected_chip_id << " " << physical_connected_chip_id << " "
+                          << connected_chips_and_eth_cores.size() << std::endl;
                 const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
                 TT_FATAL(
                     connected_eth_cores.size() == edge.connected_chip_ids.size(),
@@ -238,6 +240,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 for (const auto& eth_core : connected_eth_cores) {
                     // There could be an optimization here to create entry for both chips here, assuming links are
                     // bidirectional
+                    std::cout << "Map here eth core is " << eth_core.str() << std::endl;
                     this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
                         .push_back(tt::Cluster::instance()
                                        .get_soc_desc(physical_chip_id)
@@ -257,6 +260,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                     const auto& physical_connected_chip_id =
                         this->logical_mesh_chip_id_to_physical_chip_id_mapping_[connected_mesh_id]
                                                                                [logical_connected_chip_id];
+                    std::cout << "Map 1 fails" << std::endl;
                     const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
                     for (const auto& eth_core : connected_eth_cores) {
                         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
@@ -340,6 +344,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
                                 src_chan_id;
                         } else {
+                            std::cout << "Map 3 fails" << std::endl;
                             const auto& eth_chans_in_target_direction =
                                 this->router_port_directions_to_physical_eth_chan_map_[mesh_id][src_chip_id].at(
                                     target_direction);
@@ -393,6 +398,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                             this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
                                 src_chan_id;
                         } else {
+                            std::cout << "Map 4 fails" << std::endl;
                             const auto& eth_chans_in_target_direction =
                                 this->router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id].at(
                                     target_direction);
@@ -436,24 +442,28 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
             }
 
             if (chip_eth_chans_map.find(RoutingDirection::N) != chip_eth_chans_map.end()) {
+                std::cout << "Map 5 fails" << std::endl;
                 fabric_router_config.port_direction.north =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::N));
             } else {
                 fabric_router_config.port_direction.north = eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::S) != chip_eth_chans_map.end()) {
+                std::cout << "Map 6 fails" << std::endl;
                 fabric_router_config.port_direction.south =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::S));
             } else {
                 fabric_router_config.port_direction.south = eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::E) != chip_eth_chans_map.end()) {
+                std::cout << "Map 7 fails" << std::endl;
                 fabric_router_config.port_direction.east =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::E));
             } else {
                 fabric_router_config.port_direction.east = eth_chan_magic_values::INVALID_DIRECTION;
             }
             if (chip_eth_chans_map.find(RoutingDirection::W) != chip_eth_chans_map.end()) {
+                std::cout << "Map 8 fails" << std::endl;
                 fabric_router_config.port_direction.west =
                     this->get_downstream_eth_chan_id(eth_chan, chip_eth_chans_map.at(RoutingDirection::W));
             } else {
@@ -506,10 +516,12 @@ std::tuple<mesh_id_t, chip_id_t, chan_id_t> ControlPlane::get_connected_mesh_chi
     mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const {
     // TODO: simplify this and maybe have this functionality in ControlPlane
     auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
+    std::cout << "Map 9 fails" << std::endl;
     auto eth_core = tt::Cluster::instance().get_soc_desc(physical_chip_id).chan_to_logical_eth_core_map.at(chan_id);
     auto [connected_physical_chip_id, connected_eth_core] =
         tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(physical_chip_id, eth_core));
 
+    std::cout << "Map 10 fails" << std::endl;
     auto [connected_mesh_id, connected_chip_id] =
         this->get_mesh_chip_id_from_physical_chip_id(connected_physical_chip_id);
     auto connected_chan_id = tt::Cluster::instance()

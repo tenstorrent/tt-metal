@@ -16,17 +16,24 @@ struct address_map {
     // SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE)
     static constexpr std::int32_t SYSENG_RESERVED_SIZE = 64 * 1024;
     static constexpr std::int32_t ERISC_BARRIER_SIZE = 64;
-    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
+    static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;  // we don't need this in BH
     static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
-    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;  // aligning this to L1_ALIGNMENT
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE =
+        160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;  // won't be needed with Fabric 288
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE =
+        2064;  // This stores Fabric routing tables (aligning this to L1_ALIGNMENT)
+    static constexpr std::int32_t FABRIC_ROUTER_DATA_SIZE =
+        1024;  // size of all eth/noc handshake globals in tt_fabric_router + some padding
+
+    // 69,024
 
     static constexpr std::int32_t MAX_SIZE = (512 * 1024) - SYSENG_RESERVED_SIZE - ERISC_BARRIER_SIZE -
                                              ERISC_APP_ROUTING_INFO_SIZE - ERISC_APP_SYNC_INFO_SIZE -
-                                             FABRIC_ROUTER_CONFIG_SIZE;
+                                             FABRIC_ROUTER_CONFIG_SIZE - FABRIC_ROUTER_DATA_SIZE;
     static constexpr std::int32_t MAX_L1_LOADING_SIZE = MAX_SIZE;
 
-    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = MAX_SIZE;
+    static constexpr std::int32_t FABRIC_ROUTER_DATA_BASE = MAX_SIZE;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = FABRIC_ROUTER_DATA_BASE + FABRIC_ROUTER_DATA_SIZE;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE;
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
     static constexpr std::uint32_t ERISC_BARRIER_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;

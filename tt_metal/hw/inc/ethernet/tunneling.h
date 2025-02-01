@@ -8,6 +8,7 @@
 #include "erisc.h"
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
+#include "debug/waypoint.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
@@ -68,10 +69,12 @@ FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+    WAYPOINT("TXQW");
     while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
         risc_context_switch();
     }
+    WAYPOINT("TXQD");
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
