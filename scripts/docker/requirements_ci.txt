@@ -11,3 +11,9 @@ python3-dev
 cargo
 bc
 jq
+libfmt-dev
+libyaml-cpp-dev
+pybind11-dev
+nlohmann-json3-dev
+libgtest-dev
+libboost-all-dev
