@@ -73,6 +73,15 @@ jobs:
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
           fi
 
+  debug:
+    name: "Debug the outputs"
+    needs: check-docker-images
+    run: |
+      echo "ci-build-exists=${{ needs.check-docker-images.outputs.ci-build-exists }}"
+      echo "ci-build-tag=${{ needs.check-docker-images.outputs.ci-build-tag }}"
+      echo "ci-test-exists=${{ needs.check-docker-images.outputs.ci-test-exists }}"
+      echo "ci-test-tag=${{ needs.check-docker-images.outputs.ci-test-tag }}"
+
   build-docker-image:
     name: "🐳️ Build ${{ inputs.os }} image"
     needs: check-docker-images
