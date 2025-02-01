@@ -92,6 +92,9 @@ tt_metal/hostdevcommon/profiler_common.h @mo-tenstorrent
 docs/source/performance_measurement_tools/profiler.rst @mo-tenstorrent
 tt-metal/tt_metal/programming_examples/profiler @mo-tenstorrent
 
+# Metalium - flatbuffer schemas
+tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @omilyutin-tt
+
 # test scripts
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tests/scripts/run_performance.sh @tenstorrent/metalium-developers-infra
