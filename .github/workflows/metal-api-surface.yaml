@@ -31,6 +31,7 @@ jobs:
         run: |
           output=$(python3 compute_public_api_surface.py)
           echo "result=$output" >> $GITHUB_ENV
+          python3 compute_public_api_surface.py
 
       - name: Parse JSON output
         id: parse_json
