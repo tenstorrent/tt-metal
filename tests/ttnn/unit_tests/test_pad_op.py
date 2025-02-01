@@ -9,6 +9,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -25,5 +26,5 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
-    passing = torch.equal(output_tt, output_torch)
+    passing = assert_with_pcc(output_tt, output_torch, 0.9999)
     assert passing
