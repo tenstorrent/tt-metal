@@ -41,6 +41,8 @@ public:
     tt::tt_metal::Tensor &get_grad();
     bool get_requires_grad() const;
     const std::optional<NodeId> &get_node() const;
+    const ttnn::SimpleShape &get_shape() const;
+    uint32_t rank() const;
 
     void backward(bool retain_graph = false);
 
