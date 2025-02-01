@@ -85,7 +85,7 @@ jobs:
         env:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
-          ./build/test/tt_metal/test_add_two_ints
+          ./build/test/tt_metal/unit_tests_device
 
   check_images:
     runs-on: ubuntu-latest
@@ -97,21 +97,16 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Compute BUILD_TAG
-        id: build_tag
+      - name: Compute tags
+        id: compute-tags
         run: |
-          set -x
           BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
-
-      - name: Compute TEST_TAG
-        id: test_tag
-        run: |
           TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
 
-      - name: Query BUILD_IMAGE_EXISTS
-        id: build_image_exists
+      - name: Query images exist
+        id: images-exist
         run: |
           BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
           if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
@@ -120,9 +115,6 @@ jobs:
             echo "BUILD_IMAGE_EXISTS=false" >> $GITHUB_ENV
           fi
 
-      - name: Query TEST_IMAGE_EXISTS
-        id: test_image_exists
-        run: |
           TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
           if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
             echo "TEST_IMAGE_EXISTS=true" >> $GITHUB_ENV
