@@ -56,7 +56,10 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work
       options: >
         --device /dev/tenstorrent
-        -w /work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       #- name: Detect and Set Correct User
       #  shell: bash
