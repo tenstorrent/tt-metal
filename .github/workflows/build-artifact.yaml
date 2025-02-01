@@ -113,7 +113,7 @@ jobs:
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
     # needs: build-docker-image
-    needs: ${{ needs.bild-docker-image.result == 'success' || needs.check-docker-images.outputs.image-exists == 'true' }}
+    # needs: ${{ needs.bild-docker-image.result == 'success' || needs.check-docker-images.outputs.image-exists == 'true' }}
     timeout-minutes: 30
     env:
       SILENT: 0
