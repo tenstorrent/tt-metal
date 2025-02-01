@@ -213,9 +213,12 @@ install() {
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 if [[ "$VERSION" = "22.04" ]]; then
+	            echo "Detected Ubuntu 22.04, thus install g++-12"
 		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
-		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+		    update-alternatives --set gcc /usr/bin/gcc-12
+		    update-alternatives --set g++ /usr/bin/g++-12
                 fi
                 ;;
             baremetal)
@@ -223,9 +226,12 @@ install() {
                 install_llvm
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 if [[ "$VERSION" = "22.04" ]]; then
+	            echo "Detected Ubuntu 22.04, thus install g++-12"
 		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
-		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
-		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+		    update-alternatives --set gcc /usr/bin/gcc-12
+		    update-alternatives --set g++ /usr/bin/g++-12
                 fi
                 configure_hugepages
                 ;;
