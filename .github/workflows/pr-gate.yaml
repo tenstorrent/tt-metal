@@ -73,6 +73,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_any
+          path: /work/
       - name: Inspect post DL
         run: |
           set -x
