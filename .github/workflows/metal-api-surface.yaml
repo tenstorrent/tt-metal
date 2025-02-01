@@ -39,15 +39,19 @@ jobs:
           num_types=$(jq -r '.num_types' raw_output.json)
           num_methods=$(jq -r '.num_methods' raw_output.json)
 
-          jq -n --arg date "$date" --arg num_files "$num_files" --arg num_types "$num_types" --arg num_methods "$num_methods" \
-            '{"text": "*Public API Surface Report* 📊\n📅 *Date:* \($date)\n📂 *Files:* \($num_files)\n🔠 *Types:* \($num_types)\n🔧 *Methods:* \($num_methods)"}' > slack_payload.json
-
-          cat slack_payload.json  # Debugging step to verify correct JSON
+          echo "DATE=$date" >> $GITHUB_ENV
+          echo "NUM_FILES=$num_files" >> $GITHUB_ENV
+          echo "NUM_TYPES=$num_types" >> $GITHUB_ENV
+          echo "NUM_METHODS=$num_methods" >> $GITHUB_ENV
 
       - name: Send Slack message to a channel
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          payload-file-path: "./slack_payload.json"
+          payload: |
+            {
+              "text": " date: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
+              "owner": "${{ env.SLACK_CHANNEL_ID }}"
+            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_CHANNEL_ID: C08BAGE4410
