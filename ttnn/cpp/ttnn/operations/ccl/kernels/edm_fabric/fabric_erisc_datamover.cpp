@@ -578,7 +578,6 @@ void receiver_forward_packet(
     volatile tt::fabric::PacketHeader const &packet_header = *packet_start;
     ASSERT(tt::fabric::is_valid(const_cast<tt::fabric::PacketHeader const &>(packet_header)));
     auto forward_status = get_packet_local_forward_type(packet_header);
-
     switch (forward_status) {
         case PACKET_FORWARD_LOCAL_ONLY: {
             execute_chip_unicast_to_local_chip(packet_start);
@@ -786,7 +785,7 @@ void run_receiver_channel_state_machine_step(
             bool got_payload = local_receiver_channel.eth_bytes_are_available_on_channel(receiver_buffer_index);
             if (got_payload) {
                 bool can_ack = !eth_txq_is_busy();
-                if (eth_txq_is_busy()) {
+                if (!can_ack) {
                     DPRINT << "EDMR eth_txq_is_busy\n";
                 }
                 if (can_ack) {
