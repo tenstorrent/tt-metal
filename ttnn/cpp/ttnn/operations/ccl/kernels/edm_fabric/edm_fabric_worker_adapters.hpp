@@ -195,11 +195,6 @@ struct WorkerToFabricEdmSender {
         noc_inline_dw_write(remote_buffer_index_addr, *this->buffer_slot_wrptr_ptr);
 
         // Need to wait for the ack from edm
-        // We wait min because there is currently a race with worker <-> EDM teardown
-        // that will cause this to sometimes reach a value of 2 (because of the race)
-        // A proper fix requires for example adding an additional teardown semaphore on the
-        // worker side that the EDM writes to to acknowledge teardown. The problem here
-        // is that the flow control aliases the teardown.
         noc_semaphore_wait(this->worker_teardown_addr, 1);
 
         noc_async_write_barrier();
