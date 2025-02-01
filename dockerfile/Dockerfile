@@ -16,8 +16,6 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 
 FROM base AS ci-build
 
-ARG UBUNTU_VERSION
-
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode build
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
@@ -70,7 +68,7 @@ COPY /scripts /opt/tt_metal_infra/scripts
 
 # Install extra ci apt requirements
 RUN apt-get -y update \
-    && xargs -a /opt/tt_metal_infra/scripts/docker/requirements-${UBUNTU_VERSION}.txt apt-get install -y --no-install-recommends \
+    && xargs -a /opt/tt_metal_infra/scripts/docker/requirements_ci.txt apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
@@ -104,7 +102,7 @@ FROM ci-test AS dev
 
 # Need this to build GDB
 RUN apt-get -y update \
-    && apt-get install libmpfr-dev \
+    && apt-get install -y libmpfr-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the gdb that is compatible with clang-17
