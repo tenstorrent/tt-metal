@@ -55,8 +55,10 @@ jobs:
           BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
           if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
             # echo "ci-build-exists=true" >> $GITHUB_OUTPUT
+            echo "no-op"
           else
             # echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+            echo "no-op"
           fi
 
           TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
