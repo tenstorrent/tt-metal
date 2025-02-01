@@ -58,7 +58,7 @@ jobs:
     runs-on:
       - in-service
       - cloud-virtual-machine
-      # - BH
+      - BH
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:dev-afuller-tests-shift-left
       env:
