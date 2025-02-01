@@ -36,14 +36,14 @@ on:
 #  # cancel-in-progress: true
 
 jobs:
-  #build-artifact:
-  #  if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-  #  uses: ./.github/workflows/build-artifact.yaml
-  #  with:
-  #    os: "ubuntu-22.04-amd64"
+  build-artifact:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    uses: ./.github/workflows/build-artifact.yaml
+    with:
+      os: "ubuntu-22.04-amd64"
 
   metal-tests:
-    # needs: build-artifact
+    needs: build-artifact
     runs-on:
       - in-service
       - cloud-virtual-machine
@@ -53,32 +53,13 @@ jobs:
       env:
         ENV_VAR: foo
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}/docker-job:/work # subdir to workaround https://github.com/actions/runner/issues/691
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      #- name: Detect and Set Correct User
-      #  shell: bash
-      #  run: |
-      #    set -euo pipefail
-      #    set -x
-      #    # Detect the owner of the mounted /work directory
-      #    MOUNT_USER=$(stat -c "%u" /work)
-      #    MOUNT_GROUP=$(stat -c "%g" /work)
-
-      #    echo "Detected user/group: ${MOUNT_USER}:${MOUNT_GROUP}"
-
-      #    # If the mount user is not root, create a matching user in the container
-      #    if [ "$MOUNT_USER" -ne 0 ]; then
-      #      groupadd -g "$MOUNT_GROUP" runnergroup || true
-      #      useradd -m -u "$MOUNT_USER" -g "$MOUNT_GROUP" runner || true
-      #    fi
-
-      #    # Adjust permissions and switch user
-      #    # chown -R "$MOUNT_USER:$MOUNT_GROUP" /work
       - name: Inspect
         shell: bash
         run: |
@@ -89,9 +70,13 @@ jobs:
           touch foo
           ls -al
 
-      #- uses: actions/download-artifact@v4
-      #  if: ${{ inputs.is_profiler == 'false' }}
-      #    with:
-      #  name: TTMetal_build_any
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_any
+      - name: Inspect post DL
+        run: |
+          set -x
+          pwd
+          ls -al
       #- name: Check for dockerenv file
       #  run: (ls /.dockerenv && echo Found dockerenv) || (echo No dockerenv)
