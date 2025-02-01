@@ -119,14 +119,34 @@ inline auto run_with_autoformat(
         cq_id);
 }
 
-template <class Callable, class OutputType = Tensors>
-void launch_op(
-    Callable&& op_func,
+template <class OutputType = Tensors>
+__attribute__((noinline)) void launch_op_func(
+    const std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
     const OptionalTensors optional_output_tensors = {},
     bool enable_autoformat_device = true);
+
+/*
+ */
+template <class F, class OutputType>
+void launch_op(
+    F&& op_func,
+    const Tensors input_tensors,
+    OutputType& output_tensors,
+    const OptionalConstTensors optional_input_tensors = {},
+    const OptionalTensors optional_output_tensors = {},
+    bool enable_autoformat_device = true) {
+    using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
+    launch_op_func(
+        FuncType(std::forward<F>(op_func)),
+        input_tensors,
+        output_tensors,
+        optional_input_tensors,
+        optional_output_tensors,
+        enable_autoformat_device);
+}
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
@@ -147,5 +167,3 @@ IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& op
 }  // namespace operation
 
 }  // namespace tt::tt_metal
-
-#include "run_operation_inl.hpp"
