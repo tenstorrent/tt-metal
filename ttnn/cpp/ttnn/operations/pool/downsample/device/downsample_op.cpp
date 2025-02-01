@@ -39,7 +39,7 @@ std::vector<TensorSpec> Downsample::compute_output_specs(const std::vector<Tenso
     uint32_t output_height = img_batch_size * ceil((double)img_height / (double)img_stride_h) *
                              ceil((double)img_width / (double)img_stride_w);
     uint32_t output_width = input_tensor.get_padded_shape()[3];
-    auto output_shape = SimpleShape({1, 1, output_height, output_width});
+    auto output_shape = Shape({1, 1, output_height, output_width});
 
     auto [num_cores_height_sliced, num_cores_width_sliced] = detail::get_num_cores_height_width_sliced(
         input_tensor.shard_spec().value().grid,

@@ -72,7 +72,7 @@ std::vector<ttnn::TensorSpec> RepeatAndInterleaveEltwiseMul::compute_output_spec
     const auto& input_tensor_b = input_tensors.at(1);
     const auto shape_a = input_tensor_a.get_padded_shape();
     const auto shape_b = input_tensor_b.get_padded_shape();
-    SimpleShape output_shape({shape_a[0], shape_a[1], shape_a[2], tt::constants::TILE_WIDTH * HIDDEN_SIZE});
+    Shape output_shape({shape_a[0], shape_a[1], shape_a[2], tt::constants::TILE_WIDTH * HIDDEN_SIZE});
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 

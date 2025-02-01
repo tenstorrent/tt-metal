@@ -20,7 +20,7 @@ using MassagedUntilize = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedUntilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
-    auto original_shape = std::make_shared<std::pair<ttnn::SimpleShape, ttnn::SimpleShape>>();
+    auto original_shape = std::make_shared<std::pair<ttnn::Shape, ttnn::Shape>>();
     return MassagedUntilize(MassagedUntilizeParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
             return input_tensor.get_logical_shape().rank() > 4;

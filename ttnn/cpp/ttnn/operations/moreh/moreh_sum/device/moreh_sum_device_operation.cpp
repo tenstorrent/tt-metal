@@ -80,7 +80,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         operation_attributes.dim,
         operation_attributes.keepdim);
 
-    ttnn::SimpleShape output_shape = input_shape;
+    ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keepdim) {
         // e.g. (2, 64, 64) with dim 0 to be (1, 64, 64)
         output_shape[operation_attributes.dim] = 1;
@@ -99,7 +99,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
             shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : (input_shape[i]));
         }
 
-        output_shape = ttnn::SimpleShape(std::move(shape));
+        output_shape = ttnn::Shape(std::move(shape));
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);

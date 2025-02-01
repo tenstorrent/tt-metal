@@ -76,7 +76,7 @@ std::vector<TensorSpec> Sampling::compute_output_specs(
 
     const auto& input_values_tensor = input_tensors[0];
     auto input_shape = input_values_tensor.get_logical_shape();
-    ttnn::SimpleShape output_shape({1, 1, 1, input_shape[2]});
+    ttnn::Shape output_shape({1, 1, 1, input_shape[2]});
 
     return {TensorSpec(
         output_shape,
