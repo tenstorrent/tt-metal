@@ -157,6 +157,10 @@ prep_ubuntu_runtime()
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
+    echo "deb http://apt.llvm.org/$UBUNTU_CODENAME/ llvm-toolchain-$UBUNTU_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+    apt-get update
 }
 
 prep_ubuntu_build()
@@ -217,7 +221,7 @@ install() {
                 DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 if [[ "$VERSION" = "22.04" ]]; then
 	            echo "Detected Ubuntu 22.04, thus install g++-12"
-		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
+		    apt-get install -y --no-install-recommends g++-12 gcc-12
 		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
 		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 		    update-alternatives --set gcc /usr/bin/gcc-12
