@@ -804,7 +804,7 @@ void insert_write_packed_payloads(
             tt::align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
-        calculator.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+        calculator.add_dispatch_write_packed<PackedSubCmd>(
             num_sub_cmds_in_cmd, sub_cmd_sizeB, packed_write_max_unicast_sub_cmds);
     }
 }
