@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape output_shape);
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
@@ -165,7 +165,7 @@ enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 // provided, the shard shape will be inferred from the tensor shape and the
 // shard strategy.
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,

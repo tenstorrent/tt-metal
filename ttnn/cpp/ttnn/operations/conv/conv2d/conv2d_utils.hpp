@@ -70,7 +70,7 @@ uint32_t get_num_cores_nhw_from_parallel_config(const sliding_window::ParallelCo
 uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::ParallelConfig& pconfig);
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
-    const ttnn::SimpleShape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
+    const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
 OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
@@ -110,7 +110,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     T* device);
 
 template <typename T>
-static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
+static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,

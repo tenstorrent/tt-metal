@@ -18,7 +18,7 @@ std::tuple<uint32_t, float, bool> get_floored_p_and_decimal_and_p_is_negative(fl
     return std::make_tuple(static_cast<uint32_t>(floored_p), decimal, p_is_negative);
 }
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -30,7 +30,7 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& s
     }
 }
 
-ttnn::SimpleShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
         return output_grad.get_logical_shape();

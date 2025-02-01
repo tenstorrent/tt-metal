@@ -725,6 +725,9 @@ def test_inplace_bf4b_bf8b(a_shape, b_shape, input_dtype, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
+    torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
+
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
@@ -804,7 +807,7 @@ def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
     "ttnn_fn",
     binary_inplace_fns,
 )
-def test_inplace_binary_scalar_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
+def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
     torch.manual_seed(0)
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
 
@@ -868,3 +871,30 @@ def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
     output_tensor = ttnn.to_torch(input_tensor_a)
     assert output_tensor.shape == torch_output_tensor.shape
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape, out_shape",
+    (
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 32, 32]), torch.Size([5, 3, 1, 32])),
+        (torch.Size([1, 1, 1, 1]), torch.Size([5, 3, 128, 64]), torch.Size([5, 3, 1, 64])),
+        (torch.Size([5, 2, 64, 1]), torch.Size([1, 3, 1, 128]), torch.Size([5, 3, 64, 128])),
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    binary_fns,
+)
+def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, device):
+    torch.manual_seed(0)
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+
+    _, input_tensor_a = rand_bf16_gen(a_shape, device)
+    _, input_tensor_b = rand_bf16_gen(b_shape, device)
+    _, out_tt = rand_bf16_gen(out_shape, device)
+
+    with pytest.raises(
+        RuntimeError, match=r"Shape of Output tensor.+ provided does not match the broadcasted output shape .+"
+    ):
+        cq_id = 0
+        ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
