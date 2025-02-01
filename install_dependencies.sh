@@ -18,10 +18,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
-ARCH=`uname -m`
+set -e
 
 usage()
 {
@@ -29,10 +26,32 @@ usage()
     echo
     echo "[--help, -h]                List this help"
     echo "[--validate, -v]            Validate that required packages are installed"
+    echo "[--docker, -d]              Specialize execution for docker"
+    echo "[--mode, -m <mode>]         Select installation mode: runtime, build, baremetal"
     exit 1
 }
 
+FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+MAJOR=${VERSION%.*}
+ARCH=`uname -m`
+
+if [ $FLAVOR != "ubuntu" ]; then
+    echo "Error: Only Ubuntu is supported"
+    exit 1
+fi
+
+UBUNTU_CODENAME=$(grep '^VERSION_CODENAME=' /etc/os-release | awk -F= '{print $2}' | tr -d '"')
+export UBUNTU_CODENAME
+
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root. Please use sudo."
+    usage
+fi
+
 validate=0
+docker=0
+mode="baremetal"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -43,6 +62,14 @@ while [ $# -gt 0 ]; do
             validate=1
             shift
             ;;
+        --docker|-d)
+            docker=1
+            shift
+            ;;
+	--mode|-m)
+            mode="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             usage
@@ -50,54 +77,99 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-ub_package_list()
+# libc++ runtime dependency could eventually go away
+# It is favored on Ubuntu20.04 for C++20 support
+
+# At the time of this writing the following libraries are linked at runtime by sfpi cross compiler
+# libmpc, libmfpr, libgmp, libz
+# For the time being it will be assumed that these packages come from the base Ubuntu image
+
+ub_runtime_packages()
 {
-    UB_LIST=(\
-     git \
-     build-essential \
-     cmake \
-     software-properties-common \
-     libhwloc-dev \
-     graphviz \
-     ninja-build \
-     libpython3-dev \
-     libcapstone-dev \
+    UB_RUNTIME_LIST=(\
      python3-pip \
-     python3-dev \
-     python3.8-venv \
+     libhwloc-dev \
+     libnuma-dev \
+     libc++1 \
+     libc++abi1 \
+    )
+}
+
+ub_buildtime_packages()
+{
+    UB_BUILDTIME_LIST=(\
+     libpython3-dev \
+     python3-pip \
+     cmake \
+     ninja-build \
+     libhwloc-dev \
      libc++-17-dev \
      libc++abi-17-dev \
+     build-essential \
+     xz-utils \
     )
+}
 
+# Packages needed to setup a baremetal machine to build from source and run
+
+ub_baremetal_packages() {
+    ub_runtime_packages
+    ub_buildtime_packages
+    UB_BAREMETAL_LIST=("${UB_RUNTIME_LIST[@]}" "${UB_BUILDTIME_LIST[@]}")
 }
 
 update_package_list()
 {
     if [ $FLAVOR == "ubuntu" ]; then
-        ub_package_list
-    else
-        echo "unknown OS flavor $FLAVOR"
-        exit 1
+	case "$mode" in
+            runtime)
+                ub_runtime_packages
+                PKG_LIST=("${UB_RUNTIME_LIST[@]}")
+                ;;
+            build)
+                ub_buildtime_packages
+                PKG_LIST=("${UB_BUILDTIME_LIST[@]}")
+                ;;
+            baremetal)
+                ub_baremetal_packages
+                PKG_LIST=("${UB_BAREMETAL_LIST[@]}")
+                ;;
+            *)
+                echo "Invalid mode: $mode"
+                usage
+                ;;
+        esac
     fi
 }
 
 validate_packages()
 {
     if [ $FLAVOR == "ubuntu" ]; then
-        dpkg -l "${UB_LIST[@]}"
-        #dpkg -l "${UB_LIST[@]}" > /dev/null
-    else
-        echo "unknown OS flavor $FLAVOR"
-        exit 1
+        dpkg -l "${PKG_LIST[@]}"
     fi
 }
 
-prep_ubuntu()
+prep_ubuntu_runtime()
 {
     echo "Preparing ubuntu ..."
     # Update the list of available packages
     apt-get update
 }
+
+prep_ubuntu_build()
+{
+    echo "Preparing ubuntu ..."
+    # Update the list of available packages
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates gpg lsb-release wget software-properties-common gnupg
+    # The below is to bring cmake from kitware
+    wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | tee /etc/apt/sources.list.d/kitware.list >/dev/null
+    apt-get update
+}
+
+# We currently have an affinity to clang as it is more thoroughly tested in CI
+# However g++-12 and later should also work
 
 install_llvm() {
     LLVM_VERSION="17"
@@ -114,37 +186,67 @@ install_llvm() {
     fi
 }
 
+# We don't really want to have this dependency
+# This could be removed in the future
+
 configure_hugepages() {
     TT_TOOLS_VERSION='1.1-5_all'
     echo "Installing Tenstorrent Hugepages Service $TT_TOOLS_VERSION..."
     TEMP_DIR=$(mktemp -d)
     wget -P $TEMP_DIR https://github.com/tenstorrent/tt-system-tools/releases/download/upstream%2F1.1/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
-    apt-get install $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
+    apt-get install -y --no-install-recommends $TEMP_DIR/tenstorrent-tools_${TT_TOOLS_VERSION}.deb
     systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
 }
 
-install()
-{
+install() {
     if [ $FLAVOR == "ubuntu" ]; then
-        prep_ubuntu
-
         echo "Installing packages..."
-        DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${UB_LIST[@]}"
+
+	case "$mode" in
+            runtime)
+                prep_ubuntu_runtime
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+                ;;
+            build)
+                prep_ubuntu_build
+                install_llvm
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+                if [[ "$VERSION" = "22.04" ]]; then
+		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
+		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+                fi
+                ;;
+            baremetal)
+                prep_ubuntu_build
+                install_llvm
+                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+                if [[ "$VERSION" = "22.04" ]]; then
+		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
+		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 100
+		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 100
+                fi
+                configure_hugepages
+                ;;
+        esac
     fi
 }
 
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please use sudo."
-    usage
-fi
+cleanup() {
+    if [ $FLAVOR == "ubuntu" ]; then
+        rm -rf /var/lib/apt/lists/*
+    fi
+}
 
 update_package_list
 
 if [ $validate == 1 ]; then
     validate_packages
 else
-    configure_hugepages
-    install_llvm
     install
+fi
+
+if [ $docker == 1 ]; then
+    cleanup
 fi
