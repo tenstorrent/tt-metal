@@ -54,8 +54,7 @@ jobs:
         ENV_VAR: foo
       volumes:
         - ${{ github.workspace }}/docker-job:/work
-      options: >
-        --device /dev/tenstorrent
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
