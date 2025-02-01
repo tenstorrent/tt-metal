@@ -3,5 +3,4 @@ emacs
 less
 nano
 openssh-server
-sudo
 vim
