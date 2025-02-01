@@ -100,7 +100,8 @@ jobs:
           path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
       - name: Proper packaging can't come soon enough
         run: |
-          mkdir tt_metal
+          mkdir -p tt_metal
+          ll tt_metal
           cp -a deleteme/tt_metal/soc_descriptors tt_metal/
           ll tt_metal/soc_descriptors
 
