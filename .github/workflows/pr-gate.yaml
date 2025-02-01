@@ -49,7 +49,7 @@ jobs:
       - cloud-virtual-machine
       # - BH
     container:
-      image: ubuntu:22.04
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-amd64:dev-afuller-tests-shift-left
       env:
         ENV_VAR: foo
       volumes:
