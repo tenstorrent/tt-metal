@@ -68,6 +68,7 @@ def run_with_trace(
     dim,
     num_links,
     output_mem_config,
+    enable_persistent_fabric,
     multi_device_global_semaphore,
     num_iter=20,
     subdevice_id=None,
@@ -82,6 +83,7 @@ def run_with_trace(
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        enable_persistent_fabric_mode=enable_persistent_fabric,
     )
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
@@ -98,6 +100,7 @@ def run_with_trace(
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            enable_persistent_fabric_mode=enable_persistent_fabric,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for d in mesh_device.get_devices():
@@ -186,7 +189,7 @@ def run_all_gather_impl(
             tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec
         )
         output_shard_shape = list(input_shard_shape)
-        if dim == 3:
+        if dim == len(output_shape) - 1:
             output_shard_shape[1] *= num_devices
         else:
             output_shard_shape[0] *= num_devices
@@ -242,6 +245,7 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
+            enable_persistent_fabric,
             multi_device_global_semaphore=ccl_semaphore_handles,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,

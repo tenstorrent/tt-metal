@@ -10,8 +10,8 @@ namespace ttnn::operations::data_movement::detail {
 tt::tt_metal::operation::ProgramWithCallbacks slice_multi_core(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end,
-    const ttnn::SimpleShape& step);
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const ttnn::Shape& step);
 
 }  // namespace ttnn::operations::data_movement::detail

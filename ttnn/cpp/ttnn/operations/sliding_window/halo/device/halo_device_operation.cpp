@@ -35,7 +35,7 @@ void HaloDeviceOperation::validate(const std::vector<Tensor>& input_tensors) con
 std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.get_padded_shape();
-    ttnn::SimpleShape output_shape = ttnn::SimpleShape(input_shape.to_array_4D());
+    ttnn::Shape output_shape = ttnn::Shape(input_shape.to_array_4D());
 
     uint32_t nbatch = input_shape[0];
     uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
@@ -78,10 +78,7 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         shard_shape,
         shard_shape,
         output_memory_config_.shard_spec->orientation};
-    return {TensorSpec(
-        output_shape,
-        TensorLayout::fromLegacyPaddedShape(
-            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, ttnn::Shape(output_shape)))};
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(

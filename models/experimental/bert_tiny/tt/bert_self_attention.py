@@ -66,10 +66,10 @@ def mha(
         # Expected output shape: [1, 128, 2, 64]
         reshape_unt = fallback_ops.reshape(
             x,
-            x.shape.with_tile_padding()[0],
-            x.shape.with_tile_padding()[2],
+            x.padded_shape[0],
+            x.padded_shape[2],
             num_heads,
-            x.shape.with_tile_padding()[3] // num_heads,
+            x.padded_shape[3] // num_heads,
         )
         # Permute expects input to be in TILE layout
         # Input shape: [1, 128, 2, 64]

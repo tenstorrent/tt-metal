@@ -22,38 +22,34 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
     const bool transpose_key) {
     auto [query, key, value] = outputs;
 
-    auto batch_size = query.get_shape()[0];
-    auto num_heads = query.get_shape()[1];
-    auto head_size = query.get_shape()[-1];
-    auto head_size_padded = query.get_shape().with_tile_padding()[-1];
+    auto batch_size = query.get_logical_shape()[0];
+    auto num_heads = query.get_logical_shape()[1];
+    auto head_size = query.get_logical_shape()[-1];
+    auto head_size_padded = query.get_padded_shape()[-1];
 
-    auto num_kv_heads = value.get_shape()[1];
+    auto num_kv_heads = value.get_logical_shape()[1];
 
     query = ttnn::reshape(
         query,
-        ttnn::Shape(tt::tt_metal::LegacyShape(
-            std::array{batch_size, num_heads, sequence_size, head_size},
-            std::array{batch_size, num_heads, sequence_size_padded, head_size_padded})));
+        ttnn::Shape({batch_size, num_heads, sequence_size, head_size}),
+        ttnn::Shape({batch_size, num_heads, sequence_size_padded, head_size_padded}));
 
     if (transpose_key) {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::LegacyShape(
-                std::array{batch_size, num_kv_heads, head_size, sequence_size},
-                std::array{batch_size, num_kv_heads, head_size_padded, sequence_size_padded})));
+            ttnn::Shape({batch_size, num_kv_heads, head_size, sequence_size}),
+            ttnn::Shape({batch_size, num_kv_heads, head_size_padded, sequence_size_padded}));
     } else {
         key = ttnn::reshape(
             key,
-            ttnn::Shape(tt::tt_metal::LegacyShape(
-                std::array{batch_size, num_kv_heads, sequence_size, head_size},
-                std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
+            ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
+            ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     }
 
     value = ttnn::reshape(
         value,
-        ttnn::Shape(tt::tt_metal::LegacyShape(
-            std::array{batch_size, num_kv_heads, sequence_size, head_size},
-            std::array{batch_size, num_kv_heads, sequence_size_padded, head_size_padded})));
+        ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
+        ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     return {query, key, value};
 }
 }  // namespace detail
@@ -65,7 +61,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
     const std::optional<MemoryConfig>& memory_config) {
-    const auto input_shape = input_tensor.get_shape();
+    const auto input_shape = input_tensor.get_logical_shape();
+    const auto padded_input_shape = input_tensor.get_padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
 
     TT_FATAL(
@@ -80,7 +77,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         static_cast<int>(input_tensor.storage_type()));
 
     const uint32_t sequence_size = input_shape[1];
-    const uint32_t sequence_size_padded = input_shape.with_tile_padding()[1];
+    const uint32_t sequence_size_padded = padded_input_shape[1];
 
     if (num_kv_heads.has_value()) {
         TT_FATAL(
@@ -89,7 +86,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             "used.");
 
         uint32_t qkv_heads_times_head_dim = input_shape[2];
-        uint32_t qkv_heads_times_head_dim_padded = input_shape.with_tile_padding()[2];
+        uint32_t qkv_heads_times_head_dim_padded = padded_input_shape[2];
         auto head_size = qkv_heads_times_head_dim / (num_heads + (num_kv_heads.value() * 2));
         auto padded_head_size = qkv_heads_times_head_dim_padded / (num_heads + (num_kv_heads.value() * 2));
 
@@ -107,12 +104,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             padded_head_size);
 
         const auto input_4d = ttnn::experimental::view(
-            input_tensor,
-            ttnn::SimpleShape{
-                input_shape.with_tile_padding()[0],
-                1,
-                input_shape.with_tile_padding()[1],
-                input_shape.with_tile_padding()[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
 
         auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
@@ -125,7 +117,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
     uint32_t hidden_dim_padded = 0, hidden_dim = 0;
     if (input_tensor_kv.has_value()) {
-        const auto input_shape_kv = input_tensor_kv.value().get_shape();
+        const auto input_shape_kv = input_tensor_kv.value().get_logical_shape();
         TT_FATAL(
             input_shape_kv[0] == input_shape[0],
             "Dimension mismatch: KV tensor batch dimension ({}) must match Q tensor batch dimension ({}).",
@@ -145,10 +137,10 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             2 * input_shape[2]);
 
         hidden_dim = input_shape[2];
-        hidden_dim_padded = input_shape.with_tile_padding()[2];
+        hidden_dim_padded = padded_input_shape[2];
     } else {
         hidden_dim = input_shape[2];
-        hidden_dim_padded = input_shape.with_tile_padding()[2];
+        hidden_dim_padded = padded_input_shape[2];
     }
 
     uint32_t head_size = hidden_dim / num_heads;
@@ -174,12 +166,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             "the KV tensor is only used in non-sharded configurations.");
 
         const auto input_tensor_4d = ttnn::experimental::view(
-            input_tensor,
-            ttnn::SimpleShape{
-                input_shape.with_tile_padding()[0],
-                1,
-                input_shape.with_tile_padding()[1],
-                input_shape.with_tile_padding()[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
                 input_tensor_4d,
@@ -192,18 +179,13 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
             transpose_key);
     } else {
         const auto input_tensor_4d = ttnn::experimental::view(
-            input_tensor,
-            ttnn::SimpleShape{
-                input_shape.with_tile_padding()[0],
-                1,
-                input_shape.with_tile_padding()[1],
-                input_shape.with_tile_padding()[2]});
+            input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
         std::optional<Tensor> input_tensor_kv_4d = std::nullopt;
         if (input_tensor_kv.has_value()) {
-            auto padded_input_shape_kv = input_tensor_kv.value().get_shape().with_tile_padding();
+            auto padded_input_shape_kv = input_tensor_kv.value().get_padded_shape();
             input_tensor_kv_4d = ttnn::experimental::view(
                 input_tensor_kv.value(),
-                ttnn::SimpleShape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
+                ttnn::Shape{padded_input_shape_kv[0], 1, padded_input_shape_kv[1], padded_input_shape_kv[2]});
         }
         const auto outputs = ttnn::experimental::nlp_create_qkv_heads(
             input_tensor_4d,

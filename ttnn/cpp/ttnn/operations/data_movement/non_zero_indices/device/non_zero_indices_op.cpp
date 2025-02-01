@@ -25,7 +25,7 @@ void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> NonZeroIndices::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape num_non_zero_shape({1, 1, 1, 8});
+    ttnn::Shape num_non_zero_shape({1, 1, 1, 8});
     TensorLayout layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), output_mem_config);
     return {TensorSpec(num_non_zero_shape, layout), TensorSpec(input_tensors.at(0).get_logical_shape(), layout)};
 }

@@ -60,7 +60,7 @@ std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tenso
     auto batch_num = input_tensor.logical_shape()[0];
     auto num_embedding_dims = weight_tensor.logical_shape()[-1];
 
-    ttnn::SimpleShape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
+    ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     auto output_layout = tilized ? Layout::TILE : Layout::ROW_MAJOR;
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(output_layout), output_mem_config))};
 }

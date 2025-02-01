@@ -22,6 +22,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROGRAMMING_EXAMPLES_SRCS}" "") # no subdir, output b
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/profiler)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/contributed)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/distributed)
 
 add_custom_target(
     programming_examples

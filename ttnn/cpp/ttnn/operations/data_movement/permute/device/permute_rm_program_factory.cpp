@@ -24,7 +24,7 @@ uint32_t page_size(const ttnn::Tensor& input_tensor) {
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
 }
 
-std::vector<uint32_t> get_row_strides(const ttnn::SimpleShape& shape) {
+std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
     std::vector<uint32_t> strides(shape.rank());
     strides[shape.rank() - 1] = 1;
     strides[shape.rank() - 2] = 1;

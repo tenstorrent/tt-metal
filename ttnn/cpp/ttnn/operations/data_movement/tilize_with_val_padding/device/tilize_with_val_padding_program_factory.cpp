@@ -348,7 +348,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t tile_height = output.get_tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output.get_logical_shape(),
-        output.get_padding(),
+        output.get_padded_shape(),
         ncores,
         nblocks_per_core,
         has_cliff,

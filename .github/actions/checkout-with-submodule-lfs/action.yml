@@ -17,10 +17,24 @@ runs:
     - name: Clean repo (if it exists)
       shell: bash
       run: |
+        set -x
+        ls -al
+        if [ -f "semicolon_delimited_script" ]; then
+          file semicolon_delimited_script
+          head semicolon_delimited_script
+        fi
+        sudo rm -rf deleteme
+        sudo rm -rf docker-job
         if [ -d ".git" ]; then
+          echo 'Cleaning repo'
           git clean -xffd
+          echo 'Done git clean -xffd'
+          echo 'Attempting to delete any lock files'
           find .git -type f -iname '*.lock' -delete
+          echo 'Done deleting lock files'
+          echo 'De-init-ing submodules'
           git submodule deinit -f --all
+          echo 'Done de-initing submodules'
         fi
     - name: Checkout repo
       uses: actions/checkout@v4

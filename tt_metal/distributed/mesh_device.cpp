@@ -654,9 +654,7 @@ WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->ge
 void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
     this->work_executor_->set_worker_queue_mode(mode);
 }
-WorkerQueueMode MeshDevice::get_worker_queue_mode() { return this->work_executor_->get_worker_queue_mode(); }
 bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
-bool MeshDevice::can_use_passthrough_scheduling() const { return this->work_executor_->use_passthrough(); }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     this->work_executor_->push_work(std::move(work), blocking);
 }
@@ -666,18 +664,7 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_no
     TT_THROW("extract_dst_noc_multicast_info() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
-bool MeshDevice::dispatch_s_enabled() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->get_devices(), [](const auto& device) { return device->dispatch_s_enabled(); });
-}
-bool MeshDevice::distributed_dispatcher() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->get_devices(), [](const auto& device) { return device->distributed_dispatcher(); });
-}
-NOC MeshDevice::dispatch_go_signal_noc() const {
-    return validate_and_get_reference_value(
-        scoped_devices_->get_devices(), [](const auto& device) { return device->dispatch_go_signal_noc(); });
-}
+
 size_t MeshDevice::get_device_kernel_defines_hash() {
     TT_THROW("get_device_kernel_defines_hash() is not supported on MeshDevice - use individual devices instead");
     return validate_and_get_reference_value(
