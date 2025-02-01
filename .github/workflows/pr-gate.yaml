@@ -95,9 +95,9 @@ jobs:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
           ls -al  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          file  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          head  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          tail  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
+          # file  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
+          # head  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
+          # tail  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
           ./build/test/tt_metal/unit_tests_noc
 
       - name: Cleanup
