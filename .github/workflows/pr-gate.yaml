@@ -36,14 +36,14 @@ on:
 #  # cancel-in-progress: true
 
 jobs:
-  build-artifact:
+  build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
       os: "ubuntu-22.04-amd64"
 
   metal-tests:
-    needs: build-artifact
+    needs: build
     runs-on:
       - in-service
       - cloud-virtual-machine
@@ -81,3 +81,53 @@ jobs:
           set -x
           pwd
           ls -al
+      - name: Run a test
+        run: |
+          ./build/test/tt_metal/test_add_two_ints
+
+  check_images:
+    runs-on: ubuntu-latest
+    env:
+      OS: ubuntu-22.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+
+      - name: Compute BUILD_TAG
+        id: build_tag
+        run: |
+          set -x
+          BUILD_TAG=$(sha1sum scripts/docker/requirements_dev.txt pyproject.toml | awk '{print $1}')
+          echo "BUILD_TAG=$BUILD_TAG"
+          echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
+
+      - name: Compute TEST_TAG
+        id: test_tag
+        run: |
+          TEST_TAG=$(sha1sum tt_metal/python_env/requirements-dev.txt pyproject.toml | awk '{print $1}')
+          echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
+
+      - name: Query BUILD_IMAGE_EXISTS
+        id: build_image_exists
+        run: |
+          BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
+          if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
+            echo "BUILD_IMAGE_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "BUILD_IMAGE_EXISTS=false" >> $GITHUB_ENV
+
+      - name: Query TEST_IMAGE_EXISTS
+        id: test_image_exists
+        run: |
+          TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
+          if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
+            echo "TEST_IMAGE_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "TEST_IMAGE_EXISTS=false" >> $GITHUB_ENV
+
+      - name: Output results
+        run: |
+          echo "BUILD_IMAGE_EXISTS=${{ env.BUILD_IMAGE_EXISTS }}"
+          echo "TEST_IMAGE_EXISTS=${{ env.TEST_IMAGE_EXISTS }}"
