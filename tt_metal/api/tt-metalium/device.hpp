@@ -167,9 +167,7 @@ public:
     virtual void synchronize() = 0;
     virtual WorkExecutorMode get_worker_mode() = 0;
     virtual void set_worker_queue_mode(const WorkerQueueMode& mode) = 0;
-    virtual WorkerQueueMode get_worker_queue_mode() = 0;
     virtual bool is_worker_queue_empty() const = 0;
-    virtual bool can_use_passthrough_scheduling() const = 0;
 
     virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
 

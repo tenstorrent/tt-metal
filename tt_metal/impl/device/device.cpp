@@ -1372,10 +1372,6 @@ CommandQueue& Device::command_queue(size_t cq_id) {
     return *command_queues_[cq_id];
 }
 
-bool Device::can_use_passthrough_scheduling() const {
-    return this->work_executor_.use_passthrough();
-}
-
 void Device::synchronize() {
     if (not this->initialized_) {
         log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
