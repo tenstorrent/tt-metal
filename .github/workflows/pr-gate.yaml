@@ -101,9 +101,9 @@ jobs:
       - name: Proper packaging can't come soon enough
         run: |
           mkdir -p tt_metal
-          ll tt_metal
+          ls -al tt_metal
           cp -a deleteme/tt_metal/soc_descriptors tt_metal/
-          ll tt_metal/soc_descriptors
+          ls -al tt_metal/soc_descriptors
 
       - name: Inspect post DL / extract
         run: |
