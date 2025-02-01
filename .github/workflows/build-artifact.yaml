@@ -75,6 +75,7 @@ jobs:
     env:
       SILENT: 0
       VERBOSE: 1
+      ACTIONS_STEP_DEBUG: true
     runs-on:
       - build
       - in-service

@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OS: ubuntu-22.04
+      ACTIONS_RUNNER_DEBUG: true
+      ACTIONS_STEP_DEBUG: true
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
       ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
