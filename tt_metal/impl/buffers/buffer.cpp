@@ -364,8 +364,6 @@ std::shared_ptr<Buffer> Buffer::create(
 }
 
 void Buffer::allocate_impl() {
-    TT_ASSERT(tt::tt_metal::detail::InWorkerThread(), "Buffer allocation must be called from worker thread");
-
     if (GraphTracker::instance().hook_allocate(this)) {
         address_ = 0;
     } else {
@@ -411,7 +409,6 @@ void Buffer::deleter(Buffer* buffer) {
 }
 
 void Buffer::deallocate_impl() {
-    TT_ASSERT(tt::tt_metal::detail::InWorkerThread(), "Buffer deallocation must be called from worker thread");
     if (allocation_status_.load(std::memory_order::relaxed) != AllocationStatus::ALLOCATED) {
         return;
     }
