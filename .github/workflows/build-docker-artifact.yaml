@@ -8,10 +8,10 @@ on:
         type: string
         default: "ubuntu-20.04-amd64"
     outputs:
-      docker-image.ci-build.tag:
+      ci-build.tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
-      docker-image.ci-test.tag:
+      ci-test.tag:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
   workflow_dispatch:
@@ -44,7 +44,8 @@ jobs:
         run: |
           BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
-          echo "ci-build-tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
+          # FIXME!  echo "ci-build-tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/${{ env.OS }}:dev-afuller-tests-shift-left" >> $GITHUB_OUTPUT
           TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
           echo "ci-test-tag=${TEST_TAG}" >> $GITHUB_OUTPUT
@@ -60,6 +61,8 @@ jobs:
             # echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "no-op"
           fi
+          # FIXME!
+          echo "ci-build-exists=true" >> $GITHUB_OUTPUT
 
           TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
           if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
@@ -68,15 +71,10 @@ jobs:
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: DELETEME HACK
-        run: |
-          echo "ci-build-exists=true" >> $GITHUB_OUTPUT
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/${{ env.OS }}:dev-afuller-tests-shift-left" >> $GITHUB_OUTPUT
-
   build-docker-image:
     name: "🐳️ Build ${{ inputs.os }} image"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.ci-build-exists == 'false'
+    if: needs.check-docker-images.outputs.ci-build-exists != 'true'
     timeout-minutes: 30
     env:
       TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
