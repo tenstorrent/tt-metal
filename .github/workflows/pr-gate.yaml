@@ -117,44 +117,44 @@ jobs:
         run: |
           ./build/test/tt_metal/unit_tests_device
 
-  check-docker-images:
-    runs-on: ubuntu-latest
-    env:
-      OS: ubuntu-22.04
-    outputs:
-      ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
-      ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
-      ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
+  # check-docker-images:
+  #   runs-on: ubuntu-latest
+  #   env:
+  #     OS: ubuntu-22.04
+  #   outputs:
+  #     ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
+  #     ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+  #     ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
+  #     ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
+  #   steps:
+  #     - name: Checkout repo
+  #       uses: actions/checkout@v3
+  #       with:
+  #         fetch-depth: 1
 
-      - name: Compute tags
-        id: tags
-        run: |
-          BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
-          echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
-          echo "ci-build-tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
-          TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
-          echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
-          echo "ci-test-tag=${TEST_TAG}" >> $GITHUB_OUTPUT
+  #     - name: Compute tags
+  #       id: tags
+  #       run: |
+  #         BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
+  #         echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
+  #         echo "ci-build-tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
+  #         TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
+  #         echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
+  #         echo "ci-test-tag=${TEST_TAG}" >> $GITHUB_OUTPUT
 
-      - name: Query images exist
-        id: images
-        run: |
-          BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
-          if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
-            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
-          fi
+  #     - name: Query images exist
+  #       id: images
+  #       run: |
+  #         BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
+  #         if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
+  #           echo "ci-build-exists=true" >> $GITHUB_OUTPUT
+  #         else
+  #           echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+  #         fi
 
-          TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
-          if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
-            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-          fi
+  #         TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
+  #         if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
+  #           echo "ci-test-exists=true" >> $GITHUB_OUTPUT
+  #         else
+  #           echo "ci-test-exists=false" >> $GITHUB_OUTPUT
+  #         fi

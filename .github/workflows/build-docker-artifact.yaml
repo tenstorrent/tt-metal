@@ -88,6 +88,13 @@ jobs:
       - build-docker
       - in-service
     steps:
+      - name: debug
+        run: |
+          set -x
+          echo "ci-build-exists=${{ needs.check-docker-images.outputs.ci-build-exists }}"
+          echo "ci-build-tag=${{ needs.check-docker-images.outputs.ci-build-tag }}"
+          echo "ci-test-exists=${{ needs.check-docker-images.outputs.ci-test-exists }}"
+          echo "ci-test-tag=${{ needs.check-docker-images.outputs.ci-test-tag }}"
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
         with:
           fetch-depth: 0
