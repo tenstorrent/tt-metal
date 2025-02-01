@@ -79,6 +79,9 @@ jobs:
       - build
       - in-service
     steps:
+      - name: debug
+        run: |
+          echo "image: ${{ needs.build-docker-image.outputs.ci-build-tag }}"
       - name: Verify ccache availability
         shell: bash
         run: |
