@@ -22,12 +22,16 @@ on:
       docker-image.ci-build.exists:
         description: "Whether the image exists to build TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-build-exists }}
-      # docker-image.ci-build.tag:
-      # docker-image.ci-test.exists:
-      # docker-image.ci-test.tag:
-      # secondword:
-      #   description: "The second output string"
-      #   value: ${{ jobs.example_job.outputs.output2 }}
+      docker-image.ci-build.tag:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
+      docker-image.ci-test.exists:
+        description: "Whether the image exists to test TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-test-exists }}
+      docker-image.ci-test.tag:
+        description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+        value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+
 #  pull_request:
 #    types:
 #      - opened
@@ -115,10 +119,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OS: ubuntu-22.04
-    # Map the job outputs to step outputs
     outputs:
       ci-build-exists: ${{ steps.images.outputs.ci-build-exists }}
-      # ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      ci-build-tag: ${{ steps.tags.outputs.ci-build-tag }}
+      ci-test-exists: ${{ steps.images.outputs.ci-test-exists }}
+      ci-test-tag: ${{ steps.tags.outputs.ci-test-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -140,21 +145,14 @@ jobs:
         run: |
           BUILD_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.BUILD_TAG }})
           if [ "$BUILD_IMAGE_EXISTS" == "200" ]; then
-            echo "BUILD_IMAGE_EXISTS=true" >> $GITHUB_ENV
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "BUILD_IMAGE_EXISTS=false" >> $GITHUB_ENV
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
           fi
 
           TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
           if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
-            echo "TEST_IMAGE_EXISTS=true" >> $GITHUB_ENV
+            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "TEST_IMAGE_EXISTS=false" >> $GITHUB_ENV
+            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
           fi
-
-      - name: Output results
-        run: |
-          echo "BUILD_IMAGE_EXISTS=${{ env.BUILD_IMAGE_EXISTS }}"
-          echo "TEST_IMAGE_EXISTS=${{ env.TEST_IMAGE_EXISTS }}"
