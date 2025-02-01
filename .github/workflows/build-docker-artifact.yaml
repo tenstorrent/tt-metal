@@ -8,7 +8,7 @@ on:
         type: string
         default: "ubuntu-20.04-amd64"
     outputs:
-      ci-build.tag:
+      ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
       ci-test.tag:
