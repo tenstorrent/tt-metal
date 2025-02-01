@@ -99,14 +99,13 @@ jobs:
         id: build_tag
         run: |
           set -x
-          BUILD_TAG=$(sha1sum scripts/docker/requirements_dev.txt pyproject.toml | awk '{print $1}')
-          echo "BUILD_TAG=$BUILD_TAG"
+          BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
 
       - name: Compute TEST_TAG
         id: test_tag
         run: |
-          TEST_TAG=$(sha1sum tt_metal/python_env/requirements-dev.txt pyproject.toml | awk '{print $1}')
+          TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
 
       - name: Query BUILD_IMAGE_EXISTS
