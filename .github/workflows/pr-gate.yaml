@@ -57,7 +57,6 @@ jobs:
       options: >
         --device /dev/tenstorrent
         -w /work
-        # --entrypoint "bash -c 'set -ex; MOUNT_USER=\$(stat -c \"%u\" /work); MOUNT_GROUP=\$(stat -c \"%g\" /work); if [ \"\$MOUNT_USER\" -ne 0 ]; then groupadd -g \"\$MOUNT_GROUP\" runnergroup || true; useradd -m -u \"\$MOUNT_USER\" -g \"\$MOUNT_GROUP\" runner || true; exec su - runner -c \"/bin/bash \$@\"; else exec \"\$@\"; fi'"
     steps:
       #- name: Detect and Set Correct User
       #  shell: bash
