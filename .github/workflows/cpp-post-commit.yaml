@@ -109,9 +109,10 @@ jobs:
             ${{ matrix.test-group.cmd }}
             lcov --directory . --capture --gcov-tool /work/scripts/llvm-gcov-wrapper --output-file coverage.info
       - uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         if: ${{ inputs.upload_coverage }}
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.info
           fail_ci_if_error: true
           verbose: true
