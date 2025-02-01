@@ -88,34 +88,41 @@ jobs:
           touch foo
           ls -al
 
-      - uses: actions/download-artifact@v4
-        with:
-          name: TTMetal_build_any
-          path: /work/
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: Srsly
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 1
-          path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
-      - name: Proper packaging can't come soon enough
-        run: |
-          mkdir -p tt_metal
-          ls -al tt_metal
-          cp -a deleteme/tt_metal/soc_descriptors tt_metal/
-          ls -al tt_metal/soc_descriptors
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: TTMetal_build_any
+      #     path: /work/
+      # - name: Extract files
+      #   run: tar -xvf ttm_any.tar
+      # - name: Srsly
+      #   uses: actions/checkout@v3
+      #   with:
+      #     fetch-depth: 1
+      #     path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
+      # - name: Proper packaging can't come soon enough
+      #   run: |
+      #     mkdir -p tt_metal
+      #     ls -al tt_metal
+      #     cp -a deleteme/tt_metal/soc_descriptors tt_metal/
+      #     ls -al tt_metal/soc_descriptors
 
-      - name: Inspect post DL / extract
-        run: |
-          set -x
-          pwd
-          ls -al
+      # - name: Inspect post DL / extract
+      #   run: |
+      #     set -x
+      #     pwd
+      #     ls -al
       - name: Run a test
         env:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
           ./build/test/tt_metal/unit_tests_device
+      - name: Cleanup
+        if: always()
+        run: |
+          set -x
+          ls -al ${{ github.workspace }}
+          # rm -rf ${{ github.workspace }}/deleteme
+          # rm -rf ${{ github.workspace }}/docker-job
 
   # check-docker-images:
   #   runs-on: ubuntu-latest
