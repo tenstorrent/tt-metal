@@ -74,10 +74,10 @@ jobs:
         with:
           name: TTMetal_build_any
           path: /work/
-      - name: Inspect post DL
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: Inspect post DL / extract
         run: |
           set -x
           pwd
           ls -al
-      #- name: Check for dockerenv file
-      #  run: (ls /.dockerenv && echo Found dockerenv) || (echo No dockerenv)
