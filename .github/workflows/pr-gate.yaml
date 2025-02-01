@@ -94,7 +94,9 @@ jobs:
 
       - name: Run a test
         env:
+          # TODO: None of these should be necessary
           LD_LIBRARY_PATH: /work/build/lib
+          TT_METAL_HOME: /work
         run: |
           ./build/test/tt_metal/unit_tests_noc
 
