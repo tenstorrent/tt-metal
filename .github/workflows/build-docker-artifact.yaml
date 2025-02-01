@@ -13,7 +13,7 @@ on:
         value: 'foobar & ${{ jobs.check-docker-images.outputs.ci-build-tag }}'
       ci-test.tag:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
+        value: 'fizzbuzz & ${{ jobs.check-docker-images.outputs.ci-test-tag }}'
   workflow_dispatch:
     inputs:
       os:
@@ -72,18 +72,6 @@ jobs:
           else
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
           fi
-
-  debug:
-    name: "Debug the outputs"
-    needs: check-docker-images
-    runs-on: ubuntu-latest
-    steps:
-      - name: dump
-        run: |
-          echo "ci-build-exists=${{ needs.check-docker-images.outputs.ci-build-exists }}"
-          echo "ci-build-tag=${{ needs.check-docker-images.outputs.ci-build-tag }}"
-          echo "ci-test-exists=${{ needs.check-docker-images.outputs.ci-test-exists }}"
-          echo "ci-test-tag=${{ needs.check-docker-images.outputs.ci-test-tag }}"
 
   build-docker-image:
     name: "🐳️ Build ${{ inputs.os }} image"
