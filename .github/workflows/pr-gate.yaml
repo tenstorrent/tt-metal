@@ -94,7 +94,7 @@ jobs:
         env:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
-          ./build/test/tt_metal/unit_tests_device
+          ./build/test/tt_metal/unit_tests_noc
 
       - name: Cleanup
         if: always()
