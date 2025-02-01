@@ -11,6 +11,11 @@
 
 namespace ttml::init {
 
+xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
+    auto& [a, b] = range;
+    return xt::random::rand(shape.view(), a, b, autograd::AutoContext::get_instance().get_generator());
+}
+
 void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& [a, b] = range;
 

@@ -6,6 +6,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "init/cpu_initializers.hpp"
+#include "init/tensor_initializers.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/linear_op.hpp"
 
@@ -43,8 +45,22 @@ void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_fe
             num_devices));
     }
 
-    auto weight_shape = core::create_shape({1, 1, out_features / num_devices, in_features});
-    throw std::runtime_error("Not completely implemented yet");
+    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+
+    uint32_t rank = 4U;
+    auto mesh_shape = device->shape();
+    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+
+    ttml::core::XTensorToMeshVariant<float> shard_composer =
+        ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 2U);
+    auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
+    m_weight->set_value(ttml::core::from_xtensor<float, DataType::BFLOAT16>(weight, device, shard_composer));
+
+    if (has_bias) {
+        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        m_bias = ttml::autograd::create_tensor();
+        init::uniform_init(m_bias, bias_shape, init::UniformRange{-init_k, init_k});
+    }
 }
 
 ColumnParallelLinear::ColumnParallelLinear(
@@ -68,7 +84,31 @@ autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor)
 }
 
 void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
-    throw std::runtime_error("Not implemented yet");
+    auto* device = &autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    if (in_features % num_devices != 0) {
+        throw std::runtime_error(fmt::format(
+            "Input features must be divisible by the number of devices. Input features = {}, devices = {}",
+            in_features,
+            num_devices));
+    }
+
+    auto weight_shape = core::create_shape({1, 1, out_features, in_features});
+
+    uint32_t rank = 4U;
+    auto mesh_shape = device->shape();
+    const float init_k = std::sqrtf(1.F / static_cast<float>(in_features));
+
+    ttml::core::XTensorToMeshVariant<float> shard_composer =
+        ttml::core::ShardXTensorToMesh<float>(mesh_shape, rank - 1U);
+    auto weight = init::uniform_init(weight_shape, init::UniformRange{-init_k, init_k});
+    m_weight->set_value(ttml::core::from_xtensor<float, DataType::BFLOAT16>(weight, device, shard_composer));
+
+    if (has_bias) {
+        auto bias_shape = core::create_shape({1, 1, 1, out_features});
+        m_bias = ttml::autograd::create_tensor();
+        init::uniform_init(m_bias, bias_shape, init::UniformRange{-init_k, init_k});
+    }
 }
 
 }  // namespace ttml::modules::distributed

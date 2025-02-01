@@ -150,7 +150,7 @@ const std::optional<NodeId>& Tensor::get_node() const {
     return m_node_id;
 }
 
-const ttnn::SimpleShape& Tensor::get_shape() const {
+const ttnn::Shape& Tensor::get_shape() const {
     return get_value().get_logical_shape();
 }
 
