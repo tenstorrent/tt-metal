@@ -47,7 +47,7 @@ jobs:
           BUILD_TAG=$(cat scripts/docker/requirements_dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
           # FIXME!  echo "ci-build-tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/${{ env.OS }}-amd64:dev-afuller-tests-shift-left" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.OS }}-amd64:dev-afuller-tests-shift-left" >> $GITHUB_OUTPUT
           TEST_TAG=$(cat tt_metal/python_env/requirements-dev.txt pyproject.toml | sha1sum | cut -d' ' -f1)
           echo "TEST_TAG=$TEST_TAG" >> $GITHUB_ENV
           echo "ci-test-tag=${TEST_TAG}" >> $GITHUB_OUTPUT
