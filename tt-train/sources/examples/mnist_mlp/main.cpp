@@ -17,10 +17,12 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_dataset.hpp"
 #include "models/mlp.hpp"
+#include "modules/distributed/linear.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "utils.hpp"
 #include "yaml-cpp/node/node.h"
+
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::vector<uint8_t>, uint8_t>;
@@ -32,6 +34,30 @@ using DataLoader = ttml::datasets::DataLoader<
 
 constexpr auto model_name = "mlp";
 constexpr auto optimizer_name = "optimizer";
+
+class MnistTP : public ttml::autograd::ModuleBase {
+public:
+    MnistTP() {
+        m_linear1 = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+            784, 256, /* has_bias */ true, /* gather_output */ false);
+        m_linear2 = std::make_shared<ttml::modules::distributed::RowParallelLinear>(
+            256, 10, /* has_bias */ true, /* input_is_parallel */ true);
+        create_name(model_name);
+        register_module(m_linear1, "linear1");
+        register_module(m_linear2, "linear2");
+    }
+
+    ttml::autograd::TensorPtr operator()(ttml::autograd::TensorPtr tensor) {
+        tensor = (*m_linear1)(tensor);
+        tensor = ttml::ops::relu(tensor);
+        tensor = (*m_linear2)(tensor);
+        return tensor;
+    }
+
+private:
+    std::shared_ptr<ttml::modules::distributed::ColumnParallelLinear> m_linear1;
+    std::shared_ptr<ttml::modules::distributed::RowParallelLinear> m_linear2;
+};
 
 template <typename Model>
 float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
@@ -91,11 +117,14 @@ int main(int argc, char **argv) {
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
     bool is_eval = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-    app.add_option("-e,--eval", config_name, "Evaluate")->default_val(is_eval);
+    app.add_option("-e,--eval", is_eval, "Evaluate")->default_val(is_eval);
 
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
+
+    ttml::autograd::ctx().set_mesh_shape({1, 2});
+
     // Load MNIST data
     const size_t num_targets = 10;
     const size_t num_features = 784;
@@ -134,7 +163,8 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(training_dataset, config.batch_size, /* shuffle */ true, collate_fn);
     auto test_dataloader = DataLoader(test_dataset, config.batch_size, /* shuffle */ false, collate_fn);
 
-    auto model = ttml::models::mlp::create(config.mlp_config);
+    // auto model = ttml::models::mlp::create(config.mlp_config);
+    auto model = std::make_shared<MnistTP>();
 
     const float learning_rate = config.learning_rate * (static_cast<float>(config.batch_size) / 128.F);
     const float momentum = config.momentum;

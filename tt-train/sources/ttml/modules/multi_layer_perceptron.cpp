@@ -14,6 +14,7 @@ void add_linear_layer(Layers& layers, Args&&... args) {
 }
 
 MultiLayerPerceptron::MultiLayerPerceptron(const MultiLayerPerceptronParameters& params) {
+    m_layers.reserve(params.hidden_features.size() + 1UL);
     uint32_t current_input_features = params.input_features;
     for (auto hidden_features : params.hidden_features) {
         add_linear_layer(m_layers, current_input_features, hidden_features);
