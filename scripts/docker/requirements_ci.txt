@@ -10,3 +10,4 @@ wget
 python3-dev
 cargo
 bc
+jq
