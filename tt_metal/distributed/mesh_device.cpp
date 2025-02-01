@@ -545,20 +545,24 @@ CommandQueue& MeshDevice::command_queue(size_t cq_id) {
 
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    TT_THROW("begin_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->begin_trace(cq_id, tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->begin_trace(cq_id, tid);
+    }
 }
 void MeshDevice::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    TT_THROW("end_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->end_trace(cq_id, tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->end_trace(cq_id, tid);
+    }
 }
 void MeshDevice::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    TT_THROW("replay_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->replay_trace(cq_id, tid, blocking);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->replay_trace(cq_id, tid, blocking);
+    }
 }
 void MeshDevice::release_trace(const uint32_t tid) {
-    TT_THROW("release_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->release_trace(tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->release_trace(tid);
+    }
 }
 std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
     TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
