@@ -155,7 +155,7 @@ struct WorkerToFabricEdmSender {
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
-    FORCE_INLINE void open() {
+    void open() {
         const auto dest_noc_addr_coord_only =
             // get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
@@ -183,7 +183,7 @@ struct WorkerToFabricEdmSender {
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 
-    FORCE_INLINE void close() {
+    void close() {
         const auto dest_noc_addr_coord_only =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
 
