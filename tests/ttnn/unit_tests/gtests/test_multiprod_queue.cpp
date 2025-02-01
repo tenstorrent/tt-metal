@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 #include <tt-metalium/tt_metal.hpp>
@@ -19,6 +20,7 @@ namespace {
 
 using ::testing::FloatEq;
 using ::testing::Pointwise;
+using ::tt::tt_metal::is_tensor_on_device;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
@@ -30,7 +32,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
 
-    const ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
+    const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
@@ -81,7 +83,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Enable async engine and set queue setting to lock_based
     device->enable_async(true);
 
-    const ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
+    const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         .buffer_type = BufferType::DRAM,
