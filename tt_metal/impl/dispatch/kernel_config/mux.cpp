@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "mux.hpp"
+#include "assert.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernel_config/demux.hpp"
+#include "dispatch/kernel_config/prefetch.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
 
@@ -42,7 +45,8 @@ void MuxKernel::GenerateStaticConfigs() {
 }
 
 void MuxKernel::GenerateDependentConfigs() {
-    // Upstream, expect DISPATCH_D or TUNNELER
+    // Upstream
+    // DISPATCH_D or TUNNELER or PREFETCH_H
     TT_ASSERT(upstream_kernels_.size() <= MAX_SWITCH_FAN_IN && upstream_kernels_.size() > 0);
     uint32_t num_upstream_dispatchers = 0;
     for (int idx = 0; idx < upstream_kernels_.size(); idx++) {
@@ -62,29 +66,47 @@ void MuxKernel::GenerateDependentConfigs() {
             dependent_config_.input_packetize[idx] = 0x0;
             dependent_config_.input_packetize_upstream_sem[idx] = 0;
             dependent_config_.remote_rx_queue_id[idx] = tunneler_kernel->GetStaticConfig().vc_count.value() * 2 - 1;
+        } else if (auto prefetch_h_kernel = dynamic_cast<PrefetchKernel*>(k)) {
+            TT_ASSERT(upstream_kernels_.size() == 1);
+
+            dependent_config_.input_packetize[idx] = 0x1;
+            dependent_config_.input_packetize_upstream_sem[idx] =
+                prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+            dependent_config_.remote_rx_queue_id[idx] = 1;
         } else {
-            TT_FATAL(false, "Unexpected kernel type upstream of MUX");
+            TT_FATAL(false, "MUX got unexpected upstream kernel type");
         }
     }
+
     uint32_t src_id = 0xC1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
     uint32_t dest_id = 0xD1 + (FDKernel::GetTunnelStop(device_id_) - 1) * num_upstream_dispatchers;
     static_config_.input_packetize_src_endpoint = packet_switch_4B_pack(src_id, src_id + 1, src_id + 2, src_id + 3);
     static_config_.input_packetize_dest_endpoint =
         packet_switch_4B_pack(dest_id, dest_id + 1, dest_id + 2, dest_id + 3);
 
-    // Downstream, expect TUNNELER
+    // Downstream
+    // TUNNELER or DEMUX
     TT_ASSERT(downstream_kernels_.size() == 1);
     FDKernel* ds = downstream_kernels_[0];
-    auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(ds);
-    TT_ASSERT(ds);
-    dependent_config_.remote_tx_queue_start_addr_words =
-        tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
-        (tunneler_kernel->GetStaticConfig().vc_count.value() - 1) *
-            tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
-    dependent_config_.remote_tx_queue_size_words = tunneler_kernel->GetStaticConfig().in_queue_size_words;
-    dependent_config_.remote_tx_x = ds->GetVirtualCore().x;
-    dependent_config_.remote_tx_y = ds->GetVirtualCore().y;
-    dependent_config_.remote_tx_queue_id = tunneler_kernel->GetStaticConfig().vc_count.value() - 1;
+    if (auto tunneler_kernel = dynamic_cast<EthTunnelerKernel*>(ds)) {
+        dependent_config_.remote_tx_queue_start_addr_words =
+            tunneler_kernel->GetStaticConfig().in_queue_start_addr_words.value() +
+            (tunneler_kernel->GetStaticConfig().vc_count.value() - 1) *
+                tunneler_kernel->GetStaticConfig().in_queue_size_words.value();
+        dependent_config_.remote_tx_queue_size_words = tunneler_kernel->GetStaticConfig().in_queue_size_words;
+        dependent_config_.remote_tx_x = ds->GetVirtualCore().x;
+        dependent_config_.remote_tx_y = ds->GetVirtualCore().y;
+        dependent_config_.remote_tx_queue_id = tunneler_kernel->GetStaticConfig().vc_count.value() - 1;
+    } else if (auto demux_kernel = dynamic_cast<DemuxKernel*>(ds)) {
+        dependent_config_.remote_tx_queue_start_addr_words =
+            demux_kernel->GetStaticConfig().rx_queue_start_addr_words.value();
+        dependent_config_.remote_tx_queue_size_words = demux_kernel->GetStaticConfig().rx_queue_size_words.value();
+        dependent_config_.remote_tx_x = demux_kernel->GetVirtualCore().x;
+        dependent_config_.remote_tx_y = demux_kernel->GetVirtualCore().y;
+        dependent_config_.remote_tx_queue_id = 0;  // Demux input queue id is always 0
+    } else {
+        TT_FATAL(false, "MUX got unexpected downstream kernel type");
+    }
 }
 
 void MuxKernel::CreateKernel() {

@@ -78,18 +78,20 @@ public:
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() {
+    virtual CoreType GetCoreType() const {
         return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
     }
-    tt_cxy_pair GetLogicalCore() { return logical_core_; }
-    tt_cxy_pair GetVirtualCore() {
+    tt_cxy_pair GetLogicalCore() const { return logical_core_; }
+    tt_cxy_pair GetVirtualCore() const {
         return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
     }
-    chip_id_t GetDeviceId() { return device_id_; }  // Since this->device may not exist yet
+    chip_id_t GetDeviceId() const { return device_id_; }  // Since this->device may not exist yet
 
     // Get the port index for which a given kernel is upstream/downstream of this one
-    int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
-    int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
+    int GetUpstreamPort(const FDKernel* other) const { return GetPort(other, this->upstream_kernels_); }
+
+    int GetDownstreamPort(const FDKernel* other) const { return GetPort(other, this->downstream_kernels_); }
+
     void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
         device_ = device;
         program_ = program;
@@ -103,7 +105,8 @@ protected:
         bool is_active_eth_core,
         bool send_to_brisc,
         bool force_watcher_no_inline);
-    int GetPort(FDKernel* other, std::vector<FDKernel*>& kernels) {
+
+    int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
             if (kernels[idx] == other) {
                 return idx;
