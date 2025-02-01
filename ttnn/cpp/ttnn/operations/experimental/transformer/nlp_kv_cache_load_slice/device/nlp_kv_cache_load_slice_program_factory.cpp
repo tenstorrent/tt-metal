@@ -19,7 +19,7 @@ using namespace tt;
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_runtime_args_tile_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& output_tensor_start,
+    const ttnn::Shape& output_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores_x,
     uint32_t num_tiles_per_core) {
@@ -30,8 +30,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_id =
-        ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, Shape(output_tensor_start));
+    uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
@@ -52,10 +51,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 }
 
 operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice(
-    const Tensor& a,
-    Tensor& output,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const auto output_shape = output.get_padded_shape();
     const auto input_shape = a.get_padded_shape();
 

@@ -67,7 +67,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
 
     uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
     uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
@@ -299,22 +300,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
                 .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
-    auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
-    auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
-    auto input_y = input_shape.rank() >= 2 ? input_shape[-2] : 1;
-    auto input_x = input_shape[-1];
-
-    auto output_w = output_shape.rank() >= 4 ? output_shape[-4] : 1;
-    auto output_z = output_shape.rank() >= 3 ? output_shape[-3] : 1;
-    auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
-    auto output_x = output_shape[-1];
-
-    Padding padding(
-        {{0, input_w - output_w}, {0, input_z - output_z}, {0, input_y - output_y}, {0, input_x - output_x}},
-        Padding::PadValue::Any);
     uint32_t tile_height = output.get_tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
-        output_shape, padding, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
+        output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;

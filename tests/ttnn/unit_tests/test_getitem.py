@@ -110,7 +110,7 @@ def test_getitem_non_tile_boundary(device, batch_sizes, height, width, input_lay
         raise RuntimeError("Invalid batch size")
     assert output_tensor.layout == input_layout
     assert output_tensor.shape[-1] == 1
-    assert output_tensor.shape.with_tile_padding()[-1] == 32
+    assert output_tensor.padded_shape[-1] == 32
 
     output_tensor = ttnn.to_torch(output_tensor)
 

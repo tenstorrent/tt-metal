@@ -90,7 +90,7 @@ void validate_shard_spec_with_tensor_shape(const TensorSpec& tensor_spec) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorSpec::TensorSpec(ttnn::SimpleShape logical_shape, TensorLayout tensor_layout) :
+TensorSpec::TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
     cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),

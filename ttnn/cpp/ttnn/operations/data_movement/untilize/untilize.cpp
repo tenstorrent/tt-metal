@@ -20,16 +20,18 @@ using MassagedUntilize = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedUntilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<std::pair<ttnn::Shape, ttnn::Shape>>();
     return MassagedUntilize(MassagedUntilizeParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeArgs {
-            *original_shape = input_tensor.get_shape();
+            *original_shape = std::make_pair(input_tensor.get_logical_shape(), input_tensor.get_padded_shape());
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
+            auto unsqueezed_tensor = ttnn::reshape(output, original_shape->first, original_shape->second);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_untilize)});

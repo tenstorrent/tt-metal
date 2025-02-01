@@ -155,19 +155,18 @@ MorehMatmulOperation::spec_return_value_t MorehMatmulOperation::compute_output_s
     output_dim[output_rank - 2] = h;
     output_dim[output_rank - 1] = w;
 
-    tt::tt_metal::LegacyShape output_shape{output_dim};
-    auto padding = output_shape.padding();
-    // padding for t logmatrix dims
-    padding[output_rank - 2] = Padding::PadDimension{0, h - h_wo_padding};
-    padding[output_rank - 1] = Padding::PadDimension{0, w - w_wo_padding};
-    Shape result_shape({tt::tt_metal::LegacyShape(output_shape, padding)});
+    ttnn::Shape output_shape({output_dim});
+    ttnn::Shape output_shape_wo_padding = output_shape;
+    output_shape_wo_padding[output_rank - 2] = h_wo_padding;
+    output_shape_wo_padding[output_rank - 1] = w_wo_padding;
     return TensorSpec(
-        result_shape.logical_shape(),
-        TensorLayout::fromLegacyPaddedShape(
+        output_shape_wo_padding,
+        TensorLayout::fromPaddedShape(
             tensor_args.input.get_dtype(),
             PageConfig(Layout::TILE),
             operation_attributes.output_memory_config,
-            result_shape));
+            output_shape_wo_padding,
+            output_shape));
 }
 
 std::tuple<MorehMatmulOperation::operation_attributes_t, MorehMatmulOperation::tensor_args_t>

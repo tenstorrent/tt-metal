@@ -28,7 +28,7 @@ TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     const auto device_id = 0;
     auto& device = ttnn::open_device(device_id);
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
-    ttnn::SimpleShape shape(dimensions);
+    ttnn::Shape shape(dimensions);
 
     {
         const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);

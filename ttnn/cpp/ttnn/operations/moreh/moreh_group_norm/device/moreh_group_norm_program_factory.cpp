@@ -45,14 +45,14 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_shape = input.get_shape();
+    const auto input_shape = input.get_padded_shape();
 
-    const auto n = input_shape.value[0];
-    const auto c = input_shape.value[1];
-    const auto h = input_shape.value[2];
-    const auto w = input_shape.value[3];
+    const auto n = input_shape[0];
+    const auto c = input_shape[1];
+    const auto h = input_shape[2];
+    const auto w = input_shape[3];
 
-    const auto origin_input_shape = input_shape.value.without_padding();
+    const auto origin_input_shape = input.get_logical_shape();
 
     const auto origin_h = origin_input_shape[2];
     const auto origin_w = origin_input_shape[3];
@@ -135,7 +135,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
                            im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
                           single_tile_size;
-    const auto available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
 
     if (use_large_algorithm) {

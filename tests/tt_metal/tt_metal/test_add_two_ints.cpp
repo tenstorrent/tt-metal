@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

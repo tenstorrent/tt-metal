@@ -4,7 +4,6 @@
 
 #include <host_api.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
@@ -65,7 +64,7 @@ void write_go_signal(
     run_program_go_signal.dispatch_message_offset = 0;
 
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(cq.device()->id());
-    uint32_t dispatch_message_addr = dispatch_constants::get(dispatch_core_type)
+    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type)
                                          .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
     go_signal_cmd_sequence.add_notify_dispatch_s_go_signal_cmd(

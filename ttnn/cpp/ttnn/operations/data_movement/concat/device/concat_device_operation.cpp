@@ -44,7 +44,7 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
         // last tensor can support without any kernel changes
-        if (in_ref.get_layout() == Layout::TILE and in_ref.get_shape().has_tile_padding(this->dim)) {
+        if (in_ref.get_layout() == Layout::TILE and in_ref.get_logical_shape()[dim] != in_ref.get_padded_shape()[dim]) {
             warn_about_alignment = true;
         }
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
@@ -108,10 +108,10 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
 std::vector<ttnn::TensorSpec> ConcatDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const Tensor& ref_in_tensor = input_tensors.at(0);
-    ttnn::SimpleShape shape_out = ref_in_tensor.get_logical_shape();
+    ttnn::Shape shape_out = ref_in_tensor.get_logical_shape();
     shape_out[this->dim] = 0;
     for (const Tensor& in_ref : input_tensors) {
-        ttnn::SimpleShape curr_shape = in_ref.get_logical_shape();
+        ttnn::Shape curr_shape = in_ref.get_logical_shape();
         shape_out[this->dim] += curr_shape[this->dim];
     }
 
@@ -189,7 +189,7 @@ Tensor concat_impl(
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        ttnn::SimpleShape pad_shape =
+                        ttnn::Shape pad_shape =
                             ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
                                 input_tensor.get_padded_shape());
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{

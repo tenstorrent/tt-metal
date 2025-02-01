@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <sys/types.h>
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
 
 #include "conv2d_utils.hpp"
 #include <tt-metalium/buffer_constants.hpp>
+#include "tt-metalium/hal.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -242,7 +244,7 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 }
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
-    const ttnn::SimpleShape& tensor_shape, const ParallelConfig& parallel_config, uint32_t tile_size) {
+    const ttnn::Shape& tensor_shape, const ParallelConfig& parallel_config, uint32_t tile_size) {
     log_debug(
         tt::LogOp,
         "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}",
@@ -480,7 +482,7 @@ static TensorMemoryLayout select_shard_spec(
 }
 
 template <typename T>
-static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
+static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
     T* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -616,7 +618,7 @@ static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_pa
                 tt::round_up(input_shape[3], conv_config.input_channels_alignment);
         }
 
-        auto input_padded_shape = ttnn::SimpleShape(
+        auto input_padded_shape = ttnn::Shape(
             {1,
              1,
              input_tensor_height_snapped_to_tile,
@@ -624,8 +626,7 @@ static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_pa
                                                                   // tt::tt_metal::LegacyShape issue to clean up next
                                                                   // line
         MemoryConfig input_tensor_sharded_memory_config = create_sharded_memory_config_from_parallel_config(
-            ttnn::SimpleShape(
-                {input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
+            ttnn::Shape({input_padded_shape[0], input_padded_shape[1], input_padded_shape[2], input_padded_shape[3]}),
             parallel_config,
             round_up_size);
 
@@ -681,7 +682,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
         if (input_shape[0] != 1 or input_shape[1] != 1) {
             const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
             const uint32_t channels = input_shape[3];
-            ttnn::SimpleShape new_shape({1, 1, nhw, channels});
+            ttnn::Shape new_shape({1, 1, nhw, channels});
             input_tensor = ttnn::reshape(input_tensor, new_shape);
             input_shape = new_shape;
         }
@@ -892,7 +893,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         out_channels_padded = tt::round_up(out_channels, 32);
     }
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::SimpleShape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
+        ttnn::Shape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
     ParallelConfig largest_parallel_config =
         output_parallel_config.grid.num_cores() > input_parallel_config.grid.num_cores() ? output_parallel_config
                                                                                          : input_parallel_config;
@@ -936,9 +937,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape,
-    const Shape& weights_shape,
-    const Shape& output_shape,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& padded_weights_shape,
+    const ttnn::Shape& output_shape,
     uint32_t output_channels,
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
@@ -969,8 +970,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_num_tiles = block_config.act_block_h_ntiles * act_block_w_ntiles;
 
-    uint32_t weight_matrix_height = weights_shape.padded_shape()[2];
-    uint32_t weight_matrix_width = weights_shape.padded_shape()[3];
+    uint32_t weight_matrix_height = padded_weights_shape[2];
+    uint32_t weight_matrix_width = padded_weights_shape[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / tt::constants::TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 
@@ -982,6 +983,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t num_blocks_act_h_per_core =
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
+
+    // TODO: this needs to be changed - needs to be independent from dram alignment
+    const uint32_t alignment_bytes = std::max(hal.get_alignment(HalMemType::L1), hal.get_alignment(HalMemType::DRAM));
 
     if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
@@ -1061,7 +1065,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1164,7 +1168,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (output_dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, 32) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1258,8 +1262,7 @@ template bool check_non_tile_mul_width<IDevice>(
 template bool check_non_tile_mul_width<MeshDevice>(
     MeshDevice* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
-template std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool>
-get_conv_padded_input_shape_and_mem_config<IDevice>(
+template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
     IDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -1271,8 +1274,7 @@ get_conv_padded_input_shape_and_mem_config<IDevice>(
     bool is_mm_conv,
     bool is_non_tile_mul_width);
 
-template std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool>
-get_conv_padded_input_shape_and_mem_config<MeshDevice>(
+template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
     MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,

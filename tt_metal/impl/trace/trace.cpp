@@ -77,7 +77,7 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
     uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(
-        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
+        unpadded_size, cq.device()->allocator()->get_num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
     uint64_t padded_size = round_up(unpadded_size, page_size);
     size_t numel_padding = (padded_size - unpadded_size) / sizeof(uint32_t);
     if (numel_padding > 0) {
@@ -85,7 +85,7 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     }
     const auto current_trace_buffers_size = cq.device()->get_trace_buffers_size();
     cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = cq.device()->get_initialized_allocator()->config.trace_region_size;
+    auto trace_region_size = cq.device()->allocator()->get_config().trace_region_size;
     TT_FATAL(
         cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",

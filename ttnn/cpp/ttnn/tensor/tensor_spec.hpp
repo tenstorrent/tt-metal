@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 
 class TensorSpec final {
 public:
-    TensorSpec(ttnn::SimpleShape logical_shape, TensorLayout tensor_layout);
+    TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout);
     TensorSpec(TensorSpec&&) noexcept = default;
     TensorSpec& operator=(TensorSpec&&) = default;
     TensorSpec(const TensorSpec&) = default;
@@ -19,16 +19,15 @@ public:
     bool operator==(const TensorSpec&) const = default;
     bool operator!=(const TensorSpec&) const = default;
 
-    const ttnn::SimpleShape& logical_shape() const { return logical_shape_; }
+    const ttnn::Shape& logical_shape() const { return logical_shape_; }
     const TensorLayout& tensor_layout() const { return tensor_layout_; }
     DataType data_type() const { return tensor_layout_.get_data_type(); }
     Layout layout() const { return tensor_layout_.get_layout(); }
     PageConfig page_config() const { return tensor_layout_.get_page_config(); }
     const MemoryConfig& memory_config() const { return tensor_layout_.get_memory_config(); }
-    const ttnn::SimpleShape& padded_shape() const { return cached_padded_shape_; }
+    const ttnn::Shape& padded_shape() const { return cached_padded_shape_; }
     const Shape2D& logical_2d_shape() const { return cached_logical_2d_shape_; }
     const Shape2D& physical_shape() const { return cached_physical_shape_; }
-    ttnn::Shape shape() const { return ttnn::Shape(logical_shape_.view(), cached_padded_shape_.view()); }
 
     Tile tile() const { return tensor_layout_.get_tile(); }
 
@@ -45,10 +44,10 @@ public:
     const auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }
 
 private:
-    ttnn::SimpleShape logical_shape_;
+    ttnn::Shape logical_shape_;
     TensorLayout tensor_layout_;
 
-    ttnn::SimpleShape cached_padded_shape_;
+    ttnn::Shape cached_padded_shape_;
     Shape2D cached_logical_2d_shape_;
     Shape2D cached_physical_shape_;
 };

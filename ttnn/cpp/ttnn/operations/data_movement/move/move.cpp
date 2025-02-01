@@ -72,7 +72,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
@@ -103,7 +103,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     }
 
     bool fits_in_cb =
-        (output_tensor.device()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
+        (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
         (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
                                                                        : output_tensor.device()->l1_size_per_core());
 

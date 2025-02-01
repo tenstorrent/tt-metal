@@ -18,13 +18,14 @@
 #include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
 
 // assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -61,10 +62,10 @@ SubDeviceManager::~SubDeviceManager() {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator) {
             // Clear the bank managers, this makes subsequent buffer deallocations fast
-            allocator::clear(*allocator);
+            allocator->clear();
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
-            const auto& allocated_buffers = allocator::get_allocated_buffers(*allocator);
+            const auto& allocated_buffers = allocator->get_allocated_buffers();
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
             }
@@ -107,7 +108,7 @@ uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id
     return noc_unicast_data_start_index_[sub_device_index];
 }
 
-const std::unique_ptr<Allocator>& SubDeviceManager::get_initialized_allocator(SubDeviceId sub_device_id) const {
+const std::unique_ptr<Allocator>& SubDeviceManager::allocator(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     TT_FATAL(sub_device_allocators_[sub_device_index], "SubDevice allocator not initialized");
     return sub_device_allocators_[sub_device_index];
@@ -136,7 +137,7 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
-        if (allocator && allocator->allocated_buffers.size() > 0) {
+        if (allocator && allocator->get_allocated_buffers().size() > 0) {
             return true;
         }
     }
@@ -237,7 +238,7 @@ void SubDeviceManager::populate_sub_allocators() {
     if (local_l1_size_ == 0) {
         return;
     }
-    const auto& global_allocator_config = device_->get_initialized_allocator()->config;
+    const auto& global_allocator_config = device_->allocator()->get_config();
     // Construct allocator config from soc_desc
     // Take max alignment to satisfy NoC rd/wr constraints
     // Tensix/Eth -> PCIe/DRAM src and dst addrs must be L1_ALIGNMENT aligned
@@ -254,7 +255,7 @@ void SubDeviceManager::populate_sub_allocators() {
         l1_bank_remap.reserve(compute_cores_vec.size());
         for (const auto& core : compute_cores_vec) {
             // These are compute cores, so they should have a single bank
-            l1_bank_remap.push_back(device_->bank_ids_from_logical_core(BufferType::L1, core)[0]);
+            l1_bank_remap.push_back(device_->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0]);
         }
         AllocatorConfig config(
             {.num_dram_channels = global_allocator_config.num_dram_channels,
@@ -304,7 +305,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = device_->dispatch_go_signal_noc();
+    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
@@ -333,10 +334,10 @@ void SubDeviceManager::populate_noc_data() {
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];
 
         TT_FATAL(
-            idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            idx <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             "NOC data entries {} exceeds maximum supported size {}",
             idx,
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 
