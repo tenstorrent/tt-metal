@@ -430,30 +430,6 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
 }
 
 template <typename PackedSubCmd>
-uint32_t get_max_write_packed_sub_cmds(
-    uint32_t data_size, uint32_t max_prefetch_cmd_size, uint32_t packed_write_max_unicast_sub_cmds, bool no_stride) {
-    static_assert(
-        std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value or
-        std::is_same<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>::value);
-    constexpr bool is_unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
-    uint32_t sub_cmd_sizeB =
-        is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-    // Approximate calculation due to alignment
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    uint32_t max_prefetch_size = max_prefetch_cmd_size - sizeof(CQPrefetchCmd) - hal.get_alignment(HalMemType::HOST) -
-                                 sizeof(CQDispatchCmd) - l1_alignment;
-    uint32_t max_prefetch_num_packed_cmds =
-        no_stride ? (max_prefetch_size - tt::align(data_size * sizeof(uint32_t), l1_alignment)) / sub_cmd_sizeB
-                  : max_prefetch_size / (tt::align(data_size * sizeof(uint32_t), l1_alignment) + sub_cmd_sizeB);
-
-    uint32_t packed_write_max_multicast_sub_cmds =
-        get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
-    return std::min(
-        max_prefetch_num_packed_cmds,
-        is_unicast ? packed_write_max_unicast_sub_cmds : packed_write_max_multicast_sub_cmds);
-};
-
-template <typename PackedSubCmd>
 void generate_runtime_args_cmds(
     std::vector<HostMemDeviceCommand>& runtime_args_command_sequences,
     const uint32_t& l1_arg_base_addr,
@@ -493,7 +469,8 @@ void generate_runtime_args_cmds(
     constexpr bool unicast = std::is_same<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>::value;
 
     uint32_t num_packed_cmds_in_seq = sub_cmds.size();
-    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<PackedSubCmd>(
+    DeviceCommandCalculator calculator;
+    uint32_t max_packed_cmds = calculator.get_max_write_packed_sub_cmds<PackedSubCmd>(
         max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, no_stride);
     uint32_t offset_idx = 0;
     if (no_stride) {
@@ -568,6 +545,7 @@ void assemble_runtime_args_commands(
 
     program_command_sequence.runtime_args_command_sequences = {};
     uint32_t command_count = 0;
+    const DeviceCommandCalculator calculator;
 
     // Unique RTAs
     for (uint32_t programmable_core_type_index = 0;
@@ -581,8 +559,9 @@ void assemble_runtime_args_commands(
             if (kg->total_rta_size != 0) {
                 uint32_t num_sub_cmds = kg->core_ranges.num_cores();
                 uint32_t max_runtime_args_len = kg->total_rta_size / sizeof(uint32_t);
-                uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<decltype(unique_sub_cmds)::value_type>(
-                    max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
+                uint32_t max_packed_cmds =
+                    calculator.get_max_write_packed_sub_cmds<decltype(unique_sub_cmds)::value_type>(
+                        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
                 command_count += div_up(num_sub_cmds, max_packed_cmds);
             }
         }
@@ -605,13 +584,15 @@ void assemble_runtime_args_commands(
                 CoreType core_type = hal.get_core_type(programmable_core_type_index);
                 if (core_type == CoreType::ETH) {
                     uint32_t num_sub_cmds = kernel->logical_cores().size();
-                    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
-                        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
+                    uint32_t max_packed_cmds =
+                        calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedUnicastSubCmd>(
+                            max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
                     command_count += div_up(num_sub_cmds, max_packed_cmds);
                 } else {
                     uint32_t num_sub_cmds = kernel->logical_coreranges().size();
-                    uint32_t max_packed_cmds = get_max_write_packed_sub_cmds<CQDispatchWritePackedMulticastSubCmd>(
-                        max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
+                    uint32_t max_packed_cmds =
+                        calculator.get_max_write_packed_sub_cmds<CQDispatchWritePackedMulticastSubCmd>(
+                            max_runtime_args_len, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, true);
                     command_count += div_up(num_sub_cmds, max_packed_cmds);
                 }
             }
@@ -788,31 +769,6 @@ void assemble_runtime_args_commands(
     program_command_sequence.runtime_args_fetch_size_bytes = runtime_args_fetch_size_bytes;
 }
 
-template <typename PackedSubCmd>
-void insert_write_packed_payloads(
-    DeviceCommandCalculator& calculator,
-    const uint32_t num_sub_cmds,
-    const uint32_t sub_cmd_sizeB,
-    const uint32_t max_prefetch_command_size,
-    const uint32_t packed_write_max_unicast_sub_cmds,
-    std::vector<std::pair<uint32_t, uint32_t>>& packed_cmd_payloads) {
-    uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const uint32_t aligned_sub_cmd_sizeB = tt::align(sub_cmd_sizeB, l1_alignment);
-    const uint32_t max_packed_sub_cmds_per_cmd = get_max_write_packed_sub_cmds<PackedSubCmd>(
-        aligned_sub_cmd_sizeB, max_prefetch_command_size, packed_write_max_unicast_sub_cmds, false);
-    uint32_t rem_num_sub_cmds = num_sub_cmds;
-    while (rem_num_sub_cmds != 0) {
-        const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
-        const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
-        const uint32_t dispatch_cmd_sizeB =
-            tt::align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
-        packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
-        rem_num_sub_cmds -= num_sub_cmds_in_cmd;
-        calculator.add_dispatch_write_packed<PackedSubCmd>(
-            num_sub_cmds_in_cmd, sub_cmd_sizeB, packed_write_max_unicast_sub_cmds);
-    }
-}
-
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     DeviceCommandCalculator calculator;
@@ -890,8 +846,7 @@ void assemble_device_commands(
                         transfer_info.data.data(), transfer_info.data.size() * sizeof(uint32_t));
                 }
             }
-            insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
-                calculator,
+            calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
                 unicast_sem_sub_cmds[i].size(),
                 unicast_sem_dst_size.back().second,
                 max_prefetch_command_size,
@@ -1196,8 +1151,7 @@ void assemble_device_commands(
         }
     }
     if (multicast_go_signal_sub_cmds.size() > 0) {
-        insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
-            calculator,
+        calculator.insert_write_packed_payloads<CQDispatchWritePackedMulticastSubCmd>(
             multicast_go_signal_sub_cmds.size(),
             go_signal_sizeB,
             max_prefetch_command_size,
@@ -1233,8 +1187,7 @@ void assemble_device_commands(
     }
 
     if (unicast_go_signal_sub_cmds.size() > 0) {
-        insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
-            calculator,
+        calculator.insert_write_packed_payloads<CQDispatchWritePackedUnicastSubCmd>(
             unicast_go_signal_sub_cmds.size(),
             go_signal_sizeB,
             max_prefetch_command_size,
