@@ -1,0 +1,12 @@
+apt-utils
+dialog
+git
+pandoc
+libtbb-dev
+libcapstone-dev
+pkg-config
+curl
+wget
+python3-dev
+cargo
+bc
