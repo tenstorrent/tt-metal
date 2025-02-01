@@ -72,44 +72,30 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Inspect
-        shell: bash
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_any
+          path: /work/
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: Srsly
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+          path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
+      - name: Proper packaging can't come soon enough
         run: |
-          set -x
-          pwd
-          ls -al
-          whoami
-          touch foo
-          ls -al
+          mkdir -p tt_metal
+          ls -al tt_metal
+          cp -a deleteme/tt_metal/soc_descriptors tt_metal/
+          ls -al tt_metal/soc_descriptors
 
-      # - uses: actions/download-artifact@v4
-      #   with:
-      #     name: TTMetal_build_any
-      #     path: /work/
-      # - name: Extract files
-      #   run: tar -xvf ttm_any.tar
-      # - name: Srsly
-      #   uses: actions/checkout@v3
-      #   with:
-      #     fetch-depth: 1
-      #     path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
-      # - name: Proper packaging can't come soon enough
-      #   run: |
-      #     mkdir -p tt_metal
-      #     ls -al tt_metal
-      #     cp -a deleteme/tt_metal/soc_descriptors tt_metal/
-      #     ls -al tt_metal/soc_descriptors
-
-      # - name: Inspect post DL / extract
-      #   run: |
-      #     set -x
-      #     pwd
-      #     ls -al
       - name: Run a test
         env:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
           ./build/test/tt_metal/unit_tests_device
+
       - name: Cleanup
         if: always()
         run: |
@@ -118,10 +104,8 @@ jobs:
           ls -al /__w/tt-metal/tt-metal
           rm -rf /__w/tt-metal/tt-metal/deleteme
           rm -rf /__w/tt-metal/tt-metal/docker-job
+          rm -rf /__w/tt-metal/tt-metal/foo
           echo "post rm"
           ls -al /__w/tt-metal/tt-metal
 
           cat /__w/tt-metal/tt-metal/semicolon_delimited_script
-
-          # rm -rf ${{ github.workspace }}/deleteme
-          # rm -rf ${{ github.workspace }}/docker-job
