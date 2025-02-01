@@ -29,13 +29,25 @@ jobs:
       - name: Run script
         id: compute_api
         run: |
-          python3 compute_public_api_surface.py > api_surface.json
-          cat api_surface.json
+          python3 compute_public_api_surface.py > raw_output.json
+          cat raw_output.json
+
+      - name: Reformat JSON for Slack
+        run: |
+          date=$(jq -r '.date' raw_output.json)
+          num_files=$(jq -r '.num_files' raw_output.json)
+          num_types=$(jq -r '.num_types' raw_output.json)
+          num_methods=$(jq -r '.num_methods' raw_output.json)
+
+          jq -n --arg date "$date" --arg num_files "$num_files" --arg num_types "$num_types" --arg num_methods "$num_methods" \
+            '{"text": "*Public API Surface Report* 📊\n📅 *Date:* \($date)\n📂 *Files:* \($num_files)\n🔠 *Types:* \($num_types)\n🔧 *Methods:* \($num_methods)"}' > slack_payload.json
+
+          cat slack_payload.json  # Debugging step to verify correct JSON
 
       - name: Send Slack message to a channel
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          payload-file-path: "./api_surface.json"
+          payload-file-path: "./slack_payload.json"
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_CHANNEL_ID: C08BAGE4410
