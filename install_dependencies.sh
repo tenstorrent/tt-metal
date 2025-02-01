@@ -84,14 +84,17 @@ done
 # libmpc, libmfpr, libgmp, libz
 # For the time being it will be assumed that these packages come from the base Ubuntu image
 
+# I would prefer to not be using -dev packages for runtime dependencies
+# But I have not been able to verify any alternative package
+
 ub_runtime_packages()
 {
     UB_RUNTIME_LIST=(\
      python3-pip \
      libhwloc-dev \
      libnuma-dev \
-     libc++1 \
-     libc++abi1 \
+     libc++-17-dev \
+     libc++abi-17-dev \
     )
 }
 
