@@ -87,17 +87,15 @@ jobs:
         run: |
           mkdir -p tt_metal
           ls -al tt_metal
+          cp -a deleteme/tt_metal/soc_descriptors tt_metal/
           cp -a deleteme/tt_metal/core_descriptors tt_metal/
+          ls -al tt_metal/soc_descriptors
           ls -al tt_metal/core_descriptors
 
       - name: Run a test
         env:
           LD_LIBRARY_PATH: /work/build/lib
         run: |
-          ls -al  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          # file  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          # head  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
-          # tail  ./tt_metal/core_descriptors/blackhole_140_arch.yaml
           ./build/test/tt_metal/unit_tests_noc
 
       - name: Cleanup
