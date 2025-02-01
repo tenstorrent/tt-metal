@@ -37,7 +37,7 @@ RUN mkdir -p /tmp/doxygen \
 RUN mkdir -p /tmp/cba \
     && wget -O /tmp/cba/cba.tar.gz https://github.com/aras-p/ClangBuildAnalyzer/archive/refs/tags/v1.6.0.tar.gz \
     && tar -xzf /tmp/cba/cba.tar.gz -C /tmp/cba --strip-components=1 \
-    && cmake -S /tmp/cba/ -B /tmp/cba/build -DBUILD_TYPE=Release \
+    && cmake -S /tmp/cba/ -B /tmp/cba/build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /tmp/cba/build \
     && cmake --install /tmp/cba/build \
     && rm -rf /tmp/cba
