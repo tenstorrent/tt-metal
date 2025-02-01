@@ -10,7 +10,7 @@ on:
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
-        value: ${{ jobs.check-docker-images.outputs.ci-build-tag }}
+        value: 'foobar & ${{ jobs.check-docker-images.outputs.ci-build-tag }}'
       ci-test.tag:
         description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.ci-test-tag }}
