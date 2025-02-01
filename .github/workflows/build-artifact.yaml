@@ -68,16 +68,6 @@ jobs:
     with:
       os: ${{ inputs.os }}
 
-  debug:
-    name: "Debug the outputs"
-    needs: build-docker-image
-    runs-on: ubuntu-latest
-    steps:
-      - name: dump
-        run: |
-          echo "ci-build-tag=${{ needs.build-docker-image.outputs.ci-build-tag }}"
-          echo "ci-test-tag=${{ needs.build-docker-image.outputs.ci-test-tag }}"
-
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
     needs: build-docker-image
