@@ -6,6 +6,14 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+
 jobs:
   compute_and_notify:
     runs-on: ubuntu-latest
@@ -50,7 +58,7 @@ jobs:
           payload: |
             {
               "text": " date: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
-              "owner": "${{ env.SLACK_CHANNEL_ID }}"
+              "channel": "${{ env.SLACK_CHANNEL_ID }}"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
