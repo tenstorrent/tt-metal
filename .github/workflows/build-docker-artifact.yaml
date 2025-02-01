@@ -76,6 +76,7 @@ jobs:
   debug:
     name: "Debug the outputs"
     needs: check-docker-images
+    runs-on: ubuntu-latest
     steps:
       - name: dump
         run: |
