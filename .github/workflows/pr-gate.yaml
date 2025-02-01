@@ -116,6 +116,7 @@ jobs:
             echo "BUILD_IMAGE_EXISTS=true" >> $GITHUB_ENV
           else
             echo "BUILD_IMAGE_EXISTS=false" >> $GITHUB_ENV
+          fi
 
       - name: Query TEST_IMAGE_EXISTS
         id: test_image_exists
@@ -125,6 +126,7 @@ jobs:
             echo "TEST_IMAGE_EXISTS=true" >> $GITHUB_ENV
           else
             echo "TEST_IMAGE_EXISTS=false" >> $GITHUB_ENV
+          fi
 
       - name: Output results
         run: |
