@@ -121,5 +121,7 @@ jobs:
           echo "post rm"
           ls -al /__w/tt-metal/tt-metal
 
+          cat /__w/tt-metal/tt-metal/semicolon_delimited_script
+
           # rm -rf ${{ github.workspace }}/deleteme
           # rm -rf ${{ github.workspace }}/docker-job
