@@ -45,12 +45,24 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/trace/trace_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/event/event.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_from_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types_to_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types_from_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types_to_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_from_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_to_flatbuffer.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
-set(FLATBUFFER_SCHEMAS) # Empty to start, coming soon.
+set(FLATBUFFER_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/light_metal_binary.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/command.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/base_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
+)
 
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE})

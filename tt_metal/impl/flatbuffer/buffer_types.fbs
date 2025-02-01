@@ -1,0 +1,59 @@
+include "flatbuffer/base_types.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+enum BufferType: ushort {
+  DRAM = 0,
+  L1 = 1,
+  SystemMemory = 2,
+  L1Small = 3,
+  Trace = 4,
+}
+
+enum TensorMemoryLayout: ushort {
+  None = 0,
+  Interleaved = 1,
+  SingleBank = 2,
+  HeightSharded = 3,
+  WidthSharded = 4,
+  BlockSharded = 5,
+}
+
+table InterleavedBufferConfig {
+  device_id: int; // Reference to IDevice *device;
+  size: int; // Size in bytes
+  page_size: int; // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+  buffer_type: BufferType;
+  buffer_layout: TensorMemoryLayout;
+}
+
+struct CBConfigPageSize {
+  index: uint32;  // The index in the array
+  size: uint32;   // The page-size value for this index
+}
+
+struct CBConfigDataFormat {
+  index: uint32;  // The index in the array
+  format: DataFormat; // The data format for this index
+}
+
+
+struct CBConfigTile {
+  index: uint32;  // The index in the array
+  tile: Tile;     // The tile for this index
+}
+
+table CircularBufferConfig {
+  total_size: uint32;
+  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  data_formats: [CBConfigDataFormat]; // Mimic optional array in C++ by using KV map.
+  page_sizes: [CBConfigPageSize];     // Mimic optional array in C++ by using KV map.
+  tiles: [CBConfigTile];              // Mimic optional array in C++ by using KV map.
+  shadow_buf_global_id: uint32;
+  buffer_indices: [uint8];
+  local_buffer_indices: [uint8];
+  remote_buffer_indices: [uint8];
+  dynamic_cb: bool;
+  max_size: uint32;
+  buffer_size: uint32;
+}
