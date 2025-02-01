@@ -120,7 +120,8 @@ jobs:
         if: always()
         run: |
           set -x
-          ls -al ${{ github.workspace }}
+          ls -al __w/tt-metal
+          ls -al __w/tt-metal/tt-metal
           # rm -rf ${{ github.workspace }}/deleteme
           # rm -rf ${{ github.workspace }}/docker-job
 
