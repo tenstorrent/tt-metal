@@ -76,7 +76,7 @@ jobs:
       - name: dump
         run: |
           echo "ci-build-tag=${{ needs.build-docker-image.outputs.ci-build-tag }}"
-          echo "ci-test-tag=${{ needs.build-docker-image.outputs.ci-test.tag }}"
+          echo "ci-test-tag=${{ needs.build-docker-image.outputs.ci-test-tag }}"
 
   build-artifact:
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.os }}"
@@ -129,7 +129,7 @@ jobs:
       - name: Build tt-metal and libs
         uses: tenstorrent/docker-run-action@v5
         with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
           options: |
             --rm
             --tmpfs /tmp
