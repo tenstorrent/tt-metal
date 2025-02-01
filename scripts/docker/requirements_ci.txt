@@ -2,6 +2,7 @@ sudo
 apt-utils
 dialog
 git
+graphviz
 pandoc
 libtbb-dev
 libcapstone-dev
