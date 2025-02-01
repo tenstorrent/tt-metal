@@ -641,6 +641,12 @@ static std::tuple<ttnn::SimpleShape, ttnn::MemoryConfig, bool, bool> get_conv_pa
     }
 }
 
+static ttnn::SimpleShape flatten_spatial_dimensions_in_shape(const ttnn::SimpleShape& input_shape) {
+    const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
+    const uint32_t channels = input_shape[3];
+    return ttnn::SimpleShape{1, 1, nhw, channels};
+}
+
 template <typename T>
 std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_tensor_if_required(
     T* device,
@@ -678,28 +684,20 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig, bool> shard_or_reshard_
     ParallelConfig output_parallel_config =
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
-    if (needs_shard_or_reshard) {
-        auto input_shape = input_tensor.get_logical_shape();
-        if (input_shape[0] != 1 or input_shape[1] != 1) {
-            const uint32_t nhw = input_shape[0] * input_shape[1] * input_shape[2];
-            const uint32_t channels = input_shape[3];
-            ttnn::SimpleShape new_shape({1, 1, nhw, channels});
-            input_tensor = ttnn::reshape(input_tensor, new_shape);
-            input_shape = new_shape;
-        }
+    auto input_shape = input_tensor.get_logical_shape();  // we can have unflattened (n, h, w, c) tensors here
+    const auto flattened_input_shape = flatten_spatial_dimensions_in_shape(input_shape);
+    input_tensor = ttnn::reshape(input_tensor, flattened_input_shape);
+    input_shape = flattened_input_shape;
 
+    if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
-
         if (!input_tensor_on_device) {
             if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
                 input_tensor = ttnn::pad(
                     input_tensor,
                     tt::tt_metal::Array4D(
-                        {input_shape[0],
-                         input_shape[1],
-                         input_padded_shape[-2],
-                         input_padded_shape[-1]}),
+                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
                     0);
             }
