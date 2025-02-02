@@ -46,6 +46,7 @@ jobs:
         uses: tj-actions/changed-files@v45
         with:
           files: |
+              install_dependencies.sh
               dockerfile/Dockerfile
               scripts/docker/install_test_deps.sh
               scripts/docker/requirements*
