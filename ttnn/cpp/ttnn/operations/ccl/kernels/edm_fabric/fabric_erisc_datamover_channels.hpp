@@ -15,6 +15,7 @@
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 namespace tt::fabric {
 // Increments val and wraps to 0 if it reaches limit
@@ -209,6 +210,7 @@ struct EdmChannelWorkerInterface {
     //
     [[nodiscard]] FORCE_INLINE bool has_payload(uint8_t local_rdptr) {
         DPRINT << "\t*remote_producer_wrptr: " << (uint32_t)*remote_producer_wrptr << "\n";
+        DPRINT << "\tlocal_rdpt: " << (uint32_t)local_rdptr << "\n";
         return local_rdptr != *remote_producer_wrptr;
     }
 
@@ -237,12 +239,14 @@ struct EdmChannelWorkerInterface {
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_teardown_semaphore_address);
 
+        // Set connection to unused so it's available for next worker
+        *this->connection_live_semaphore = tt::fabric::WorkerToFabricEdmSender::unused_connection_value;
+
         noc_semaphore_inc(worker_semaphore_address, 1);
     }
 
-    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == 0; }
-
-    [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == 1; }
+    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == tt::fabric::WorkerToFabricEdmSender::close_connection_request_value; }
+    [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == tt::fabric::WorkerToFabricEdmSender::open_connection_value; }
 
     volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr;
     volatile tt_l1_ptr uint32_t *const remote_producer_wrptr;
