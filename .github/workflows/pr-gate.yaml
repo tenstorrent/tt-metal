@@ -127,7 +127,7 @@ jobs:
           cp -a deleteme/tt_metal/hw/ckernels tt_metal/hw/
 
           mkdir -p tests/tt_metal/tt_metal
-          cp -a deleteme/tests/tt_metal/tt_metal/test_kernels tt_metal/tests/tt_metal/tt_metal/
+          cp -a deleteme/tests/tt_metal/tt_metal/test_kernels tests/tt_metal/tt_metal/
 
       - name: Run a test
         env:
