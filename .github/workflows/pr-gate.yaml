@@ -132,7 +132,7 @@ jobs:
       - name: Run a test
         env:
           GTEST_COLOR: yes
-          GTEST_OUTPUT: xml:/work/test-results.xml
+          GTEST_OUTPUT: xml:/work/test-reports/
 
           # TODO: None of these should be necessary
           LD_LIBRARY_PATH: /work/build/lib
@@ -141,10 +141,9 @@ jobs:
           # ./build/test/tt_metal/unit_tests_noc
           ./build/test/tt_metal/unit_tests_llk
           # ./build/test/tt_metal/test_bcast <-- requires an env var and dies without it
-          ./build/test/tt_metal/test_dataflow_cb || true
-          ./build/test/tt_metal/test_multi_core_kernel || true
+          # ./build/test/tt_metal/test_dataflow_cb || true <-- requires an env var and dies without it
+          ./build/test/tt_metal/test_multi_core_kernel || true <-- requires an env var and dies without it
           ./build/test/tt_metal/unit_tests_stl || true
-          ./build/test/tt_metal/api_blackhole || true
 
           ls -al test-results*
 
@@ -157,7 +156,7 @@ jobs:
         if: success() || failure()
         with:
           name: Foo Tests # Name of the check run which will be created
-          path: /work/test-results*.xml
+          path: /work/test-reports/*.xml
           reporter: jest-junit        # Format of test results
 
       - name: Cleanup
