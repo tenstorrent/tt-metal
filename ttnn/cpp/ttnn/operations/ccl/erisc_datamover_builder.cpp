@@ -211,6 +211,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
     log_trace(tt::LogTest, "Sender 1 channel address: {}", this->local_sender_channel_1_buffer_address);
     log_trace(tt::LogTest, "Receiver num buffers: {}", this->receiver_num_buffers);
     log_trace(tt::LogTest, "Receiver channel address: {}", this->local_receiver_channel_buffer_address);
+
     return std::vector<uint32_t>{
         this->firmware_context_switch_interval,
         is_handshake_master,
@@ -231,7 +232,23 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         config.sender_1_channel_base_address,
 
         this->termination_signal_ptr,
-        this->enable_persistent_mode};
+        this->enable_persistent_mode,
+
+        // fabric counters
+        FabricEriscDatamoverConfig::enable_fabric_counters,
+        config.receiver_channel_counters_address,
+        config.sender_channel_0_counters_address,
+        config.sender_channel_1_counters_address,
+
+        // fabric pkt header recording
+        FabricEriscDatamoverConfig::enable_fabric_pkt_header_recording,
+
+        config.receiver_completed_packet_header_cb_address,
+        FabricEriscDatamoverConfig::receiver_completed_packet_header_cb_size_headers,
+        config.sender_0_completed_packet_header_cb_address,
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers,
+        config.sender_1_completed_packet_header_cb_address,
+        FabricEriscDatamoverConfig::sender_completed_packet_header_cb_size_headers};
 }
 
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
