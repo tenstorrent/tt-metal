@@ -44,6 +44,34 @@ namespace ttnn::ccl {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
+    TT_FATAL(
+        (receiver_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_0_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_1_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_0_buffer_index_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_0_worker_conn_info_base_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_0_local_flow_control_semaphore_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_0_producer_terminate_connection_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_1_local_flow_control_semaphore_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+    TT_FATAL(
+        (sender_channel_1_producer_terminate_connection_address % eth_word_l1_alignment == 0),
+        "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
+
     TT_FATAL(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address, "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
     const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
     TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);

@@ -16,6 +16,7 @@
 
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_counters.hpp"
 
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/hal_exp.hpp>
@@ -31,6 +32,7 @@ namespace ccl {
 struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
+    static constexpr std::size_t eth_word_l1_alignment = 16;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
     static constexpr bool enable_fabric_counters = false;
     static constexpr bool enable_fabric_pkt_header_recording = false;
