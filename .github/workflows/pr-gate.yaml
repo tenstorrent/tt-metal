@@ -116,6 +116,9 @@ jobs:
           mkdir -p tt_metal/tools/profiler
           cp deleteme/tt_metal/tools/profiler/kernel_profiler.hpp tt_metal/tools/profiler/
 
+          mkdir -p tt_metal/third_party/umd/device
+          cp -a deleteme/tt_metal/third_party/umd/device/api tt_metal/third_party/umd/device/
+
       - name: Run a test
         env:
           # TODO: None of these should be necessary
