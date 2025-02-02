@@ -146,7 +146,7 @@ Tensor to_layout_impl(
                 output_memory_config =
                     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
-            Shape output_tensor_end(SmallVector<uint32_t>(tensor.get_padded_shape().rank(), 0));
+            Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
