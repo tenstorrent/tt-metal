@@ -384,10 +384,6 @@ void send_next_data(
     auto local_sender_wrptr_buffer_index = local_sender_wrptr.get_buffer_index();
 
     // auto status = tt::fabric::SendStatus::NOT_SENT;
-    if (eth_txq_is_busy()) {
-        DPRINT << "TRIED TO SEND_DATA WHEN TXQ IS BUSY\n";
-        while (1) {run_routing();}
-    }
     ASSERT(!eth_txq_is_busy());
 
     // status = tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC;
@@ -426,14 +422,7 @@ void send_next_data(
         // We weren't able to send the channel_sync_t in one shot with the payload so we need to send a second
         // packet
         // TODO: TUNING - consider busy waiting for a maximum amount of time
-        while (eth_txq_is_busy()) {
-            DPRINT << "Waiting for txq to be free\n";
-            run_routing();
-        }
-        if (eth_txq_is_busy()) {
-            DPRINT << "TRIED TO SEND_CHANNEL_SYNC WHEN TXQ IS BUSY\n";
-            while (1) {run_routing();}
-        }
+        while (eth_txq_is_busy()) {}
         send_channel_sync(
             sender_buffer_channel, local_sender_wrptr, receiver_buffer_channel, remote_receiver_wrptr);
         // } else {
@@ -515,10 +504,6 @@ void receiver_send_received_ack(
     ASSERT(!eth_txq_is_busy());
     DPRINT << "EDMR rsa to " << (uint32_t)sender_buffer_channel.get_bytes_sent_address(sender_ackptr_buffer_index) << " for source channel " << (uint32_t)src_id << "\n";
     DPRINT << "\tbuffer_index " << (uint32_t)sender_ackptr_buffer_index  << "\n";
-    if (eth_txq_is_busy()) {
-        DPRINT << "TRIED TO WRITE WHEN TXQ IS BUSY\n";
-        while (1) {run_routing();}
-    }
     internal_::eth_send_packet_unsafe(
         0,
         local_ack_channel_sync_src_addr >> 4,
