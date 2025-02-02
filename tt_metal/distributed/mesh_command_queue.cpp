@@ -15,11 +15,8 @@ namespace tt::tt_metal::distributed {
 MeshCommandQueue::MeshCommandQueue(MeshDevice* mesh_device, uint32_t id) {
     this->mesh_device_ = mesh_device;
     this->id_ = id;
-    for (int i = 0; i < DispatchSettings::DISPATCH_MESSAGE_ENTRIES; i++) {
-        config_buffer_mgr_[i] = tt::tt_metal::WorkerConfigBufferMgr();
-        program_dispatch::initialize_worker_config_buf_mgr(config_buffer_mgr_[i]);
-        expected_num_workers_completed_[i] = 0;
-    }
+    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+        config_buffer_mgr_, expected_num_workers_completed_, DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     this->populate_virtual_program_dispatch_core();
     this->populate_dispatch_core_type();
 }
@@ -393,8 +390,27 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
 void MeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) {
     for (auto device : mesh_device_->get_devices()) {
-        auto& hw_cq = device->command_queue(id_);
-        hw_cq.reset_worker_state(reset_launch_msg_state, num_sub_devices, go_signal_noc_data);
+        program_dispatch::reset_worker_dispatch_state_on_device(
+            mesh_device_,
+            device->sysmem_manager(),
+            id_,
+            this->virtual_program_dispatch_core(),
+            expected_num_workers_completed_,
+            reset_launch_msg_state);
+        program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
+        program_dispatch::set_go_signal_noc_data_on_dispatch(
+            mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+    }
+    program_dispatch::reset_config_buf_mgrs_and_expected_workers(
+        config_buffer_mgr_, expected_num_workers_completed_, mesh_device_->num_sub_devices());
+    for (auto device : mesh_device_->get_devices()) {
+        for (int i = 0; i < mesh_device_->num_sub_devices(); i++) {
+            device->command_queue(id_).set_expected_num_workers_completed_for_sub_device(i, 0);
+        }
+    }
+    if (reset_launch_msg_state) {
+        auto& sysmem_manager = mesh_device_->get_device(0, 0)->sysmem_manager();
+        sysmem_manager.reset_worker_launch_message_buffer_state(num_sub_devices);
     }
 }
 
