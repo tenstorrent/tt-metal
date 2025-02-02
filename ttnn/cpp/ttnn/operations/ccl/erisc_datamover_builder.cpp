@@ -603,12 +603,19 @@ EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
     IDevice* local_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    IDevice* forward_device,
+    IDevice* backward_device,
     Program* program,
     bool enable_persistent_mode,
     std::optional<size_t> desired_num_links) {
-    return EdmLineFabricOpInterface(local_device, forward_device, backward_device, program, enable_persistent_mode, desired_num_links, true);
+    return EdmLineFabricOpInterface(
+        local_device,
+        forward_device == nullptr ? std::nullopt : std::optional<IDevice*>(forward_device),
+        backward_device == nullptr ? std::nullopt : std::optional<IDevice*>(backward_device),
+        program,
+        enable_persistent_mode,
+        desired_num_links,
+        true);
 }
 
 void EdmLineFabricOpInterface::build_kernels() const {

@@ -258,7 +258,13 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
-static constexpr uint32_t SWITCH_INTERVAL = get_compile_time_arg_val(0);
+static constexpr uint32_t SWITCH_INTERVAL =
+#ifndef DEBUG_PRINT_ENABLED
+get_compile_time_arg_val(0);
+#else
+0;
+#endif
+
 static constexpr size_t ETH_BYTES_TO_WORDS_SHIFT = 4;
 static constexpr size_t NUM_SENDER_CHANNELS = 2;
 static constexpr size_t num_workers_ctor = 1;
@@ -271,10 +277,12 @@ static constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 //   SENDER SIDE HELPERS
 /////////////////////////////////////////////
 
+template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void sender_notify_workers_if_buffer_available_sequence(
-    tt::fabric::EdmChannelWorkerInterface &local_sender_worker_interface) {
-    local_sender_worker_interface.clear_local_semaphore();
-    local_sender_worker_interface.increment_worker_semaphore();
+    tt::fabric::EdmChannelWorkerInterface &local_sender_worker_interface,
+    tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> &associated_sender_channel) {
+    // local_sender_worker_interface.clear_local_semaphore();
+    local_sender_worker_interface.update_worker_read_ptr(associated_sender_channel.get_rdptr());
 }
 
 template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
@@ -341,7 +349,9 @@ tt::fabric::SendStatus send_next_data(
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     if (status == tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC) {
+        DPRINT << "advancing sender buffer index\n";
         sender_buffer_channel.advance_buffer_index();
+        DPRINT << "advancing receiver buffer index\n";
         receiver_buffer_channel.advance_buffer_index();
     }
 
@@ -361,7 +371,7 @@ FORCE_INLINE void sender_eth_check_receiver_ack_sequence(
     tt::fabric::EdmChannelWorkerInterface &sender_worker_interface) {
     sender_buffer_channel.eth_clear_sender_channel_ack();
 
-    sender_notify_workers_if_buffer_available_sequence(sender_worker_interface);
+    sender_notify_workers_if_buffer_available_sequence(sender_worker_interface, sender_buffer_channel);
 }
 
 /////////////////////////////////////////////
@@ -442,7 +452,9 @@ FORCE_INLINE void receiver_send_completion_ack(
         (uint32_t)(remote_sender_channels[src_sender_channel].get_current_bytes_sent_address()) >> 4,
         1);
 
+    DPRINT << "EDMR advancing receiver buffer index\n";
     local_receiver_buffer_channel.advance_buffer_index();
+    DPRINT << "EDMR advancing sender buffer index\n";
     remote_sender_channels[src_sender_channel].advance_buffer_index();
 }
 
@@ -464,7 +476,7 @@ FORCE_INLINE bool can_forward_packet_completely(
         case PACKET_FORWARD_LOCAL_ONLY: return true;
 
         case PACKET_FORWARD_REMOTE_ONLY:
-        case PACKET_FORWARD_LOCAL_AND_REMOTE: return downstream_edm_interface.consumer_has_space();
+        case PACKET_FORWARD_LOCAL_AND_REMOTE: return downstream_edm_interface.edm_has_space_for_packet();
         default: ASSERT(false); return false;
     };
 }
@@ -515,8 +527,11 @@ bool run_sender_channel_state_machine_step(
     bool incr_sender_channel_index = true;
     switch (*sender_state_out) {
         case SenderState::SENDER_WAITING_FOR_WORKER: {
-            bool able_to_send = local_sender_channel_worker_interface.has_payload() && !eth_txq_is_busy() &&
+            bool able_to_send = local_sender_channel_worker_interface.has_payload(local_sender_channel.get_rdptr()) && !eth_txq_is_busy() &&
                                 local_sender_channel.eth_is_receiver_channel_send_done();
+            DPRINT << "EDMS " << (uint32_t)sender_channel_index << "\n";
+            DPRINT << "\tlocal_sender_channel.get_rdptr(): " << (uint32_t)local_sender_channel.get_rdptr() << "\n";
+
             if (able_to_send) {
                 DPRINT << "EDMS " << (uint32_t)sender_channel_index << "\n";
                 DPRINT << "\taddress: " << (uint32_t)local_sender_channel.get_current_buffer_address() << "\n";
@@ -536,7 +551,8 @@ bool run_sender_channel_state_machine_step(
                 // impact latency
                 incr_sender_channel_index = send_status != tt::fabric::SendStatus::SENT_PAYLOAD_ONLY;
             } else if (!graceful_termination_mode) {
-                if (!local_sender_channel_worker_interface.has_payload() && local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                if (local_sender_channel_worker_interface.has_worker_teardown_request() && !local_sender_channel_worker_interface.has_payload(local_sender_channel.get_rdptr())) {
+                    DPRINT << "EDMS TDWN\n";
                     local_sender_channel_worker_interface.teardown_connection();
                     *sender_state_out = SenderState::SENDER_WAIT_WORKER_HANDSHAKE;
                 }
@@ -551,7 +567,7 @@ bool run_sender_channel_state_machine_step(
                     DPRINT << "EDM ch " << (uint32_t)sender_channel_index << " wkr con ntfy wrkr\n";
                     DPRINT << "\tl1 worker info ptr: " << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr << "\n";
                     DPRINT << "\tworker.x=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.x << ", .y=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.y << ", sem_addr=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_semaphore_address << "\n";
-                    sender_notify_workers_if_buffer_available_sequence(local_sender_channel_worker_interface);
+                    sender_notify_workers_if_buffer_available_sequence(local_sender_channel_worker_interface, local_sender_channel);
                     *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
                 } else {
                     *sender_state_out = SenderState::SENDER_WAITING_FOR_ETH;
@@ -576,12 +592,20 @@ bool run_sender_channel_state_machine_step(
             if (is_safe_to_receive_next_message) {
                 // This also notifies workers in the same call
                 DPRINT << "EDMS:\n";
-                sender_eth_check_receiver_ack_sequence(local_sender_channel, local_sender_channel_worker_interface);
+                if (!local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                    sender_eth_check_receiver_ack_sequence(local_sender_channel, local_sender_channel_worker_interface);
+                } else {
+                    local_sender_channel.eth_clear_sender_channel_ack();
+                    // local_sender_channel_worker_interface.clear_local_semaphore();
+                }
                 *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
             }
         } break;
 
-        default: break;
+        default: {
+            DPRINT << "EDMS invalid state\n";
+            break;
+        }
     };
 
     return incr_sender_channel_index;
@@ -664,8 +688,8 @@ bool all_channels_drained(tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &lo
 
     bool eth_buffers_drained = local_sender_channels[0].all_buffers_drained() && local_sender_channels[1].all_buffers_drained() && local_receiver_channel.all_buffers_drained();
 
-    bool sender0_has_unsent_packets = (local_sender_channel_worker_interfaces[0].has_payload());
-    bool sender1_has_unsent_packets = (local_sender_channel_worker_interfaces[1].has_payload());
+    bool sender0_has_unsent_packets = (local_sender_channel_worker_interfaces[0].has_payload(local_sender_channels[0].get_rdptr()));
+    bool sender1_has_unsent_packets = (local_sender_channel_worker_interfaces[1].has_payload(local_sender_channels[1].get_rdptr()));
 
     return eth_buffers_drained && !sender0_has_unsent_packets && !sender1_has_unsent_packets;
 }

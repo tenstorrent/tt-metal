@@ -36,7 +36,8 @@ struct FabricEriscDatamoverConfig {
     std::size_t handshake_addr = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base()/* + 1024*/;
     std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
     std::size_t termination_signal_address =
-        edm_channel_ack_addr + (2 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
+        edm_channel_ack_addr +
+        (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
 
     // ----------- Sender Channel 0
     std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
@@ -253,7 +254,13 @@ class EdmLineFabricOpInterface {
     EdmLineFabricOpInterface (IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
+        IDevice* local_device,
+        IDevice* forward_device,
+        IDevice* backward_device,
+        Program* program,
+        bool enable_persistent_mode,
+        std::optional<size_t> desired_num_links = std::nullopt);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
