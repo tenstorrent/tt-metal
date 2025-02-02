@@ -139,6 +139,7 @@ def run_multi_core_matmul_1d(
     pcc_threshold=0.98,
     use_physical_to_logical_mapping=True,
     hop_grid=None,
+    in1_is_dram_interleaved=False,
 ):
     assert not has_bias, "Bias not supported for gather_in0 mode."
     if not isinstance(grid, tuple) and not use_arbitrary_cores:
@@ -237,14 +238,18 @@ def run_multi_core_matmul_1d(
         ),
     )
 
-    in1_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            core_range_set,
-            [K_padded, N_per_shard],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+    in1_sharded_mem_config = (
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                core_range_set,
+                [K, N_per_shard],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        if not in1_is_dram_interleaved
+        else ttnn.DRAM_MEMORY_CONFIG
     )
 
     output_sharded_mem_config = ttnn.MemoryConfig(
@@ -326,6 +331,85 @@ def run_multi_core_matmul_1d(
 
     # Check program cache
     assert device.num_program_cache_entries() == 1  # Only 1 op
+
+
+@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
+    [
+        (1, 32, 2048, 3584, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True, True, (8, 3)),
+        (1, 32, 2048, 16 * 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, False, (8, 4)),
+        (1, 32, 7520, 8192, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True, True, (6, 7)),
+    ],
+)
+@pytest.mark.parametrize(
+    "activation",
+    [
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "use_arbitrary_cores, hop_grid",
+    [
+        (False, None),
+        (False, [(3, 6)]),
+        (True, None),
+    ],
+)
+@pytest.mark.parametrize(
+    "in1_is_dram_interleaved",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        3,
+    ],
+)
+def test_multi_core_matmul_1d_in1_dram_wh(
+    device,
+    in0_dtype,
+    in1_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    activation,
+    grid,
+    hop_grid,
+    use_arbitrary_cores,
+    in1_is_dram_interleaved,
+    num_iters,
+    use_program_cache,
+    function_level_defaults,
+):
+    run_multi_core_matmul_1d(
+        device,
+        in0_dtype,
+        in1_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        B,
+        M,
+        K,
+        N,
+        activation,
+        grid,
+        use_arbitrary_cores,
+        num_iters,
+        hop_grid=hop_grid,
+        in1_is_dram_interleaved=in1_is_dram_interleaved,
+    )
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
