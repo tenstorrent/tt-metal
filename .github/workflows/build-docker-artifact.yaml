@@ -65,8 +65,7 @@ jobs:
           target: dev
           push: true
           tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
-          cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
-          cache-to: type=inline
+          no-cache: true
           pull: true
       - name: Tag Docker main image as current image
         if: steps.changed-files-specific.outputs.any_changed != 'true'
